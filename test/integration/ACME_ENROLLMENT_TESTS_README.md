@@ -95,22 +95,23 @@ These tests use mocks and run quickly without modifying the host:
 make test-acme-enrollment
 
 # Run with verbose output
-go test -v -tags=integration ./test/integration -run TestACMEEnrollmentFlow
+go test -v -tags "integration $(make -s print-build-tags)" ./test/integration -run TestACMEEnrollmentFlow
 
 # Run specific test case
-go test -v -tags=integration ./test/integration -run TestACMEEnrollmentFlow/DeviceAttestationFlow
+go test -v -tags "integration $(make -s print-build-tags)" ./test/integration -run TestACMEEnrollmentFlow/DeviceAttestationFlow
 ```
 
 ### Full Integration Tests with SWTPM
 These tests require swtpm and run with real TPM simulation:
 
 ```bash
-# Run TPM-based tests (requires swtpm installed)
-go test -v -tags=integration ./test/integration -run TestEnrollmentWithRealTPM
-
-# Skip if swtpm not available
-SKIP_INTEGRATION=1 go test ./test/integration
+# Run TPM-based tests (the devcontainer image installs swtpm)
+go test -v -tags "integration $(make -s print-build-tags)" ./test/integration -run TestEnrollmentWithRealTPM
 ```
+
+Neither test skips. Without swtpm on `PATH`, `TestEnrollmentWithRealTPM`
+fails at simulator start-up, so run it in the devcontainer
+(`make integration-test-root` runs this package there).
 
 ### Run in Development Container
 For complete isolation and reproducibility:
@@ -121,7 +122,7 @@ make devcontainer-build
 make devcontainer-shell
 
 # Inside container, run tests
-go test -v -tags=integration ./test/integration
+go test -v -tags "integration $(make -s print-build-tags)" ./test/integration
 ```
 
 ## Test Architecture
@@ -239,8 +240,8 @@ Authorized (VLAN 200) - Full production access
 ### Common Issues
 
 **Test fails with "TPM not available"**
-- Install swtpm: `sudo apt-get install swtpm swtpm-tools`
-- Or skip TPM tests: `SKIP_INTEGRATION=1 go test ./test/integration`
+- swtpm is missing from `PATH`; run the suite in the devcontainer, whose
+  image installs `swtpm` and `swtpm-tools`
 
 **Test fails with "datastore error"**
 - Ensure in-memory backend is available

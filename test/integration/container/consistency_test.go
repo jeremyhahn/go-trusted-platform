@@ -49,8 +49,6 @@ type adapterResult struct {
 // TestContainerConsistency verifies that all protocol adapters return consistent
 // results for container operations.
 func TestContainerConsistency(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
 
@@ -64,15 +62,13 @@ func TestContainerConsistency(t *testing.T) {
 	var workingAdapters []ContainerCommands
 	for _, adapter := range adapters {
 		if err := adapter.Setup(ctx); err != nil {
-			t.Logf("Skipping %s adapter: setup failed: %v", adapter.Name(), err)
-			continue
+			t.Fatalf("%s adapter: setup failed: %v", adapter.Name(), err)
 		}
 		workingAdapters = append(workingAdapters, adapter)
 	}
 
 	if len(workingAdapters) < 1 {
-		t.Skip("Need at least 1 working adapter to test consistency")
-		return
+		t.Fatal("Need at least 1 working adapter to test consistency")
 	}
 
 	defer func() {
@@ -103,8 +99,7 @@ func testCreateConsistency(t *testing.T, ctx context.Context, adapters []Contain
 	t.Helper()
 
 	if len(adapters) < 1 {
-		t.Skip("Need at least 1 adapter for consistency testing")
-		return
+		t.Fatal("Need at least 1 adapter for consistency testing")
 	}
 
 	prefix := GenerateUniquePrefix("consistency-create")
@@ -141,8 +136,7 @@ func testLifecycleConsistency(t *testing.T, ctx context.Context, adapters []Cont
 	t.Helper()
 
 	if len(adapters) < 1 {
-		t.Skip("Need at least 1 adapter for consistency testing")
-		return
+		t.Fatal("Need at least 1 adapter for consistency testing")
 	}
 
 	prefix := GenerateUniquePrefix("consistency-lifecycle")
@@ -192,8 +186,7 @@ func testListConsistency(t *testing.T, ctx context.Context, adapters []Container
 	t.Helper()
 
 	if len(adapters) < 1 {
-		t.Skip("Need at least 1 adapter for consistency testing")
-		return
+		t.Fatal("Need at least 1 adapter for consistency testing")
 	}
 
 	prefix := GenerateUniquePrefix("consistency-list")
@@ -252,8 +245,7 @@ func testErrorConsistency(t *testing.T, ctx context.Context, adapters []Containe
 	t.Helper()
 
 	if len(adapters) < 1 {
-		t.Skip("Need at least 1 adapter for consistency testing")
-		return
+		t.Fatal("Need at least 1 adapter for consistency testing")
 	}
 
 	nonexistentID := "nonexistent-container-12345"
@@ -301,8 +293,6 @@ func testErrorConsistency(t *testing.T, ctx context.Context, adapters []Containe
 
 // TestContainerResponseStructure verifies response structures are consistent.
 func TestContainerResponseStructure(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -402,8 +392,6 @@ func TestContainerResponseStructure(t *testing.T) {
 
 // TestContainerStateTransitions verifies state transitions are consistent.
 func TestContainerStateTransitions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 

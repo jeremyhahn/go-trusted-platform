@@ -28,7 +28,7 @@ func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 
 The compute subsystem provides comprehensive VM lifecycle management including:
   - Create and configure VMs with security policies
-  - Start, stop, and delete virtual machines
+  - Start, stop, reboot, suspend, resume, and delete virtual machines
   - View VM details and resource usage
   - Enable vTPM and Secure Boot for hardware-rooted trust
   - Manage VM networking, storage, and firmware configuration
@@ -57,6 +57,9 @@ Examples:
 	cmd.AddCommand(newCreateCommand(getFlags))
 	cmd.AddCommand(newStartCommand(getFlags))
 	cmd.AddCommand(newStopCommand(getFlags))
+	cmd.AddCommand(newRebootCommand(getFlags))
+	cmd.AddCommand(newSuspendCommand(getFlags))
+	cmd.AddCommand(newResumeCommand(getFlags))
 	cmd.AddCommand(newDeleteCommand(getFlags))
 	cmd.AddCommand(newGetCommand(getFlags))
 	cmd.AddCommand(newListCommand(getFlags))

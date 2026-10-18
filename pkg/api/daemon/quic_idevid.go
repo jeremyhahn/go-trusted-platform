@@ -24,6 +24,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -271,12 +272,18 @@ type ActivateCredentialQUICResponse struct {
 
 // handleIDevIDOperation routes IDevID/IAK opcodes to their respective handlers.
 func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	// Key deletes are refused whatever the TPM state, as on gRPC.
+	// Key deletes are refused whatever the TPM state, as on gRPC, and the
+	// certificate deletes go to the shared IDevID service, which answers a
+	// missing TPM as gRPC does.
 	switch req.Opcode {
 	case quicwire.OpIDevIDDelete:
 		return h.handleIDevIDDelete(ctx, req)
 	case quicwire.OpIAKDelete:
 		return h.handleIAKDelete(ctx, req)
+	case quicwire.OpIDevIDDeleteCert:
+		return h.handleIDevIDDeleteCert(ctx, req)
+	case quicwire.OpIAKDeleteCert:
+		return h.handleIAKDeleteCert(ctx, req)
 	}
 
 	if h.tpm2Service == nil {
@@ -312,10 +319,6 @@ func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *qui
 		return h.handleHasIDevID(ctx, req)
 	case quicwire.OpHasIAK:
 		return h.handleHasIAK(ctx, req)
-	case quicwire.OpIDevIDDeleteCert:
-		return h.handleIDevIDDeleteCert(ctx, req)
-	case quicwire.OpIAKDeleteCert:
-		return h.handleIAKDeleteCert(ctx, req)
 	default:
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
@@ -624,9 +627,16 @@ func (h *QUICServiceHandler) handleHasIAK(ctx context.Context, req *quicwire.Req
 
 // handleIDevIDDeleteCert deletes the IDevID certificate.
 func (h *QUICServiceHandler) handleIDevIDDeleteCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if err := h.tpm2Service.DeleteIDevIDCertificate(); err != nil {
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, REST and MCP answer in.
+	if h.idevidService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIDevIDServiceNotConfigured{})
+	}
+
+	if _, err := h.idevidService.DeleteIDevIDCertificate(ctx, &platformv1.DeleteIDevIDCertificateRequest{}); err != nil {
 		h.logger.Error(err, "failed to delete IDevID certificate")
-		return h.mapTPM2Error(err)
+		return h.errorResponse(idevidGRPCToQUICStatus(err),
+			ErrQUICOperationFailed{Op: "delete IDevID certificate", Cause: err})
 	}
 
 	resp := &IDevIDDeleteCertResponse{
@@ -649,9 +659,16 @@ func (h *QUICServiceHandler) handleIDevIDDeleteCert(ctx context.Context, req *qu
 
 // handleIAKDeleteCert deletes the IAK certificate.
 func (h *QUICServiceHandler) handleIAKDeleteCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if err := h.tpm2Service.DeleteIAKCertificate(); err != nil {
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, REST and MCP answer in.
+	if h.idevidService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIDevIDServiceNotConfigured{})
+	}
+
+	if _, err := h.idevidService.DeleteIAKCertificate(ctx, &platformv1.DeleteIAKCertificateRequest{}); err != nil {
 		h.logger.Error(err, "failed to delete IAK certificate")
-		return h.mapTPM2Error(err)
+		return h.errorResponse(idevidGRPCToQUICStatus(err),
+			ErrQUICOperationFailed{Op: "delete IAK certificate", Cause: err})
 	}
 
 	resp := &IAKDeleteCertResponse{

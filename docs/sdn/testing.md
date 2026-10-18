@@ -294,7 +294,7 @@ integration-test-sdn:
         -v $(PWD):/app \
         -w /app \
         trusted-platform-builder \
-        go test -tags=integration ./test/integration/sdn/...
+        go test -tags "integration $(make -s print-build-tags)" ./test/integration/sdn/...
 
 # Coverage
 coverage-sdn:
@@ -333,7 +333,7 @@ docker run --privileged --rm \
     -v $(PWD):/app \
     -w /app \
     trusted-platform-builder \
-    go test -tags=integration ./test/integration/sdn/... -run TestOpenFlow
+    go test -tags "integration $(make -s print-build-tags)" ./test/integration/sdn/... -run TestOpenFlow
 ```
 
 ### End-to-End Test

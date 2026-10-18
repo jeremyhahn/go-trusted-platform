@@ -36,8 +36,7 @@ import (
 // Adapters run sequentially to avoid OVS lock contention when 6 adapters
 // hit the same backend in parallel, which causes cascading timeouts and hangs.
 func TestSDNMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	adapters := []SDNCommands{
 		NewCLIAdapter(),
@@ -834,8 +833,7 @@ func testPolicyList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 // TestCLISDNOperations tests SDN operations specifically via CLI.
 func TestCLISDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -849,8 +847,7 @@ func TestCLISDNOperations(t *testing.T) {
 
 // TestRESTSDNOperations tests SDN operations specifically via REST.
 func TestRESTSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -864,8 +861,7 @@ func TestRESTSDNOperations(t *testing.T) {
 
 // TestGRPCSDNOperations tests SDN operations specifically via gRPC.
 func TestGRPCSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -879,8 +875,7 @@ func TestGRPCSDNOperations(t *testing.T) {
 
 // TestQUICSDNOperations tests SDN operations specifically via QUIC.
 func TestQUICSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -894,8 +889,7 @@ func TestQUICSDNOperations(t *testing.T) {
 
 // TestMCPSDNOperations tests SDN operations specifically via MCP.
 func TestMCPSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -909,8 +903,7 @@ func TestMCPSDNOperations(t *testing.T) {
 
 // TestUnixSDNOperations tests SDN operations specifically via Unix socket.
 func TestUnixSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -928,8 +921,7 @@ func TestUnixSDNOperations(t *testing.T) {
 
 // TestSDNErrorHandling tests error handling across protocols.
 func TestSDNErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -970,8 +962,7 @@ func TestSDNErrorHandling(t *testing.T) {
 
 // TestSDNStressOperations performs stress testing of SDN operations.
 func TestSDNStressOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()

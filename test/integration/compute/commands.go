@@ -39,6 +39,15 @@ type ComputeCommands interface {
 	// StopVM stops a running virtual machine.
 	StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error)
 
+	// RebootVM restarts a running virtual machine.
+	RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error)
+
+	// SuspendVM pauses a running virtual machine.
+	SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error)
+
+	// ResumeVM continues a suspended virtual machine.
+	ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error)
+
 	// DeleteVM deletes a virtual machine.
 	DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error)
 
@@ -47,6 +56,38 @@ type ComputeCommands interface {
 
 	// ListVMs lists virtual machines with optional filtering.
 	ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error)
+}
+
+// SnapshotCommands defines the VM snapshot verbs. Every API transport
+// implements it; the CLI adapter does not.
+type SnapshotCommands interface {
+	// Name returns the adapter name.
+	Name() string
+
+	// CreateSnapshot snapshots a running virtual machine's memory and disk.
+	CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error)
+
+	// RestoreSnapshot returns a virtual machine to a snapshot.
+	RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error
+
+	// DeleteSnapshot deletes a virtual machine snapshot.
+	DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error
+
+	// ListSnapshots lists a virtual machine's snapshots.
+	ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error)
+}
+
+// AttestCommands defines the VM attestation verbs. Every API transport
+// implements it; the CLI adapter does not.
+type AttestCommands interface {
+	// Name returns the adapter name.
+	Name() string
+
+	// AttestVM generates a vTPM quote for a running virtual machine.
+	AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error)
+
+	// VerifyVMAttestation verifies quote evidence against the VM's vTPM.
+	VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error)
 }
 
 // =============================================================================
@@ -76,6 +117,22 @@ type StopVMOptions struct {
 	VMID           string
 	Force          bool
 	TimeoutSeconds uint32
+}
+
+// RebootVMOptions contains parameters for rebooting a virtual machine.
+type RebootVMOptions struct {
+	VMID  string
+	Force bool
+}
+
+// SuspendVMOptions contains parameters for suspending a virtual machine.
+type SuspendVMOptions struct {
+	VMID string
+}
+
+// ResumeVMOptions contains parameters for resuming a virtual machine.
+type ResumeVMOptions struct {
+	VMID string
 }
 
 // DeleteVMOptions contains parameters for deleting a virtual machine.
@@ -122,6 +179,24 @@ type StopVMResult struct {
 	Message string
 }
 
+// RebootVMResult contains the result of rebooting a virtual machine.
+type RebootVMResult struct {
+	Success bool
+	Message string
+}
+
+// SuspendVMResult contains the result of suspending a virtual machine.
+type SuspendVMResult struct {
+	Success bool
+	Message string
+}
+
+// ResumeVMResult contains the result of resuming a virtual machine.
+type ResumeVMResult struct {
+	Success bool
+	Message string
+}
+
 // DeleteVMResult contains the result of deleting a virtual machine.
 type DeleteVMResult struct {
 	Success bool
@@ -150,4 +225,44 @@ type VMSummary struct {
 	Name   string
 	State  string
 	Labels map[string]string
+}
+
+// CreateSnapshotOptions contains options for creating a VM snapshot.
+type CreateSnapshotOptions struct {
+	VMID        string
+	Name        string
+	Description string
+}
+
+// SnapshotOptions names one snapshot of a VM.
+type SnapshotOptions struct {
+	VMID       string
+	SnapshotID string
+}
+
+// SnapshotSummary contains summary information about a VM snapshot.
+type SnapshotSummary struct {
+	ID   string
+	VMID string
+}
+
+// AttestVMOptions contains options for attesting a VM.
+type AttestVMOptions struct {
+	VMID       string
+	Nonce      []byte
+	PCRIndices []uint32
+}
+
+// VMQuote is the quote evidence a VM attestation returns.
+type VMQuote struct {
+	Quote              []byte
+	Signature          []byte
+	SignatureAlgorithm string
+}
+
+// VerifyVMAttestationOptions contains the evidence to verify for a VM.
+type VerifyVMAttestationOptions struct {
+	VMID  string
+	Nonce []byte
+	VMQuote
 }

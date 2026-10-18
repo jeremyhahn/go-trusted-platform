@@ -30,8 +30,6 @@ import (
 // These tests verify the SDK client is properly connected and handles responses.
 // Actual embedding generation may fail if no provider is configured.
 func TestEmbeddingService_Generate(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -78,8 +76,6 @@ func TestEmbeddingService_Generate(t *testing.T) {
 // TestEmbeddingService_Ollama tests Ollama embedding operations.
 // Note: These tests require Ollama to be running locally with embedding models available.
 func TestEmbeddingService_Ollama(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -138,8 +134,6 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 // TestEmbeddingService_BatchGenerate tests batch embedding generation.
 // Note: This requires external providers to be configured.
 func TestEmbeddingService_BatchGenerate(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -169,8 +163,6 @@ func TestEmbeddingService_BatchGenerate(t *testing.T) {
 
 // TestEmbeddingService_OllamaBatch tests batch Ollama embedding generation.
 func TestEmbeddingService_OllamaBatch(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -209,8 +201,6 @@ func TestEmbeddingService_OllamaBatch(t *testing.T) {
 
 // TestEmbeddingService_InputTypes tests different input types for embeddings.
 func TestEmbeddingService_InputTypes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -244,8 +234,6 @@ func TestEmbeddingService_InputTypes(t *testing.T) {
 // TestEmbeddingService_WithVectorStorage tests the integration of embeddings with vector storage.
 // This demonstrates the typical workflow of generating embeddings and storing them for search.
 func TestEmbeddingService_WithVectorStorage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 

@@ -31,6 +31,8 @@ type MockComputeClient struct {
 	GetVMFunc        func(ctx context.Context, in *platformv1.GetVMRequest, opts ...grpc.CallOption) (*platformv1.GetVMResponse, error)
 	ListVMsFunc      func(ctx context.Context, in *platformv1.ListVMsRequest, opts ...grpc.CallOption) (*platformv1.ListVMsResponse, error)
 	RebootVMFunc     func(ctx context.Context, in *platformv1.RebootVMRequest, opts ...grpc.CallOption) (*platformv1.RebootVMResponse, error)
+	SuspendVMFunc    func(ctx context.Context, in *platformv1.SuspendVMRequest, opts ...grpc.CallOption) (*platformv1.SuspendVMResponse, error)
+	ResumeVMFunc     func(ctx context.Context, in *platformv1.ResumeVMRequest, opts ...grpc.CallOption) (*platformv1.ResumeVMResponse, error)
 	GetVMMetricsFunc func(ctx context.Context, in *platformv1.GetVMMetricsRequest, opts ...grpc.CallOption) (*platformv1.VMMetricsResponse, error)
 }
 
@@ -60,6 +62,20 @@ func (m *MockComputeClient) StopVM(ctx context.Context, in *platformv1.StopVMReq
 func (m *MockComputeClient) RebootVM(ctx context.Context, in *platformv1.RebootVMRequest, opts ...grpc.CallOption) (*platformv1.RebootVMResponse, error) {
 	if m.RebootVMFunc != nil {
 		return m.RebootVMFunc(ctx, in, opts...)
+	}
+	return nil, errNotImplemented
+}
+
+func (m *MockComputeClient) SuspendVM(ctx context.Context, in *platformv1.SuspendVMRequest, opts ...grpc.CallOption) (*platformv1.SuspendVMResponse, error) {
+	if m.SuspendVMFunc != nil {
+		return m.SuspendVMFunc(ctx, in, opts...)
+	}
+	return nil, errNotImplemented
+}
+
+func (m *MockComputeClient) ResumeVM(ctx context.Context, in *platformv1.ResumeVMRequest, opts ...grpc.CallOption) (*platformv1.ResumeVMResponse, error) {
+	if m.ResumeVMFunc != nil {
+		return m.ResumeVMFunc(ctx, in, opts...)
 	}
 	return nil, errNotImplemented
 }

@@ -40,8 +40,6 @@ import (
 
 // TestCeremonyMultiProtocol runs the same scenario against every transport.
 func TestCeremonyMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 

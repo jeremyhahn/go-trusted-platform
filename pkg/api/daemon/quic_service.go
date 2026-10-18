@@ -102,7 +102,6 @@ type QUICServiceHandler struct {
 	tpm2Handler        *quic.TPM2Handler
 	containerHandler   *quic.ContainerHandler
 	attestationHandler *quic.AttestationHandler
-	vmHandler          *quic.VMHandler
 	tenantManager      TenantManagerInterface
 	// tenantGRPC is the shared *TenantGRPCServer the converged tenant QUIC
 	// handlers delegate to (pb wire), wired via SetTenantGRPCServer.
@@ -297,15 +296,6 @@ func WithQUICAttestationService(svc quic.AttestationServiceInterface) QUICServic
 	}
 }
 
-// WithQUICVMService sets the VM orchestrator for the QUIC handler
-func WithQUICVMService(orchestrator quic.VMOrchestrator) QUICServiceHandlerOption {
-	return func(h *QUICServiceHandler) {
-		if orchestrator != nil {
-			h.vmHandler = quic.NewVMHandler(h.logger, orchestrator)
-		}
-	}
-}
-
 // WithQUICDaemonService sets the daemon service for the QUIC handler
 func WithQUICDaemonService(svc *Service) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
@@ -431,7 +421,7 @@ func (h *QUICServiceHandler) SetDNSService(svc DNSService) {
 }
 
 // SetComputeGRPCService sets the shared compute gRPC service the container
-// QUIC handlers delegate to.
+// and converged VM QUIC handlers delegate to.
 func (h *QUICServiceHandler) SetComputeGRPCService(svc *ComputeGRPCService) { h.computeGRPC = svc }
 
 // SetAttestationGRPCService sets the shared attestation gRPC service the
@@ -499,18 +489,6 @@ func (h *QUICServiceHandler) SetAttestationHandler(handler *quic.AttestationHand
 func (h *QUICServiceHandler) SetAttestationService(svc quic.AttestationServiceInterface) {
 	if svc != nil {
 		h.attestationHandler = quic.NewAttestationHandler(h.logger, svc)
-	}
-}
-
-// SetVMHandler sets the VM handler after construction
-func (h *QUICServiceHandler) SetVMHandler(handler *quic.VMHandler) {
-	h.vmHandler = handler
-}
-
-// SetVMOrchestrator sets the VM orchestrator and creates a handler
-func (h *QUICServiceHandler) SetVMOrchestrator(orchestrator quic.VMOrchestrator) {
-	if orchestrator != nil {
-		h.vmHandler = quic.NewVMHandler(h.logger, orchestrator)
 	}
 }
 
@@ -650,13 +628,12 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpIDevIDGenerate && req.Opcode <= quicwire.OpIAKCSR:
 		return h.handleIDevIDOperation(ctx, req)
 
-	// Compute/VM Operations (0x60-0x6A). The compute extended category
-	// opcode (0x69) inside this range carries extended VM sub-opcodes AND
-	// container sub-opcodes (create/start/stop/remove/get/list/logs/attest,
-	// whose direct opcodes are shadowed by the PXE ranges) in payload[0];
-	// handleVMServiceOperation routes container sub-opcodes to the
-	// container handler and everything else to the VM handler.
-	case req.Opcode >= quicwire.OpVMCreate && req.Opcode <= quicwire.OpVMGetState:
+	// Compute (0x69). The compute extended category carries the VM
+	// sub-opcodes AND the container sub-opcodes (create/start/stop/remove/
+	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
+	// ranges) in payload[0]; handleVMServiceOperation routes each to its
+	// handler. The rest of 0x60-0x6A is unassigned.
+	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
 
 	// IAK Extended Operations (0x6B-0x6E)
@@ -862,6 +839,12 @@ func (h *QUICServiceHandler) handleCASignCSR(ctx context.Context, payload []byte
 // The first byte of the payload is the sub-opcode that selects the TPM2
 // operation; the remaining payload bytes are the operation request payload.
 func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	// The IAK is the 802.1AR attestation key the IDevID service refuses to
+	// delete. The TPM2 DeleteIAK sub-opcode names the same key, so it gets
+	// the same refusal as OpIAKDelete instead of reaching the TPM.
+	if len(req.Payload) > 0 && req.Payload[0] == quicwire.SubOpTPM2DeleteIAK {
+		return h.handleIAKDelete(ctx, req)
+	}
 	// LDevID (802.1AR) issuance is CA-backed and lives in the shared
 	// IDevIDGRPCService, not the physical-TPM handler. Intercept the LDevID
 	// sub-opcode and delegate so QUIC matches gRPC/Unix/embedded semantics.

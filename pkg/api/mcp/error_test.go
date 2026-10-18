@@ -41,7 +41,6 @@ func TestVMError_PredefinedErrors(t *testing.T) {
 		expected string
 	}{
 		{"ErrVMServiceUnavailable", ErrVMServiceUnavailable, "VM_SERVICE_UNAVAILABLE: VM service is not available"},
-		{"ErrVMNameRequired", ErrVMNameRequired, "VM_NAME_REQUIRED: VM name is required"},
 		{"ErrVMIDRequired", ErrVMIDRequired, "VM_ID_REQUIRED: VM ID is required"},
 		{"ErrVMNotFound", ErrVMNotFound, "VM_NOT_FOUND: VM not found"},
 		{"ErrSnapshotNameRequired", ErrSnapshotNameRequired, "SNAPSHOT_NAME_REQUIRED: snapshot name is required"},

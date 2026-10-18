@@ -13,9 +13,27 @@
 
 package quicwire
 
-// VM operation codes use the existing opcodes from protocol.go (0x60-0x6A range)
-// Additional VM-specific operations
+// VM operation codes, carried as sub-opcodes in payload[0] under
+// OpVMExtendedCategory (0x69).
 const (
+	// OpVMCreate creates a VM
+	OpVMCreate byte = 0x60
+
+	// OpVMDelete deletes a VM
+	OpVMDelete byte = 0x61
+
+	// OpVMStart starts a VM
+	OpVMStart byte = 0x62
+
+	// OpVMStop stops a VM
+	OpVMStop byte = 0x63
+
+	// OpVMGet reads one VM
+	OpVMGet byte = 0x64
+
+	// OpVMList lists VMs
+	OpVMList byte = 0x65
+
 	// OpVMRestart restarts a VM
 	OpVMRestart byte = 0xB6
 
@@ -25,31 +43,19 @@ const (
 	// OpVMResume resumes a suspended VM
 	OpVMResume byte = 0xB8
 
-	// OpVMAttest performs TPM attestation for a VM
+	// OpVMAttest generates a vTPM quote for a running VM
 	OpVMAttest byte = 0xB9
-
-	// OpVMConsole retrieves console information for a VM
-	OpVMConsole byte = 0xBA
-
-	// OpVMSnapshot creates a snapshot of a VM
-	OpVMSnapshot byte = 0xBB
+	// OpVMSnapshotCreate creates a snapshot of a VM
+	OpVMSnapshotCreate byte = 0xBB
 
 	// OpVMSnapshotRestore restores a VM from a snapshot
 	OpVMSnapshotRestore byte = 0xBC
 
-	// OpVMSnapshotDelete deletes a snapshot
+	// OpVMSnapshotDelete deletes a VM snapshot
 	OpVMSnapshotDelete byte = 0xBD
 
-	// OpVMSnapshotList lists snapshots for a VM
+	// OpVMSnapshotList lists a VM's snapshots
 	OpVMSnapshotList byte = 0xBE
-
-	// OpVMVerifyAttest verifies VM attestation evidence
+	// OpVMVerifyAttest verifies VM quote evidence against the VM's vTPM
 	OpVMVerifyAttest byte = 0xBF
 )
-
-// NOTE: the extended VM opcodes above (0xB6-0xBF) collide with the IAM
-// role/group opcode ranges at the top level of the daemon dispatcher, so
-// remote transports reach them as sub-opcodes carried in payload[0] under
-// OpVMExtendedCategory (0x69, inside the VM opcode range). The daemon
-// VMHandler accepts both framings: direct opcodes (in-process callers, tests)
-// and the category framing (wire traffic).

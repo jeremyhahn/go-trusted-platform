@@ -359,7 +359,6 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMDeleteSRK", func() error { _, err := p.TPMDeleteSRK(ctx); return err }},
 		{"TPMGetIAK", func() error { _, err := p.TPMGetIAK(ctx); return err }},
 		{"TPMCreateIAK", func() error { _, err := p.TPMCreateIAK(ctx); return err }},
-		{"TPMDeleteIAK", func() error { _, err := p.TPMDeleteIAK(ctx); return err }},
 		{"TPMQuote", func() error { _, err := p.TPMQuote(ctx, []byte("n"), []int{0}); return err }},
 		{"TPMVerifyQuote", func() error {
 			_, err := p.TPMVerifyQuote(ctx, &mcp.TPMVerifyQuoteRequest{

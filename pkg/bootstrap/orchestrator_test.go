@@ -334,9 +334,20 @@ func orchTestLogger() *slog.Logger {
 
 // cpStaticInterfaces is the operator-declared static address every
 // control-plane fixture carries: the trust anchor is captured only from
-// it, so discovery rejects a control plane without one.
+// it, so discovery rejects a control plane without one. It is loopback so a
+// run that captures the anchor dials this host, never a fleet address; pair
+// it with refuseControlPlane so the capture fails at once instead of waiting
+// out its 10s network timeout (#284).
 func cpStaticInterfaces() []installer.InterfaceConfig {
-	return []installer.InterfaceConfig{{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "172.16.0.10/24"}}
+	return []installer.InterfaceConfig{{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "127.0.0.1/24"}}
+}
+
+// refuseControlPlane points the control-plane port at a closed loopback
+// port, so the CA-bundle and SPKI-pin captures a worker install makes are
+// refused at once — the warn-and-continue path these runs take anyway.
+func refuseControlPlane(t *testing.T, cfg *BootstrapConfig) {
+	t.Helper()
+	cfg.Platform.ControlPlanePort = closedTCPPort(t)
 }
 
 func minimalConfig() *BootstrapConfig {
@@ -780,6 +791,7 @@ func TestOrchestrator_Validate_NoControlPlane(t *testing.T) {
 
 func TestOrchestrator_Run_MultiNode(t *testing.T) {
 	cfg := multiNodeConfig()
+	refuseControlPlane(t, cfg)
 	deployer := &mockDeployer{}
 	healthChk := &mockHealthChecker{err: nil}
 
@@ -839,6 +851,7 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 			},
 		},
 	}
+	refuseControlPlane(t, cfg)
 	deployer := &mockDeployer{}
 	healthChk := &mockHealthChecker{err: nil}
 

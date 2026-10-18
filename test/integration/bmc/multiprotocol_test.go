@@ -49,8 +49,6 @@ func createAdapters() []BMCCommands {
 // TestBMCMultiProtocol runs the full BMC test suite against all protocols.
 // This is the main entry point for BMC integration testing.
 func TestBMCMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -98,37 +96,31 @@ func TestBMCMultiProtocol(t *testing.T) {
 
 // TestBMCCLI tests BMC operations via CLI protocol only.
 func TestBMCCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewCLIAdapter())
 }
 
 // TestBMCREST tests BMC operations via REST protocol only.
 func TestBMCREST(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewRESTAdapter())
 }
 
 // TestBMCGRPC tests BMC operations via gRPC protocol only.
 func TestBMCGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewGRPCAdapter())
 }
 
 // TestBMCQUIC tests BMC operations via QUIC protocol only.
 func TestBMCQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewQUICAdapter())
 }
 
 // TestBMCMCP tests BMC operations via MCP protocol only.
 func TestBMCMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewMCPAdapter())
 }
 
 // TestBMCUnix tests BMC operations via Unix socket protocol only.
 func TestBMCUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewUnixAdapter())
 }
 
@@ -402,8 +394,6 @@ func testListUsers(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // TestBMCEnrollMultiProtocol runs the EnrollBMC test against all protocol
 // adapters.
 func TestBMCEnrollMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -438,10 +428,9 @@ func testEnrollBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	result, err := adapter.EnrollBMC(ctx, DefaultTestProfileID, nil)
 	if err != nil {
 		if isEnrollServiceUnavailable(err) {
-			// The daemon is up but the enroller is not wired — tolerated on the
-			// vBMC harness. Log and skip rather than fail.
-			t.Skipf("%s: enrollment service not available (deployment-config gap): %v", adapter.Name(), err)
-			return
+			// platformd serve wires the enroller (pkg/api/daemon/daemon.go
+			// SetEnroller); an unwired enroller is a daemon regression.
+			t.Fatalf("%s: enrollment service not wired in platformd; start platformd with the vBMC config (run-integration-tests.sh bmc): %v", adapter.Name(), err)
 		}
 		t.Fatalf("%s: EnrollBMC failed: %v", adapter.Name(), err)
 	}
@@ -471,8 +460,6 @@ func testEnrollBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // service layer across all protocols. It runs with explicit opts to exercise
 // the option-marshalling code paths in each adapter.
 func TestBMCEnrollWithOptions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -494,8 +481,7 @@ func TestBMCEnrollWithOptions(t *testing.T) {
 			result, err := adapter.EnrollBMC(ctx, DefaultTestProfileID, opts)
 			if err != nil {
 				if isEnrollServiceUnavailable(err) {
-					t.Skipf("%s: enrollment service not available (deployment-config gap): %v", adapter.Name(), err)
-					return
+					t.Fatalf("%s: enrollment service not wired in platformd; start platformd with the vBMC config (run-integration-tests.sh bmc): %v", adapter.Name(), err)
 				}
 				t.Fatalf("%s: EnrollBMC with options failed: %v", adapter.Name(), err)
 			}
@@ -512,8 +498,6 @@ func TestBMCEnrollWithOptions(t *testing.T) {
 
 // TestBMCErrorHandling tests error handling across all protocols.
 func TestBMCErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -568,8 +552,6 @@ func testInvalidProfileEnroll(t *testing.T, ctx context.Context, adapter BMCComm
 // TestBMCRestoreMultiProtocol runs the RestoreBMC test against all protocol
 // adapters.
 func TestBMCRestoreMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -603,10 +585,9 @@ func testRestoreBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	result, err := adapter.RestoreBMC(ctx, DefaultTestProfileID)
 	if err != nil {
 		if isRestoreServiceUnavailable(err) {
-			// The daemon is up but the restorer is not wired — tolerated on the
-			// vBMC harness. Log and skip rather than fail.
-			t.Skipf("%s: restore service not available (deployment-config gap): %v", adapter.Name(), err)
-			return
+			// platformd serve wires the restorer (pkg/api/daemon/daemon.go
+			// SetRestorer); an unwired restorer is a daemon regression.
+			t.Fatalf("%s: restore service not wired in platformd; start platformd with the vBMC config (run-integration-tests.sh bmc): %v", adapter.Name(), err)
 		}
 		t.Fatalf("%s: RestoreBMC failed: %v", adapter.Name(), err)
 	}
@@ -641,8 +622,6 @@ func testRestoreBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // profile either returns a typed error or a tolerated service-unavailable
 // response — it must never panic or return (nil, nil).
 func TestBMCRestoreInvalidProfile(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 

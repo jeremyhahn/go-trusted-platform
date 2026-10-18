@@ -33,8 +33,6 @@ const shardID uint64 = 0
 
 // TestWriteReplication tests that writes replicate to all nodes.
 func TestWriteReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -93,8 +91,6 @@ func TestWriteReplication(t *testing.T) {
 
 // TestWriteReplication_Multiple tests multiple writes replicate correctly.
 func TestWriteReplication_Multiple(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -150,8 +146,6 @@ func TestWriteReplication_Multiple(t *testing.T) {
 
 // TestReadConsistency tests that reads are consistent across nodes.
 func TestReadConsistency(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -197,8 +191,6 @@ func TestReadConsistency(t *testing.T) {
 
 // TestReadConsistency_AfterUpdate tests consistency after updates.
 func TestReadConsistency_AfterUpdate(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -258,8 +250,6 @@ func TestReadConsistency_AfterUpdate(t *testing.T) {
 
 // TestLogReplication tests that Raft log entries replicate.
 func TestLogReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -303,8 +293,6 @@ func TestLogReplication(t *testing.T) {
 
 // TestLogReplication_TermIncrement tests term increments on leader change.
 func TestLogReplication_TermIncrement(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -335,8 +323,6 @@ func TestLogReplication_TermIncrement(t *testing.T) {
 
 // TestSnapshotCreation tests that snapshots are created.
 func TestSnapshotCreation(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -379,8 +365,6 @@ func TestSnapshotCreation(t *testing.T) {
 
 // TestSnapshotRecovery tests that a new node catches up via snapshot.
 func TestSnapshotRecovery(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -402,7 +386,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("recovery-test-%d-%d", time.Now().UnixNano(), i)
 		testKeys[i] = hashString(key)
-		data := []byte(fmt.Sprintf(`{"index": %d, "timestamp": "%s"}`, i, time.Now().Format(time.RFC3339)))
+		data := []byte(fmt.Sprintf(`{"index": %d, "timestamp": %q}`, i, time.Now().Format(time.RFC3339)))
 		err := leader.storage.Put(ctx, "RecoveryTest", testKeys[i], data, shardID)
 		require.NoError(t, err)
 		written[testKeys[i]] = data
@@ -431,8 +415,6 @@ func TestSnapshotRecovery(t *testing.T) {
 
 // TestConsensus_ConcurrentWrites tests concurrent writes achieve consensus.
 func TestConsensus_ConcurrentWrites(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -476,8 +458,6 @@ func TestConsensus_ConcurrentWrites(t *testing.T) {
 
 // TestConsensus_OrderPreservation tests that operation order is preserved.
 func TestConsensus_OrderPreservation(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 

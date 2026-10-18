@@ -20,8 +20,10 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -35,7 +37,8 @@ type Authenticode interface {
 	// This enables UEFI Secure Boot verification
 	Sign(input io.Reader, output io.Writer) error
 
-	// SignFile signs a PE/COFF file and writes the signed output
+	// SignFile signs a PE/COFF file and writes the signed output. The output
+	// is replaced atomically, so outputPath may equal inputPath.
 	SignFile(inputPath, outputPath string) error
 
 	// Verify verifies an Authenticode signature on a PE/COFF file
@@ -189,25 +192,29 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 
 	s.logger.Info("[AUTHENTICODE] Signed with keystore", "signature_size", len(signature), "backend", s.keystore.Type())
 
+	// Optional: countersign the signature at an RFC 3161 time-stamp authority.
+	// A configured TSA that cannot stamp fails the signing: the caller asked
+	// for a signature that outlives its certificate, and silently dropping the
+	// timestamp would hand back one that does not.
+	var unauthenticatedAttrs []attribute
+	if s.timestampURL != "" {
+		s.logger.Info("[AUTHENTICODE] Requesting RFC 3161 timestamp", "url", s.timestampURL)
+		timestamp, err := s.timestampAttribute(signature)
+		if err != nil {
+			return err
+		}
+		unauthenticatedAttrs = append(unauthenticatedAttrs, timestamp)
+		s.logger.Info("[AUTHENTICODE] Timestamp added")
+	}
+
 	// Create PKCS#7 signature structure with the pre-computed signature
 	// IMPORTANT: Must pass the SAME spcContent bytes that were used for signing
-	pkcs7Sig, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime)
+	pkcs7Sig, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime, unauthenticatedAttrs)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create PKCS#7 signature", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] PKCS#7 signature created", "size", len(pkcs7Sig))
-
-	// Optional: Add timestamp
-	if s.timestampURL != "" {
-		s.logger.Info("[AUTHENTICODE] Adding RFC3161 timestamp", "url", s.timestampURL)
-		pkcs7Sig, err = s.addTimestamp(pkcs7Sig, attrDigest)
-		if err != nil {
-			s.logger.Warn("Failed to add timestamp (non-fatal)", "error", err)
-		} else {
-			s.logger.Info("[AUTHENTICODE] Timestamp added successfully")
-		}
-	}
 
 	// Embed signature in PE file
 	signedPE, err := s.embedSignature(pe, pkcs7Sig)
@@ -312,7 +319,7 @@ func buildSPCLink() (asn1.RawValue, error) {
 
 // createPKCS7SignatureWithTime creates a PKCS#7 SignedData structure with specific signing time
 // spcContentBytes is the pre-marshaled SPC content - must use the SAME bytes that were used for signing
-func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte, signingTime time.Time) ([]byte, error) {
+func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte, signingTime time.Time, unauthenticatedAttrs []attribute) ([]byte, error) {
 	// Content type attribute - marshal the OID and wrap in SET
 	contentTypeValue, err := asn1.Marshal(oidSPCIndirectDataContent)
 	if err != nil {
@@ -399,7 +406,8 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 			Algorithm:  oidRSAEncryption,
 			Parameters: asn1NULL,
 		},
-		EncryptedDigest: signature,
+		EncryptedDigest:           signature,
+		UnauthenticatedAttributes: unauthenticatedAttrs,
 	}
 
 	// Build certificate chain
@@ -454,7 +462,8 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 	return asn1.Marshal(ci)
 }
 
-// SignFile signs a PE/COFF file and writes the signed output
+// SignFile signs a PE/COFF file and writes the signed output. The output
+// is replaced atomically, so outputPath may equal inputPath.
 func (s *Signer) SignFile(inputPath, outputPath string) error {
 	s.logger.Info("[AUTHENTICODE] Signing file", "input", inputPath, "output", outputPath)
 
@@ -462,25 +471,51 @@ func (s *Signer) SignFile(inputPath, outputPath string) error {
 	if err != nil {
 		return &WrappedError{Msg: "failed to open input file", Err: err}
 	}
-	defer func() { _ = inputFile.Close() }()
 
-	outputFile, err := os.Create(outputPath)
+	// The signed image goes to a temporary file beside the output and is
+	// renamed over it, so outputPath may be inputPath (signing in place) and
+	// a failed signing leaves an existing output untouched.
+	tmp, err := os.CreateTemp(filepath.Dir(outputPath), "."+filepath.Base(outputPath)+".signing-*")
 	if err != nil {
-		return &WrappedError{Msg: "failed to create output file", Err: err}
+		return errors.Join(&WrappedError{Msg: "failed to create output file", Err: err}, inputFile.Close())
 	}
-	defer func() { _ = outputFile.Close() }()
+	tmpPath := tmp.Name()
 
-	if err := s.Sign(inputFile, outputFile); err != nil {
-		_ = os.Remove(outputPath)
+	err = s.writeSigned(inputFile, tmp)
+	if closeErr := inputFile.Close(); err == nil && closeErr != nil {
+		err = &WrappedError{Msg: "failed to close input file", Err: closeErr}
+	}
+	if err == nil {
+		if renameErr := os.Rename(tmpPath, outputPath); renameErr != nil {
+			err = &WrappedError{Msg: "failed to replace output file", Err: renameErr}
+		}
+	}
+	if err != nil {
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			return errors.Join(err, &WrappedError{Msg: "failed to remove temporary output file", Err: removeErr})
+		}
 		return err
 	}
 
-	// Make executable
-	if err := os.Chmod(outputPath, 0755); err != nil {
-		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
-	}
-
 	s.logger.Info("[AUTHENTICODE] File signed successfully", "output", outputPath)
+	return nil
+}
+
+// writeSigned signs input into out, makes it executable, flushes it to disk
+// and closes it.
+func (s *Signer) writeSigned(input io.Reader, out *os.File) error {
+	if err := s.Sign(input, out); err != nil {
+		return errors.Join(err, out.Close())
+	}
+	if err := out.Chmod(0755); err != nil {
+		return errors.Join(&WrappedError{Msg: "failed to set executable permissions", Err: err}, out.Close())
+	}
+	if err := out.Sync(); err != nil {
+		return errors.Join(&WrappedError{Msg: "failed to flush output file", Err: err}, out.Close())
+	}
+	if err := out.Close(); err != nil {
+		return &WrappedError{Msg: "failed to close output file", Err: err}
+	}
 	return nil
 }
 

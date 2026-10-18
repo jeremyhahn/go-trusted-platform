@@ -229,6 +229,7 @@ type Daemon struct {
 	// overlayIPsec runs overlay IPsec between Start and Stop; its floor was
 	// installed by New. nil when overlay.ipsec is disabled.
 	overlayIPsec   *overlayIPsecRun
+	dnsGRPCService *DNSServiceServer
 	pxeGRPCService *PXEGRPCService
 	ntpGRPCService *NTPGRPCService
 	vpnGRPCService *VPNGRPCService
@@ -956,9 +957,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
 	logger.Info("Cluster gRPC service registered")
 
-	// Create DNS gRPC service - stub returning Unimplemented
-	// Full implementation wired when DNS service is available
-	dnsGRPCService := NewDNSServiceServer(nil, logger.Slog())
+	// Create the DNS gRPC service over the DNS service a dns: section with
+	// a server starts (config.DNSService): the same instance the QUIC
+	// handler, the MCP provider and the embedded SDK transport reach. A node
+	// without one builds it with no backend, and every handler answers
+	// Unavailable with SERVICE_NOT_CONFIGURED (requireService), as REST
+	// answers 503.
+	dnsGRPCService := NewDNSServiceServer(fullDNSService(config.DNSService), logger.Slog())
 	if grpcServer != nil {
 		platformv1.RegisterDNSServiceServer(grpcServer, dnsGRPCService)
 	}
@@ -967,8 +972,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("DNS gRPC service registered")
 
-	// Create PXE gRPC service - stub returning Unimplemented
-	// Full implementation wired when PXE service is available
+	// Create the PXE gRPC service. Every transport serves this one
+	// instance. platformd never sets its backend (PXE is a gateway-role
+	// service and the platformd config has no pxe: section), so each call
+	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
 	pxeGRPCService := NewPXEGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
@@ -1395,6 +1402,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		overlayGRPCService:           overlayService,
 		overlayCtrl:                  overlayCtrl,
 		overlayIPsec:                 overlayIPsecSvc,
+		dnsGRPCService:               dnsGRPCService,
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
 		vpnGRPCService:               vpnGRPCService,
@@ -2816,6 +2824,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	return err
 }
 
+// forceStopTimeoutSeconds is the deadline ForceStop hands each service's
+// Stop. A forced stop ignores the error a failed or expired Stop returns.
+const forceStopTimeoutSeconds = 5
+
 // ForceStop immediately stops the daemon
 func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
@@ -2892,7 +2904,7 @@ func (d *Daemon) ForceStop() error {
 	// Force shutdown through the service
 	_, _ = d.service.Shutdown(context.Background(), &platformv1.ShutdownRequest{
 		Graceful:       false,
-		TimeoutSeconds: 5,
+		TimeoutSeconds: forceStopTimeoutSeconds,
 	})
 
 	d.running.Store(false)
@@ -3079,6 +3091,13 @@ func (d *Daemon) GatewayGRPCService() *GatewayService {
 // Returns nil if not configured.
 func (d *Daemon) OverlayGRPCService() *OverlayService {
 	return d.overlayGRPCService
+}
+
+// DNSGRPCServiceServer returns the DNS gRPC service registered on the gRPC
+// and Unix servers and the embedded transport. It is never nil; on a node
+// without a DNS backend every handler answers not-configured.
+func (d *Daemon) DNSGRPCServiceServer() *DNSServiceServer {
+	return d.dnsGRPCService
 }
 
 // PXEGRPCServiceServer returns the PXE gRPC service backing /api/v1/pxe.

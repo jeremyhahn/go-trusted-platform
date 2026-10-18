@@ -43,48 +43,72 @@ const (
 	ovmfVarsPath   = "/usr/share/OVMF/OVMF_VARS_4M.fd"
 )
 
-// skipIfNotInDevcontainer skips the test if not running in the devcontainer
+// requireDevcontainer fails the test unless it runs in the devcontainer
 // environment with QEMU/OVS/swtpm available.
-func skipIfNotInDevcontainer(t *testing.T) {
+func requireDevcontainer(t *testing.T) {
 	t.Helper()
+	if err := checkDevcontainer(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
+}
 
-	// Check for integration test environment variable
-	if os.Getenv("INTEGRATION_TEST") != "1" {
-		t.Skip("Skipping: INTEGRATION_TEST environment variable not set (not in devcontainer)")
+// ErrMissingPrerequisite reports a devcontainer prerequisite the compute
+// orchestrator tests need but the environment lacks.
+type ErrMissingPrerequisite struct {
+	Prerequisite string
+	Remedy       string
+	Err          error
+}
+
+func (e ErrMissingPrerequisite) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v: %s", e.Prerequisite, e.Err, e.Remedy)
+	}
+	return fmt.Sprintf("%s: %s", e.Prerequisite, e.Remedy)
+}
+
+func (e ErrMissingPrerequisite) Unwrap() error {
+	return e.Err
+}
+
+// devcontainerRemedy names where the compute prerequisites come from.
+const devcontainerRemedy = "run in the devcontainer (test/integration/compute/docker-compose.yml), " +
+	"which runs as root, installs qemu-system-x86, swtpm, ovmf and openvswitch, and starts OVS (AUTO_START_OVS=true)"
+
+// checkDevcontainer returns ErrMissingPrerequisite for the first compute
+// prerequisite the environment lacks.
+func checkDevcontainer() error {
+	// Root privileges are required for OVS/QEMU operations
+	if euid := os.Geteuid(); euid != 0 {
+		return ErrMissingPrerequisite{
+			Prerequisite: fmt.Sprintf("root privileges (running as euid %d)", euid),
+			Remedy:       devcontainerRemedy,
+		}
 	}
 
-	// Check root privileges (required for OVS/QEMU operations)
-	if os.Geteuid() != 0 {
-		t.Skip("Skipping: root privileges required for compute integration tests")
-	}
-
-	// Check QEMU availability
 	if _, err := exec.LookPath(qemuBinary); err != nil {
-		t.Skip("Skipping: QEMU not available")
+		return ErrMissingPrerequisite{Prerequisite: "QEMU binary " + qemuBinary, Remedy: devcontainerRemedy, Err: err}
 	}
 
-	// Check OVS availability
-	if _, err := os.Stat(ovsSocketPath); os.IsNotExist(err) {
-		t.Skip("Skipping: OVS socket not available at " + ovsSocketPath)
+	if _, err := os.Stat(ovsSocketPath); err != nil {
+		return ErrMissingPrerequisite{Prerequisite: "OVS socket " + ovsSocketPath, Remedy: devcontainerRemedy, Err: err}
 	}
 
-	// Check OVS is running
+	// The socket can outlive the daemon, so ask OVS itself
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "show")
-	if err := cmd.Run(); err != nil {
-		t.Skip("Skipping: OVS is not running")
+	if err := exec.CommandContext(ctx, "ovs-vsctl", "show").Run(); err != nil {
+		return ErrMissingPrerequisite{Prerequisite: "running OVS (ovs-vsctl show)", Remedy: devcontainerRemedy, Err: err}
 	}
 
-	// Check swtpm availability
 	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("Skipping: swtpm not available")
+		return ErrMissingPrerequisite{Prerequisite: "swtpm binary", Remedy: devcontainerRemedy, Err: err}
 	}
 
-	// Check OVMF firmware availability
-	if _, err := os.Stat(ovmfCodePath); os.IsNotExist(err) {
-		t.Skip("Skipping: OVMF firmware not available at " + ovmfCodePath)
+	if _, err := os.Stat(ovmfCodePath); err != nil {
+		return ErrMissingPrerequisite{Prerequisite: "OVMF firmware " + ovmfCodePath, Remedy: devcontainerRemedy, Err: err}
 	}
+	return nil
 }
 
 // createTestOrchestrator creates a QEMU orchestrator configured for integration testing.
@@ -178,7 +202,7 @@ func cleanupTestDir(t *testing.T, dir string) {
 
 // TestQEMUOrchestratorStart tests the full VM lifecycle with Start().
 func TestQEMUOrchestratorStart(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -240,7 +264,7 @@ func TestQEMUOrchestratorStart(t *testing.T) {
 
 // TestQEMUOrchestratorStartError tests Start() error handling.
 func TestQEMUOrchestratorStartError(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 
 	workDir := t.TempDir()
 	defer cleanupTestDir(t, workDir)
@@ -264,7 +288,7 @@ func TestQEMUOrchestratorStartError(t *testing.T) {
 
 // TestQEMUOrchestratorStop tests stopping a running VM.
 func TestQEMUOrchestratorStop(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -314,7 +338,7 @@ func TestQEMUOrchestratorStop(t *testing.T) {
 
 // TestQEMUOrchestratorStopError tests Stop() error handling.
 func TestQEMUOrchestratorStopError(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 
 	workDir := t.TempDir()
 	defer cleanupTestDir(t, workDir)
@@ -346,9 +370,86 @@ func TestQEMUOrchestratorStopError(t *testing.T) {
 	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
 }
 
+// TestQEMUOrchestratorSuspendResumeReboot tests suspend, resume and reboot of a
+// running VM instance, and the wrong-state errors of suspend and resume.
+func TestQEMUOrchestratorSuspendResumeReboot(t *testing.T) {
+	requireDevcontainer(t)
+	setupTestBridge(t)
+	defer cleanupTestBridge(t)
+
+	workDir := t.TempDir()
+	defer cleanupTestDir(t, workDir)
+
+	orchestrator := createTestOrchestrator(t, workDir)
+	defer orchestrator.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	profile := createTestDeviceProfile("test-vm-suspend")
+
+	instance, err := orchestrator.Create(ctx, profile)
+	require.NoError(t, err)
+	defer func() {
+		state, stateErr := orchestrator.GetState(ctx, instance.ID)
+		if stateErr == nil && state != compute.StateStopped {
+			if stopErr := orchestrator.Stop(ctx, instance.ID); stopErr != nil {
+				t.Logf("Cleanup: failed to stop VM %s: %v", instance.ID, stopErr)
+			}
+		}
+		if deleteErr := orchestrator.Delete(ctx, instance.ID); deleteErr != nil {
+			t.Logf("Cleanup: failed to delete VM %s: %v", instance.ID, deleteErr)
+		}
+	}()
+
+	// Resuming an instance that is not suspended fails.
+	err = orchestrator.Resume(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotSuspended)
+
+	// Suspending an instance that is not running fails.
+	err = orchestrator.Suspend(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
+
+	err = orchestrator.Start(ctx, instance.ID)
+	require.NoError(t, err)
+
+	// Suspend: the instance is paused, and a second suspend fails.
+	err = orchestrator.Suspend(ctx, instance.ID)
+	require.NoError(t, err, "Failed to suspend VM instance")
+
+	state, err := orchestrator.GetState(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.Equal(t, compute.StateSuspended, state, "State should be suspended after suspend")
+
+	err = orchestrator.Suspend(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
+
+	// Resume: the instance runs again, and a second resume fails.
+	err = orchestrator.Resume(ctx, instance.ID)
+	require.NoError(t, err, "Failed to resume VM instance")
+
+	state, err = orchestrator.GetState(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.Equal(t, compute.StateRunning, state, "State should be running after resume")
+
+	err = orchestrator.Resume(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotSuspended)
+
+	// Reboot: stop then start leaves the instance running.
+	err = compute.Reboot(ctx, orchestrator, instance.ID)
+	require.NoError(t, err, "Failed to reboot VM instance")
+
+	state, err = orchestrator.GetState(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.Equal(t, compute.StateRunning, state, "State should be running after reboot")
+
+	err = orchestrator.Stop(ctx, instance.ID)
+	require.NoError(t, err)
+}
+
 // TestQEMUOrchestratorAttachNetwork tests OVS network attachment.
 func TestQEMUOrchestratorAttachNetwork(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -391,7 +492,7 @@ func TestQEMUOrchestratorAttachNetwork(t *testing.T) {
 
 // TestQEMUOrchestratorAttachNetworkError tests AttachNetwork() error handling.
 func TestQEMUOrchestratorAttachNetworkError(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -427,7 +528,7 @@ func TestQEMUOrchestratorAttachNetworkError(t *testing.T) {
 
 // TestQEMUOrchestratorDetachNetwork tests OVS network detachment.
 func TestQEMUOrchestratorDetachNetwork(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -471,7 +572,7 @@ func TestQEMUOrchestratorDetachNetwork(t *testing.T) {
 
 // TestQEMUOrchestratorDetachNetworkError tests DetachNetwork() error handling.
 func TestQEMUOrchestratorDetachNetworkError(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -513,7 +614,7 @@ func TestQEMUOrchestratorDetachNetworkError(t *testing.T) {
 // TestQEMUOrchestratorE2ELifecycle tests the complete end-to-end lifecycle:
 // Create VM -> Start -> Attach Network -> Stop -> Delete
 func TestQEMUOrchestratorE2ELifecycle(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -604,7 +705,7 @@ func TestQEMUOrchestratorE2ELifecycle(t *testing.T) {
 
 // TestQEMUOrchestratorMultipleInstances tests managing multiple VM instances.
 func TestQEMUOrchestratorMultipleInstances(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 
@@ -671,7 +772,7 @@ func TestQEMUOrchestratorMultipleInstances(t *testing.T) {
 
 // TestQEMUOrchestratorWithTPM tests VM creation with TPM enabled.
 func TestQEMUOrchestratorWithTPM(t *testing.T) {
-	skipIfNotInDevcontainer(t)
+	requireDevcontainer(t)
 	setupTestBridge(t)
 	defer cleanupTestBridge(t)
 

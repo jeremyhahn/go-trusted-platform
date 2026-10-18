@@ -302,6 +302,7 @@ GET /api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A
 | 409 | Conflict |
 | 429 | Rate limited |
 | 500 | Server error |
+| 503 | No DNS backend: the daemon has no `dns:` section (code `SERVICE_NOT_CONFIGURED`) |
 
 ## Rate Limiting
 

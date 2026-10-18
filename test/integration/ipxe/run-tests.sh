@@ -9,12 +9,18 @@
 #   ./run-tests.sh dhcp      # Run DHCP protocol tests
 #   ./run-tests.sh tftp      # Run TFTP protocol tests
 #   ./run-tests.sh http      # Run HTTP boot script tests
-#   ./run-tests.sh multi     # Run multi-protocol integration tests
+#   ./run-tests.sh multi     # Run the TestIPXE* boot-flow tests
+#
+# all, dhcp and multi set IPXE_DHCP_ENABLED=1, as the shared runner's
+# TARGET_ENV does for ipxe and ipxe-dhcp: TestMain then starts the DHCP
+# server the DHCP tests and TestIPXEDHCPToHTTPChain need.
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
+
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE" print-build-tags)}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -42,10 +48,10 @@ run_all_tests() {
     log_info "=== Running iPXE Integration Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
+    export IPXE_DHCP_ENABLED=1
 
-    go test -v -count=1 -parallel 1 -timeout 5m -tags=integration \
+    go test -v -count=1 -parallel 1 -timeout 5m -tags "$BUILD_TAGS" \
         ./test/integration/ipxe/...
 
     log_info "=== iPXE Integration Tests Complete ==="
@@ -55,11 +61,11 @@ run_dhcp_tests() {
     log_info "=== Running DHCP Protocol Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
+    export IPXE_DHCP_ENABLED=1
 
-    go test -v -count=1 -parallel 1 -timeout 5m -tags=integration \
-        -run "TestDHCP" ./test/integration/ipxe/...
+    go test -v -count=1 -parallel 1 -timeout 5m -tags "$BUILD_TAGS" \
+        -run '.*DHCP.*' ./test/integration/ipxe/...
 
     log_info "=== DHCP Protocol Tests Complete ==="
 }
@@ -68,10 +74,9 @@ run_tftp_tests() {
     log_info "=== Running TFTP Protocol Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
 
-    go test -v -count=1 -parallel 1 -timeout 5m -tags=integration \
+    go test -v -count=1 -parallel 1 -timeout 5m -tags "$BUILD_TAGS" \
         -run "TestTFTP" ./test/integration/ipxe/...
 
     log_info "=== TFTP Protocol Tests Complete ==="
@@ -81,10 +86,9 @@ run_http_tests() {
     log_info "=== Running HTTP Boot Script Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
 
-    go test -v -count=1 -parallel 1 -timeout 5m -tags=integration \
+    go test -v -count=1 -parallel 1 -timeout 5m -tags "$BUILD_TAGS" \
         -run "TestHTTP" ./test/integration/ipxe/...
 
     log_info "=== HTTP Boot Script Tests Complete ==="
@@ -94,11 +98,11 @@ run_multi_tests() {
     log_info "=== Running Multi-Protocol Integration Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
+    export IPXE_DHCP_ENABLED=1
 
-    go test -v -count=1 -parallel 1 -timeout 10m -tags=integration \
-        -run "TestMultiProtocol|TestPXE" ./test/integration/ipxe/...
+    go test -v -count=1 -parallel 1 -timeout 10m -tags "$BUILD_TAGS" \
+        -run '^TestIPXE' ./test/integration/ipxe/...
 
     log_info "=== Multi-Protocol Integration Tests Complete ==="
 }
@@ -131,7 +135,7 @@ case "${1:-all}" in
         echo "  dhcp  - Run DHCP protocol tests only"
         echo "  tftp  - Run TFTP protocol tests only"
         echo "  http  - Run HTTP boot script tests only"
-        echo "  multi - Run multi-protocol integration tests"
+        echo "  multi - Run the TestIPXE* boot-flow tests"
         exit 1
         ;;
 esac

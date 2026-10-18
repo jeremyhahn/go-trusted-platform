@@ -356,7 +356,7 @@ func TestFIPSInstaller_installPackage_APKManagerError(t *testing.T) {
 		OS:         "alpine",
 		Version:    "3.20",
 		Arch:       "x86_64",
-		Mirror:     "http://invalid.test",
+		Mirror:     closedMirror(t),
 		WorkDir:    tmpDir,
 		MountPoint: tmpDir,
 		Logger:     logger,

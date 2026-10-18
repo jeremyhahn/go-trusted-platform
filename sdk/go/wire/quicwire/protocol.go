@@ -195,26 +195,16 @@ const (
 	OpIAKDelete         byte = 0x5E
 	OpIAKCSR            byte = 0x5F
 
-	// Compute/VM Operations (0x60-0x6F)
-	OpVMCreate    byte = 0x60
-	OpVMDelete    byte = 0x61
-	OpVMStart     byte = 0x62
-	OpVMStop      byte = 0x63
-	OpVMGet       byte = 0x64
-	OpVMList      byte = 0x65
-	OpVMAttachNet byte = 0x66
-	OpVMDetachNet byte = 0x67
-	OpVMActivate  byte = 0x68
-	// OpVMExtendedCategory multiplexes the extended VM operations
-	// (restart, suspend, resume, attest, attest-verify, console, and
-	// snapshot create/restore/delete/list) as sub-opcodes carried in
-	// payload[0]. The direct opcodes 0xB6-0xBE collide with the IAM
-	// role/group ranges at the top level, so transports reach the
-	// extended VM surface through this category opcode inside the VM
-	// range (it replaces the never-implemented OpVMDeactivate
-	// allocation).
+	// Compute (0x69). The VM verbs travel as OpVMExtendedCategory
+	// sub-opcodes (vm_opcodes.go); the rest of 0x60-0x6A is unassigned.
+	//
+	// OpVMExtendedCategory multiplexes the VM operations (create, delete,
+	// start, stop, get, list, restart, suspend, resume and the operational
+	// VM verbs) and the container verbs as sub-opcodes carried in
+	// payload[0]. Sub-opcode values such as 0xB6-0xB8 collide with the
+	// IAM role/group ranges at the top level, which is why they live
+	// under this category byte.
 	OpVMExtendedCategory byte = 0x69
-	OpVMGetState         byte = 0x6A
 
 	// IAK Extended Operations (0x6B-0x6F)
 	OpIAKInstallCert     byte = 0x6B
@@ -886,17 +876,7 @@ var opcodeNames = map[byte]string{
 	OpIAKDeleteCert:      "IAKDeleteCert",
 
 	// VM
-	OpVMCreate:           "VMCreate",
-	OpVMDelete:           "VMDelete",
-	OpVMStart:            "VMStart",
-	OpVMStop:             "VMStop",
-	OpVMGet:              "VMGet",
-	OpVMList:             "VMList",
-	OpVMAttachNet:        "VMAttachNet",
-	OpVMDetachNet:        "VMDetachNet",
-	OpVMActivate:         "VMActivate",
 	OpVMExtendedCategory: "VMExtendedCategory",
-	OpVMGetState:         "VMGetState",
 
 	// Attestation
 	OpAttestQuote:        "AttestQuote",

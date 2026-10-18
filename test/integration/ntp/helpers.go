@@ -114,16 +114,6 @@ func IsNoReachableSource(err error) bool {
 	return false
 }
 
-// SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set, which
-// is how the devcontainer runner gates every suite.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
-}
-
 // ShortContext derives a bounded per-call context.
 func ShortContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, 30*time.Second)

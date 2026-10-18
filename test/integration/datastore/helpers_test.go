@@ -19,7 +19,6 @@ package datastore
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,14 +36,6 @@ const startupTimeout = 60 * time.Second
 
 // shutdownTimeout is the timeout for factory shutdown operations.
 const shutdownTimeout = 10 * time.Second
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // newIntegrationClient creates a new QuicBaaS Factory for integration testing.
 // It returns the Factory's Storage interface and a cleanup function that must be called with defer.

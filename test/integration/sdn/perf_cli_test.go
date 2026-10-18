@@ -525,9 +525,7 @@ func setupPerfBridge(t *testing.T) {
 // every protocol against the running platformd. All reported values are
 // real measurements produced by the daemon against the live OVS.
 func TestGatewayPerfMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
 	requireOVSForTest(t)
-	SkipIfSDNUnavailable(t)
 
 	setupPerfBridge(t)
 

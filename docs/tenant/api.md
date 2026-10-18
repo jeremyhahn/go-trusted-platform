@@ -210,7 +210,9 @@ tenant resolves any name without the extra lookup. Another tenant's name and an
 unknown name both get `403` with the `tenant.ErrNameLookupDenied` message, so
 the two answers are identical. The shared server check never reads the REST
 session: behind the guard, the REST caller reads as unbound to
-`TenantGRPCServer`.
+`TenantGRPCServer`. This guard and `tenant.AuthorizeNameLookup` are the
+platform's own tenant-scope check, which moves to go-qrdb under the IAM
+clean-up row for tenant scope in [SPEC.md §Interfaces](../SPEC.md#interfaces).
 
 The SDK REST transport (`sdk/go/transport/rest/adapter.go`) carries
 `GetTenantByName`, `GetQuotas`, `UpdateQuotas` and `GetUsage` on the routes in
@@ -299,7 +301,10 @@ the binding is `403`, and its `error` text is the message gRPC returns with
 `PermissionDenied`: `ErrTenantForbidden`, `ErrTenantSystemOnly` or
 `tenant.ErrNameLookupDenied`. The by-name route resolves the name first, then
 calls `tenant.AuthorizeNameLookup`. Another tenant's name and an unknown name
-therefore get the same `403`, and only the system tenant sees `404`.
+therefore get the same `403`, and only the system tenant sees `404`. The
+certificate operator's `*:*` grant is the platform's own, and the IAM clean-up
+row for transport checks in [SPEC.md §Interfaces](../SPEC.md#interfaces) moves
+it to the go-qrdb decision point.
 
 The system tenant is `App.TenantID`, the same one the gRPC server uses. Every
 caller on this listener is authenticated, so the unbound caller that gRPC

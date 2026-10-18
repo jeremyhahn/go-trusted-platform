@@ -20,6 +20,7 @@ import (
 	"os"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -406,16 +407,33 @@ func TestServer_WaitForReady(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start server
+	// The server starts outside the bubble, since its listeners block in
+	// network I/O, and only once the first poll has been refused. The
+	// retry tick then runs on the synctest bubble's clock (#284).
+	start := make(chan struct{})
+	returned := make(chan struct{})
 	go func() {
+		defer close(returned)
+		<-start
 		server.Start(ctx)
 	}()
 
-	// Wait for ready with timeout
-	err = server.WaitForReady(15 * time.Second)
-	if err != nil {
-		t.Errorf("WaitForReady() error: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		result := make(chan error, 1)
+		go func() { result <- server.WaitForReady(15 * time.Second) }()
+		// Returns once the refused poll waits on its ticker.
+		synctest.Wait()
+		close(start)
+		// A listener that failed to bind returns Start instead, and the
+		// poll then reports its timeout.
+		select {
+		case <-server.Ready():
+		case <-returned:
+		}
+		if err := <-result; err != nil {
+			t.Errorf("WaitForReady() error: %v", err)
+		}
+	})
 
 	// Cleanup
 	cancel()
@@ -423,19 +441,23 @@ func TestServer_WaitForReady(t *testing.T) {
 }
 
 func TestServer_WaitForReadyTimeout(t *testing.T) {
-	config := createMinimalConfig(t)
-	logger := logging.DefaultLogger()
+	// The refused dials return at once and the polls between them run on
+	// synctest time, so the 500ms timeout costs nothing (#284).
+	synctest.Test(t, func(t *testing.T) {
+		config := createMinimalConfig(t)
+		logger := logging.DefaultLogger()
 
-	server, err := NewServer(config, logger)
-	if err != nil {
-		t.Fatalf("NewServer() error: %v", err)
-	}
+		server, err := NewServer(config, logger)
+		if err != nil {
+			t.Fatalf("NewServer() error: %v", err)
+		}
 
-	// Don't start the server, should timeout
-	err = server.WaitForReady(500 * time.Millisecond)
-	if err == nil {
-		t.Error("WaitForReady() should timeout when server not started")
-	}
+		// Don't start the server, should timeout
+		err = server.WaitForReady(500 * time.Millisecond)
+		if err == nil {
+			t.Error("WaitForReady() should timeout when server not started")
+		}
+	})
 }
 
 func TestServer_WaitForReadyDefaultTimeout(t *testing.T) {
@@ -458,9 +480,18 @@ func TestServer_WaitForReadyDefaultTimeout(t *testing.T) {
 	defer cancel()
 
 	// Start server
+	returned := make(chan struct{})
 	go func() {
+		defer close(returned)
 		server.Start(ctx)
 	}()
+	// Bound first, so the probe answers on its first dial instead of on
+	// a 100ms tick; the poll's retry is TestServer_WaitForReady's (#284).
+	// A listener that failed to bind returns Start instead.
+	select {
+	case <-server.Ready():
+	case <-returned:
+	}
 
 	// Wait for ready with zero timeout (uses default)
 	err = server.WaitForReady(0)

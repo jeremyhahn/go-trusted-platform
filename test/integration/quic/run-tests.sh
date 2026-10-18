@@ -14,7 +14,6 @@
 # Environment Variables:
 #   QUIC_SERVER_ADDR - QUIC server address (default: localhost:9444)
 #   QUIC_AUTH_TOKEN  - Authentication token for requests
-#   INTEGRATION_TEST - Set to 1 to enable tests (auto-set by script)
 #   SKIP_DAEMON_START - Set to 1 to skip starting platformd (use external server)
 
 set -e
@@ -22,8 +21,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$PROJECT_ROOT" print-build-tags)}"
+
 # Default configuration
-export INTEGRATION_TEST=1
 export QUIC_SERVER_ADDR="${QUIC_SERVER_ADDR:-localhost:9444}"
 QUIC_HOST="${QUIC_SERVER_ADDR%:*}"
 QUIC_PORT="${QUIC_SERVER_ADDR#*:}"
@@ -124,7 +125,7 @@ cd "${PROJECT_ROOT}"
 # Run the tests
 echo ""
 echo "Running QUIC tests..."
-go test -v -tags=integration "${SCRIPT_DIR}/..." "$@"
+go test -v -tags "$BUILD_TAGS" "${SCRIPT_DIR}/..." "$@"
 TEST_RESULT=$?
 
 echo ""

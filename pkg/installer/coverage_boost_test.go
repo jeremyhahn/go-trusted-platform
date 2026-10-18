@@ -990,6 +990,7 @@ func TestNewInstaller_FilesystemTypeDefaultsToLVM(t *testing.T) {
 // =============================================================================
 
 func TestInstaller_Install_OSInstallFailure(t *testing.T) {
+	withoutHostTPM(t)
 	mockDisk := new(MockDiskManager)
 	mockOS := new(MockOSInstaller)
 	mockUKI := new(MockUKIBuilder)

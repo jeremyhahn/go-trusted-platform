@@ -152,7 +152,7 @@ Examples:
 	cmd.Flags().BoolVarP(&flags.interactive, "interactive", "i", false, "Interactive configuration wizard (future)")
 
 	// Mark required flags
-	_ = cmd.MarkFlagRequired("profile")
+	cli.MarkFlagsRequired(cmd, "profile")
 
 	return cmd
 }

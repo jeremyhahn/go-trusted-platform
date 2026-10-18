@@ -27,11 +27,9 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
@@ -43,25 +41,9 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// DefaultTestTimeout is the default timeout for integration tests.
 	DefaultTestTimeout = 2 * time.Minute
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // =============================================================================
 // Mock TPM Provider

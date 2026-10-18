@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -255,6 +256,16 @@ var protoUnmarshalOptions = protojson.UnmarshalOptions{
 // responses and the standard error envelope.
 type protoResponder struct {
 	logger *slog.Logger
+	// statuses, when set, take precedence over protorestHTTPStatus.
+	statuses map[codes.Code]int
+}
+
+// keyDeleteResponder answers a refused device-identity key delete
+// (FailedPrecondition) with 412, as the daemon's IDevID and IAK delete
+// routes do, instead of the generic 400.
+func (p protoResponder) keyDeleteResponder() protoResponder {
+	p.statuses = map[codes.Code]int{codes.FailedPrecondition: http.StatusPreconditionFailed}
+	return p
 }
 
 // writeJSON writes a JSON response with the given status code.
@@ -313,7 +324,10 @@ func (p protoResponder) writeProto(w http.ResponseWriter, statusCode int, msg pr
 // writeStatusError answers with the HTTP equivalent of a service's gRPC
 // status error.
 func (p protoResponder) writeStatusError(w http.ResponseWriter, err error) {
-	code, ok := protorestHTTPStatus[status.Code(err)]
+	code, ok := p.statuses[status.Code(err)]
+	if !ok {
+		code, ok = protorestHTTPStatus[status.Code(err)]
+	}
 	if !ok {
 		code = http.StatusInternalServerError
 	}

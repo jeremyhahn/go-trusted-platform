@@ -190,6 +190,16 @@ type InstanceConfig struct {
 
 	// Environment variables for the instance
 	Environment map[string]string `json:"environment,omitempty" yaml:"environment,omitempty"`
+
+	// Description is the caller's free-text description of the instance
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+
+	// Labels are the caller's labels, which list selectors match against
+	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+
+	// Metadata is the caller's metadata. The orchestrator's own keys live in
+	// Instance.Metadata, apart from it.
+	Metadata map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
 
 // InstanceFilter is used to filter instances in List operations

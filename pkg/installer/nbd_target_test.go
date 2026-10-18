@@ -81,6 +81,8 @@ func TestCheckNBDAttached_Refused(t *testing.T) {
 func TestInstall_DisklessNBDInstallsOntoTheExport(t *testing.T) {
 	r := newInstallRecorder(t, nbdLiveCmdline)
 	r.installer.sysfsRoot = attachedNBDSysfs(t)
+	enroller := enrolledNode(t)
+	r.installer.enroller = enroller
 	// A Pi profile partitions its local disk MBR; the export is GPT anyway.
 	r.installer.config.Disk.PartitionTable = PartitionTableMBR
 	anyArg := mock.Anything
@@ -104,6 +106,7 @@ func TestInstall_DisklessNBDInstallsOntoTheExport(t *testing.T) {
 	err := r.installer.Install(context.Background())
 
 	require.ErrorContains(t, err, "stop after the disk")
+	assert.Equal(t, 1, enroller.calls, "the node enrols once, before it installs")
 	assert.Empty(t, *r.modprobes, "the TPM clear ran; it would evict the IDevID the export attaches with")
 	r.disk.AssertExpectations(t)
 	assert.Equal(t, nbdTargetDevice, r.installer.config.Disk.Device)
@@ -132,6 +135,7 @@ func TestInstall_RefusesAnUnusableNBDTargetBeforeAnythingDestructive(t *testing.
 		t.Run(name, func(t *testing.T) {
 			r := newInstallRecorder(t, nbdLiveCmdline)
 			r.installer.sysfsRoot = fakeNBDSysfs(t, tc.files)
+			r.installer.enroller = enrolledNode(t)
 			r.installer.config.Disk.PartitionTable = PartitionTableMBR
 			if tc.unencrypted {
 				r.installer.config.Disk.Encryption = nil
@@ -159,11 +163,14 @@ func TestInstall_RefusesAnUnusableNBDTargetBeforeAnythingDestructive(t *testing.
 func TestInstall_DiskNodeIgnoresNBD(t *testing.T) {
 	r := newInstallRecorder(t, "console=ttyS0 alpine_start=autoinstall platform_nbd_server=10.0.0.1:10809")
 	r.installer.sysfsRoot = fakeNBDSysfs(t, nil)
+	enroller := &recordingEnroller{err: errors.New("a disk node does not enrol in the installer")}
+	r.installer.enroller = enroller
 	r.disk.On("CreatePartitionTable", mock.Anything, PartitionTableGPT).Return(errors.New("disk error"))
 
 	err := r.installer.Install(context.Background())
 
 	require.ErrorContains(t, err, "disk setup failed")
+	assert.Zero(t, enroller.calls)
 	assert.Equal(t, "/dev/sda", r.installer.config.Disk.Device)
 	assert.NotEmpty(t, *r.modprobes, "a disk node's TPM is cleared before the install")
 }

@@ -162,6 +162,12 @@ Run with verbose output:
 go test -v ./pkg/compute/...
 ```
 
+The unit tests need no `swtpm`, `swtpm_setup`, `qemu-img`, OVMF firmware or
+OVSDB socket: they replace each with an in-memory fake or a temp file and
+never skip. The test that creates a VM against the real binaries lives in
+`test/integration/vtpm/qemu_swtpm_test.go` and runs in the devcontainer with
+`make integration-test-vtpm`; a missing binary or firmware file fails it.
+
 ## Implementation Status
 
 ### Completed

@@ -55,7 +55,7 @@ func TestNetworkProvisioningFlow(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	// Create test bridges
@@ -188,7 +188,7 @@ func TestNetworkProvisioningFlow(t *testing.T) {
 
 	t.Run("ApplyProductionPhaseACLs", func(t *testing.T) {
 		if profile.Networks[entities.DefaultPostEnrollmentNetwork] == nil || len(profile.Networks[entities.DefaultPostEnrollmentNetwork].ACLs) == 0 {
-			t.Skip("No production ACLs defined")
+			t.Fatal("the createTestDeviceProfile fixture defines no post-enrollment ACLs")
 		}
 
 		// Get the new OpenFlow port number (may have changed after moving to production bridge)
@@ -251,7 +251,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-test-profile"
@@ -268,7 +268,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	t.Run("TranslateProvisioningNetworkConfig", func(t *testing.T) {
 		if profile.Networks[entities.DefaultEnrollmentNetwork] == nil {
-			t.Skip("No provisioning network config")
+			t.Fatal("the createTestDeviceProfile fixture defines no enrollment network")
 		}
 
 		config := profile.Networks[entities.DefaultEnrollmentNetwork]
@@ -288,7 +288,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	t.Run("TranslateProductionNetworkConfig", func(t *testing.T) {
 		if profile.Networks[entities.DefaultPostEnrollmentNetwork] == nil {
-			t.Skip("No production network config")
+			t.Fatal("the createTestDeviceProfile fixture defines no post-enrollment network")
 		}
 
 		config := profile.Networks[entities.DefaultPostEnrollmentNetwork]
@@ -308,7 +308,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	t.Run("ApplyACLRulesAsOpenFlowEntries", func(t *testing.T) {
 		if profile.Networks[entities.DefaultPostEnrollmentNetwork] == nil {
-			t.Skip("No production network config")
+			t.Fatal("the createTestDeviceProfile fixture defines no post-enrollment network")
 		}
 
 		portName := "test-acl-port"

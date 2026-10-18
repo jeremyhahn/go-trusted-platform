@@ -69,7 +69,7 @@ Examples:
 	cmd.Flags().StringVar(&pcrBank, "pcr-bank", "sha256", "PCR bank algorithm (sha1, sha256, sha384, sha512)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing sealed data")
 
-	_ = cmd.MarkFlagRequired("cn")
+	cli.MarkFlagsRequired(cmd, "cn")
 
 	return cmd
 }

@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,46 @@ type grpcMockOrchestrator struct {
 	waitFunc      func(ctx context.Context, instanceID string) error
 	getStateFunc  func(ctx context.Context, instanceID string) (compute.InstanceState, error)
 	closeFunc     func() error
+
+	// specs records every VMSpec CreateWithSpec received.
+	specs []compute.VMSpec
+}
+
+// CreateWithSpec records spec and applies the parts a VM reports back, the
+// way the QEMU orchestrator does.
+func (m *grpcMockOrchestrator) CreateWithSpec(ctx context.Context, profile *entities.DeviceProfile, spec compute.VMSpec) (*compute.Instance, error) {
+	m.mu.Lock()
+	m.specs = append(m.specs, spec)
+	m.mu.Unlock()
+
+	instance, err := m.Create(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if instance.Config == nil {
+		instance.Config = &compute.InstanceConfig{}
+	}
+	if spec.MemoryMB > 0 {
+		instance.Config.Memory = spec.MemoryMB
+	}
+	if spec.CPUs > 0 {
+		instance.Config.CPUs = spec.CPUs
+	}
+	instance.Config.SecureBoot = spec.SecureBoot
+	instance.Config.BootMode = spec.BootMode
+	instance.Config.Description = spec.Description
+	instance.Config.Labels = spec.Labels
+	instance.Config.Metadata = spec.Metadata
+	return instance, nil
+}
+
+// recordedSpecs returns the specs CreateWithSpec has received.
+func (m *grpcMockOrchestrator) recordedSpecs() []compute.VMSpec {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.specs)
 }
 
 func newGRPCMockOrchestrator() *grpcMockOrchestrator {
@@ -1397,7 +1438,11 @@ func TestComputeGRPCService_InstanceStateToVMState(t *testing.T) {
 		{"running", compute.StateRunning, platformv1.VMState_VM_STATE_RUNNING},
 		{"stopping", compute.StateStopping, platformv1.VMState_VM_STATE_STOPPING},
 		{"error", compute.StateError, platformv1.VMState_VM_STATE_ERROR},
+		{"suspended", compute.StateSuspended, platformv1.VMState_VM_STATE_PAUSED},
 		{"unknown", compute.StateUnknown, platformv1.VMState_VM_STATE_UNSPECIFIED},
+		{"creating", compute.StateCreating, platformv1.VMState_VM_STATE_UNSPECIFIED},
+		{"deleting", compute.StateDeleting, platformv1.VMState_VM_STATE_UNSPECIFIED},
+		{"unrecognised value", compute.InstanceState("hibernating"), platformv1.VMState_VM_STATE_UNSPECIFIED},
 	}
 
 	for _, tc := range tests {
@@ -1460,9 +1505,17 @@ func TestComputeGRPCService_InstanceStateToContainerState(t *testing.T) {
 		expected platformv1.ContainerState
 	}{
 		{"creating", compute.StateCreating, platformv1.ContainerState_CONTAINER_STATE_CREATED},
+		{"starting", compute.StateStarting, platformv1.ContainerState_CONTAINER_STATE_STARTING},
 		{"running", compute.StateRunning, platformv1.ContainerState_CONTAINER_STATE_RUNNING},
+		{"suspended", compute.StateSuspended, platformv1.ContainerState_CONTAINER_STATE_PAUSED},
+		{"stopping", compute.StateStopping, platformv1.ContainerState_CONTAINER_STATE_STOPPING},
 		{"stopped", compute.StateStopped, platformv1.ContainerState_CONTAINER_STATE_EXITED},
+		{"error", compute.StateError, platformv1.ContainerState_CONTAINER_STATE_ERROR},
+		// No proto value: these stay UNSPECIFIED rather than claim a state.
 		{"unknown", compute.StateUnknown, platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED},
+		{"deleting", compute.StateDeleting, platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED},
+		{"unrecognised value", compute.InstanceState("hibernating"), platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED},
+		{"empty value", compute.InstanceState(""), platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED},
 	}
 
 	for _, tc := range tests {
@@ -1471,4 +1524,15 @@ func TestComputeGRPCService_InstanceStateToContainerState(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+// TestComputeGRPCService_ContainerProtoReportsSuspendedAsPaused pins the
+// #704 parity defect: a suspended workload read through the container view
+// was UNSPECIFIED while the VM view said PAUSED.
+func TestComputeGRPCService_ContainerProtoReportsSuspendedAsPaused(t *testing.T) {
+	svc := createTestComputeService(t)
+	instance := &compute.Instance{ID: "c-1", Name: "web", State: compute.StateSuspended}
+
+	assert.Equal(t, platformv1.ContainerState_CONTAINER_STATE_PAUSED, svc.instanceToContainerProto(instance).GetState())
+	assert.Equal(t, platformv1.VMState_VM_STATE_PAUSED, svc.instanceToVMProto(instance).GetState())
 }

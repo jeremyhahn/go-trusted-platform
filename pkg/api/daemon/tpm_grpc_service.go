@@ -654,36 +654,15 @@ func tpmIAKAttributes(tpm quicbaassdk.TrustedPlatformModule) (*quicbaassdk.KeyAt
 	return iakAttrs, nil
 }
 
-// DeleteAK deletes the Attestation Key.
+// DeleteAK refuses: the attestation key this service names is the IAK, which
+// is TPM-resident and not evicted here, so it answers like IDevIDService
+// DeleteIAK whatever the request's handle, without touching the TPM.
 func (s *TPMGRPCService) DeleteAK(
 	ctx context.Context,
 	req *platformv1.DeleteAKRequest,
 ) (*platformv1.DeleteAKResponse, error) {
 
-	s.mu.RLock()
-	tpm := s.tpm
-	s.mu.RUnlock()
-
-	if tpm == nil {
-		return nil, status.Error(codes.Unavailable, "TPM service not available")
-	}
-
-	s.logger.Debug("TPM DeleteAK request received")
-
-	iakAttrs, err := tpm.IAKAttributes()
-	if err != nil {
-		return nil, s.mapError(err)
-	}
-
-	tpm.Flush(iakAttrs.TPMAttributes.Handle)
-
-	s.logger.Debug("TPM DeleteAK completed")
-	return &platformv1.DeleteAKResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "AK handle flushed",
-		},
-	}, nil
+	return nil, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
 }
 
 // Seal seals data to the TPM.

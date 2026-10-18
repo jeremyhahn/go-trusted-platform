@@ -791,17 +791,7 @@ func TestOpcodeToString(t *testing.T) {
 		{OpMessagingCategory, "MessagingCategory"},
 
 		// VM Operations
-		{OpVMCreate, "VMCreate"},
-		{OpVMDelete, "VMDelete"},
-		{OpVMStart, "VMStart"},
-		{OpVMStop, "VMStop"},
-		{OpVMGet, "VMGet"},
-		{OpVMList, "VMList"},
-		{OpVMAttachNet, "VMAttachNet"},
-		{OpVMDetachNet, "VMDetachNet"},
-		{OpVMActivate, "VMActivate"},
 		{OpVMExtendedCategory, "VMExtendedCategory"},
-		{OpVMGetState, "VMGetState"},
 
 		// Attestation Operations
 		{OpAttestQuote, "AttestQuote"},

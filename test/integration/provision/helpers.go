@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
-	"testing"
 	"time"
 )
 
@@ -33,7 +32,6 @@ const (
 	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
-	EnvIntegrationTest      = "INTEGRATION_TEST"
 )
 
 // envOrDefault returns the environment variable value or the default.
@@ -63,14 +61,6 @@ func unixSocket() string {
 
 // platformctlPath returns the platformctl binary path.
 func platformctlPath() string { return envOrDefault(EnvPlatformCTL, "platformctl") }
-
-// SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
-}
 
 // uniqueCounter disambiguates identities generated within the same
 // nanosecond across parallel adapters.

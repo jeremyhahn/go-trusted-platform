@@ -197,6 +197,93 @@ func TestApplyDesired_CarriesTheApplyErrorBesideTheState(t *testing.T) {
 	}
 }
 
+// fakeVPNPlanes records the peer RPCs it is handed and answers with a
+// scripted refusal.
+type fakeVPNPlanes struct {
+	refusal   *ipcv1.VPNPeerRefusal
+	installed *ipcv1.VPNPeer
+	removed   *ipcv1.RemoveVPNPeerRequest
+}
+
+func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
+	f.installed = req.GetPeer()
+	return &ipcv1.InstallVPNPeerResponse{Refusal: f.refusal}
+}
+
+func (f *fakeVPNPlanes) RemoveVPNPeer(_ context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
+	f.removed = req
+	return &ipcv1.RemoveVPNPeerResponse{Refusal: f.refusal}
+}
+
+func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
+	srv, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	planes := &fakeVPNPlanes{}
+	srv.SetVPNPlanes(planes)
+
+	peer := &ipcv1.VPNPeer{LeaseId: "l1", DataPlane: "masque", Address: "100.64.0.7/32", ClientCertificateSha256: []byte{1, 2, 3}}
+	resp, err := client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: peer})
+	if err != nil {
+		t.Fatalf("InstallVPNPeer: %v", err)
+	}
+	if resp.GetRefusal() != nil {
+		t.Fatalf("refusal = %v, want none", resp.GetRefusal())
+	}
+	if planes.installed.GetLeaseId() != "l1" || planes.installed.GetAddress() != "100.64.0.7/32" ||
+		len(planes.installed.GetClientCertificateSha256()) != 3 {
+		t.Fatalf("planes saw %v", planes.installed)
+	}
+
+	removed, err := client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{DataPlane: "masque", LeaseId: "l1"})
+	if err != nil {
+		t.Fatalf("RemoveVPNPeer: %v", err)
+	}
+	if removed.GetRefusal() != nil || planes.removed.GetLeaseId() != "l1" || planes.removed.GetDataPlane() != "masque" {
+		t.Fatalf("remove = %v, planes saw %v", removed.GetRefusal(), planes.removed)
+	}
+}
+
+func TestVPNPeer_CarriesThePlanesRefusal(t *testing.T) {
+	srv, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	srv.SetVPNPlanes(&fakeVPNPlanes{refusal: &ipcv1.VPNPeerRefusal{
+		Class:           ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_PEER_CONFLICT,
+		ExistingLeaseId: "l0",
+		Reason:          "the address is already bound",
+	}})
+
+	resp, err := client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}})
+	if err != nil {
+		t.Fatalf("a refusal must not be an RPC error: %v", err)
+	}
+	refusal := resp.GetRefusal()
+	if refusal.GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_PEER_CONFLICT ||
+		refusal.GetExistingLeaseId() != "l0" || refusal.GetReason() != "the address is already bound" {
+		t.Fatalf("refusal = %v", refusal)
+	}
+}
+
+func TestVPNPeer_RefusedWhenTheProcessHostsNoPlanes(t *testing.T) {
+	srv, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	unavailable := ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE
+
+	install, err := client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}})
+	if err != nil || install.GetRefusal().GetClass() != unavailable {
+		t.Fatalf("install with no planes = %v, %v; want an UNAVAILABLE refusal", install.GetRefusal(), err)
+	}
+	remove, err := client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"})
+	if err != nil || remove.GetRefusal().GetClass() != unavailable {
+		t.Fatalf("remove with no planes = %v, %v; want an UNAVAILABLE refusal", remove.GetRefusal(), err)
+	}
+
+	// Withdrawn planes refuse again.
+	planes := &fakeVPNPlanes{}
+	srv.SetVPNPlanes(planes)
+	srv.SetVPNPlanes(nil)
+	install, err = client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}})
+	if err != nil || install.GetRefusal().GetClass() != unavailable || planes.installed != nil {
+		t.Fatalf("install after withdrawal = %v, %v; planes saw %v", install.GetRefusal(), err, planes.installed)
+	}
+}
+
 func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	// No caller is uid 4294967000, so both services must refuse us.
 	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{4294967000}}
@@ -209,6 +296,14 @@ func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	_, err = client.ApplyDesired(testContext(t), &gwstate.DesiredConfig{GatewayID: "gw-test"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("ApplyDesired err = %v, want PermissionDenied", err)
+	}
+	_, err = client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("InstallVPNPeer err = %v, want PermissionDenied", err)
+	}
+	_, err = client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("RemoveVPNPeer err = %v, want PermissionDenied", err)
 	}
 }
 

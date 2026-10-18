@@ -3,7 +3,7 @@ version: '3.8'
 services:
   sdn-test:
     build:
-      context: .
+      context: ../../../build/docker/devcontainer
       dockerfile: Dockerfile
     container_name: go-trusted-platform-sdn-test
     privileged: true
@@ -23,13 +23,16 @@ services:
       - CGO_ENABLED=1
       - GOCACHE=/tmp/go-cache
       - GOPATH=/go
+      # Optional override; unset, the command derives the tags from make.
+      - BUILD_TAGS
     working_dir: /workspace/test/integration/sdn
     command: >
       sh -c "
         echo 'Waiting for OVS to start...';
         sleep 5;
         echo 'Running integration tests...';
-        go test -v -timeout 10m ./...
+        TAGS=$${BUILD_TAGS:-integration $$(make -s -C /workspace print-build-tags)};
+        go test -v -tags \"$$TAGS\" -timeout 10m ./...
       "
 
 volumes:

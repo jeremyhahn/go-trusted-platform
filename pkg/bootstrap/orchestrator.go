@@ -245,6 +245,7 @@ type Orchestrator struct {
 	configServerReady ConfigServerReadiness
 	bmcTLSProvider    bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
 	trustConfig       *trust.Config   // base trust config; merged with per-node bmc_spki_pin/bmc_trust for node-scoped BMC TLS
+	discoverMACs      macDiscoverer   // nil ⇒ bmc.DiscoverMACs
 
 	// cpCAPool is populated after the control-plane CA bundle is successfully
 	// fetched via fetchControlPlaneCABundle (capture-then-verify). Once set,
@@ -545,6 +546,7 @@ func (o *Orchestrator) discover(ctx context.Context) ([]DiscoveredNode, error) {
 	discovered, err := DiscoverNodes(ctx, o.config.Nodes, o.logger, DiscoveryOptions{
 		TLSProvider:   o.bmcTLSProvider,
 		ClientFactory: o.bmcFactory,
+		discoverMACs:  o.discoverMACs,
 	})
 	if err != nil {
 		return nil, err

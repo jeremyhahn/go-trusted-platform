@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -28,6 +29,24 @@ import (
 // ErrUnsupported is returned when the host kernel does not expose the
 // data sources sysstats relies on (notably /proc on non-Linux systems).
 var ErrUnsupported = errors.New("sysstats: kernel data sources unavailable")
+
+var (
+	// ErrProcStatEmpty is returned when /proc/stat has no lines.
+	ErrProcStatEmpty = errors.New("sysstats: /proc/stat is empty")
+	// ErrProcStatNoAggregateCPU is returned when the first /proc/stat line
+	// is not the aggregate "cpu" line.
+	ErrProcStatNoAggregateCPU = errors.New("sysstats: /proc/stat first line is not aggregate cpu")
+	// ErrMemTotalMissing is returned when /proc/meminfo has no MemTotal.
+	ErrMemTotalMissing = errors.New("sysstats: MemTotal not found in /proc/meminfo")
+)
+
+// procRoot is the procfs directory the CPU and memory samplers read.
+// Overridable seam for tests; defaults to /proc.
+var procRoot = "/proc"
+
+// procSupported reports whether the host kernel exposes procfs.
+// Overridable seam for tests; defaults to true on Linux only.
+var procSupported = runtime.GOOS == "linux"
 
 // Snapshot is a single sample of CPU/memory/disk pressure.
 type Snapshot struct {
@@ -90,7 +109,7 @@ func (s *Sampler) Snapshot() (Snapshot, error) {
 // time since the last call. The first call seeds the baseline and
 // returns 0%.
 func (s *Sampler) cpuPercent() (float64, error) {
-	if runtime.GOOS != "linux" {
+	if !procSupported {
 		return 0, ErrUnsupported
 	}
 
@@ -124,7 +143,7 @@ func (s *Sampler) cpuPercent() (float64, error) {
 // readProcStatCPU returns (totalJiffies, idleJiffies) from the
 // aggregate "cpu" line in /proc/stat.
 func readProcStatCPU() (uint64, uint64, error) {
-	f, err := os.Open("/proc/stat")
+	f, err := os.Open(filepath.Join(procRoot, "stat"))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -132,12 +151,12 @@ func readProcStatCPU() (uint64, uint64, error) {
 
 	scanner := bufio.NewScanner(f)
 	if !scanner.Scan() {
-		return 0, 0, errors.New("sysstats: /proc/stat is empty")
+		return 0, 0, ErrProcStatEmpty
 	}
 
 	line := scanner.Text()
 	if !strings.HasPrefix(line, "cpu ") {
-		return 0, 0, errors.New("sysstats: /proc/stat first line is not aggregate cpu")
+		return 0, 0, ErrProcStatNoAggregateCPU
 	}
 
 	fields := strings.Fields(line)[1:]
@@ -161,11 +180,11 @@ func readProcStatCPU() (uint64, uint64, error) {
 // memoryPercent reads /proc/meminfo and returns
 // (MemTotal - MemAvailable) / MemTotal * 100.
 func memoryPercent() (float64, error) {
-	if runtime.GOOS != "linux" {
+	if !procSupported {
 		return 0, ErrUnsupported
 	}
 
-	f, err := os.Open("/proc/meminfo")
+	f, err := os.Open(filepath.Join(procRoot, "meminfo"))
 	if err != nil {
 		return 0, err
 	}
@@ -190,7 +209,7 @@ func memoryPercent() (float64, error) {
 		return 0, err
 	}
 	if total == 0 {
-		return 0, errors.New("sysstats: MemTotal not found in /proc/meminfo")
+		return 0, ErrMemTotalMissing
 	}
 	if available > total {
 		available = total

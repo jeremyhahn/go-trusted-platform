@@ -362,6 +362,12 @@ gRPC status codes map to DNS errors:
 | `INVALID_ARGUMENT` | invalid_zone_name, invalid_ip_address |
 | `UNAUTHENTICATED` | unauthorized |
 | `PERMISSION_DENIED` | forbidden |
+| `UNAVAILABLE` | no DNS backend: the daemon has no `dns:` section |
+
+The `UNAVAILABLE` answer carries an `ErrorInfo` detail with reason
+`SERVICE_NOT_CONFIGURED` and metadata `service=dns`. Every method checks for
+the backend before it reads the request, so an empty request answers
+`UNAVAILABLE` too, not `INVALID_ARGUMENT`.
 
 **Go Example:**
 ```go

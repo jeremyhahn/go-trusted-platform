@@ -27,8 +27,6 @@ import (
 
 // TestIAMMultiProtocol runs all IAM tests across multiple protocols
 func TestIAMMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -746,8 +744,6 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 // ============================================================================
 
 func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -876,8 +872,6 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 // ============================================================================
 
 func TestIAMCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -892,8 +886,6 @@ func TestIAMCLI(t *testing.T) {
 }
 
 func TestIAMREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -908,8 +900,6 @@ func TestIAMREST(t *testing.T) {
 }
 
 func TestIAMGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -924,8 +914,6 @@ func TestIAMGRPC(t *testing.T) {
 }
 
 func TestIAMQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -940,8 +928,6 @@ func TestIAMQUIC(t *testing.T) {
 }
 
 func TestIAMMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -956,8 +942,6 @@ func TestIAMMCP(t *testing.T) {
 }
 
 func TestIAMUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

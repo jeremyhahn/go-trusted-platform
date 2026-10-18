@@ -164,7 +164,6 @@ func startEchoServer(t *testing.T, ns, addr string) func() {
 // +inv+trk drop rule.
 func TestCTFirewallPipeline(t *testing.T) {
 	requireOVSForTest(t)
-	SkipIfSDNUnavailable(t)
 
 	bridge := setupTestBridge(t, ctFWBridge)
 	client := newOVSDBClient(t)

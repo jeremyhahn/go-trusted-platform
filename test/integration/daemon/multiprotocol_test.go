@@ -57,8 +57,6 @@ func createAdapters() []protocolAdapter {
 // TestDaemonMultiProtocol runs the full daemon test suite against all protocols.
 // This is the main entry point for daemon integration testing.
 func TestDaemonMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -107,37 +105,31 @@ func TestDaemonMultiProtocol(t *testing.T) {
 
 // TestDaemonCLI tests daemon operations via CLI protocol only.
 func TestDaemonCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testProtocol(t, NewCLIAdapter())
 }
 
 // TestDaemonREST tests daemon operations via REST protocol only.
 func TestDaemonREST(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testProtocol(t, NewRESTAdapter())
 }
 
 // TestDaemonGRPC tests daemon operations via gRPC protocol only.
 func TestDaemonGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testProtocol(t, NewGRPCAdapter())
 }
 
 // TestDaemonQUIC tests daemon operations via QUIC protocol only.
 func TestDaemonQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testProtocol(t, NewQUICAdapter())
 }
 
 // TestDaemonMCP tests daemon operations via MCP protocol only.
 func TestDaemonMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testProtocol(t, NewMCPAdapter())
 }
 
 // TestDaemonUnix tests daemon operations via Unix socket protocol only.
 func TestDaemonUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testProtocol(t, NewUnixAdapter())
 }
 
@@ -698,8 +690,6 @@ func testListProtocols(t *testing.T, ctx context.Context, adapter DaemonCommands
 
 // TestDaemonErrorHandling tests error handling across all protocols.
 func TestDaemonErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -740,8 +730,6 @@ func testGetNonExistentService(t *testing.T, ctx context.Context, adapter Daemon
 
 // TestDaemonConsistency verifies that all protocols return consistent data.
 func TestDaemonConsistency(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -759,7 +747,7 @@ func TestDaemonConsistency(t *testing.T) {
 	for _, pa := range adapters {
 		adapter := pa.adapter
 		if err := adapter.Setup(ctx); err != nil {
-			continue
+			t.Fatalf("%s adapter: setup failed; platformd must serve every protocol endpoint: %v", adapter.Name(), err)
 		}
 
 		version, err := adapter.Version(ctx)
@@ -773,8 +761,7 @@ func TestDaemonConsistency(t *testing.T) {
 	}
 
 	if len(results) < 2 {
-		t.Skip("Need at least 2 working adapters to test consistency")
-		return
+		t.Fatalf("Need at least 2 working adapters to test consistency, got %d", len(results))
 	}
 
 	// Find the first successful result as reference

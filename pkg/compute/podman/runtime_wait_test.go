@@ -17,6 +17,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,8 +49,11 @@ func TestRuntimeWaitContainer_ReturnsWhenContainerExits(t *testing.T) {
 	rt := newTestRuntime(t)
 	id := createTestContainer(t, rt, "wait-exit")
 
-	_, err := rt.WaitContainer(context.Background(), id)
-	require.NoError(t, err)
+	// The state polls run on synctest time (#284).
+	synctest.Test(t, func(t *testing.T) {
+		_, err := rt.WaitContainer(context.Background(), id)
+		require.NoError(t, err)
+	})
 
 	state, err := rt.lookupContainer(id)
 	require.NoError(t, err)
@@ -87,7 +91,10 @@ func TestRuntimeStopContainer_GracefulExitMarksStopped(t *testing.T) {
 	rt := newTestRuntime(t)
 	id := createTestContainer(t, rt, "stop-graceful")
 
-	require.NoError(t, rt.StopContainer(context.Background(), id, 30))
+	// The grace period's state polls run on synctest time (#284).
+	synctest.Test(t, func(t *testing.T) {
+		require.NoError(t, rt.StopContainer(context.Background(), id, 30))
+	})
 
 	state, err := rt.lookupContainer(id)
 	require.NoError(t, err)

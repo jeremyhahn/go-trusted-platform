@@ -28,16 +28,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// SkipIfNotIntegration skips the test if INTEGRATION_TEST is not set.
-// This provides a safety mechanism for tests that should only run in
-// the devcontainer environment.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
-}
-
 // SkipIfNotDevContainer skips the test if not running inside the devcontainer
 func SkipIfNotDevContainer(t *testing.T) {
 	t.Helper()

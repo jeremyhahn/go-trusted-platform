@@ -42,8 +42,6 @@ import (
 
 // TestInvitationMultiProtocol runs all invitation tests across multiple protocols
 func TestInvitationMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -512,7 +510,7 @@ func testInvitationOwnerOnly(t *testing.T, ctx context.Context, cmd InvitationCo
 
 		createResult, err := cmd.CreateInvitation(testCtx, createOpts)
 		if err != nil {
-			t.Skipf("Could not create invitation for test: %v", err)
+			t.Fatalf("Setup: CreateInvitation failed: %v", err)
 		}
 
 		// Try to revoke as non-owner
@@ -546,7 +544,7 @@ func testInvitationCrossTenant(t *testing.T, ctx context.Context, cmd Invitation
 
 		createResult, err := cmd.CreateInvitation(testCtx, createOpts)
 		if err != nil {
-			t.Skipf("Could not create invitation for test: %v", err)
+			t.Fatalf("Setup: CreateInvitation failed: %v", err)
 		}
 
 		// Try to revoke from different tenant
@@ -571,7 +569,7 @@ func testInvitationCrossTenant(t *testing.T, ctx context.Context, cmd Invitation
 
 		_, err := cmd.CreateInvitation(testCtx, createOpts)
 		if err != nil {
-			t.Skipf("Could not create invitation for test: %v", err)
+			t.Fatalf("Setup: CreateInvitation failed: %v", err)
 		}
 
 		// List invitations from different tenant
@@ -599,8 +597,6 @@ func testInvitationCrossTenant(t *testing.T, ctx context.Context, cmd Invitation
 // ============================================================================
 
 func TestInvitationCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -620,8 +616,6 @@ func TestInvitationCLI(t *testing.T) {
 }
 
 func TestInvitationREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -635,8 +629,6 @@ func TestInvitationREST(t *testing.T) {
 }
 
 func TestInvitationGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -650,8 +642,6 @@ func TestInvitationGRPC(t *testing.T) {
 }
 
 func TestInvitationQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -665,8 +655,6 @@ func TestInvitationQUIC(t *testing.T) {
 }
 
 func TestInvitationMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -680,8 +668,6 @@ func TestInvitationMCP(t *testing.T) {
 }
 
 func TestInvitationUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -736,8 +722,6 @@ func testCLIOutputFormats(t *testing.T, ctx context.Context, cmd InvitationComma
 // ============================================================================
 
 func TestInvitationMultiProtocol_ErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

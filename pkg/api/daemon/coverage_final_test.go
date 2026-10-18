@@ -932,8 +932,6 @@ func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
 	h.SetContainerOrchestrator(nil)
 	h.SetAttestationHandler(nil)
 	h.SetAttestationService(nil)
-	h.SetVMHandler(nil)
-	h.SetVMOrchestrator(nil)
 	h.SetDaemonService(nil)
 	h.SetOverlayHandler(nil)
 	h.SetGatewayHandler(nil)

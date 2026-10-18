@@ -48,8 +48,6 @@ import (
 // Each adapter implements the SecretsCommands interface, enabling unified testing across
 // CLI, REST, and future protocols (gRPC, QUIC, MCP, Socket).
 func TestSecretsMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

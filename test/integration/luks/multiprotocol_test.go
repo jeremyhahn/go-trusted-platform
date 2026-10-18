@@ -36,8 +36,6 @@ import (
 
 // TestLUKSMultiProtocol runs the LUKS scenario against every transport.
 func TestLUKSMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 

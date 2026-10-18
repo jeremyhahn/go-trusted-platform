@@ -97,6 +97,8 @@ func (r *ComputeRouter) RegisterRoutes(parent *mux.Router) {
 //	POST   /api/v1/compute/vms/{id}/start            - StartVM
 //	POST   /api/v1/compute/vms/{id}/stop             - StopVM
 //	POST   /api/v1/compute/vms/{id}/reboot           - RebootVM
+//	POST   /api/v1/compute/vms/{id}/suspend          - SuspendVM
+//	POST   /api/v1/compute/vms/{id}/resume           - ResumeVM
 //	GET    /api/v1/compute/vms/{id}/metrics          - GetVMMetrics
 //	POST   /api/v1/compute/vms/{id}/migrate          - MigrateVM
 func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
@@ -107,6 +109,8 @@ func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms/{id}/start", r.handlers.StartVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/stop", r.handlers.StopVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/reboot", r.handlers.RebootVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/suspend", r.handlers.SuspendVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/resume", r.handlers.ResumeVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/metrics", r.handlers.GetVMMetrics).Methods("GET")
 	sr.HandleFunc("/vms/{id}/migrate", r.handlers.MigrateVM).Methods("POST")
 }

@@ -366,10 +366,12 @@ POST /api/v1/compute/vms/{id}/attest/verify
 POST /api/v1/compute/vms/{id}/disks
 POST /api/v1/compute/vms/{id}/migrate
 POST /api/v1/compute/vms/{id}/reboot
+POST /api/v1/compute/vms/{id}/resume
 POST /api/v1/compute/vms/{id}/snapshots
 POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore
 POST /api/v1/compute/vms/{id}/start
 POST /api/v1/compute/vms/{id}/stop
+POST /api/v1/compute/vms/{id}/suspend
 POST /api/v1/device/activate
 POST /api/v1/device/activate-json
 POST /api/v1/device/boot

@@ -15,13 +15,17 @@ package luks
 
 import "os"
 
+// geteuid returns the effective user ID checkRoot tests.
+// Overridable seam for tests; defaults to os.Geteuid.
+var geteuid = os.Geteuid
+
 // checkRoot verifies the current process is running as root. LUKS2 header IO
 // requires CAP_SYS_ADMIN which in practice means running as UID 0.
 //
 // This helper lived previously in the fido2 package alongside LUKS code; it
 // now lives next to its only remaining caller.
 func checkRoot() error {
-	if os.Geteuid() != 0 {
+	if geteuid() != 0 {
 		return ErrRootRequired{}
 	}
 	return nil

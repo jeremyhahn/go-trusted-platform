@@ -47,8 +47,6 @@ import (
 // Each adapter implements the ACMECommands interface, enabling unified testing across
 // CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestACMEMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -578,14 +576,14 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 	reqResult, err := cmd.CertificateRequest(testCtx, reqOpts)
 	require.NoError(t, err, "Setup: CertificateRequest should succeed")
 
-	// Only run revocation tests if we got a certificate
+	// Revocation needs the certificate this setup just requested.
 	if reqResult.CertificateURL == "" && reqResult.SerialNumber == "" {
-		t.Skip("Skipping revocation tests: no certificate was issued")
+		t.Fatalf("Setup: CertificateRequest for %s issued no certificate (status %q); revocation needs an issued certificate URL or serial", cn, reqResult.Status)
 	}
 
 	t.Run("RevokeCertificateByURL", func(t *testing.T) {
 		if reqResult.CertificateURL == "" {
-			t.Skip("No certificate URL available")
+			t.Fatalf("Setup: CertificateRequest for %s returned no certificate URL; revoke-by-URL needs one", cn)
 		}
 
 		opts := CertificateRevokeOptions{
@@ -609,7 +607,7 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 		require.NoError(t, err, "Setup: CertificateRequest should succeed")
 
 		if reqResult2.SerialNumber == "" {
-			t.Skip("No certificate serial available")
+			t.Fatalf("Setup: CertificateRequest for %s returned no certificate serial; revoke-by-serial needs one", cn2)
 		}
 
 		opts := CertificateRevokeOptions{

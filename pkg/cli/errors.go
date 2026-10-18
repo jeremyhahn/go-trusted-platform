@@ -228,6 +228,22 @@ func (e ErrTLSCACertInvalid) Error() string {
 	return fmt.Sprintf("CA certificate file contains no valid PEM data: %s", e.Path)
 }
 
+// ErrFlagSetup is a command-line flag that could not be configured while the
+// command tree was built.
+type ErrFlagSetup struct {
+	Command string
+	Flag    string
+	Err     error
+}
+
+func (e ErrFlagSetup) Error() string {
+	return fmt.Sprintf("command %q: failed to set up flag --%s: %v", e.Command, e.Flag, e.Err)
+}
+
+func (e ErrFlagSetup) Unwrap() error {
+	return e.Err
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

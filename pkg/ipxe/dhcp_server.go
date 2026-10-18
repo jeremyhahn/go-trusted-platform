@@ -325,6 +325,12 @@ func (s *DHCPServer) handleDHCP(conn net.PacketConn, peer net.Addr, req *dhcpv4.
 		"mac", req.ClientHWAddr.String(),
 		"xid", fmt.Sprintf("0x%x", req.TransactionID))
 
+	if !hasClientHWAddr(req.ClientHWAddr) {
+		s.logger.Debug("Ignoring DHCP packet without a client hardware address",
+			"xid", fmt.Sprintf("0x%x", req.TransactionID))
+		return
+	}
+
 	switch req.MessageType() {
 	case dhcpv4.MessageTypeDiscover:
 		s.handleDiscover(conn, peer, req)
@@ -335,6 +341,18 @@ func (s *DHCPServer) handleDHCP(conn net.PacketConn, peer net.Addr, req *dhcpv4.
 	default:
 		s.logger.Debug("Ignoring DHCP message type", "type", req.MessageType().String())
 	}
+}
+
+// hasClientHWAddr reports whether chaddr names a client. Leases are keyed
+// on it, so an empty or all-zero chaddr would give every such packet the
+// same lease, and the broadcast reply is addressed to no one.
+func hasClientHWAddr(mac net.HardwareAddr) bool {
+	for _, b := range mac {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDiscover handles DHCP Discover messages.

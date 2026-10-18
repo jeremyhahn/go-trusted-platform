@@ -194,6 +194,44 @@ argon2:
   keyLen: 32
 
 # =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+#
+# An internal server gives platformd a DNS backend (pkg/app/app.go
+# newDNSService and StartDNS run only when dns.HasServer() is true), so the
+# dns suite's REST, QUIC, MCP, Unix and CLI adapters reach real zone and
+# record storage. CoreDNS listens on an unprivileged port; the suite creates
+# and deletes its own zones, so the configured zone only seeds the server.
+# DNSSEC and DANE stay off, and with no webservices nothing would publish
+# TLSA records anyway; the bootstrap suite, whose DANE tests need them, is
+# out of the runner's default set for that reason.
+
+dns:
+  default-ttl: 300
+  internal:
+    port: 9053
+    zone:
+      name: integration.internal.
+      description: Internal zone for the integration platformd
+      ttl: 300
+      internal: true
+      records:
+        soa:
+          name: integration.internal.
+          mname: ns1.integration.internal.
+          rname: hostmaster.integration.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          min_ttl: 300
+          ttl: 300
+        ns:
+          - name: "@"
+            value: ns1.integration.internal.
+            ttl: 300
+
+# =============================================================================
 # SDN CONFIGURATION
 # =============================================================================
 # Enables the overlay controller so TestOverlayMultiProtocol and

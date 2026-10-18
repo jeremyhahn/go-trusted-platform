@@ -29,7 +29,6 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -37,9 +36,6 @@ import (
 
 // Environment variables consumed by the harness.
 const (
-	// EnvIntegration is the standard "integration tests are running" gate.
-	EnvIntegration = "INTEGRATION_TEST"
-
 	// EnvPlatformdBinary points to the platformd binary used to launch the
 	// dedicated barrier-gate instance (NOT the shared daemon).
 	EnvPlatformdBinary = "PLATFORM_BARRIER_GATE_BIN"
@@ -50,16 +46,6 @@ const (
 	// EnvConfigPath points to the YAML config file passed to --config.
 	EnvConfigPath = "PLATFORM_BARRIER_GATE_CONFIG"
 )
-
-// SkipIfNotIntegration skips the test when the integration gate is not
-// set. The barrier-gate suite requires the devcontainer runner to seed
-// the PLATFORM_BARRIER_GATE_* env vars and build the platformd binary.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegration) == "" {
-		t.Skip("Skipping barrier-gate integration test: INTEGRATION_TEST not set")
-	}
-}
 
 // gatePort is the port of the M6 gate's loopback bind address,
 // apidaemon.DefaultInitOnlyHTTPAddr. The daemon gives no way to override

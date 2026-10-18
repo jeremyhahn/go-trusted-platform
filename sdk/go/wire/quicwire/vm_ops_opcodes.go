@@ -35,11 +35,6 @@ package quicwire
 // server-side against the QEMU migration manager and it returns a terminal
 // status; interactive console and log-follow remain streaming-only and
 // daemon-native.
-//
-// The extended VM lifecycle/snapshot/attestation sub-opcodes (0xB6-0xBF) are
-// handled by the flat VMHandler (see vm_handlers.go::handleExtendedCategory);
-// these operational sub-opcodes are intercepted ahead of that fallthrough by
-// the daemon dispatcher's IsVMSubOpcode check.
 const (
 	// OpVMMetrics samples a running VM's resource-usage metrics.
 	OpVMMetrics byte = 0xCC
@@ -61,8 +56,7 @@ const (
 // extended category (OpVMExtendedCategory, 0x69) sub-opcodes and routed to the
 // shared *ComputeGRPCService by the daemon dispatcher. It is deliberately
 // disjoint from containerSubOpcodes (checked first by handleVMServiceOperation)
-// and from the extended VM lifecycle sub-opcode range 0xB6-0xBF (handled by the
-// flat VMHandler).
+// and from the VM verb sub-opcodes (vm_opcodes.go).
 var vmSubOpcodes = map[byte]bool{
 	OpVMMetrics:    true,
 	OpVMAttachDisk: true,
@@ -71,9 +65,8 @@ var vmSubOpcodes = map[byte]bool{
 	OpVMMigrate:    true,
 }
 
-// IsVMSubOpcode reports whether op is an operational VM sub-opcode that must be
-// routed to the converged pb handler under OpVMExtendedCategory rather than to
-// the flat VMHandler.
+// IsVMSubOpcode reports whether op is an operational VM sub-opcode routed to
+// the converged pb handler under OpVMExtendedCategory.
 func IsVMSubOpcode(op byte) bool {
 	return vmSubOpcodes[op]
 }

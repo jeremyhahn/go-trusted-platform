@@ -43,8 +43,6 @@ import (
 
 // TestTenantMultiProtocol runs all tenant tests across multiple protocols
 func TestTenantMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -836,8 +834,6 @@ func testTenantSyncOps(t *testing.T, ctx context.Context, cmd TenantCommands, pr
 // ============================================================================
 
 func TestTenantMultiProtocol_ErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -925,8 +921,6 @@ func TestTenantMultiProtocol_ErrorHandling(t *testing.T) {
 // ============================================================================
 
 func TestTenantCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -946,8 +940,6 @@ func TestTenantCLI(t *testing.T) {
 }
 
 func TestTenantREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -961,8 +953,6 @@ func TestTenantREST(t *testing.T) {
 }
 
 func TestTenantGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -976,8 +966,6 @@ func TestTenantGRPC(t *testing.T) {
 }
 
 func TestTenantQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -991,8 +979,6 @@ func TestTenantQUIC(t *testing.T) {
 }
 
 func TestTenantMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1006,8 +992,6 @@ func TestTenantMCP(t *testing.T) {
 }
 
 func TestTenantUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

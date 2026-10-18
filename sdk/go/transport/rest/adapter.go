@@ -970,6 +970,36 @@ var templatedRouteTable = map[string]templatedRoute{
 	// pcr_bank stay in the body.
 	"/platform.v1.ComputeService/AttestContainer": itemRoute("/api/v1/compute/containers/{id}/attest", http.MethodPost, "{id}", "id"),
 
+	// DELETE /api/v1/compute/vms/{id}?delete_disks=true -- both REST servers
+	// read delete_disks from the query.
+	"/platform.v1.ComputeService/DeleteVM": {
+		path:        "/api/v1/compute/vms/{id}",
+		method:      http.MethodDelete,
+		pathParams:  []pathParam{{placeholder: "{id}", field: "id"}},
+		queryParams: []queryParam{{name: "delete_disks", field: "delete_disks"}},
+	},
+
+	// POST /api/v1/compute/vms/{id}/{start,stop,reboot,suspend,resume} --
+	// stop's force and timeout_seconds and reboot's force stay in the body.
+	"/platform.v1.ComputeService/StartVM":   itemRoute("/api/v1/compute/vms/{id}/start", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/StopVM":    itemRoute("/api/v1/compute/vms/{id}/stop", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/RebootVM":  itemRoute("/api/v1/compute/vms/{id}/reboot", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/SuspendVM": itemRoute("/api/v1/compute/vms/{id}/suspend", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/ResumeVM":  itemRoute("/api/v1/compute/vms/{id}/resume", http.MethodPost, "{id}", "id"),
+
+	// /api/v1/compute/vms/{id}/snapshots[/{snapshotId}[/restore]] -- the VM
+	// and snapshot ids ride the path; create's config stays in the body.
+	"/platform.v1.ComputeService/CreateSnapshot": itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/ListSnapshots":  itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodGet, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/DeleteSnapshot": vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodDelete),
+	"/platform.v1.ComputeService/RestoreSnapshot": vmSnapshotRoute(
+		"/api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore", http.MethodPost),
+
+	// POST /api/v1/compute/vms/{id}/attest[/verify] -- the nonce, PCR
+	// selection and evidence stay in the body.
+	"/platform.v1.ComputeService/AttestVM":            itemRoute("/api/v1/compute/vms/{id}/attest", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/VerifyVMAttestation": itemRoute("/api/v1/compute/vms/{id}/attest/verify", http.MethodPost, "{id}", "vm_id"),
+
 	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
 	//
 	// The three routes whose server template carries a :[0-9]+ constraint keep
@@ -1185,6 +1215,19 @@ func itemRoute(path, method, placeholder, field string) templatedRoute {
 		path:       path,
 		method:     method,
 		pathParams: []pathParam{{placeholder: placeholder, field: field}},
+	}
+}
+
+// vmSnapshotRoute is itemRoute for a single VM snapshot: vm_id fills {id}
+// and snapshot_id fills {snapshotId}, and neither may be empty.
+func vmSnapshotRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:   path,
+		method: method,
+		pathParams: []pathParam{
+			{placeholder: "{id}", field: "vm_id"},
+			{placeholder: "{snapshotId}", field: "snapshot_id"},
+		},
 	}
 }
 
@@ -1416,6 +1459,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
 	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
 	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	// ListVMs sends its whole request (states, selector, pagination) as the
+	// JSON body, which both REST servers decode on this GET.
+	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},
+	// CreateVM sends its whole request (config and start) as the JSON body.
+	"/platform.v1.ComputeService/CreateVM": {"/api/v1/compute/vms", http.MethodPost},
 
 	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
 	// Server registrations live in pkg/api/daemon/ceremony_rest.go.

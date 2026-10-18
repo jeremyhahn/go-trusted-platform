@@ -83,8 +83,6 @@ func newConnectedQUICAdapter(t *testing.T, ctx context.Context) *QUICAdapter {
 // the server's own TLS configuration rather than typed here, so the two
 // cannot drift.
 func TestQUICAdapterALPNMatchesTheServer(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	// The server's own TLS configuration, built the way the daemon builds
 	// it, is the reference. Reading it here rather than retyping the string
 	// is what keeps the two from drifting.
@@ -116,8 +114,6 @@ func TestQUICAdapterALPNMatchesTheServer(t *testing.T) {
 // makes the bug unconstructible must not also make the test for it
 // unwritable.
 func TestQUICWrongALPNFailsTheHandshake(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
 	defer cancel()
 
@@ -134,8 +130,6 @@ func TestQUICWrongALPNFailsTheHandshake(t *testing.T) {
 // TestQUICDeviceOperationsReachTheDaemon drives one negative case per
 // implemented opcode. Each asserts a refusal that ONLY a daemon can send.
 func TestQUICDeviceOperationsReachTheDaemon(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
 	defer cancel()
 	adapter := newConnectedQUICAdapter(t, ctx)
@@ -260,8 +254,6 @@ func TestQUICDeviceOperationsReachTheDaemon(t *testing.T) {
 // evidence comes from the same forgedQuoteEvidence helper the other
 // transports use, so all six assert against one payload shape.
 func TestQUICDeviceAttestRefusesUnsignedEvidence(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
 	defer cancel()
 	adapter := newConnectedQUICAdapter(t, ctx)

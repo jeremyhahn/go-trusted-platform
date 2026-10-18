@@ -550,7 +550,8 @@ make integration-test-cluster-failover
 make stress-sdn-cluster                  # -run TestCluster ./stress/...
 ```
 
-The integration targets set `RAFT_CLUSTER_TEST=1` and `CLUSTER_SIZE=3`.
+The suite runs on the integration build tags alone: no environment variable
+gates its replication tests.
 
 **Fault-injection seams.** `RaftOperator` is the seam: a fake that returns
 `ErrClusterUnavailable`, an empty node list, no leader, or a leader that flips

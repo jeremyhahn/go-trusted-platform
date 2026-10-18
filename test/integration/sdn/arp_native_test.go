@@ -17,9 +17,10 @@ package sdn
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"os/exec"
-	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,14 +53,10 @@ func TestNativeARP_ReadTable(t *testing.T) {
 
 // TestNativeARP_Entries tests getting all ARP entries
 func TestNativeARP_Entries(t *testing.T) {
-	skipIfNoNetworkAccess(t)
-	skipIfNoPingCommand(t)
+	requireCommand(t, "ping")
 
 	// First, ping the gateway to ensure we have at least one ARP entry
-	gateway := getDefaultGateway(t)
-	if gateway == "" {
-		t.Skip("No default gateway found, skipping test")
-	}
+	gateway := setupTestGateway(t)
 
 	// Ping gateway to populate ARP table
 	pingHost(t, gateway)
@@ -82,16 +79,12 @@ func TestNativeARP_Entries(t *testing.T) {
 
 // TestNativeARP_LookupAfterPing tests that pinging creates an ARP entry that we can lookup
 func TestNativeARP_LookupAfterPing(t *testing.T) {
-	skipIfNoNetworkAccess(t)
-	skipIfNoPingCommand(t)
+	requireCommand(t, "ping")
 
-	// Get default gateway
-	gateway := getDefaultGateway(t)
-	if gateway == "" {
-		t.Skip("No default gateway found, skipping test")
-	}
+	// Get the test-owned gateway
+	gateway := setupTestGateway(t)
 
-	t.Logf("Default gateway: %s", gateway)
+	t.Logf("Test gateway: %s", gateway)
 
 	// Ping the gateway to ensure ARP entry exists
 	pingHost(t, gateway)
@@ -157,14 +150,10 @@ func TestNativeARP_LookupNotFound(t *testing.T) {
 
 // TestNativeARP_MultipleEntries tests handling multiple ARP entries
 func TestNativeARP_MultipleEntries(t *testing.T) {
-	skipIfNoNetworkAccess(t)
-	skipIfNoPingCommand(t)
+	requireCommand(t, "ping")
 
 	// Get gateway
-	gateway := getDefaultGateway(t)
-	if gateway == "" {
-		t.Skip("No default gateway found, skipping test")
-	}
+	gateway := setupTestGateway(t)
 
 	// Ping gateway
 	pingHost(t, gateway)
@@ -209,14 +198,10 @@ func TestNativeARP_MultipleEntries(t *testing.T) {
 
 // TestNativeARP_LookupIP tests reverse lookup (MAC to IP)
 func TestNativeARP_LookupIP(t *testing.T) {
-	skipIfNoNetworkAccess(t)
-	skipIfNoPingCommand(t)
+	requireCommand(t, "ping")
 
 	// Get gateway and ping it
-	gateway := getDefaultGateway(t)
-	if gateway == "" {
-		t.Skip("No default gateway found, skipping test")
-	}
+	gateway := setupTestGateway(t)
 
 	pingHost(t, gateway)
 	waitForARPEntry(t, gateway)
@@ -293,14 +278,10 @@ func TestNativeARP_InvalidMAC(t *testing.T) {
 
 // TestNativeARP_GetMACForIP tests the convenience function
 func TestNativeARP_GetMACForIP(t *testing.T) {
-	skipIfNoNetworkAccess(t)
-	skipIfNoPingCommand(t)
+	requireCommand(t, "ping")
 
 	// Get gateway and ping it
-	gateway := getDefaultGateway(t)
-	if gateway == "" {
-		t.Skip("No default gateway found, skipping test")
-	}
+	gateway := setupTestGateway(t)
 
 	pingHost(t, gateway)
 	waitForARPEntry(t, gateway)
@@ -323,34 +304,47 @@ func TestNativeARP_GetMACForIP(t *testing.T) {
 
 // Helper Functions
 
-// getDefaultGateway gets the default gateway IP address
-func getDefaultGateway(t *testing.T) string {
+// arpGatewaySeq numbers the gateways setupTestGateway creates, so tests that
+// run in parallel or repeatedly never share a namespace or a subnet.
+var arpGatewaySeq atomic.Uint32
+
+// setupTestGateway creates a gateway the test owns: a network namespace
+// joined to the root namespace by a veth pair on a 198.19.n.0/30 benchmark
+// subnet. It returns the gateway address in the namespace, which answers ARP
+// for the root namespace, and removes everything when the test ends. The
+// test therefore needs no default route or outside network.
+func setupTestGateway(t *testing.T) string {
 	t.Helper()
+	requireRoot(t)
+	requireCommand(t, "ip")
 
-	cmd := exec.Command("ip", "route", "show", "default")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Logf("Failed to get default gateway: %v", err)
-		return ""
-	}
+	// Wrap the sequence into the third octet; cleanup frees each subnet
+	// long before it comes round again.
+	n := arpGatewaySeq.Add(1) % 256
+	ns := fmt.Sprintf("arpgw-%d", n)
+	hostIf := fmt.Sprintf("arpgw-h%d", n)
+	peerIf := fmt.Sprintf("arpgw-p%d", n)
+	hostCIDR := fmt.Sprintf("198.19.%d.1/30", n)
+	gateway := fmt.Sprintf("198.19.%d.2", n)
 
-	// Parse output: "default via 192.168.1.1 dev eth0"
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "default via ") {
-			fields := strings.Fields(line)
-			if len(fields) >= 3 {
-				gateway := fields[2]
-				// Validate it's a valid IP
-				if net.ParseIP(gateway) != nil {
-					return gateway
-				}
-			}
-		}
-	}
+	// Remove leftovers from an aborted earlier run before creating them.
+	runCmdQuiet("ip", "link", "del", hostIf)
+	runCmdQuiet("ip", "netns", "del", ns)
+	t.Cleanup(func() {
+		runCmdQuiet("ip", "link", "del", hostIf)
+		runCmdQuiet("ip", "netns", "del", ns)
+	})
 
-	t.Logf("Could not parse gateway from output: %s", string(output))
-	return ""
+	runCmd(t, "ip", "netns", "add", ns)
+	runCmd(t, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", peerIf)
+	runCmd(t, "ip", "link", "set", peerIf, "netns", ns)
+	runCmd(t, "ip", "addr", "add", hostCIDR, "dev", hostIf)
+	runCmd(t, "ip", "link", "set", hostIf, "up")
+	runCmd(t, "ip", "-n", ns, "link", "set", "lo", "up")
+	runCmd(t, "ip", "-n", ns, "addr", "add", gateway+"/30", "dev", peerIf)
+	runCmd(t, "ip", "-n", ns, "link", "set", peerIf, "up")
+
+	return gateway
 }
 
 // pingHost pings a host to populate the ARP cache

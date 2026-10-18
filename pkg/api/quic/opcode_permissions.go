@@ -413,18 +413,6 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpIDevIDDeleteCert:   idevidDelete,
 	quicwire.OpIAKDeleteCert:      idevidDelete,
 
-	// Virtual machines routed on their own byte
-	quicwire.OpVMCreate:    vmWrite,
-	quicwire.OpVMDelete:    vmDelete,
-	quicwire.OpVMStart:     vmWrite,
-	quicwire.OpVMStop:      vmWrite,
-	quicwire.OpVMGet:       vmRead,
-	quicwire.OpVMList:      vmRead,
-	quicwire.OpVMAttachNet: vmWrite,
-	quicwire.OpVMDetachNet: vmWrite,
-	quicwire.OpVMActivate:  vmWrite,
-	quicwire.OpVMGetState:  vmRead,
-
 	// Containers routed on their own byte
 	quicwire.OpContainerGet:  containerRead,
 	quicwire.OpContainerList: containerRead,
@@ -700,15 +688,20 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 
 	// Compute: extended VM operations and the container operations.
 	quicwire.OpVMExtendedCategory: {
+		quicwire.OpVMCreate:          vmWrite,
+		quicwire.OpVMDelete:          vmDelete,
+		quicwire.OpVMStart:           vmWrite,
+		quicwire.OpVMStop:            vmWrite,
+		quicwire.OpVMGet:             vmRead,
+		quicwire.OpVMList:            vmRead,
 		quicwire.OpVMRestart:         vmWrite,
 		quicwire.OpVMSuspend:         vmWrite,
 		quicwire.OpVMResume:          vmWrite,
-		quicwire.OpVMAttest:          vmRead,
-		quicwire.OpVMConsole:         vmWrite,
-		quicwire.OpVMSnapshot:        vmWrite,
+		quicwire.OpVMSnapshotCreate:  vmWrite,
 		quicwire.OpVMSnapshotRestore: vmWrite,
 		quicwire.OpVMSnapshotDelete:  vmDelete,
 		quicwire.OpVMSnapshotList:    vmRead,
+		quicwire.OpVMAttest:          vmRead,
 		quicwire.OpVMVerifyAttest:    vmRead,
 		quicwire.OpVMMetrics:         vmRead,
 		quicwire.OpVMAttachDisk:      vmWrite,

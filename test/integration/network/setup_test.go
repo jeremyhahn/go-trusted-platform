@@ -69,15 +69,9 @@ var (
 // =============================================================================
 
 // TestMain coordinates integration test setup and teardown.
-// It checks for the INTEGRATION_TEST environment variable and sets up
-// the test environment including OVS bridges and test certificates.
+// It sets up the test environment including OVS bridges and test
+// certificates.
 func TestMain(m *testing.M) {
-	// Check for integration test environment
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		fmt.Println("Skipping integration tests. Set INTEGRATION_TEST=1 to run.")
-		os.Exit(0)
-	}
-
 	// Setup test environment
 	code := setupTestEnvironment()
 	if code != 0 {

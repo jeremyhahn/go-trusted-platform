@@ -30,6 +30,7 @@ const (
 	ErrorTypeDiskRelease   ErrorType = "disk_release"
 	ErrorTypeBootModel     ErrorType = "boot_model"
 	ErrorTypeNBDTarget     ErrorType = "nbd_target"
+	ErrorTypeEnrollment    ErrorType = "enrollment"
 )
 
 // InstallerError wraps errors with additional context
@@ -247,3 +248,26 @@ type NBDTargetError struct {
 func (e *NBDTargetError) Error() string {
 	return e.Device + ": " + e.Reason
 }
+
+// ErrEnrollment reports a diskless-nbd install whose node did not enrol, so
+// it holds no IDevID to attach its export with. Install returns it before it
+// clears the TPM or touches a disk.
+func ErrEnrollment(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeEnrollment, Message: message, Cause: cause}
+}
+
+// EnrollmentError is the cause of an ErrEnrollment: why the node holds no
+// IDevID, and the enrollment client's error when it returned one.
+type EnrollmentError struct {
+	Reason string
+	Err    error
+}
+
+func (e *EnrollmentError) Error() string {
+	if e.Err == nil {
+		return e.Reason
+	}
+	return e.Reason + ": " + e.Err.Error()
+}
+
+func (e *EnrollmentError) Unwrap() error { return e.Err }

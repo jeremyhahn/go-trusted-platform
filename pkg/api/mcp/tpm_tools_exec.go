@@ -211,15 +211,6 @@ func (r *ToolRegistry) executeTPMCreateIAK(ctx context.Context, args map[string]
 	return marshalResult(result)
 }
 
-// executeTPMDeleteIAK deletes the Initial Attestation Key.
-func (r *ToolRegistry) executeTPMDeleteIAK(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.TPMDeleteIAK(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
-}
-
 // executeTPMQuote generates a TPM quote for attestation.
 func (r *ToolRegistry) executeTPMQuote(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	nonceB64 := getString(args, "nonce")

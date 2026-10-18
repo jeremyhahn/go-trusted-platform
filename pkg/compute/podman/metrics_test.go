@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -172,22 +173,28 @@ func TestRuntimeStats_CPUPercent(t *testing.T) {
 	require.NoError(t, os.WriteFile(cpuStatPath, []byte("usage_usec 0\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(cgDir, "memory.current"), []byte("0\n"), 0o644))
 
-	origProc, origCgroup, origWindow := procRoot, cgroupRoot, cpuSampleWindow
-	procRoot, cgroupRoot, cpuSampleWindow = proc, cgroup, 5*time.Millisecond
-	t.Cleanup(func() { procRoot, cgroupRoot, cpuSampleWindow = origProc, origCgroup, origWindow })
+	origProc, origCgroup := procRoot, cgroupRoot
+	procRoot, cgroupRoot = proc, cgroup
+	t.Cleanup(func() { procRoot, cgroupRoot = origProc, origCgroup })
 
-	// Advance the counter after the first read by rewriting cpu.stat from a
-	// goroutine keyed off the sampling window.
-	go func() {
-		timer := time.NewTimer(cpuSampleWindow / 2)
-		<-timer.C
-		// 500us consumed over a 5ms window => ~10% CPU.
-		_ = os.WriteFile(cpuStatPath, []byte("usage_usec 500\n"), 0o644)
-	}()
+	// The sampling window runs on synctest time (#284): the counter
+	// advances halfway through it, after the first read and before the
+	// second, every time.
+	synctest.Test(t, func(t *testing.T) {
+		go func() {
+			timer := time.NewTimer(cpuSampleWindow / 2)
+			<-timer.C
+			usage := cpuSampleWindow.Microseconds() / 10
+			if err := os.WriteFile(cpuStatPath, []byte("usage_usec "+strconv.FormatInt(usage, 10)+"\n"), 0o644); err != nil {
+				t.Errorf("advance cpu.stat: %v", err)
+			}
+		}()
 
-	stats, err := rt.Stats(context.Background(), state.ID)
-	require.NoError(t, err)
-	assert.Greater(t, stats.CPUUsagePercent, 0.0)
+		stats, err := rt.Stats(context.Background(), state.ID)
+		require.NoError(t, err)
+		// A tenth of the window consumed => 10% CPU.
+		assert.InDelta(t, 10.0, stats.CPUUsagePercent, 1e-9)
+	})
 }
 
 func TestReadIOStat(t *testing.T) {

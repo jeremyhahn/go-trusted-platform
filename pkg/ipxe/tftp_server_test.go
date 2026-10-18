@@ -396,7 +396,7 @@ func TestTFTPServer_Start(t *testing.T) {
 	server.firmware["ipxe.efi"] = []byte("test firmware")
 	server.firmwareMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	bound := newBoundSignal()
@@ -419,7 +419,9 @@ func TestTFTPServer_Start(t *testing.T) {
 		}
 	}
 
-	// Wait for context cancellation
+	// Cancel rather than wait out a deadline: the shutdown path is the
+	// same and the test does not sit on the clock (#284).
+	cancel()
 	select {
 	case err := <-errChan:
 		// Server should return nil on clean shutdown

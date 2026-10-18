@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -272,11 +273,8 @@ func TestHTTPServer_handleStatic(t *testing.T) {
 	testContent := "test content"
 	require.NoError(t, os.WriteFile(testFile, []byte(testContent), 0644))
 
-	// Change to temp directory for the test
-	oldWd, err := os.Getwd()
-	require.NoError(t, err)
-	defer os.Chdir(oldWd)
-	require.NoError(t, os.Chdir(tmpDir))
+	// handleStatic serves ./static relative to the working directory
+	t.Chdir(tmpDir)
 
 	tests := []struct {
 		name           string
@@ -832,25 +830,24 @@ func TestHTTPServer_Start_GracefulShutdown(t *testing.T) {
 	}
 }
 
+// TestHTTPServer_Start_InvalidConfig gives Start a listen address it cannot
+// bind and expects the bind error back at once, rather than serving until a
+// deadline the test has to wait out (#284).
 func TestHTTPServer_Start_InvalidConfig(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, taken.Close()) })
+
 	cfg := DefaultServerConfig()
-	// Use a port that's likely to fail (like 0 in some contexts or already bound)
-	// This test verifies error handling during startup
+	cfg.BindHost = "127.0.0.1"
+	cfg.HTTPPort = taken.Addr().(*net.TCPAddr).Port
 
 	server := newTestHTTPServer(t, cfg)
+	err = server.Start(t.Context(), nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	// The server should start successfully in most cases
-	// This test primarily verifies the error handling structure
-	err := server.Start(ctx, nil)
-
-	// We expect either success or a specific error
-	// In a timeout scenario, we get context.DeadlineExceeded
-	if err != nil {
-		assert.Error(t, err)
-	}
+	var bindErr *WrappedError
+	require.ErrorAs(t, err, &bindErr)
+	assert.Contains(t, bindErr.Msg, "failed to bind")
 }
 
 // Additional tests for better coverage
@@ -1020,38 +1017,6 @@ func TestHTTPServer_responseWriter_WriteHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, rw.status)
 	assert.Equal(t, http.StatusCreated, underlying.Code)
-}
-
-func TestHTTPServer_handleStatic_ValidFile(t *testing.T) {
-	cfg := DefaultServerConfig()
-	server := newTestHTTPServer(t, cfg)
-
-	// Create static directory with a file
-	staticDir := "./static"
-	if err := os.MkdirAll(staticDir, 0755); err != nil {
-		t.Skipf("Could not create static directory: %v", err)
-	}
-	defer os.RemoveAll(staticDir)
-
-	testFile := filepath.Join(staticDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("static content"), 0644); err != nil {
-		t.Skipf("Could not create test file: %v", err)
-	}
-
-	req := httptest.NewRequest("GET", "/static/test.txt", nil)
-	w := httptest.NewRecorder()
-
-	server.handleStatic(w, req)
-
-	resp := w.Result()
-	defer resp.Body.Close()
-
-	// Check if file was served
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		assert.Contains(t, string(body), "static content")
-	}
 }
 
 // TestHTTPServer_InstallUploadHappyPath verifies that PUT

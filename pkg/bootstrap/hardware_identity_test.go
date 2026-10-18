@@ -200,6 +200,8 @@ func TestResolveNodeConfig_WritesHardwareKeys(t *testing.T) {
 // from the issue: a node whose BMC could not be read gets no hardware keys
 // and the installer resolves the cross-vendor default without error.
 func TestResolveNodeConfig_UnreadableBMCLeavesKeysUnset(t *testing.T) {
+	noIdentityRetryDelay(t)
+
 	client := bmc.NewMockClient()
 	client.HardwareIdentityErr = bmc.ErrUnsupportedOperation{Operation: "hardware identity"}
 
@@ -401,6 +403,7 @@ func TestOrchestrator_DryRun_PreviewsHardwareIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)
 	}
+	o.discoverMACs = unreachableMACDiscovery
 
 	result, err := o.DryRun(context.Background())
 	if err != nil {
@@ -429,6 +432,8 @@ func TestOrchestrator_DryRun_PreviewsHardwareIdentity(t *testing.T) {
 // that partial value. Discarding it here would leave the installer on
 // Default() while the BMC side is on the vendor entry.
 func TestResolveNodeConfig_PartialIdentityIsStaged(t *testing.T) {
+	noIdentityRetryDelay(t)
+
 	partial := quirks.Identity{Manufacturer: "Supermicro"} // FRU never read
 
 	client := bmc.NewMockClient()

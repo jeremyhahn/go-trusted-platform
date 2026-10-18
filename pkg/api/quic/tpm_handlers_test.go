@@ -298,7 +298,8 @@ func TestNewTPM2Handler(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	require.NotNil(t, h)
 	assert.NotNil(t, h.handlers)
-	assert.Len(t, h.handlers, 34)
+	// 34 sub-opcodes less SubOpTPM2DeleteIAK, which the daemon refuses.
+	assert.Len(t, h.handlers, 33)
 	assert.Nil(t, h.tpm)
 }
 
@@ -571,11 +572,13 @@ func TestTPM2Handler_HandleCreateIAK_Success(t *testing.T) {
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
-func TestTPM2Handler_HandleDeleteIAK(t *testing.T) {
+// The IAK delete is refused by the daemon dispatcher before it reaches this
+// handler; the handler itself must not serve it, so it cannot flush the key.
+func TestTPM2Handler_DeleteIAKNotServed(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteIAK}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }
 
 func TestTPM2Handler_HandleQuote_Success(t *testing.T) {

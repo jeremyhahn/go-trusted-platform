@@ -288,7 +288,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Delete IAK
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_iak_delete",
-		Description: "Flush the Initial Attestation Key (IAK) handle from the TPM",
+		Description: "Refused: the Initial Attestation Key (IAK) is TPM-resident and is not deleted; answers as iak_delete (FailedPrecondition)",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

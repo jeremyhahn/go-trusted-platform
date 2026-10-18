@@ -72,8 +72,12 @@
 // sdk/go/services/orchestration.
 //
 // The request, response and value types of Cache, Vector, TimeSeries,
-// ObjectStorage, Scheduler and Messaging are re-exported by the sibling
-// packages sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging}.
+// ObjectStorage, Scheduler, Messaging, Backup, ParameterStore, Operations,
+// ObjectStorageAdmin, ObjectTransfer, Embedding, Ollama and RAG are
+// re-exported by the sibling packages
+// sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging,
+// backup,parameterstore,operations,objectstorageadmin,objecttransfer,
+// embedding,ollama,rag}.
 //
 // # Usage
 //

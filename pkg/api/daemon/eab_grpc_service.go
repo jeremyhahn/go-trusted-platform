@@ -16,7 +16,6 @@ package daemon
 import (
 	"context"
 	"encoding/base64"
-	"sort"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
@@ -269,7 +268,7 @@ func (s *EABGRPCService) ListCredentials(
 	if err := sortEABCredentials(filtered, req.GetPagination()); err != nil {
 		return nil, err
 	}
-	pageCreds, pagination := paginateEABCredentials(filtered, req.GetPagination())
+	pageCreds, pagination := paginatePage(filtered, req.GetPagination())
 
 	pbCreds := make([]*platformv1.EABCredential, 0, len(pageCreds))
 	for _, cred := range pageCreds {
@@ -347,87 +346,34 @@ func filterEABCredentials(creds []*eab.Credential, filter eabCredentialFilter) [
 	return filtered
 }
 
-// sortEABCredentials orders a credential set deterministically. When
-// sort_by is empty the set is ordered by id ascending (stable default;
-// the ascending flag is only meaningful alongside an explicit sort_by
-// because the pb bool defaults to false). Supported sort_by fields are
-// "id" and "created_at"; anything else is rejected as InvalidArgument so
-// callers get a clear contract instead of silently unsorted results.
-func sortEABCredentials(creds []*eab.Credential, pagination *platformv1.PaginationRequest) error {
-	sortBy := pagination.GetSortBy()
-	ascending := true
-	if sortBy != "" {
-		ascending = pagination.GetAscending()
-	}
-
-	var less func(a, b *eab.Credential) bool
-	switch sortBy {
-	case "", "id":
-		less = func(a, b *eab.Credential) bool { return a.ID < b.ID }
-	case "created_at":
-		less = func(a, b *eab.Credential) bool {
-			if a.CreatedAt.Equal(b.CreatedAt) {
-				return a.ID < b.ID
-			}
-			return a.CreatedAt.Before(b.CreatedAt)
+// eabCredentialOrders are the sort_by fields an EAB list accepts. When
+// sort_by is empty the set is ordered by id ascending (stable default; the
+// ascending flag is only meaningful alongside an explicit sort_by because the
+// pb bool defaults to false).
+var eabCredentialOrders = pageOrder[*eab.Credential]{
+	"":   eabCredentialByID,
+	"id": eabCredentialByID,
+	"created_at": func(a, b *eab.Credential) bool {
+		if a.CreatedAt.Equal(b.CreatedAt) {
+			return a.ID < b.ID
 		}
-	default:
-		return status.Error(codes.InvalidArgument,
-			ErrEABUnsupportedSortField{Field: sortBy}.Error())
-	}
-
-	sort.SliceStable(creds, func(i, j int) bool {
-		if ascending {
-			return less(creds[i], creds[j])
-		}
-		return less(creds[j], creds[i])
-	})
-	return nil
+		return a.CreatedAt.Before(b.CreatedAt)
+	},
 }
 
-// paginateEABCredentials slices a filtered credential set according to
-// the request pagination and builds the matching PaginationResponse. A
-// zero page_size returns the entire set as a single page.
-func paginateEABCredentials(
-	creds []*eab.Credential,
-	pagination *platformv1.PaginationRequest,
-) ([]*eab.Credential, *platformv1.PaginationResponse) {
-	total := uint64(len(creds))
-	pageSize := pagination.GetPageSize()
-	if pageSize == 0 {
-		return creds, &platformv1.PaginationResponse{
-			Page:       1,
-			PageSize:   uint32(len(creds)),
-			TotalPages: 1,
-			TotalItems: total,
-		}
-	}
+// eabCredentialByID orders credentials by id.
+func eabCredentialByID(a, b *eab.Credential) bool { return a.ID < b.ID }
 
-	page := pagination.GetPage()
-	if page == 0 {
-		page = 1
+// sortEABCredentials orders a credential set deterministically by the
+// request's sort_by field. A field not in eabCredentialOrders is rejected as
+// InvalidArgument so callers get a clear contract instead of silently
+// unsorted results.
+func sortEABCredentials(creds []*eab.Credential, pagination *platformv1.PaginationRequest) error {
+	if !sortPage(creds, pagination, eabCredentialOrders) {
+		return status.Error(codes.InvalidArgument,
+			ErrEABUnsupportedSortField{Field: pagination.GetSortBy()}.Error())
 	}
-	totalPages := uint32((total + uint64(pageSize) - 1) / uint64(pageSize))
-
-	start := uint64(page-1) * uint64(pageSize)
-	if start >= total {
-		return nil, &platformv1.PaginationResponse{
-			Page:       page,
-			PageSize:   pageSize,
-			TotalPages: totalPages,
-			TotalItems: total,
-		}
-	}
-	end := start + uint64(pageSize)
-	if end > total {
-		end = total
-	}
-	return creds[start:end], &platformv1.PaginationResponse{
-		Page:       page,
-		PageSize:   pageSize,
-		TotalPages: totalPages,
-		TotalItems: total,
-	}
+	return nil
 }
 
 // RevokeCredential marks an EAB credential as revoked. The revoker_id is

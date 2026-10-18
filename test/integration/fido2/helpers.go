@@ -16,8 +16,6 @@
 package fido2
 
 import (
-	"os"
-
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -61,13 +59,4 @@ func GetServiceEndpoints() *ServiceEndpoints {
 func isBackendUnavailable(err error) bool {
 	return surface.IsNotImplemented(err) ||
 		surface.IsDeclaredRefusal(err, daemonpkg.ErrFIDO2NotConfigured)
-}
-
-// SkipIfNotIntegration skips when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
 }

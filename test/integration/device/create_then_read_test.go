@@ -88,8 +88,6 @@ func unreachableTransportIssue(adapter string, err error) string {
 // cannot be exercised is exactly the condition this test exists to
 // detect, and reporting it as a pass is the disagreement #523 settles.
 func TestDeviceCreateThenReadAcrossTransports(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -189,8 +187,6 @@ func TestDeviceCreateThenReadAcrossTransports(t *testing.T) {
 // assigned identity: two creates on one transport must not collide, or
 // the second silently replaces the first.
 func TestDeviceCreateAssignsDistinctIdentities(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 

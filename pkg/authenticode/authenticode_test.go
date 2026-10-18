@@ -1377,31 +1377,6 @@ func TestSigningTimeUnsigned(t *testing.T) {
 	require.Contains(t, err.Error(), "not signed")
 }
 
-func TestSignWithTimestamp(t *testing.T) {
-	// This test verifies the timestamp URL path
-	// We don't actually call a real timestamp server
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		TimestampURL:  "http://timestamp.example.com", // Fake URL - will fail but tests code path
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	// Sign will succeed even if timestamp fails (timestamp is optional)
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-	require.Greater(t, output.Len(), len(peData))
-}
-
 func TestSignWithCertChain(t *testing.T) {
 	// Generate intermediate and leaf certificates
 	rootKey, rootCert := generateTestKey(t)
@@ -2317,22 +2292,6 @@ func TestEncodeAuthenticatedAttributesForVerification(t *testing.T) {
 	require.Equal(t, byte(0x31), encoded[0])
 }
 
-func TestAddTimestamp(t *testing.T) {
-	_, cert := generateTestKey(t)
-	s := &Signer{cert: cert}
-
-	// addTimestamp returns ErrRFC3161NotImplemented since RFC3161 is deferred
-	signature := []byte{0x01, 0x02, 0x03}
-	digest := []byte{0x04, 0x05, 0x06}
-
-	result, err := s.addTimestamp(signature, digest)
-	require.Error(t, err)
-	require.Nil(t, result)
-
-	var notImplErr ErrRFC3161NotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-}
-
 func TestEmbedSignatureWithExistingSignature(t *testing.T) {
 	key, cert := generateTestKey(t)
 	logger := logging.DefaultLogger()
@@ -3194,7 +3153,7 @@ func TestSignFileChmodError(t *testing.T) {
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
-	// Create a directory at the output path so os.Create fails with "is a directory"
+	// Create a directory at the output path so the signed file cannot replace it
 	outputPath := filepath.Join(tmpDir, "output.efi")
 	err = os.MkdirAll(outputPath, 0755)
 	require.NoError(t, err)
@@ -3202,7 +3161,13 @@ func TestSignFileChmodError(t *testing.T) {
 	// SignFile should fail because the output path is a directory
 	err = signer.SignFile(inputPath, outputPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is a directory")
+	assert.Contains(t, err.Error(), "failed to replace output file")
+	info, err := os.Stat(outputPath)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	entries, err := os.ReadDir(tmpDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2, "no temporary file is left beside the output")
 }
 
 func TestVerifyInvalidSignatureData(t *testing.T) {
@@ -3938,7 +3903,7 @@ func TestCreatePKCS7SignatureStructure(t *testing.T) {
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, attrDigest)
 	require.NoError(t, err)
 
-	pkcs7, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime)
+	pkcs7, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, pkcs7)
 
@@ -4559,31 +4524,6 @@ func TestExtractDigestFromContentInvalid(t *testing.T) {
 	_, err := s.extractDigestFromContent([]byte{0xFF, 0xFF})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse SPC content")
-}
-
-// TestSignWithTimestampURL tests signing with a timestamp URL configured
-func TestSignWithTimestampURL(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	// Create signer with timestamp URL
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		TimestampURL:  "http://timestamp.example.com", // Will log but not fail
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	// Sign should succeed even with timestamp URL (addTimestamp returns unchanged signature)
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-	require.Greater(t, output.Len(), len(peData))
 }
 
 // TestSignWithCertificateChainMultiple tests signing with multiple certificates in chain

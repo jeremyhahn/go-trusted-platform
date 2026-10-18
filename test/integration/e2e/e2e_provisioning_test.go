@@ -77,12 +77,12 @@ const (
 func TestE2EDeviceProvisioning(t *testing.T) {
 	// Check QEMU availability
 	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
-		t.Skip("QEMU not available, skipping E2E test")
+		t.Fatalf("qemu-system-x86_64 not on PATH: %v; run in the devcontainer, which installs qemu-system-x86", err)
 	}
 
 	// Check OVS availability
 	if _, err := exec.LookPath("ovs-vsctl"); err != nil {
-		t.Skip("Open vSwitch not available, skipping E2E test")
+		t.Fatalf("ovs-vsctl not on PATH: %v; run in the devcontainer, which installs openvswitch-switch", err)
 	}
 
 	// Check for pre-built ISOs

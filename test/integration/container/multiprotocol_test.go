@@ -47,8 +47,6 @@ import (
 // protocol adapters. Each adapter implements the ContainerCommands interface,
 // enabling unified testing across CLI, REST, and future protocols (gRPC, QUIC, MCP, Socket).
 func TestContainerMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

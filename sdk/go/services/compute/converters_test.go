@@ -22,6 +22,50 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestCreateParamsToProto_EveryParamReachesTheRequest(t *testing.T) {
+	labels := map[string]string{"tier": "web"}
+
+	req := createParamsToProto(&CreateVMParams{
+		Name: "vm-web", Description: "web front end",
+		Firmware: FirmwareUEFISecureBoot, BootDevice: BootDeviceNetwork,
+		CPUs: 4, MemoryMB: 4096, DiskSizeGB: 40,
+		SecureBoot: true, TPM: false, Start: true,
+		NetworkBridge: "br-vms", Labels: labels,
+	})
+
+	config := req.GetConfig()
+	if !req.GetStart() || config.GetName() != "vm-web" || config.GetDescription() != "web front end" {
+		t.Errorf("request = %v", req)
+	}
+	if config.GetFirmware() != platformv1.FirmwareType_FIRMWARE_TYPE_UEFI_SECURE_BOOT ||
+		config.GetBootDevice() != platformv1.BootDevice_BOOT_DEVICE_NETWORK {
+		t.Errorf("firmware/boot device = %v/%v", config.GetFirmware(), config.GetBootDevice())
+	}
+	if config.GetCpu().GetCores() != 4 || config.GetMemory().GetSizeMb() != 4096 || config.GetDisks()[0].GetSizeGb() != 40 {
+		t.Errorf("sizes = %v", config)
+	}
+	// TPM false must travel as an explicit tpm.enabled=false, or the server
+	// cannot tell "no vTPM" from "default".
+	if config.GetTpm() == nil || config.GetTpm().GetEnabled() {
+		t.Errorf("tpm = %v, want present and disabled", config.GetTpm())
+	}
+	if !config.GetSecureBoot() || config.GetNetworks()[0].GetBridge() != "br-vms" || config.GetLabels()["tier"] != "web" {
+		t.Errorf("config = %v", config)
+	}
+}
+
+func TestCreateParamsToProto_UnknownFirmwareIsUnspecified(t *testing.T) {
+	req := createParamsToProto(&CreateVMParams{Name: "vm-x", Firmware: FirmwareType("coreboot"), BootDevice: BootDevice("floppy")})
+
+	if req.GetConfig().GetFirmware() != platformv1.FirmwareType_FIRMWARE_TYPE_UNSPECIFIED ||
+		req.GetConfig().GetBootDevice() != platformv1.BootDevice_BOOT_DEVICE_UNSPECIFIED {
+		t.Errorf("config = %v, want unspecified firmware and boot device", req.GetConfig())
+	}
+	if len(req.GetConfig().GetNetworks()) != 0 {
+		t.Errorf("networks = %v, want none without a bridge", req.GetConfig().GetNetworks())
+	}
+}
+
 func TestCreateContainerParamsToProto_UserAndAttestOnCreate(t *testing.T) {
 	req := createContainerParamsToProto(&CreateContainerParams{
 		Name:           "web",

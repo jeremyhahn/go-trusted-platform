@@ -32,10 +32,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		fmt.Println("Skipping BMC integration tests: INTEGRATION_TEST not set")
-		os.Exit(0)
-	}
 	if err := seedTestProfile(); err != nil {
 		fmt.Printf("FATAL: failed to seed test device profile: %v\n", err)
 		os.Exit(1)

@@ -34,34 +34,61 @@ import (
 // the underlay network interface name for overlay tests.
 const underlayInterfaceEnvVar = "OVERLAY_UNDERLAY_INTERFACE"
 
-// skipIfNoUnderlayInterface checks whether a suitable underlay network
-// interface is available for overlay controller tests. It first checks the
-// OVERLAY_UNDERLAY_INTERFACE environment variable, then falls back to
-// probing for common interface names (eth0, ens0, enp0s0). If no usable
-// interface is found, the test is skipped.
-func skipIfNoUnderlayInterface(t *testing.T) string {
-	t.Helper()
+// UnderlayInterfaceError reports that no underlay network interface exists
+// for the overlay controller tests. The devcontainer always has one: the
+// Docker run in the Makefile's run-integration-suite sets no --network, so
+// the container joins the default bridge as eth0.
+type UnderlayInterfaceError struct {
+	// Interface is the name that was asked for; empty when probing.
+	Interface string
 
-	// Check environment variable first
+	// Err is the lookup failure, when there is one.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *UnderlayInterfaceError) Error() string {
+	if e.Interface != "" {
+		return fmt.Sprintf("underlay interface %q from %s not found: %v", e.Interface, underlayInterfaceEnvVar, e.Err)
+	}
+	return fmt.Sprintf("no underlay network interface (eth0, ens0 or enp0s0) found; set %s or run the suite "+
+		"through `make integration-test-sdn`, whose devcontainer has eth0", underlayInterfaceEnvVar)
+}
+
+// Unwrap returns the lookup failure.
+func (e *UnderlayInterfaceError) Unwrap() error {
+	return e.Err
+}
+
+// findUnderlayInterface returns the underlay network interface for overlay
+// controller tests: the one OVERLAY_UNDERLAY_INTERFACE names, else the first
+// of eth0, ens0 and enp0s0 that exists.
+func findUnderlayInterface() (string, error) {
 	if iface := os.Getenv(underlayInterfaceEnvVar); iface != "" {
-		if _, err := net.InterfaceByName(iface); err == nil {
-			return iface
+		if _, err := net.InterfaceByName(iface); err != nil {
+			return "", &UnderlayInterfaceError{Interface: iface, Err: err}
 		}
-		t.Skipf("Skipping: underlay interface %q from %s not available: interface not found",
-			iface, underlayInterfaceEnvVar)
+		return iface, nil
 	}
 
-	// Probe for common underlay interface names
 	candidates := []string{"eth0", "ens0", "enp0s0"}
 	for _, name := range candidates {
 		if _, err := net.InterfaceByName(name); err == nil {
-			return name
+			return name, nil
 		}
 	}
+	return "", &UnderlayInterfaceError{}
+}
 
-	t.Skipf("Skipping: no underlay network interface available (set %s or ensure eth0/ens0/enp0s0 exists)",
-		underlayInterfaceEnvVar)
-	return "" // unreachable, t.Skipf calls runtime.Goexit
+// requireUnderlayInterface returns the underlay network interface and fails
+// the test when there is none.
+func requireUnderlayInterface(t *testing.T) string {
+	t.Helper()
+	iface, err := findUnderlayInterface()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iface
 }
 
 // createTestOverlayController creates an overlay controller for testing.
@@ -121,7 +148,7 @@ func isVTEPNotFoundErr(err error) bool {
 
 // TestOverlayMACLearningStress tests high MAC learning rate.
 func TestOverlayMACLearningStress(t *testing.T) {
-	underlayIface := skipIfNoUnderlayInterface(t)
+	underlayIface := requireUnderlayInterface(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -198,7 +225,7 @@ func TestOverlayMACLearningStress(t *testing.T) {
 
 // TestOverlayMACChurnStress tests rapid MAC learning and forgetting.
 func TestOverlayMACChurnStress(t *testing.T) {
-	underlayIface := skipIfNoUnderlayInterface(t)
+	underlayIface := requireUnderlayInterface(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -302,7 +329,7 @@ func TestOverlayMACChurnStress(t *testing.T) {
 
 // TestOverlayVTEPChurnStress tests VTEP creation/deletion churn.
 func TestOverlayVTEPChurnStress(t *testing.T) {
-	underlayIface := skipIfNoUnderlayInterface(t)
+	underlayIface := requireUnderlayInterface(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -408,7 +435,7 @@ func TestOverlayVTEPChurnStress(t *testing.T) {
 
 // TestOverlayVNIOperationsStress tests VNI creation and management under load.
 func TestOverlayVNIOperationsStress(t *testing.T) {
-	underlayIface := skipIfNoUnderlayInterface(t)
+	underlayIface := requireUnderlayInterface(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -517,7 +544,7 @@ func TestOverlayVNIOperationsStress(t *testing.T) {
 
 // TestOverlayMACWithIPLearningStress tests MAC/IP learning from EVPN.
 func TestOverlayMACWithIPLearningStress(t *testing.T) {
-	underlayIface := skipIfNoUnderlayInterface(t)
+	underlayIface := requireUnderlayInterface(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -595,7 +622,7 @@ func TestOverlayMACWithIPLearningStress(t *testing.T) {
 
 // TestOverlayCombinedStress tests all overlay operations under combined load.
 func TestOverlayCombinedStress(t *testing.T) {
-	underlayIface := skipIfNoUnderlayInterface(t)
+	underlayIface := requireUnderlayInterface(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

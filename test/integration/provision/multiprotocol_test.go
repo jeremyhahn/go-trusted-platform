@@ -70,8 +70,6 @@ const (
 
 // TestProvisionMultiProtocol runs the same scenario against every transport.
 func TestProvisionMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
@@ -548,8 +546,6 @@ func runSessionScenario(t *testing.T, ctx context.Context, cmd SessionCommands) 
 // setup, not the operation under test); the lifecycle operations then run
 // through the adapter under test on each transport.
 func TestProvisionDeliveredConfigLifecycle(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 

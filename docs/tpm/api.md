@@ -153,7 +153,7 @@ Request/response schemas: `TPMInfoRequest`/`TPMInfoResponse`,
 | Delete SRK | `DELETE /api/v1/tpm/srk` | `DeleteSRK` | `0x99` · `0x0B` | `platform_tpm_srk_delete` | ✅ |
 | Get AK / IAK | `GET /api/v1/tpm/ak` | `GetAK` | `0x99` · `0x0C` (`GetIAK`) | `platform_tpm_iak` | ✅ |
 | Create AK / IAK | `POST /api/v1/tpm/ak` | `CreateAK` | `0x99` · `0x0D` (`CreateIAK`) | `platform_tpm_iak_create` | ✅ |
-| Delete AK / IAK | `DELETE /api/v1/tpm/ak` | `DeleteAK` | `0x99` · `0x0E` (`DeleteIAK`) | `platform_tpm_iak_delete` | ✅ |
+| Delete AK / IAK (refused, §8) | `DELETE /api/v1/tpm/ak`, `DELETE /api/v1/tpm/ak/{handle}` | `DeleteAK` | `0x99` · `0x0E` (`DeleteIAK`) | `platform_tpm_iak_delete` | ✅ |
 
 **AK and IAK are the same key under two names.** gRPC and REST say `ak`; QUIC
 and MCP say `iak`. A client author who learns one transport will not find the
@@ -446,17 +446,35 @@ not happen. gRPC and Unix `DeleteIDevID` / `DeleteIAK`, QUIC `0x58` / `0x5E`,
 the MCP `idevid_delete` / `iak_delete` tools and REST
 `DELETE /api/v1/tpm/idevid` / `DELETE /api/v1/tpm/iak` all refuse with
 `FailedPrecondition` (`ErrDeviceIdentityKeyNotDeletable`) and change nothing —
-no key, no certificate, no state (#304). Both REST servers serve those two
+no key, no certificate, no state (#304). The TPM service's Delete AK / IAK
+(§4) names the same IAK and answers the same (#704): gRPC and Unix
+`TPMService/DeleteAK` (any `handle`), QUIC `0x99` · `0x0E`, MCP
+`platform_tpm_iak_delete` and `DELETE /api/v1/tpm/ak` and
+`/api/v1/tpm/ak/{handle}` on both REST servers refuse before the TPM is
+reached, even with no TPM injected. Until #704 they flushed the IAK handle,
+which evicts nothing from a persistent handle, and reported success. Both REST servers serve those two
 paths: the daemon listener and the web service, which also keeps its own
 `DELETE /api/v1/idevid` / `DELETE /api/v1/idevid/iak` on the same handlers,
 behind the admin role gate. On the wire the class is QUIC status `0x0C`
 (`StatusFailedPrecondition`) and HTTP `412` on both REST servers: the daemon
 listener's IDevID-family mapping, shared with LDevID, and on the web service
-the key-delete handlers' own mapping, because `protorest`'s shared `400`
-(#665) reaches the SDK as `InvalidArgument`, not the refusal. The SDK returns
+the identity-delete handlers' own mapping (`protorest.WriteIdentityDeleteError`),
+because `protorest`'s shared `400` (#665) reaches the SDK as `InvalidArgument`,
+not the refusal. The SDK returns
 `*idevid.ErrIdentityKeyNotDeletable`, and `platformctl tpm idevid delete` /
-`platformctl tpm iak delete` exit `1` with the refusal. The certificate
-deletes are real on every transport.
+`platformctl tpm iak delete` exit `1` with the refusal.
+
+The certificate deletes (Delete IDevID Certificate, Delete IAK Certificate)
+are real on every transport and answer in gRPC's classes (#704): daemon REST
+`DELETE /api/v1/tpm/idevid/cert` / `DELETE /api/v1/tpm/iak/cert` and QUIC
+`0x7A` / `0x7B` call the shared IDevID service, as gRPC, Unix and MCP do. No
+TPM is `FailedPrecondition` (QUIC `0x0C`, HTTP `412` on both REST servers), a
+missing certificate `NotFound` (`404`), a bad NV index `InvalidArgument`
+(`400`) and any other TPM failure `Internal` (`500`); with no IDevID service
+wired the daemon REST and QUIC handlers answer `Unavailable` (`503`). Until
+#704 daemon REST answered `503` with no TPM and `500` for every failure, QUIC
+answered `Unavailable` with no TPM and classified failures by its own table,
+and the web service answered no TPM with `400`.
 
 ---
 
@@ -476,7 +494,7 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 | MCP — `platform_tpm_pcr_extend` | **scoped `tpm:write`** in `pkg/api/mcp/authz.go`, the scope of QUIC's `SubOpTPM2ExtendPCR` (it has no gRPC twin) |
 | MCP — `platform_tpm_*` tools with a gRPC twin | **scoped** in `pkg/api/mcp/authz.go` on the gRPC tiers (#304), except `platform_tpm_unseal`, which needs `tpm:write`; the table is in [api-reference-mcp.md](api-reference-mcp.md) |
 | MCP — `platform_tpm_capabilities`, `platform_tpm_platform` | **scoped** `tpm:read` (#304): each answers a subset of gRPC `Info` (the fixed properties; the config and the EK/SRK/IAK attributes), and their QUIC twins `0x17` and `0x1E` are `tpm:read` |
-| MCP — `platform_tpm_{ek,srk,iak}_delete` | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller. The deletes flush a persistent handle, which deletes nothing |
+| MCP — `platform_tpm_{ek,srk,iak}_delete` | **scoped `tpm:delete`** in `pkg/api/mcp/authz.go`, the scope of gRPC `DeleteEK`/`DeleteSRK`/`DeleteAK`. `ek_delete` and `srk_delete` flush a persistent handle, which deletes nothing; `iak_delete` is refused with `FailedPrecondition` (§8) |
 | MCP — `idevid_*` / `iak_*` tools | **scoped** in `pkg/api/mcp/authz.go` with their gRPC twins' scopes, IAK tools included: `idevid:read` for info, exists and get-cert; `idevid:write` for generate, CSR, install-cert and `idevid_create_ldevid`; `idevid:delete` for the deletes. The tools call the shared `IDevIDGRPCService`, so each answers with its gRPC message and error class (#304) |
 | MCP — `device_attributes`, `activate_credential` | **scoped** `idevid:read` and `idevid:write`, the scopes of gRPC `GetDeviceAttributes` and `IDevIDService/ActivateCredential` (#304). They make the same TPM calls as those methods but answer with the MCP provider's errors, not the gRPC status |
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID CSR and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete`. The exception is `LDevIDCSR` (`0x1D`): the daemon serves it with `IDevIDService.CreateLDevID`, so it takes `idevid:write` |

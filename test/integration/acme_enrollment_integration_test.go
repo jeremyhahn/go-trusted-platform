@@ -65,10 +65,6 @@ const (
 // TestACMEEnrollmentFlow tests the complete ACME enroll-01 challenge flow
 // including TPM attestation, certificate issuance, and network transition.
 func TestACMEEnrollmentFlow(t *testing.T) {
-	if os.Getenv("SKIP_INTEGRATION") != "" {
-		t.Skip("Skipping integration test")
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -95,14 +91,8 @@ func TestACMEEnrollmentFlow(t *testing.T) {
 
 // TestEnrollmentWithRealTPM tests enrollment with software TPM (swtpm)
 func TestEnrollmentWithRealTPM(t *testing.T) {
-	if os.Getenv("SKIP_INTEGRATION") != "" {
-		t.Skip("Skipping integration test")
-	}
-
-	if _, err := os.Stat("/usr/bin/swtpm"); err != nil {
-		t.Skip("swtpm not available, skipping TPM-based test")
-	}
-
+	// swtpm comes from the devcontainer image; swtpm.NewSWTPM fails the
+	// test when it is not on PATH.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

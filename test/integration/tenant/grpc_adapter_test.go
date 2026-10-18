@@ -35,8 +35,6 @@ import (
 // never starts a QuicBaaS of its own (#541): a second node in the container
 // collides with the daemon's ports and tests nothing the daemon serves.
 func TestTenantGRPCService(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

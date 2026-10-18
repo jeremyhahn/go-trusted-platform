@@ -297,8 +297,17 @@ for DANE is added with `dns_record_create` and a `tlsa` record.
 `name`. When none matches, it returns `NotFound`. With no `type` or no `name`,
 it returns `InvalidArgument`.
 
-With no DNS service wired into the daemon, every tool in this section returns
-`Unavailable`.
+With no `dns:` section in the daemon configuration there is no DNS backend,
+and every DNS tool, in this section and in the older `dns_*` family, returns
+`Unavailable`. The older family's answer also carries the reason
+`SERVICE_NOT_CONFIGURED` for service `dns`, the same answer gRPC gives.
+
+The Go SDK's MCP transport routes `DNSService` calls to the older family
+(`dns_create_zone`, `dns_list_zones`, ...), not to these tools, and sends the
+request in its proto JSON form. `dns_create_zone` reads the zone from `zone`,
+while `CreateZoneRequest` names it `name`, so `CreateZone` through the SDK over
+MCP is refused with the zone name missing. Call `dns_zone_create` directly
+until the route is settled ([api.md](api.md) §3).
 
 ## Resources
 

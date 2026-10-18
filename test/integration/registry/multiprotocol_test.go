@@ -48,8 +48,6 @@ import (
 // protocol adapters. Each adapter implements the RegistryCommands interface,
 // enabling unified testing across CLI, REST, and future protocols (gRPC, QUIC, MCP, Socket).
 func TestRegistryMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -588,7 +586,7 @@ func runSessionManagementTests(t *testing.T, ctx context.Context, cmd RegistryCo
 	evidence := GenerateMockAttestationEvidence(clientID)
 	verifyResult, err := cmd.VerifyClient(testCtx, evidence)
 	if err != nil {
-		t.Skipf("Skipping session tests: VerifyClient failed: %v", err)
+		t.Fatalf("Setup: VerifyClient failed; session tests need a verified client: %v", err)
 	}
 	require.True(t, verifyResult.Verified, "Client should be verified")
 

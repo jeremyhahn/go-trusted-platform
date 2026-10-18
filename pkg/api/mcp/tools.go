@@ -1809,7 +1809,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	case "platform_tpm_iak_create":
 		return r.executeTPMCreateIAK(ctx, args)
 	case "platform_tpm_iak_delete":
-		return r.executeTPMDeleteIAK(ctx, args)
+		// Same key as iak_delete, so the same refusal.
+		return r.executeIAKDelete(ctx, args)
 	case "platform_tpm_quote":
 		return r.executeTPMQuote(ctx, args)
 	case "platform_tpm_verify_quote":

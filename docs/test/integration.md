@@ -150,10 +150,6 @@ func (g *grpcAdapter) GenerateKey(ctx context.Context, req *GenerateKeyRequest) 
 
 ```go
 func TestKMSMultiProtocol(t *testing.T) {
-    if os.Getenv("INTEGRATION_TEST") == "" {
-        t.Skip("Set INTEGRATION_TEST=1 to run")
-    }
-
     protocols := []kmsProtocol{
         &cliAdapter{binaryPath: "/usr/local/bin/platformctl"},
         &restAdapter{baseURL: "https://localhost:8443"},
@@ -321,21 +317,65 @@ A hand-written list drops codecs, and the suite then fails with
 ### Makefile Targets
 
 ```makefile
-# Run all integration tests
+# Run every devcontainer-runnable suite (the runner's `all` keyword)
 make integration-test
 
-# Run package-specific integration tests
+# Run one suite: integration-test-<key>, where <key> is a TARGET_PACKAGES key
 make integration-test-ca
+make integration-test-compute
 make integration-test-vtpm
 make integration-test-daemon
-make integration-test-secrets
-make integration-test-iam
-make integration-test-sdn
-make integration-test-tenant
-make integration-test-attestation
+make integration-test-root          # test/integration itself, not its subdirectories
 ```
 
+Every directory under `test/integration` that holds a Go suite has a key in
+the runner's `TARGET_PACKAGES` map and an `integration-test-<key>` target.
+`make help` lists them. The suites a container cannot run are the exceptions,
+listed below.
+
+`make integration-test` runs the runner's `ALL_TARGETS` list in order:
+every key except `cold-start` and `barrier-gate` (each needs the shared
+`platformd` not running), `bmc` (needs the vBMC config), `diskimage`,
+`netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
+`pxe` (platformd has no PXE backend), `bootstrap` (the shared platformd
+publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
+artifacts), all three in the table below, and the keys that
+only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
+`ipxe-http`, `testenv-enrollment`).
+
+The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
+their suites start their own daemon or cluster, or test something that needs
+none (`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `installer`, `lb`,
+`e2e`, `ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
+the integration-tagged tests of the harness library itself; its untagged
+tests run in `make test`.
+
+Kept out of the runner, or out of its default set:
+
+| Directory | Why | How it runs |
+|-----------|-----|-------------|
+| `pxe` | platformd constructs its PXE service with a nil backend (`pkg/api/daemon/daemon.go:979`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
+| `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
+| `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
+| `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
+| `compute-aws` | A Floci emulator compose file, not a suite; the tests are in `pkg/compute/aws` | `make integration-test-compute-aws` on the host |
+| `diskimage/userspace` | An arm64 userspace container | `make integration-test-diskimage-userspace` |
+| `web` | Playwright (TypeScript), not Go | `npx playwright test --config ../test/integration/web/playwright.config.ts` from `web/` |
+
 These targets automatically include the required build tags and environment variables.
+
+The runner's `TARGET_ENV` map sets `IPXE_DHCP_ENABLED=1` for `ipxe` and
+`ipxe-dhcp`; with it, the suite's `TestMain` starts the platform DHCP server on
+loopback at a free UDP port, and the DHCP tests exchange real DISCOVER/OFFER
+and REQUEST/ACK with it. Without the variable those tests fail rather than
+skip; `ipxe-http` and `ipxe-tftp` keep them out with their `-run` patterns.
+The iPXE suite has no skips at all: its firmware upstream and HTTPS proxy
+upstream are local fixture servers, so it needs no outside network.
+`integration-test-testenv-enrollment` and `integration-test-e2e` pass
+`INTEGRATION_TEST_SERVER_ISO` and `INTEGRATION_TEST_CLIENT_ISO` through when
+they are set. Without them the enrollment test runs its framework VM only, and
+`TestE2EDeviceProvisioning` validates its infrastructure and stops before
+provisioning.
 
 A per-package target must drive
 `build/docker/devcontainer/run-integration-tests.sh`, which brings up Open
@@ -370,14 +410,12 @@ and otherwise from the mount point's own ownership.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INTEGRATION_TEST` | - | Must be set to `1` to run |
 | `PLATFORM_REST_ENDPOINT` | `https://localhost:8443` | REST API endpoint |
 | `PLATFORM_GRPC_ENDPOINT` | `localhost:10443` | platformd gRPC endpoint |
 | `PLATFORM_QUIC_ENDPOINT` | `localhost:9444` | QUIC protocol endpoint |
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
-| `RAFT_CLUSTER_TEST` | (unset) | Set to `1` to enable cluster replication tests |
 
 The endpoint variables are the ones the shared helpers in
 `test/integration/helpers/endpoints.go` read. Suites with a private namespace
@@ -419,7 +457,17 @@ The Makefile automatically handles:
 - Cleaning up test artifacts
 
 **Test Configuration:**
-- Config file: `test/integration/config.yaml`
+- Config file: `test/integration/config.yaml`. Its `dns:` section gives
+  platformd an internal CoreDNS server on port 9053 seeded with zone
+  `integration.internal.`, so the daemon builds a DNS backend and the dns
+  suite reaches real zone storage. DNSSEC and DANE stay off, so the
+  `bootstrap` suite's DANE tests have no records to find and the suite is kept
+  out of `ALL_TARGETS` (see the kept-out table above).
+  `TestIntegrationConfig_LoadsWithDNSServer` (`pkg/app`) loads the file the way
+  platformd does and checks the `dns:` keys strictly. The file has no `pxe:`
+  section: platformd has no reader for one, because PXE is a gateway-role
+  service. Its `PXEGRPCService` therefore has no backend, so the `pxe` suite is
+  kept out of `ALL_TARGETS` (see the kept-out table above).
 - Script: `build/docker/devcontainer/run-integration-tests.sh`
 - Test cleanup: `/tmp/platformd-integration` directory removed before each run to avoid key/cert mismatches
 
@@ -439,10 +487,9 @@ passive thing to host: it `chmod 666`s `/dev/net/tun` and `/dev/kvm`,
 and `ovsdb-server` — including ones it did not start. Fifteen targets did
 exactly that until #492.
 
-`integration-test-kms`, `integration-test-secrets` and
-`integration-test-webservice` do not follow this yet: each hand-writes a
-`docker run` of the builder image that calls `go test` directly, so the runner
-starts no `platformd` for them.
+`integration-test-webservice` and `integration-test-ca-quicbaas-adapter` do
+not follow this: they test packages under `pkg/`, not a suite under
+`test/integration`, so the runner has no key for them.
 
 No target hand-writes its own `docker run` of the runner either, including
 `make integration-test`, which calls the define with the runner's `all`
@@ -595,8 +642,10 @@ Two helpers in `test/integration/helpers` carry this:
 
 Environment guards that fire *before* the adapter loop remain skips: they state
 that the suite is not applicable here, rather than hiding a transport that was
-supposed to work. `SkipIfNotIntegration`, `SkipIfNoTPM`, `SkipIfNoOVS` and their
-siblings are unaffected.
+supposed to work. `SkipIfNoTPM`, `SkipIfNoOVS` and their siblings are
+unaffected. The runner starts OVS and swtpm for every target, so in a `make` run these guards fire only when that
+bring-up failed, and the runner has already printed a warning saying so. For
+`integration-test-vtpm` a swtpm that does not start ends the run.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any

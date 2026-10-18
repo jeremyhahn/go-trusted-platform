@@ -14,25 +14,16 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package vtpm provides multi-protocol integration tests for vTPM services.
-// This file contains TestMain which expects a real platformd instance to be
-// started externally by the integration test shell script, with endpoints
-// provided via environment variables.
+// The suite expects a real platformd instance started externally by the
+// integration test shell script, with endpoints provided via environment
+// variables. The integration build tag selects it; there is no env gate.
 package vtpm
-
-import (
-	"fmt"
-	"os"
-	"testing"
-)
 
 // =============================================================================
 // Environment Variable Constants
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run integration tests.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdSocket is the Unix socket path for platformd.
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
 
@@ -51,15 +42,3 @@ const (
 	// EnvPlatformctlBinary is the path to the platformctl binary.
 	EnvPlatformctlBinary = "PLATFORMCTL_BINARY"
 )
-
-// TestMain expects a real platformd instance to be running externally with
-// endpoints provided via environment variables. If INTEGRATION_TEST is not
-// set, the tests are skipped gracefully.
-func TestMain(m *testing.M) {
-	if os.Getenv(EnvIntegrationTest) == "" {
-		fmt.Println("vtpm: skipping integration tests (INTEGRATION_TEST not set)")
-		os.Exit(0)
-	}
-
-	os.Exit(m.Run())
-}

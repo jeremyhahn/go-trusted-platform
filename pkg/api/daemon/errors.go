@@ -254,6 +254,13 @@ func (e ErrDNSServiceNotAvailable) Error() string {
 	return "DNS service not available"
 }
 
+// GRPCStatus classifies the error as the canonical not-configured answer for
+// service "dns" (codes.Unavailable, SERVICE_NOT_CONFIGURED), so gRPC, Unix,
+// QUIC and MCP agree with REST's 503.
+func (e ErrDNSServiceNotAvailable) GRPCStatus() *status.Status {
+	return ErrServiceNotConfigured{Service: "dns", Detail: e.Error()}.GRPCStatus()
+}
+
 // ErrDNSInvalidParameter is returned when a DNS operation receives an invalid parameter
 type ErrDNSInvalidParameter struct {
 	Parameter string
@@ -1884,6 +1891,69 @@ type ErrEABUnsupportedStatusFilter struct {
 // Error implements the error interface.
 func (e ErrEABUnsupportedStatusFilter) Error() string {
 	return "eab: unsupported status filter: " + e.Status
+}
+
+// ErrVMListUnknownState is returned when a ListVMs request filters on a state
+// value the VMState enum does not define.
+type ErrVMListUnknownState struct {
+	State int32
+}
+
+func (e ErrVMListUnknownState) Error() string {
+	return fmt.Sprintf("list VMs: unknown VM state %d", e.State)
+}
+
+// GRPCStatus classifies an unknown state filter as InvalidArgument.
+func (e ErrVMListUnknownState) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMListSelectorExpression is returned when a ListVMs selector carries a
+// match_expressions entry. The API defines no expression syntax, so the
+// service refuses the entry rather than ignore it.
+type ErrVMListSelectorExpression struct {
+	Expression string
+}
+
+func (e ErrVMListSelectorExpression) Error() string {
+	return fmt.Sprintf("list VMs: selector match_expressions are not supported: %q", e.Expression)
+}
+
+// GRPCStatus classifies a selector expression as InvalidArgument.
+func (e ErrVMListSelectorExpression) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMCreateUnsupportedField is returned when a CreateVM config sets a
+// field the compute backend cannot honour. The service refuses the request
+// rather than create a VM that differs from it.
+type ErrVMCreateUnsupportedField struct {
+	Field  string
+	Reason string
+}
+
+func (e ErrVMCreateUnsupportedField) Error() string {
+	return "create VM: config." + e.Field + " is not supported: " + e.Reason
+}
+
+// GRPCStatus classifies an unsupported config field as InvalidArgument.
+func (e ErrVMCreateUnsupportedField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMListUnsupportedSortField is returned when a ListVMs request asks for a
+// sort_by field the service does not support.
+type ErrVMListUnsupportedSortField struct {
+	Field string
+}
+
+func (e ErrVMListUnsupportedSortField) Error() string {
+	return "list VMs: unsupported sort field: " + e.Field
+}
+
+// GRPCStatus classifies an unsupported sort field as InvalidArgument.
+func (e ErrVMListUnsupportedSortField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrProfileConfigInvalid is returned when a device profile create or

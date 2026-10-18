@@ -19,115 +19,9 @@
 package ipxe
 
 import (
-	"context"
 	"net"
 	"time"
 )
-
-// IPXECommands defines the central command set for iPXE integration testing.
-// This interface abstracts the protocol-specific operations for testing
-// DHCP, TFTP, and HTTP boot services.
-type IPXECommands interface {
-	// Protocol identification and lifecycle
-	Name() string
-	Setup(ctx context.Context) error
-	Teardown() error
-
-	// DHCP Commands
-	SendDHCPDiscover(ctx context.Context, opts DHCPDiscoverOptions) (*DHCPOfferResult, error)
-	SendDHCPRequest(ctx context.Context, opts DHCPRequestOptions) (*DHCPAckResult, error)
-
-	// TFTP Commands
-	TFTPDownload(ctx context.Context, filename string) (*TFTPDownloadResult, error)
-	TFTPList(ctx context.Context) (*TFTPListResult, error)
-
-	// HTTP Commands
-	HTTPGetBootScript(ctx context.Context) (*HTTPBootScriptResult, error)
-	HTTPGetMenuScript(ctx context.Context) (*HTTPMenuScriptResult, error)
-	HTTPGetBootEntry(ctx context.Context, entryName string) (*HTTPBootEntryResult, error)
-	HTTPGetHealth(ctx context.Context) (*HTTPHealthResult, error)
-	HTTPGetFile(ctx context.Context, path string) (*HTTPFileResult, error)
-}
-
-// =============================================================================
-// DHCP Options and Results
-// =============================================================================
-
-// DHCPDiscoverOptions contains options for sending a DHCP DISCOVER packet.
-type DHCPDiscoverOptions struct {
-	// ClientMAC is the MAC address of the client.
-	ClientMAC net.HardwareAddr
-	// ClientArch is the client architecture (0x0007 = EFI x64).
-	ClientArch uint16
-	// IsPXEClient indicates if the client is a PXE client.
-	IsPXEClient bool
-	// IsIPXEClient indicates if the client is already running iPXE.
-	IsIPXEClient bool
-	// VendorClass is the vendor class identifier (e.g., "PXEClient").
-	VendorClass string
-}
-
-// DHCPOfferResult contains the result of a DHCP DISCOVER request.
-type DHCPOfferResult struct {
-	// YourIP is the offered IP address.
-	YourIP net.IP
-	// ServerIP is the DHCP server IP.
-	ServerIP net.IP
-	// SubnetMask is the subnet mask.
-	SubnetMask net.IPMask
-	// Router is the default gateway.
-	Router net.IP
-	// DNS is the DNS server.
-	DNS net.IP
-	// LeaseTime is the offered lease duration.
-	LeaseTime time.Duration
-	// BootFilename is the boot filename (for non-iPXE clients).
-	BootFilename string
-	// TFTPServerName is the TFTP server hostname.
-	TFTPServerName string
-	// TransactionID is the DHCP transaction ID.
-	TransactionID uint32
-}
-
-// DHCPRequestOptions contains options for sending a DHCP REQUEST packet.
-type DHCPRequestOptions struct {
-	// ClientMAC is the MAC address of the client.
-	ClientMAC net.HardwareAddr
-	// RequestedIP is the IP address being requested.
-	RequestedIP net.IP
-	// ServerIP is the DHCP server IP.
-	ServerIP net.IP
-	// TransactionID is the DHCP transaction ID from the OFFER.
-	TransactionID uint32
-	// ClientArch is the client architecture.
-	ClientArch uint16
-	// IsPXEClient indicates if the client is a PXE client.
-	IsPXEClient bool
-	// IsIPXEClient indicates if the client is already running iPXE.
-	IsIPXEClient bool
-}
-
-// DHCPAckResult contains the result of a DHCP REQUEST.
-type DHCPAckResult struct {
-	// YourIP is the confirmed IP address.
-	YourIP net.IP
-	// ServerIP is the DHCP server IP.
-	ServerIP net.IP
-	// SubnetMask is the subnet mask.
-	SubnetMask net.IPMask
-	// Router is the default gateway.
-	Router net.IP
-	// DNS is the DNS server.
-	DNS net.IP
-	// LeaseTime is the confirmed lease duration.
-	LeaseTime time.Duration
-	// BootFilename is the boot filename.
-	BootFilename string
-	// TFTPServerName is the TFTP server hostname.
-	TFTPServerName string
-	// TFTPServerIP is the TFTP server IP.
-	TFTPServerIP net.IP
-}
 
 // =============================================================================
 // TFTP Options and Results
@@ -143,20 +37,6 @@ type TFTPDownloadResult struct {
 	Size int64
 	// TransferTime is the duration of the transfer.
 	TransferTime time.Duration
-}
-
-// TFTPListResult contains the result of listing available TFTP files.
-type TFTPListResult struct {
-	// Files is the list of available firmware files.
-	Files []TFTPFileInfo
-}
-
-// TFTPFileInfo contains information about a TFTP file.
-type TFTPFileInfo struct {
-	// Filename is the name of the file.
-	Filename string
-	// Size is the file size in bytes.
-	Size int64
 }
 
 // =============================================================================
@@ -209,20 +89,6 @@ type HTTPHealthResult struct {
 	StatusCode int
 }
 
-// HTTPFileResult contains the result of fetching a file.
-type HTTPFileResult struct {
-	// Path is the file path.
-	Path string
-	// Data is the file contents.
-	Data []byte
-	// Size is the file size.
-	Size int64
-	// ContentType is the HTTP content type.
-	ContentType string
-	// StatusCode is the HTTP status code.
-	StatusCode int
-}
-
 // =============================================================================
 // Server Configuration
 // =============================================================================
@@ -237,6 +103,8 @@ type TestServerConfig struct {
 	TFTPPort int
 	// DHCPEnabled indicates if DHCP is enabled.
 	DHCPEnabled bool
+	// DHCPPort is the UDP port the DHCP server listens on.
+	DHCPPort int
 	// DHCPRangeStart is the start of the DHCP IP range.
 	DHCPRangeStart net.IP
 	// DHCPRangeEnd is the end of the DHCP IP range.

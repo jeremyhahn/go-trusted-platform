@@ -27,8 +27,6 @@ import (
 
 // TestKVService_Put tests the KV Put operation.
 func TestKVService_Put(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -140,8 +138,6 @@ func TestKVService_Put(t *testing.T) {
 
 // TestKVService_Get tests the KV Get operation.
 func TestKVService_Get(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -185,8 +181,6 @@ func TestKVService_Get(t *testing.T) {
 
 // TestKVService_Delete tests the KV Delete operation.
 func TestKVService_Delete(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -284,8 +278,6 @@ func TestKVService_Delete(t *testing.T) {
 
 // TestKVService_List tests the KV List operation.
 func TestKVService_List(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -344,8 +336,6 @@ func TestKVService_List(t *testing.T) {
 
 // TestKVService_CRUD tests full CRUD lifecycle.
 func TestKVService_CRUD(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -412,8 +402,6 @@ func TestKVService_CRUD(t *testing.T) {
 
 // TestKVService_ConcurrentPuts tests concurrent put operations.
 func TestKVService_ConcurrentPuts(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -452,8 +440,6 @@ func TestKVService_ConcurrentPuts(t *testing.T) {
 
 // TestKVService_ContextCancellation tests that operations respect context cancellation.
 func TestKVService_ContextCancellation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -483,8 +469,6 @@ func TestKVService_ContextCancellation(t *testing.T) {
 
 // TestKVService_Batch tests batch operations.
 func TestKVService_Batch(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -554,8 +538,6 @@ func TestKVService_Batch(t *testing.T) {
 
 // TestKVService_Transaction tests transactional operations.
 func TestKVService_Transaction(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 

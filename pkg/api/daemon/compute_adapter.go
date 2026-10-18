@@ -338,6 +338,10 @@ func instanceStateToContainerState(state compute.InstanceState) container.Contai
 		compute.StateStopping: container.StateStopped,
 		compute.StateError:    container.StateDead,
 		compute.StateDeleting: container.StateRemoving,
+		// A suspended instance is alive with its memory kept but not
+		// executing, which is what a paused container is. gRPC reports the
+		// same state as VM_STATE_PAUSED.
+		compute.StateSuspended: container.StatePaused,
 	}
 
 	if containerState, ok := stateMap[state]; ok {

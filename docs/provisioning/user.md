@@ -220,9 +220,9 @@ credential (#238). See [api.md](api.md) §6 and
 [`docs/ipxe/api.md`](../ipxe/api.md) §5.
 
 **Test coverage.** Two provisioning integration suites do not exercise what they
-appear to: the PXE gRPC adapter is hollow (15 unimplemented TODOs) and the
-authenticode multi-protocol test has all five adapters commented out. A green
-run currently means less than it looks like. See
+appear to: the PXE suite reaches a platformd with no PXE backend, so every call
+answers `SERVICE_NOT_CONFIGURED`, and the authenticode multi-protocol test has
+all five adapters commented out. See
 [engineering.md](engineering.md) §7.
 
 ---

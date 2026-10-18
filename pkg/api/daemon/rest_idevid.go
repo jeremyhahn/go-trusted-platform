@@ -23,6 +23,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -469,14 +470,16 @@ func (s *RESTServer) handleIDevIDGetCert(w http.ResponseWriter, r *http.Request)
 
 // handleIDevIDDeleteCert handles DELETE /api/v1/tpm/idevid/cert
 func (s *RESTServer) handleIDevIDDeleteCert(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, QUIC and MCP answer in.
+	if s.idevidService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, ErrIDevIDServiceNotConfigured{})
 		return
 	}
 
-	if err := s.tpm2Service.DeleteIDevIDCertificate(); err != nil {
+	if _, err := s.idevidService.DeleteIDevIDCertificate(r.Context(), &platformv1.DeleteIDevIDCertificateRequest{}); err != nil {
 		s.logger.Error("Failed to delete IDevID certificate", "error", err)
-		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "DeleteIDevIDCertificate", Cause: err})
+		s.writeError(w, idevidGRPCToHTTPStatus(err), err)
 		return
 	}
 
@@ -707,14 +710,16 @@ func (s *RESTServer) handleIAKGetCert(w http.ResponseWriter, r *http.Request) {
 
 // handleIAKDeleteCert handles DELETE /api/v1/tpm/iak/cert
 func (s *RESTServer) handleIAKDeleteCert(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, QUIC and MCP answer in.
+	if s.idevidService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, ErrIDevIDServiceNotConfigured{})
 		return
 	}
 
-	if err := s.tpm2Service.DeleteIAKCertificate(); err != nil {
+	if _, err := s.idevidService.DeleteIAKCertificate(r.Context(), &platformv1.DeleteIAKCertificateRequest{}); err != nil {
 		s.logger.Error("Failed to delete IAK certificate", "error", err)
-		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "DeleteIAKCertificate", Cause: err})
+		s.writeError(w, idevidGRPCToHTTPStatus(err), err)
 		return
 	}
 

@@ -211,8 +211,9 @@ It is outside the thirteen supported types.
 The name is taken. With registration open, it may have been taken by somebody
 else — see "zone registration does not verify ownership" above.
 
-**Everything returns 503.**
-The DNS service is not wired into the daemon. Configuration, not a crash.
+**Everything returns 503 (gRPC `UNAVAILABLE`, reason `SERVICE_NOT_CONFIGURED`).**
+The daemon configuration has no `dns:` section, so no DNS service started.
+Configuration, not a crash.
 
 **Hand edits to the CoreDNS Corefile keep disappearing.**
 The Corefile is generated from platform state. Change the platform's zones and

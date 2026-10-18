@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -406,62 +407,60 @@ func TestSchedulerTriggerPush(t *testing.T) {
 
 func TestSchedulerNotifyChange(t *testing.T) {
 	t.Run("notify change triggers push", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer server.Close()
-
-		cfg := &SchedulerConfig{
-			TriggerType:         TriggerOnChange,
-			MaxConcurrentPushes: 1,
-			OnChangeDebounce:    10 * time.Millisecond,
-		}
-		clientCfg := DefaultClientConfig()
-		client, err := NewClient(clientCfg)
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-		defer client.Close()
-
-		targets := []*PushTarget{
-			{ID: "t1", Endpoint: server.URL, Transport: TransportHTTP, Enabled: true},
-		}
-
-		provider := NewSimpleManifestProvider("application/json")
-		provider.SetManifest("m1", []byte(`{"test":"data"}`))
-
-		observer := newPushObserver()
-
-		scheduler, err := NewScheduler(cfg, client, targets,
-			WithManifestProvider(provider),
-			WithHandler(observer.handle))
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-
-		ctx := context.Background()
-		err = scheduler.Start(ctx)
-		if err != nil {
-			t.Fatalf("expected no error on start, got %v", err)
-		}
-		defer func() {
-			if err := scheduler.Stop(); err != nil {
-				t.Logf("cleanup: %v", err)
+		// The debounce window runs on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			cfg := &SchedulerConfig{
+				TriggerType:         TriggerOnChange,
+				MaxConcurrentPushes: 1,
+				OnChangeDebounce:    10 * time.Millisecond,
 			}
-		}()
+			clientCfg := DefaultClientConfig()
+			httpClient := &http.Client{Transport: statusTransport(http.StatusOK)}
+			client, err := NewClient(clientCfg, WithHTTPClient(httpClient))
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+			defer client.Close()
 
-		scheduler.NotifyChange()
+			targets := []*PushTarget{
+				{ID: "t1", Endpoint: inMemoryEndpoint, Transport: TransportHTTP, Enabled: true},
+			}
 
-		// The debounce window may be anything the host makes of it; what is
-		// asserted is that the change produced exactly one push.
-		observer.awaitPushes(t, 1)
+			provider := NewSimpleManifestProvider("application/json")
+			provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		if err := scheduler.Stop(); err != nil {
-			t.Fatalf("Stop() error = %v", err)
-		}
-		if got := observer.Count(); got != 1 {
-			t.Errorf("expected 1 push, got %d", got)
-		}
+			observer := newPushObserver()
+
+			scheduler, err := NewScheduler(cfg, client, targets,
+				WithManifestProvider(provider),
+				WithHandler(observer.handle))
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			ctx := context.Background()
+			err = scheduler.Start(ctx)
+			if err != nil {
+				t.Fatalf("expected no error on start, got %v", err)
+			}
+			defer func() {
+				if err := scheduler.Stop(); err != nil {
+					t.Logf("cleanup: %v", err)
+				}
+			}()
+
+			scheduler.NotifyChange()
+
+			// What is asserted is that the change produced exactly one push.
+			observer.awaitPushes(t, 1)
+
+			if err := scheduler.Stop(); err != nil {
+				t.Fatalf("Stop() error = %v", err)
+			}
+			if got := observer.Count(); got != 1 {
+				t.Errorf("expected 1 push, got %d", got)
+			}
+		})
 	})
 
 	t.Run("notify change when not running does nothing", func(t *testing.T) {
@@ -490,77 +489,77 @@ func TestSchedulerNotifyChange(t *testing.T) {
 	})
 
 	t.Run("debounce multiple changes", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer server.Close()
-
-		cfg := &SchedulerConfig{
-			TriggerType:         TriggerOnChange,
-			MaxConcurrentPushes: 1,
-			OnChangeDebounce:    50 * time.Millisecond,
-		}
-		clientCfg := DefaultClientConfig()
-		client, err := NewClient(clientCfg)
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-		defer client.Close()
-
-		targets := []*PushTarget{
-			{ID: "t1", Endpoint: server.URL, Transport: TransportHTTP, Enabled: true},
-		}
-
-		provider := NewSimpleManifestProvider("application/json")
-		provider.SetManifest("m1", []byte(`{"test":"data"}`))
-
-		observer := newPushObserver()
-
-		scheduler, err := NewScheduler(cfg, client, targets,
-			WithManifestProvider(provider),
-			WithHandler(observer.handle))
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-
-		ctx := context.Background()
-		err = scheduler.Start(ctx)
-		if err != nil {
-			t.Fatalf("expected no error on start, got %v", err)
-		}
-		defer func() {
-			if err := scheduler.Stop(); err != nil {
-				t.Logf("cleanup: %v", err)
+		// The debounce window runs on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			cfg := &SchedulerConfig{
+				TriggerType:         TriggerOnChange,
+				MaxConcurrentPushes: 1,
+				OnChangeDebounce:    50 * time.Millisecond,
 			}
-		}()
+			clientCfg := DefaultClientConfig()
+			httpClient := &http.Client{Transport: statusTransport(http.StatusOK)}
+			client, err := NewClient(clientCfg, WithHTTPClient(httpClient))
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+			defer client.Close()
 
-		// Rapid fire changes, issued back to back. The 10ms sleeps that used
-		// to separate them were the defect: on a loaded host one of them
-		// stretched, the burst was no longer a burst, and what the assertion
-		// measured stopped being coalescing at all (#207).
-		//
-		// What this pins is the coalescing a caller sees: a burst that
-		// arrives faster than the scheduler consumes it becomes one push,
-		// because NotifyChange's change channel holds a single pending item.
-		// It does NOT pin handleChange's pendingDebounce guard: a burst this
-		// fast may never reach handleChange more than once.
-		// TestSchedulerDebounceWindow pins the guard.
-		for i := 0; i < 5; i++ {
-			scheduler.NotifyChange()
-		}
+			targets := []*PushTarget{
+				{ID: "t1", Endpoint: inMemoryEndpoint, Transport: TransportHTTP, Enabled: true},
+			}
 
-		observer.awaitPushes(t, 1)
+			provider := NewSimpleManifestProvider("application/json")
+			provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		// Stop before asserting. A second debounce window can only be armed
-		// after the first one fires, and it would need another full
-		// OnChangeDebounce to push; Stop cancels it well inside that, so the
-		// count below is exact rather than an upper bound.
-		if err := scheduler.Stop(); err != nil {
-			t.Fatalf("Stop() error = %v", err)
-		}
-		if got := observer.Count(); got != 1 {
-			t.Errorf("a burst of 5 changes must coalesce into 1 push, got %d", got)
-		}
+			observer := newPushObserver()
+
+			scheduler, err := NewScheduler(cfg, client, targets,
+				WithManifestProvider(provider),
+				WithHandler(observer.handle))
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			ctx := context.Background()
+			err = scheduler.Start(ctx)
+			if err != nil {
+				t.Fatalf("expected no error on start, got %v", err)
+			}
+			defer func() {
+				if err := scheduler.Stop(); err != nil {
+					t.Logf("cleanup: %v", err)
+				}
+			}()
+
+			// Rapid fire changes, issued back to back. The 10ms sleeps that
+			// used to separate them were the defect: on a loaded host one of
+			// them stretched, the burst was no longer a burst, and what the
+			// assertion measured stopped being coalescing at all (#207).
+			//
+			// What this pins is the coalescing a caller sees: a burst that
+			// arrives faster than the scheduler consumes it becomes one push,
+			// because NotifyChange's change channel holds a single pending
+			// item. It does NOT pin handleChange's pendingDebounce guard: a
+			// burst this fast may never reach handleChange more than once.
+			// TestSchedulerDebounceWindow pins the guard.
+			for i := 0; i < 5; i++ {
+				scheduler.NotifyChange()
+			}
+
+			observer.awaitPushes(t, 1)
+
+			// Stop before asserting. A second debounce window can only be
+			// armed after the first one fires, and it would need another
+			// full OnChangeDebounce to push; Stop cancels it before the
+			// bubble's clock moves again, so the count below is exact
+			// rather than an upper bound.
+			if err := scheduler.Stop(); err != nil {
+				t.Fatalf("Stop() error = %v", err)
+			}
+			if got := observer.Count(); got != 1 {
+				t.Errorf("a burst of 5 changes must coalesce into 1 push, got %d", got)
+			}
+		})
 	})
 }
 
@@ -672,54 +671,54 @@ func TestSchedulerDebounceWindow(t *testing.T) {
 
 func TestSchedulerPeriodicPush(t *testing.T) {
 	t.Run("periodic push triggers on interval", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer server.Close()
+		// The push interval runs on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			cfg := &SchedulerConfig{
+				TriggerType:         TriggerPeriodic,
+				PushInterval:        50 * time.Millisecond,
+				MaxConcurrentPushes: 1,
+			}
+			clientCfg := DefaultClientConfig()
+			httpClient := &http.Client{Transport: statusTransport(http.StatusOK)}
+			client, err := NewClient(clientCfg, WithHTTPClient(httpClient))
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+			defer client.Close()
 
-		cfg := &SchedulerConfig{
-			TriggerType:         TriggerPeriodic,
-			PushInterval:        50 * time.Millisecond,
-			MaxConcurrentPushes: 1,
-		}
-		clientCfg := DefaultClientConfig()
-		client, err := NewClient(clientCfg)
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-		defer client.Close()
+			targets := []*PushTarget{
+				{ID: "t1", Endpoint: inMemoryEndpoint, Transport: TransportHTTP, Enabled: true},
+			}
 
-		targets := []*PushTarget{
-			{ID: "t1", Endpoint: server.URL, Transport: TransportHTTP, Enabled: true},
-		}
+			provider := NewSimpleManifestProvider("application/json")
+			provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		provider := NewSimpleManifestProvider("application/json")
-		provider.SetManifest("m1", []byte(`{"test":"data"}`))
+			observer := newPushObserver()
 
-		observer := newPushObserver()
+			scheduler, err := NewScheduler(cfg, client, targets,
+				WithManifestProvider(provider),
+				WithHandler(observer.handle))
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
 
-		scheduler, err := NewScheduler(cfg, client, targets,
-			WithManifestProvider(provider),
-			WithHandler(observer.handle))
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+			ctx := context.Background()
+			err = scheduler.Start(ctx)
+			if err != nil {
+				t.Fatalf("expected no error on start, got %v", err)
+			}
 
-		ctx := context.Background()
-		err = scheduler.Start(ctx)
-		if err != nil {
-			t.Fatalf("expected no error on start, got %v", err)
-		}
+			// The property is that the ticker keeps firing, so wait for a
+			// second push to actually happen. The old form asserted that two
+			// pushes fit inside 150ms of wall clock, and on a loaded host
+			// only one did (#207). The interval now only sets how fast they
+			// arrive.
+			observer.awaitPushes(t, 2)
 
-		// The property is that the ticker keeps firing, so wait for a second
-		// push to actually happen. The old form asserted that two pushes fit
-		// inside 150ms of wall clock, and on a loaded host only one did
-		// (#207). The interval now only sets how fast they arrive.
-		observer.awaitPushes(t, 2)
-
-		if err := scheduler.Stop(); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
+			if err := scheduler.Stop(); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		})
 	})
 }
 

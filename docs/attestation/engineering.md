@@ -201,6 +201,17 @@ IMA: `Event`, `EventLog`, `EventFilter`, `Status`.
     with `vm.QuoteSignatureAlgorithm`, which is
     `vm.ErrQuoteSchemeUnavailable` when the IAK names none, so no quote
     leaves without one.
+    These checks (`vm.VerifyQuoteSignatureWithAlgorithm`,
+    `vm.VerifyQuoteNonce`, `vm.VerifyQuotePCRDigest`) stay local because
+    every caller above holds a bare AK public key: a guest vTPM's AIK, the
+    node's own IAK, or one the request carries. The go-quicbaas re-export
+    `xkms.NewPeerAttestationVerifier` takes only an AK certificate chained to
+    anchors (TCG DevID v1 r12 §8.2) and refuses a bare key by design, so it
+    cannot stand in for them. The device quote verifier, which holds the
+    certificate, is on that primitive ([architecture](architecture.md),
+    "Device quote verification"). Moving the rest needs an upstream entry that checks the
+    signature, nonce and PCR digest under a key the caller already trusts
+    (#482).
 
 ### 3a. Signing paths that are not relay oracles
 

@@ -24,48 +24,19 @@ var (
 	ErrCorruptWrite       = errors.New("trusted-platform: corrupt write: bytes written don't match source length")
 	ErrCorruptCopy        = errors.New("trusted-platform: corrupt copy: destination bytes don't match source length")
 
-	// TCG OIDs:
-	// https://trustedcomputinggroup.org/wp-content/uploads/TCG-OID-Registry-Version-1.00-Revision-0.74_10July24.pdf
-	OIDTCGHWModule        = asn1.ObjectIdentifier{2, 23, 133, 1, 1}
-	OIDTCGHWType          = asn1.ObjectIdentifier{2, 23, 133, 1, 2}
-	OIDTCGTPMManufacturer = asn1.ObjectIdentifier{2, 23, 133, 2, 1}
-	OIDTCGTPMModel        = asn1.ObjectIdentifier{2, 23, 133, 2, 2}
-	OIDTCGTPMVersion      = asn1.ObjectIdentifier{2, 23, 133, 2, 3}
-	OIDTCGSpecification   = asn1.ObjectIdentifier{2, 23, 133, 2, 16}
-	// The tcg-cap-verifiedTPM* certificate-policy arcs (2.23.133.11.1.1-.3)
-	// are NOT defined here. They are reached through the SDK re-export
-	// github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca as
-	// OIDTCGVerifiedTPM{Residency,Fixed,Restricted} and their x509.OID twins
-	// TCGVerifiedTPM*Policy, so the arc a relying party checks has one
-	// definition in the stack.
-	OIDTCGPermanentIdentifier    = asn1.ObjectIdentifier{2, 23, 133, 12, 1}
-	OIDTCGPlatformManufacturer   = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 1}
-	OIDTCGPlatformManufacturerID = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 2}
-	OIDTCGPlatformConfigURL      = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 3}
-	OIDTCGPlatformModel          = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 4}
-	OIDTCGPlatformVersion        = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 5}
-	OIDTCGPlatformSerial         = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 6}
-	OIDTCGPlatformConfiguration  = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 7}
-	OIDTCGEKCertificate          = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
-	OIDTCGPlatformCertificate    = asn1.ObjectIdentifier{2, 23, 133, 8, 2}
-	OIDTCGAIKCertificate         = asn1.ObjectIdentifier{2, 23, 133, 8, 3}
-	OIDTCGPlatformKeyCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 4}
-
-	OIDTCGTPMFirmwareVersion = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 21911, 1, 1, 3, 1, 1, 5}
+	// TCG OIDs are not defined here. The tcg-cap-verifiedTPM*
+	// certificate-policy arcs (2.23.133.11.1.1-.3) and tcg-kp-AIKCertificate
+	// are reached through the SDK re-export
+	// github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca, so the arc a relying
+	// party checks has one definition in the stack.
 
 	// Trusted Platform OIDs
 	OIDTPIssuerKeyStore = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 1}
 	OIDTPKeyStore       = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 2}
 	OIDTPFIPS140        = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 3}
 
-	// OIDTPNetworkZone is tp-networkZone (1.3.6.1.4.1.29377.101.21).
-	// It carries the platform network zone assigned to the certificate subject.
-	// The SDN policy engine evaluates this extension at enforcement time to
-	// determine which network segments the subject is permitted to access.
-	// Defined canonically in go-xkms/pkg/ca and re-exported via
-	// go-quicbaas/sdk/go/xkms/ca. Mirrored here for platform-local consumers
-	// that resolve OIDs without importing the CA package.
-	OIDTPNetworkZone = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 21}
+	// tp-networkZone (1.3.6.1.4.1.29377.101.21) is
+	// quicbaasca.OIDTPNetworkZone in the same re-export.
 
 	OIDQuantumAlgorithm = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 10}
 	OIDQuantumSignature = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 29377, 101, 11}

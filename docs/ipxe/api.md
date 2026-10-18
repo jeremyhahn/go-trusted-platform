@@ -95,7 +95,9 @@ Option-93 to boot filename:
 | `0x0009` UEFI byte code | `ipxe.efi` |
 | anything else | `ServerConfig.BootFilename` (default `ipxe.efi`) |
 
-Non-PXE clients are ignored unless `DHCPRespondToAll` is set.
+Non-PXE clients are ignored unless `DHCPRespondToAll` is set. A packet whose
+`chaddr` is empty or all zeros is ignored whatever its type: leases are keyed
+on the hardware address.
 
 ### 3.2 TFTP — UDP 69
 

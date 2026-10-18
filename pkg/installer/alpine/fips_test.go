@@ -17,6 +17,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -676,6 +678,15 @@ func TestFIPSInstaller_installOpenSSLFIPS(t *testing.T) {
 	})
 }
 
+// closedMirror returns the URL of a mirror that has stopped listening, so
+// a download fails at connect on loopback instead of in a host DNS lookup.
+func closedMirror(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	return srv.URL
+}
+
 func TestFIPSInstaller_installPackage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -685,7 +696,7 @@ func TestFIPSInstaller_installPackage(t *testing.T) {
 			OS:         "alpine",
 			Version:    "3.20",
 			Arch:       "x86_64",
-			Mirror:     "http://invalid-mirror.example.com",
+			Mirror:     closedMirror(t),
 			WorkDir:    tmpDir,
 			MountPoint: tmpDir,
 			Logger:     logger,

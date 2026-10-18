@@ -44,8 +44,6 @@ import (
 
 // TestRegistrationMultiProtocol runs all registration tests across multiple protocols
 func TestRegistrationMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -581,8 +579,6 @@ func testTokenHasTenantClaim(t *testing.T, ctx context.Context, cmd Registration
 
 // TestRegistrationMultiProtocol_ErrorHandling tests error scenarios across protocols
 func TestRegistrationMultiProtocol_ErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -717,8 +713,6 @@ func TestRegistrationMultiProtocol_ErrorHandling(t *testing.T) {
 
 // TestRegistrationCLI runs CLI-specific tests
 func TestRegistrationCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -733,8 +727,6 @@ func TestRegistrationCLI(t *testing.T) {
 
 // TestRegistrationREST runs REST-specific tests
 func TestRegistrationREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -749,8 +741,6 @@ func TestRegistrationREST(t *testing.T) {
 
 // TestRegistrationGRPC runs gRPC-specific tests
 func TestRegistrationGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -765,8 +755,6 @@ func TestRegistrationGRPC(t *testing.T) {
 
 // TestRegistrationQUIC runs QUIC-specific tests
 func TestRegistrationQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -781,8 +769,6 @@ func TestRegistrationQUIC(t *testing.T) {
 
 // TestRegistrationMCP runs MCP-specific tests
 func TestRegistrationMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -797,8 +783,6 @@ func TestRegistrationMCP(t *testing.T) {
 
 // TestRegistrationUnix runs Unix socket-specific tests
 func TestRegistrationUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

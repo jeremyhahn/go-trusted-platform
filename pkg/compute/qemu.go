@@ -60,6 +60,28 @@ type QEMUOrchestrator struct {
 	// vtpmDeviceFor produces the vTPM attestor device for a swtpm socket.
 	// Overridable seam for tests; defaults to defaultVTPMDevice.
 	vtpmDeviceFor func(socketPath string) (vm.VTPMDevice, error)
+
+	// emulatorFor opens the swtpm a VM boots against.
+	// Overridable seam for tests; defaults to defaultEmulator.
+	emulatorFor func(config *swtpm.Config) (tpmEmulator, error)
+
+	// createDisk creates a VM's disk image.
+	// Overridable seam for tests; defaults to (*qemu.VM).CreateDisk.
+	createDisk func(vm *qemu.VM) error
+}
+
+// tpmEmulator is the software TPM a VM boots against; *swtpm.SWTPM
+// implements it.
+type tpmEmulator interface {
+	Initialize(ctx context.Context) error
+	IsInitialized() bool
+	Start(ctx context.Context) error
+	WaitForSocket(timeout time.Duration) error
+	Stop() error
+	IsRunning() bool
+	PID() int
+	SocketPath() string
+	StateDir() string
 }
 
 // qemuInstance holds the VM instance and its metadata
@@ -67,7 +89,7 @@ type qemuInstance struct {
 	vm                *qemu.VM
 	instance          *Instance
 	ovsNetwork        *qemu.OVSNetwork
-	swtpm             *swtpm.SWTPM
+	swtpm             tpmEmulator
 	mu                sync.Mutex
 	cancelFunc        context.CancelFunc
 	waitGroup         sync.WaitGroup
@@ -117,6 +139,8 @@ func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*Q
 	}
 	o.snapshotOpsFor = o.defaultSnapshotOps
 	o.vtpmDeviceFor = o.defaultVTPMDevice
+	o.emulatorFor = o.defaultEmulator
+	o.createDisk = (*qemu.VM).CreateDisk
 
 	// Connect to OVS if available
 	if o.ovsClient != nil {
@@ -159,7 +183,7 @@ func generateInstanceID() string {
 }
 
 // createSWTPM creates and initializes a software TPM instance for a VM
-func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir string) (*swtpm.SWTPM, error) {
+func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir string) (tpmEmulator, error) {
 	// Create TPM state directory
 	tpmStateDir := filepath.Join(workDir, "tpm")
 	if err := os.MkdirAll(tpmStateDir, 0755); err != nil {
@@ -177,7 +201,7 @@ func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir 
 	}
 
 	// Create swtpm instance
-	tpm, err := swtpm.NewSWTPM(swtpmConfig, o.logger)
+	tpm, err := o.emulatorFor(swtpmConfig)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to create swtpm", Err: err}
 	}
@@ -212,7 +236,7 @@ func (o *QEMUOrchestrator) SetVTPMGenerator(gen vtpm.Generator) {
 // with ErrVTPMIdentityRequired when the profile requires a hardware-rooted
 // identity, and otherwise falls back to a local identity-less swtpm with a
 // loud warning — never a silent downgrade.
-func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.DeviceProfile, cfg *InstanceConfig) (*swtpm.SWTPM, string, string, error) {
+func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.DeviceProfile, cfg *InstanceConfig) (tpmEmulator, string, string, error) {
 	if o.vtpmGenerator == nil {
 		if vtpmIdentityRequired(profile, cfg) {
 			return nil, "", "", &SentinelCauseError{
@@ -258,7 +282,7 @@ func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.
 // swtpmForBundle opens an swtpm bound to an existing bundle's TPM state dir and
 // socket. The bundle state is already initialized (EK cert injected at bundle
 // creation), so re-initialization is skipped.
-func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMInstance) (*swtpm.SWTPM, error) {
+func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMInstance) (tpmEmulator, error) {
 	swtpmConfig := &swtpm.Config{
 		StateDir:   filepath.Join(inst.StoragePath, "tpm"),
 		SocketPath: inst.SocketPath,
@@ -267,7 +291,7 @@ func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMIn
 		Debug:      o.config.Debug,
 		QEMUMode:   true,
 	}
-	tpm, err := swtpm.NewSWTPM(swtpmConfig, o.logger)
+	tpm, err := o.emulatorFor(swtpmConfig)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to open swtpm for bundle", Err: err}
 	}
@@ -276,6 +300,16 @@ func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMIn
 		if err := tpm.Initialize(ctx); err != nil {
 			return nil, &WrappedError{Msg: "failed to initialize swtpm for bundle", Err: err}
 		}
+	}
+	return tpm, nil
+}
+
+// defaultEmulator opens the host swtpm. It returns a nil interface, never a
+// typed nil, when swtpm cannot be opened.
+func (o *QEMUOrchestrator) defaultEmulator(config *swtpm.Config) (tpmEmulator, error) {
+	tpm, err := swtpm.NewSWTPM(config, o.logger)
+	if err != nil {
+		return nil, err
 	}
 	return tpm, nil
 }
@@ -292,8 +326,18 @@ func vtpmIdentityRequired(profile *entities.DeviceProfile, cfg *InstanceConfig) 
 
 // Create creates a new VM instance from a device profile
 func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceProfile) (*Instance, error) {
+	return o.CreateWithSpec(ctx, profile, VMSpec{})
+}
+
+// CreateWithSpec creates a VM from profile with spec applied over the
+// orchestrator's defaults. A spec it cannot honour is refused with
+// ErrInvalidVMSpec before anything is created.
+func (o *QEMUOrchestrator) CreateWithSpec(ctx context.Context, profile *entities.DeviceProfile, spec VMSpec) (*Instance, error) {
 	if profile == nil {
 		return nil, ErrInvalidProfile
+	}
+	if err := o.checkVMSpec(spec); err != nil {
+		return nil, err
 	}
 
 	o.mu.Lock()
@@ -317,21 +361,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 		return nil, err
 	}
 
-	// Create instance configuration
-	instanceConfig := &InstanceConfig{
-		Memory:      o.config.DefaultMemory,
-		CPUs:        o.config.DefaultCPUs,
-		DiskSize:    o.config.DefaultDiskSize,
-		WorkDir:     filepath.Join(o.config.WorkDir, instanceID),
-		SecureBoot:  false,
-		EnableKVM:   o.config.EnableKVM,
-		TPMEnabled:  true,
-		NetworkMode: "bridge",
-		BootMode:    "boot",
-	}
-
-	// Create disk path
-	instanceConfig.DiskPath = filepath.Join(instanceConfig.WorkDir, "disk.qcow2")
+	instanceConfig := o.instanceConfig(instanceID, spec)
 
 	// Create work directory
 	if err := os.MkdirAll(instanceConfig.WorkDir, 0755); err != nil {
@@ -343,7 +373,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	// against a profile-bound, CA-issued-EK bundle rather than an anonymous
 	// swtpm. Only WHERE the swtpm comes from changes here; the socket/NVRAM
 	// plumbing that boots the VM below is unchanged.
-	var tpm *swtpm.SWTPM
+	var tpm tpmEmulator
 	var tpmSocket string
 	var bundleID string
 	if instanceConfig.TPMEnabled {
@@ -383,7 +413,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	}
 
 	// Create disk
-	if err := vm.CreateDisk(); err != nil {
+	if err := o.createDisk(vm); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		return nil, &WrappedError{Msg: "failed to create VM disk", Err: err}
 	}
@@ -550,14 +580,7 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 		}
 		qemuInst.mu.Unlock()
 
-		// Update state to stopped
-		o.lifecycle.SetState(instanceID, StateStopped)
-		qemuInst.mu.Lock()
-		qemuInst.instance.State = StateStopped
-		qemuInst.instance.UpdatedAt = time.Now()
-		qemuInst.instance.PID = 0
-		qemuInst.mu.Unlock()
-		o.logger.Infof("VM %s stopped", instanceID)
+		o.recordExit(instanceID, qemuInst)
 	}()
 
 	o.logger.Infof("Started VM instance: %s (PID: %d)", instanceID, qemuInst.instance.PID)
@@ -565,8 +588,50 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// Stop stops a running VM instance
+// recordExit records that the QEMU process of instanceID has exited.
+//
+// The lifecycle reaches Stopped only from Stopping, so the exit is recorded
+// as Stopped only when Stop asked for it. Every other state is kept and
+// logged: an instance gone from the lifecycle was deleted or migrated away
+// and is not recreated, Error and Deleting are terminal, and the lifecycle
+// has no transition for a VM that exits on its own while running or
+// suspended.
+func (o *QEMUOrchestrator) recordExit(instanceID string, qemuInst *qemuInstance) {
+	qemuInst.mu.Lock()
+	defer qemuInst.mu.Unlock()
+
+	qemuInst.instance.PID = 0
+	qemuInst.instance.UpdatedAt = time.Now()
+
+	state, err := o.lifecycle.GetState(instanceID)
+	if err != nil {
+		o.logger.Warnf("VM %s exited after leaving the lifecycle: %v", instanceID, err)
+		return
+	}
+	if state != StateStopping {
+		o.logger.Warnf("VM %s exited while %s; no stop was requested, so its state stays %s", instanceID, state, state)
+		return
+	}
+	if err := o.lifecycle.SetState(instanceID, StateStopped); err != nil {
+		o.logger.Errorf("VM %s exited but could not be marked stopped: %v", instanceID, err)
+		return
+	}
+	qemuInst.instance.State = StateStopped
+	o.logger.Infof("VM %s stopped", instanceID)
+}
+
+// Stop stops a running VM instance with the default StopOptions.
 func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
+	return o.StopWithOptions(ctx, instanceID, StopOptions{})
+}
+
+// StopWithOptions stops a running or suspended VM. A forced stop kills the
+// QEMU process; otherwise the guest gets opts.Timeout (or the QEMU default)
+// to answer the ACPI power button before QEMU is terminated.
+func (o *QEMUOrchestrator) StopWithOptions(ctx context.Context, instanceID string, opts StopOptions) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
 	if instanceID == "" {
 		return ErrInvalidInstanceID
 	}
@@ -580,30 +645,40 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	}
 
 	qemuInst.mu.Lock()
-	defer qemuInst.mu.Unlock()
 
 	// Check current state
 	currentState, err := o.lifecycle.GetState(instanceID)
 	if err != nil {
+		qemuInst.mu.Unlock()
 		return err
 	}
 
-	if currentState != StateRunning {
+	if currentState != StateRunning && currentState != StateSuspended {
+		qemuInst.mu.Unlock()
 		return ErrInstanceNotRunning
+	}
+
+	// A suspended guest cannot answer the ACPI power button, so continue it
+	// first. If that fails, the stop below still falls back to SIGTERM. A
+	// forced stop does not ask the guest, so it kills the paused process.
+	if currentState == StateSuspended && !opts.Force {
+		o.continueBeforeStop(ctx, qemuInst)
 	}
 
 	// Update state to stopping
 	if err := o.lifecycle.SetState(instanceID, StateStopping); err != nil {
+		qemuInst.mu.Unlock()
 		return err
 	}
 	qemuInst.instance.State = StateStopping
 	qemuInst.instance.UpdatedAt = time.Now()
 
 	// Stop VM
-	if err := qemuInst.vm.Stop(); err != nil {
+	if err := stopVMProcess(qemuInst, opts); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()
+		qemuInst.mu.Unlock()
 		return &WrappedError{Msg: "failed to stop VM", Err: err}
 	}
 
@@ -611,6 +686,10 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	if qemuInst.cancelFunc != nil {
 		qemuInst.cancelFunc()
 	}
+
+	// The wait goroutine takes the instance lock to record the exit, so the
+	// lock is released before waiting for it.
+	qemuInst.mu.Unlock()
 
 	// Wait for VM to exit (this will also stop swtpm via the wait goroutine)
 	qemuInst.waitGroup.Wait()
@@ -643,8 +722,8 @@ func (o *QEMUOrchestrator) Delete(ctx context.Context, instanceID string) error 
 		return err
 	}
 
-	// Stop if running
-	if currentState == StateRunning {
+	// Stop if running or suspended
+	if currentState == StateRunning || currentState == StateSuspended {
 		qemuInst.mu.Unlock()
 		o.mu.Unlock()
 		if err := o.Stop(ctx, instanceID); err != nil {

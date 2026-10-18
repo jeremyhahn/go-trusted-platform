@@ -59,8 +59,8 @@ Examples:
 	cmd.Flags().StringVar(&sealedData, "sealed-data", "", "base64-encoded sealed data (required)")
 	cmd.Flags().StringVar(&authValue, "auth-value", "", "auth value used during sealing")
 
-	_ = cmd.MarkFlagRequired("bundle-id")
-	_ = cmd.MarkFlagRequired("sealed-data")
+	cli.MarkFlagsRequired(cmd, "bundle-id")
+	cli.MarkFlagsRequired(cmd, "sealed-data")
 
 	return cmd
 }

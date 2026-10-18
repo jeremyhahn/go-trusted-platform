@@ -226,7 +226,7 @@ func listVMsQuery(in *pb.ListVMsRequest) url.Values {
 
 // restComputeClient carries the Go SDK compute client's VM RPCs over the
 // daemon REST surface: each sends the SDK's own request message to the route
-// that serves its RPC. ComputeCommands drives only the six VM RPCs below; the
+// that serves its RPC. ComputeCommands drives only the nine VM RPCs below; the
 // embedded interface is nil and never reached.
 type restComputeClient struct {
 	pb.ComputeServiceClient
@@ -244,6 +244,18 @@ func (c *restComputeClient) StartVM(ctx context.Context, in *pb.StartVMRequest, 
 
 func (c *restComputeClient) StopVM(ctx context.Context, in *pb.StopVMRequest, _ ...grpc.CallOption) (*pb.StopVMResponse, error) {
 	return restRPC[pb.StopVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "stop"), nil, in)
+}
+
+func (c *restComputeClient) RebootVM(ctx context.Context, in *pb.RebootVMRequest, _ ...grpc.CallOption) (*pb.RebootVMResponse, error) {
+	return restRPC[pb.RebootVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "reboot"), nil, in)
+}
+
+func (c *restComputeClient) SuspendVM(ctx context.Context, in *pb.SuspendVMRequest, _ ...grpc.CallOption) (*pb.SuspendVMResponse, error) {
+	return restRPC[pb.SuspendVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "suspend"), nil, in)
+}
+
+func (c *restComputeClient) ResumeVM(ctx context.Context, in *pb.ResumeVMRequest, _ ...grpc.CallOption) (*pb.ResumeVMResponse, error) {
+	return restRPC[pb.ResumeVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "resume"), nil, in)
 }
 
 func (c *restComputeClient) DeleteVM(ctx context.Context, in *pb.DeleteVMRequest, _ ...grpc.CallOption) (*pb.DeleteVMResponse, error) {
@@ -305,6 +317,51 @@ func (a *RESTAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMRe
 	return result, nil
 }
 
+// RebootVM restarts a running virtual machine via REST.
+func (a *RESTAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
+	status, err := a.client.RebootVMDomain(ctx, opts.VMID, opts.Force)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &RebootVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// SuspendVM pauses a running virtual machine via REST.
+func (a *RESTAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.client.SuspendVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &SuspendVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// ResumeVM continues a suspended virtual machine via REST.
+func (a *RESTAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.client.ResumeVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ResumeVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
 // DeleteVM deletes a virtual machine via REST.
 func (a *RESTAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
 	status, err := a.client.DeleteVMDomain(ctx, &computesvc.DeleteVMParams{
@@ -342,4 +399,52 @@ func (a *RESTAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVM
 		return nil, err
 	}
 	return listVMsResultFromDomain(domainResult), nil
+}
+
+// CreateSnapshot snapshots a running VM via the REST SDK client.
+func (a *RESTAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.CreateSnapshot(ctx, opts.VMID, fullSnapshotConfig(opts))
+	if err != nil {
+		return nil, err
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// RestoreSnapshot restores a VM from a snapshot via the REST SDK client.
+func (a *RESTAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	return a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// DeleteSnapshot deletes a VM snapshot via the REST SDK client.
+func (a *RESTAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	return a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// ListSnapshots lists a VM's snapshots via the REST SDK client.
+func (a *RESTAdapter) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error) {
+	snapshots, err := a.client.ListSnapshots(ctx, vmID)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotSummaries(snapshots), nil
+}
+
+// AttestVM generates a VM's vTPM quote via the REST SDK client.
+func (a *RESTAdapter) AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error) {
+	resp, err := a.client.AttestVM(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, pb.PCRBank_PCR_BANK_SHA256)
+	if err != nil {
+		return nil, err
+	}
+	return vmQuote(resp), nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence via the REST SDK client.
+func (a *RESTAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error) {
+	resp, err := a.client.VerifyVMAttestation(ctx, verifyVMAttestationRequest(opts))
+	if err != nil {
+		return false, err
+	}
+	return resp.GetVerified(), nil
 }

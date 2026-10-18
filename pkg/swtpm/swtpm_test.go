@@ -15,9 +15,11 @@ package swtpm
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,6 +27,53 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errFakeSetup is the failure fakeTools reports for swtpm_setup.
+var errFakeSetup = &MessageError{Msg: "fake swtpm_setup failure"}
+
+// fakeTools stands in for the swtpm binaries. Its swtpm_setup writes the
+// state file the real one leaves in --tpmstate.
+type fakeTools struct {
+	missing   map[string]bool
+	setupErr  error
+	setupArgs []string
+	setupRuns int
+}
+
+func (f *fakeTools) tools() tools {
+	return tools{lookPath: f.lookPath, runSetup: f.runSetup}
+}
+
+func (f *fakeTools) lookPath(file string) (string, error) {
+	if f.missing[file] {
+		return "", exec.ErrNotFound
+	}
+	return "/usr/bin/" + file, nil
+}
+
+func (f *fakeTools) runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	f.setupRuns++
+	f.setupArgs = args
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if f.setupErr != nil {
+		if _, err := io.WriteString(stderr, "fake setup stderr"); err != nil {
+			return err
+		}
+		return f.setupErr
+	}
+	stateDir := args[slices.Index(args, "--tpmstate")+1]
+	return os.WriteFile(filepath.Join(stateDir, "tpm2-00.permall"), []byte("tpm state"), 0600)
+}
+
+// newFakeSWTPM builds an SWTPM whose binaries are fake.
+func newFakeSWTPM(t *testing.T, config *Config, fake *fakeTools) *SWTPM {
+	t.Helper()
+	s, err := newSWTPM(config, logging.DefaultLogger(), fake.tools())
+	require.NoError(t, err)
+	return s
+}
 
 // TestNewSWTPM tests the creation of a new SWTPM instance
 func TestNewSWTPM(t *testing.T) {
@@ -67,731 +116,246 @@ func TestNewSWTPM(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logger := logging.DefaultLogger()
-			swtpm, err := NewSWTPM(tc.config, logger)
+			fake := &fakeTools{}
+			swtpm, err := newSWTPM(tc.config, logging.DefaultLogger(), fake.tools())
 
 			if tc.expectError != nil {
 				assert.ErrorIs(t, err, tc.expectError)
 				assert.Nil(t, swtpm)
-			} else {
-				// Check if swtpm is installed
-				if _, lookupErr := exec.LookPath("swtpm"); lookupErr != nil {
-					t.Skip("swtpm not installed, skipping test")
-				}
-
-				assert.NoError(t, err)
-				assert.NotNil(t, swtpm)
-				assert.Equal(t, tc.config.StateDir, swtpm.config.StateDir)
-
-				// Check defaults
-				if tc.config.SocketPath == "" {
-					assert.Equal(t, filepath.Join(tc.config.StateDir, "swtpm.sock"), swtpm.config.SocketPath)
-				}
-				if len(tc.config.PCRBanks) == 0 {
-					assert.Equal(t, []string{"sha256"}, swtpm.config.PCRBanks)
-				}
-				if tc.config.LogLevel == 0 {
-					assert.Equal(t, 20, swtpm.config.LogLevel)
-				}
+				return
 			}
+
+			require.NoError(t, err)
+			require.NotNil(t, swtpm)
+			assert.Equal(t, tc.config.StateDir, swtpm.config.StateDir)
+			assert.Zero(t, fake.setupRuns, "construction must not run swtpm_setup")
 		})
 	}
 }
 
-// TestSWTPMNotInstalled tests behavior when swtpm is not installed
-func TestSWTPMNotInstalled(t *testing.T) {
-	// Temporarily modify PATH to simulate swtpm not being installed
-	oldPath := os.Getenv("PATH")
-	_ = os.Setenv("PATH", "/nonexistent")
-	defer func() { _ = os.Setenv("PATH", oldPath) }()
+// TestNewSWTPM_Defaults verifies the defaults applied to an empty config
+// and that explicit settings are kept.
+func TestNewSWTPM_Defaults(t *testing.T) {
+	stateDir := t.TempDir()
+	defaulted := newFakeSWTPM(t, &Config{StateDir: stateDir}, &fakeTools{})
+	assert.Equal(t, filepath.Join(stateDir, "swtpm.sock"), defaulted.config.SocketPath)
+	assert.Equal(t, []string{"sha256"}, defaulted.config.PCRBanks)
+	assert.Equal(t, 20, defaulted.config.LogLevel)
 
-	config := &Config{
-		StateDir: "/tmp/test-swtpm",
+	custom := newFakeSWTPM(t, &Config{
+		StateDir:   "/tmp/test-swtpm",
+		SocketPath: "/tmp/test-swtpm/custom.sock",
+		PCRBanks:   []string{"sha256", "sha384"},
+		LogLevel:   10,
+	}, &fakeTools{})
+	assert.Equal(t, "/tmp/test-swtpm/custom.sock", custom.config.SocketPath)
+	assert.Equal(t, []string{"sha256", "sha384"}, custom.config.PCRBanks)
+	assert.Equal(t, 10, custom.config.LogLevel)
+}
+
+// TestNewSWTPM_ToolMissing verifies that either missing binary is reported
+// as not installed.
+func TestNewSWTPM_ToolMissing(t *testing.T) {
+	for _, binary := range []string{"swtpm", "swtpm_setup"} {
+		t.Run(binary, func(t *testing.T) {
+			fake := &fakeTools{missing: map[string]bool{binary: true}}
+			swtpm, err := newSWTPM(&Config{StateDir: t.TempDir()}, nil, fake.tools())
+			assert.ErrorIs(t, err, ErrSWTPMNotInstalled)
+			assert.Nil(t, swtpm)
+		})
 	}
+}
 
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
+// TestSWTPMNotInstalled verifies that NewSWTPM looks the binaries up on PATH.
+func TestSWTPMNotInstalled(t *testing.T) {
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "empty"))
+
+	swtpm, err := NewSWTPM(&Config{StateDir: t.TempDir()}, logging.DefaultLogger())
 
 	assert.ErrorIs(t, err, ErrSWTPMNotInstalled)
 	assert.Nil(t, swtpm)
 }
 
-// TestInitialize tests TPM initialization
+// TestInitialize verifies that swtpm_setup runs in a scratch directory and
+// its state files are copied into StateDir.
 func TestInitialize(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
-		t.Skip("swtpm_setup not installed, skipping test")
+	for _, debug := range []bool{false, true} {
+		t.Run(map[bool]string{false: "quiet", true: "debug"}[debug], func(t *testing.T) {
+			stateDir := filepath.Join(t.TempDir(), "state")
+			fake := &fakeTools{}
+			swtpm := newFakeSWTPM(t, &Config{
+				StateDir: stateDir,
+				PCRBanks: []string{"sha256", "sha384", "sha512"},
+				Debug:    debug,
+			}, fake)
+
+			require.NoError(t, swtpm.Initialize(context.Background()))
+
+			require.Equal(t, 1, fake.setupRuns)
+			tpmState := fake.setupArgs[slices.Index(fake.setupArgs, "--tpmstate")+1]
+			assert.NotEqual(t, stateDir, tpmState, "swtpm_setup must run in a scratch directory")
+			assert.NoDirExists(t, tpmState, "the scratch directory must be removed")
+			assert.Equal(t, []string{
+				"--tpm2",
+				"--tpmstate", tpmState,
+				"--pcr-banks", "sha256,sha384,sha512",
+				"--overwrite",
+			}, fake.setupArgs)
+
+			data, err := os.ReadFile(filepath.Join(stateDir, "tpm2-00.permall"))
+			require.NoError(t, err)
+			assert.Equal(t, "tpm state", string(data))
+			info, err := os.Stat(filepath.Join(stateDir, "tpm2-00.permall"))
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+		})
 	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-		Debug:    true,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-	require.NotNil(t, swtpm)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	assert.NoError(t, err)
-
-	// Verify state directory exists
-	_, err = os.Stat(tempDir)
-	assert.NoError(t, err)
-
-	// Verify TPM state files were created
-	entries, err := os.ReadDir(tempDir)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, entries, "state directory should contain TPM state files")
 }
 
-// TestInitializeWithContext tests initialization with context cancellation
+// TestInitializeSetupFails verifies that a failed swtpm_setup is reported
+// with its stderr and leaves no state behind.
+func TestInitializeSetupFails(t *testing.T) {
+	stateDir := t.TempDir()
+	swtpm := newFakeSWTPM(t, &Config{StateDir: stateDir}, &fakeTools{setupErr: errFakeSetup})
+
+	err := swtpm.Initialize(context.Background())
+
+	require.ErrorIs(t, err, ErrInitFailed)
+	assert.Contains(t, err.Error(), errFakeSetup.Error())
+	assert.Contains(t, err.Error(), "fake setup stderr")
+	assert.False(t, swtpm.IsInitialized())
+}
+
+// TestInitializeWithContext verifies that the caller's context reaches
+// swtpm_setup, so a cancelled context fails initialization.
 func TestInitializeWithContext(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
-		t.Skip("swtpm_setup not installed, skipping test")
-	}
+	swtpm := newFakeSWTPM(t, &Config{StateDir: t.TempDir()}, &fakeTools{})
 
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Create a context that is already cancelled
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = swtpm.Initialize(ctx)
-	assert.Error(t, err)
+	err := swtpm.Initialize(ctx)
+	assert.ErrorIs(t, err, ErrInitFailed)
+	assert.False(t, swtpm.IsInitialized())
 }
 
-// TestStartStop tests starting and stopping the swtpm daemon
-func TestStartStop(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
+// TestInitializeError verifies that a state directory that cannot be
+// created fails before swtpm_setup runs.
+func TestInitializeError(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(parent, []byte("not a directory"), 0600))
+	fake := &fakeTools{}
+	swtpm := newFakeSWTPM(t, &Config{StateDir: filepath.Join(parent, "state")}, fake)
 
-	tempDir := t.TempDir()
+	err := swtpm.Initialize(context.Background())
 
-	config := &Config{
-		StateDir: tempDir,
-		Debug:    true,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Initialize first
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	// Start the daemon
-	err = swtpm.Start(ctx)
-	assert.NoError(t, err)
-	assert.True(t, swtpm.IsRunning())
-	assert.Greater(t, swtpm.PID(), 0)
-
-	// Wait for socket to be ready
-	err = swtpm.WaitForSocket(5 * time.Second)
-	assert.NoError(t, err)
-
-	// Verify socket exists
-	_, err = os.Stat(swtpm.SocketPath())
-	assert.NoError(t, err)
-
-	// Stop the daemon
-	err = swtpm.Stop()
-	assert.NoError(t, err)
-	assert.False(t, swtpm.IsRunning())
-	assert.Equal(t, 0, swtpm.PID())
+	assert.ErrorIs(t, err, ErrInitFailed)
+	assert.Zero(t, fake.setupRuns)
 }
 
-// TestStartAlreadyRunning tests starting swtpm when it's already running
-func TestStartAlreadyRunning(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
+// TestIsInitialized verifies that the permanent state file marks the TPM
+// as initialized.
+func TestIsInitialized(t *testing.T) {
+	swtpm := newFakeSWTPM(t, &Config{StateDir: t.TempDir()}, &fakeTools{})
 
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-		Debug:    true,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	// Start the daemon
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-	defer func() { _ = swtpm.Stop() }()
-
-	// Try to start again
-	err = swtpm.Start(ctx)
-	assert.ErrorIs(t, err, ErrAlreadyRunning)
+	assert.False(t, swtpm.IsInitialized())
+	require.NoError(t, swtpm.Initialize(context.Background()))
+	assert.True(t, swtpm.IsInitialized())
 }
 
-// TestStopNotRunning tests stopping swtpm when it's not running
-func TestStopNotRunning(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
+// TestIsInitializedNoStateDir verifies a missing state directory reads as
+// uninitialized.
+func TestIsInitializedNoStateDir(t *testing.T) {
+	swtpm := newFakeSWTPM(t, &Config{StateDir: filepath.Join(t.TempDir(), "missing")}, &fakeTools{})
 
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	err = swtpm.Stop()
-	assert.ErrorIs(t, err, ErrNotRunning)
+	assert.False(t, swtpm.IsInitialized())
 }
 
-// TestIsRunning tests the IsRunning method
-func TestIsRunning(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-		Debug:    true,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Should not be running initially
-	assert.False(t, swtpm.IsRunning())
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	// Start the daemon
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-
-	// Should be running now
-	assert.True(t, swtpm.IsRunning())
-
-	// Stop the daemon
-	err = swtpm.Stop()
-	require.NoError(t, err)
-
-	// Should not be running after stop
-	assert.False(t, swtpm.IsRunning())
-}
-
-// TestWaitForSocketTimeout tests socket wait timeout
-func TestWaitForSocketTimeout(t *testing.T) {
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir:   tempDir,
-		SocketPath: filepath.Join(tempDir, "nonexistent.sock"),
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Socket doesn't exist, should timeout
-	err = swtpm.WaitForSocket(500 * time.Millisecond)
-	assert.ErrorIs(t, err, ErrSocketNotReady)
-}
-
-// TestStopExisting tests stopping existing swtpm processes
-func TestStopExisting(t *testing.T) {
-	// This test only verifies the function doesn't panic
-	// when no processes are running
-	tempDir := t.TempDir()
-	err := StopExisting(tempDir)
-	assert.NoError(t, err)
-}
-
-// TestAccessors tests getter methods
+// TestAccessors tests the accessor methods
 func TestAccessors(t *testing.T) {
 	tempDir := t.TempDir()
 	socketPath := filepath.Join(tempDir, "test.sock")
 
-	config := &Config{
+	swtpm := newFakeSWTPM(t, &Config{
 		StateDir:   tempDir,
 		SocketPath: socketPath,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
+	}, &fakeTools{})
 
 	assert.Equal(t, tempDir, swtpm.StateDir())
 	assert.Equal(t, socketPath, swtpm.SocketPath())
 	assert.Equal(t, 0, swtpm.PID())
-}
-
-// TestStartWithoutInitialize tests starting without initialization
-func TestStartWithoutInitialize(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	// Use a non-existent subdirectory to simulate uninitialized state
-	tempDir := filepath.Join(os.TempDir(), "swtpm-test-nonexistent-12345")
-	defer func() {
-		if err := os.RemoveAll(tempDir); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
-	}()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	// Try to start without initializing first
-	err = swtpm.Start(ctx)
-	assert.Error(t, err)
-	if err != nil {
-		assert.Contains(t, err.Error(), "state directory does not exist")
-	}
-}
-
-// TestMultiplePCRBanks tests initialization with multiple PCR banks
-func TestMultiplePCRBanks(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
-		t.Skip("swtpm_setup not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-		PCRBanks: []string{"sha256", "sha384", "sha512"},
-		Debug:    true,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	assert.NoError(t, err)
-}
-
-// TestNilLogger tests creation with nil logger
-func TestNilLogger(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	config := &Config{
-		StateDir: t.TempDir(),
-	}
-
-	// Pass nil logger, should use default
-	swtpm, err := NewSWTPM(config, nil)
-	assert.NoError(t, err)
-	assert.NotNil(t, swtpm)
-	assert.NotNil(t, swtpm.logger)
-}
-
-// TestConcurrentAccess tests concurrent access to SWTPM methods
-func TestConcurrentAccess(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-	defer func() { _ = swtpm.Stop() }()
-
-	// Concurrent reads should work fine
-	done := make(chan bool)
-	for i := 0; i < 10; i++ {
-		go func() {
-			_ = swtpm.IsRunning()
-			_ = swtpm.StateDir()
-			_ = swtpm.SocketPath()
-			_ = swtpm.PID()
-			done <- true
-		}()
-	}
-
-	for i := 0; i < 10; i++ {
-		<-done
-	}
-}
-
-// TestSendStartup tests sending TPM2_Startup command
-func TestSendStartup(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-		Debug:    true,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	// Start the daemon
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-	defer func() { _ = swtpm.Stop() }()
-
-	// Wait for socket to be ready
-	err = swtpm.WaitForSocket(5 * time.Second)
-	require.NoError(t, err)
-
-	// Send TPM2_Startup command
-	err = swtpm.SendStartup()
-	assert.NoError(t, err)
-
-	// Calling again should be idempotent (TPM already initialized)
-	err = swtpm.SendStartup()
-	assert.NoError(t, err)
-}
-
-// TestSendStartupNotRunning tests SendStartup when swtpm is not running
-func TestSendStartupNotRunning(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Try to send startup without starting swtpm
-	err = swtpm.SendStartup()
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrStartupFailed)
-}
-
-// TestIsInitialized tests the IsInitialized method
-func TestIsInitialized(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
-		t.Skip("swtpm_setup not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Should not be initialized initially
-	assert.False(t, swtpm.IsInitialized())
-
-	// Initialize the TPM
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	// Should be initialized now
-	assert.True(t, swtpm.IsInitialized())
-}
-
-// TestIsInitializedNoStateDir tests IsInitialized with non-existent state directory
-func TestIsInitializedNoStateDir(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := filepath.Join(os.TempDir(), "swtpm-test-nonexistent-99999")
-	defer func() {
-		if err := os.RemoveAll(tempDir); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
-	}()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Should return false when state directory doesn't exist
-	assert.False(t, swtpm.IsInitialized())
-}
-
-// TestWaitForSocketNonSocketFile tests WaitForSocket when a non-socket file exists
-func TestWaitForSocketNonSocketFile(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-	socketPath := filepath.Join(tempDir, "fake.sock")
-
-	// Create a regular file instead of a socket
-	err := os.WriteFile(socketPath, []byte("not a socket"), 0644)
-	require.NoError(t, err)
-
-	config := &Config{
-		StateDir:   tempDir,
-		SocketPath: socketPath,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	// Should fail because it's not a socket
-	err = swtpm.WaitForSocket(1 * time.Second)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrSocketNotReady)
-	if err != nil {
-		assert.Contains(t, err.Error(), "not a socket")
-	}
-}
-
-// TestWaitForSocketProcessDied tests WaitForSocket when process dies during wait
-func TestWaitForSocketProcessDied(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-
-	// Kill the process immediately
-	if swtpm.cmd != nil && swtpm.cmd.Process != nil {
-		_ = swtpm.cmd.Process.Kill()
-	}
-
-	// Wait should fail because process died
-	err = swtpm.WaitForSocket(2 * time.Second)
-	assert.Error(t, err)
-	// May get either socket not ready or process died error
-	assert.ErrorIs(t, err, ErrSocketNotReady)
-}
-
-// TestStopAfterKill tests Stop when process was already killed
-func TestStopAfterKill(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-
-	// Kill the process first
-	if swtpm.cmd != nil && swtpm.cmd.Process != nil {
-		require.NoError(t, swtpm.cmd.Process.Kill())
-		<-swtpm.exitCh
-	}
-
-	// Stop should handle the already-dead process gracefully
-	// The SIGTERM will fail, but it will continue
-	err = swtpm.Stop()
-	// Should succeed even though process was already dead
-	assert.NoError(t, err)
-}
-
-// TestStopExistingWithRunningProcess tests StopExisting when processes are actually running
-func TestStopExistingWithRunningProcess(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-
-	// Record the original PID
-	originalPID := swtpm.PID()
-	require.Greater(t, originalPID, 0)
-
-	// Now stop existing processes using pkill
-	err = StopExisting(tempDir)
-	assert.NoError(t, err)
-
-	// StopExisting should complete without error - that's the main test
-	// The actual process termination is handled by pkill which we've verified doesn't error
-}
-
-// TestIsRunningAfterProcessKilled tests IsRunning properly detects process death
-func TestIsRunningAfterProcessKilled(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed, skipping test")
-	}
-
-	tempDir := t.TempDir()
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	require.NoError(t, err)
-
-	err = swtpm.Start(ctx)
-	require.NoError(t, err)
-
-	// Process should be running
-	assert.True(t, swtpm.IsRunning())
-
-	// Kill the process
-	if swtpm.cmd != nil && swtpm.cmd.Process != nil {
-		require.NoError(t, swtpm.cmd.Process.Kill())
-	}
-
-	// The wait goroutine closes exitCh once it has recorded the exit.
-	<-swtpm.exitCh
-
-	// IsRunning should return false after process is killed
 	assert.False(t, swtpm.IsRunning())
 }
 
-// TestInitializeError tests initialization failure
-func TestInitializeError(t *testing.T) {
-	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
-		t.Skip("swtpm_setup not installed, skipping test")
-	}
+// TestNilLogger verifies a nil logger falls back to the default logger.
+func TestNilLogger(t *testing.T) {
+	fake := &fakeTools{}
+	swtpm, err := newSWTPM(&Config{StateDir: t.TempDir()}, nil, fake.tools())
 
-	// Use a read-only directory to cause mkdir failure
-	tempDir := "/proc/swtpm-test-readonly"
-
-	config := &Config{
-		StateDir: tempDir,
-	}
-
-	logger := logging.DefaultLogger()
-	swtpm, err := NewSWTPM(config, logger)
 	require.NoError(t, err)
+	assert.NotNil(t, swtpm.logger)
+}
 
-	ctx := context.Background()
-	err = swtpm.Initialize(ctx)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrInitFailed)
+// TestStopNotRunning tests stopping when not running
+func TestStopNotRunning(t *testing.T) {
+	swtpm := newFakeSWTPM(t, &Config{StateDir: t.TempDir()}, &fakeTools{})
+
+	assert.ErrorIs(t, swtpm.Stop(), ErrNotRunning)
+}
+
+// TestStartWithoutInitialize verifies Start refuses a missing state
+// directory before launching anything.
+func TestStartWithoutInitialize(t *testing.T) {
+	swtpm := newFakeSWTPM(t, &Config{StateDir: filepath.Join(t.TempDir(), "missing")}, &fakeTools{})
+
+	err := swtpm.Start(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "state directory does not exist")
+	assert.False(t, swtpm.IsRunning())
+}
+
+// TestSendStartupNotRunning verifies TPM2_Startup fails without a socket.
+func TestSendStartupNotRunning(t *testing.T) {
+	swtpm := newFakeSWTPM(t, &Config{StateDir: t.TempDir()}, &fakeTools{})
+
+	assert.ErrorIs(t, swtpm.SendStartup(), ErrStartupFailed)
+}
+
+// TestWaitForSocketNoProcess verifies the wait ends as soon as it sees no
+// swtpm process behind a missing socket.
+func TestWaitForSocketNoProcess(t *testing.T) {
+	tempDir := t.TempDir()
+	swtpm := newFakeSWTPM(t, &Config{
+		StateDir:   tempDir,
+		SocketPath: filepath.Join(tempDir, "nonexistent.sock"),
+	}, &fakeTools{})
+
+	err := swtpm.WaitForSocket(time.Minute)
+
+	require.ErrorIs(t, err, ErrSocketNotReady)
+	assert.Contains(t, err.Error(), "exited before socket was created")
+}
+
+// TestWaitForSocketNonSocketFile verifies a regular file at the socket path
+// is rejected.
+func TestWaitForSocketNonSocketFile(t *testing.T) {
+	tempDir := t.TempDir()
+	socketPath := filepath.Join(tempDir, "fake.sock")
+	require.NoError(t, os.WriteFile(socketPath, []byte("not a socket"), 0644))
+
+	swtpm := newFakeSWTPM(t, &Config{
+		StateDir:   tempDir,
+		SocketPath: socketPath,
+	}, &fakeTools{})
+
+	err := swtpm.WaitForSocket(time.Minute)
+	require.ErrorIs(t, err, ErrSocketNotReady)
+	assert.Contains(t, err.Error(), "not a socket")
+}
+
+// TestStopExisting verifies StopExisting succeeds when no swtpm uses the
+// state directory.
+func TestStopExisting(t *testing.T) {
+	assert.NoError(t, StopExisting(t.TempDir()))
 }

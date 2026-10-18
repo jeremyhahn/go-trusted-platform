@@ -133,8 +133,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_tpm_nv_delete"] = "tpm:delete"
 	permissions["platform_tpm_ek_delete"] = "tpm:delete"
 	permissions["platform_tpm_srk_delete"] = "tpm:delete"
-	// IAK delete has no gRPC twin; it carries the scope of QUIC's
-	// SubOpTPM2DeleteIAK (pkg/api/quic/opcode_permissions.go).
+	// IAK delete carries the scope of its twins, gRPC TPMService DeleteAK
+	// and QUIC's SubOpTPM2DeleteIAK (pkg/api/quic/opcode_permissions.go).
 	permissions["platform_tpm_iak_delete"] = "tpm:delete"
 	permissions["platform_tpm_seal"] = "tpm:write"
 	// Unseal hands back the secret itself, so it needs tpm:write here. gRPC
@@ -280,6 +280,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vm_start"] = "vm:write"
 	permissions["vm_stop"] = "vm:write"
 	permissions["vm_reboot"] = "vm:write"
+	permissions["vm_suspend"] = "vm:write"
+	permissions["vm_resume"] = "vm:write"
 	permissions["vm_snapshot_create"] = "vm:write"
 	permissions["vm_snapshot_list"] = "vm:read"
 	permissions["vm_snapshot_get"] = "vm:read"

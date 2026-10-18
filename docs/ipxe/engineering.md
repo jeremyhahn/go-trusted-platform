@@ -121,6 +121,12 @@ ignores load options in any case. The bootstrap container sets it for an
 installed `diskless-nbd` node
 ([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
 
+iPXE carries no enrollment of its own, on any architecture or boot model.
+Every node enrols through the same `enroll-01` or `endorse-01` client: a disk
+node in `platformd`'s first boot, a `diskless-nbd` node in the installer,
+before it first attaches its export, so it holds the IDevID the export admits
+([installer engineering](../installer/engineering.md#enrolling-before-the-attach)).
+
 A `DeviceLookup` returns `ErrDeviceNotFound` for a MAC it has no assignment
 for; `/boot/device/<mac>.ipxe` answers that with 404 and any other lookup
 error with 500. The route accepts the MAC dashed (iPXE's `${mac:hexhyp}`) or
@@ -347,6 +353,7 @@ field.
 | `/installs/…` upload over 16 MiB | Rejected | closed |
 | `/installs/…` upload | Written via `.partial` + atomic rename | closed on partial reads |
 | DHCP request from a non-PXE client | Ignored unless `DHCPRespondToAll` | **closed by default** |
+| DHCP packet with an empty or all-zero `chaddr` | Ignored before dispatch; no lease, no reply | closed |
 | A service goroutine dies | Pushed to `errChan`; the others keep running | **open** |
 
 **The three open rows in the middle are the feature's security posture, not
@@ -374,7 +381,7 @@ both hard-code these shapes, so changing the regex breaks both ends at once.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/ipxe/*_test.go` | Config validation and defaults, DHCP packet construction and option handling, arch→bootfile mapping, raw-conn framing, TFTP handler, every HTTP route, script generation, allocator behaviour, ISO extraction |
-| Integration | `test/integration/ipxe/` | Real bridge, real TAP, real QEMU client |
+| Integration | `test/integration/ipxe/`, `make integration-test-ipxe` (slices `-dhcp`, `-tftp`, `-http`) | The real server in process on `127.0.0.1`, no VM and no outside network: HTTP routes, TFTP downloads, and DHCP DISCOVER/OFFER and REQUEST/ACK over loopback. `TestMain` points `FirmwareUpstream` at a local fixture server (each file is compared byte for byte after TFTP) and `ProxyCACertPool` at a local TLS upstream for `/proxy/https/`. `TestIPXEDHCPToHTTPChain` follows the DHCP answer: the non-iPXE boot file over TFTP, then the iPXE URL → `boot.ipxe` → menu → entry script. The runner sets `IPXE_DHCP_ENABLED=1`, `TestMain` starts DHCP on `lo` at a free UDP port, and a DHCP test fails without it. Nothing in the suite skips; a setup failure fails the run |
 | End to end | `platformctl iso test pxe` | Real network boot of a real ISO, **requires root** |
 | End to end, aarch64 | `test/integration/netboot/`, `make integration-test-netboot` | QEMU virt booted from the platform's U-Boot (`-bios`) on the harness bridge: DHCP arch `0x000b` → signed `snponly-aarch64.efi` → per-architecture script → signed kernel + initrd → Alpine; the stand-in for a Raspberry Pi from U-Boot onward |
 

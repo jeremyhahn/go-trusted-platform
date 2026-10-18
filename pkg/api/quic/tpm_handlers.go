@@ -82,20 +82,21 @@ func NewTPM2Handler(logger *logging.Logger) *TPM2Handler {
 		logger: logger,
 	}
 	h.handlers = map[byte]TPM2HandlerFunc{
-		quicwire.SubOpTPM2Info:          h.handleInfo,
-		quicwire.SubOpTPM2Provision:     h.handleProvision,
-		quicwire.SubOpTPM2Clear:         h.handleClear,
-		quicwire.SubOpTPM2GetEK:         h.handleGetEK,
-		quicwire.SubOpTPM2CreateEK:      h.handleCreateEK,
-		quicwire.SubOpTPM2DeleteEK:      h.handleDeleteEK,
-		quicwire.SubOpTPM2GetEKCert:     h.handleGetEKCertificate,
-		quicwire.SubOpTPM2ImportEKCert:  h.handleImportEKCertificate,
-		quicwire.SubOpTPM2GetSRK:        h.handleGetSRK,
-		quicwire.SubOpTPM2CreateSRK:     h.handleCreateSRK,
-		quicwire.SubOpTPM2DeleteSRK:     h.handleDeleteSRK,
-		quicwire.SubOpTPM2GetIAK:        h.handleGetIAK,
-		quicwire.SubOpTPM2CreateIAK:     h.handleCreateIAK,
-		quicwire.SubOpTPM2DeleteIAK:     h.handleDeleteIAK,
+		quicwire.SubOpTPM2Info:         h.handleInfo,
+		quicwire.SubOpTPM2Provision:    h.handleProvision,
+		quicwire.SubOpTPM2Clear:        h.handleClear,
+		quicwire.SubOpTPM2GetEK:        h.handleGetEK,
+		quicwire.SubOpTPM2CreateEK:     h.handleCreateEK,
+		quicwire.SubOpTPM2DeleteEK:     h.handleDeleteEK,
+		quicwire.SubOpTPM2GetEKCert:    h.handleGetEKCertificate,
+		quicwire.SubOpTPM2ImportEKCert: h.handleImportEKCertificate,
+		quicwire.SubOpTPM2GetSRK:       h.handleGetSRK,
+		quicwire.SubOpTPM2CreateSRK:    h.handleCreateSRK,
+		quicwire.SubOpTPM2DeleteSRK:    h.handleDeleteSRK,
+		quicwire.SubOpTPM2GetIAK:       h.handleGetIAK,
+		quicwire.SubOpTPM2CreateIAK:    h.handleCreateIAK,
+		// SubOpTPM2DeleteIAK has no handler here: the daemon dispatcher
+		// refuses it like OpIAKDelete, because the IAK is not evicted.
 		quicwire.SubOpTPM2Quote:         h.handleQuote,
 		quicwire.SubOpTPM2VerifyQuote:   h.handleVerifyQuote,
 		quicwire.SubOpTPM2ReadPCRs:      h.handleReadPCRs,
@@ -749,22 +750,6 @@ func (h *TPM2Handler) handleCreateIAK(ctx context.Context, payload []byte) *quic
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
 		Message:   fmt.Sprintf("IAK created at handle 0x%08X", iakAttrs.TPMAttributes.Handle),
-		Timestamp: time.Now().Unix(),
-	})
-}
-
-// handleDeleteIAK deletes (flushes) the Initial Attestation Key handle.
-func (h *TPM2Handler) handleDeleteIAK(ctx context.Context, payload []byte) *quicwire.Response {
-	iakAttrs, err := h.tpm.IAKAttributes()
-	if err != nil {
-		return h.tpmErrorResponse(err)
-	}
-
-	h.tpm.Flush(iakAttrs.TPMAttributes.Handle)
-
-	return h.encodeResponse(&TPM2StatusResponse{
-		Success:   true,
-		Message:   "IAK handle flushed",
 		Timestamp: time.Now().Unix(),
 	})
 }

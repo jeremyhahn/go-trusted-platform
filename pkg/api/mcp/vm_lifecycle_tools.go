@@ -15,137 +15,111 @@ package mcp
 
 import (
 	"context"
-	"math"
+	"maps"
+	"slices"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
-// VMCreateSpec is the vm_create request: the fields ComputeService.CreateVM
-// reads from its VMConfig. A nil MemoryMB or CPUs leaves the RPC's default.
-type VMCreateSpec struct {
-	Name       string
-	MemoryMB   *uint64
-	CPUs       *uint32
-	TPMEnabled bool
-	SecureBoot bool
+// =============================================================================
+// VM lifecycle tool wiring
+// =============================================================================
+//
+// Every VM lifecycle tool has one gRPC ComputeService twin (#304, #317, #704).
+// A tool's arguments are the gRPC request in protojson form (proto field
+// names, enums by name, 64-bit integers as JSON strings) and its result is
+// the gRPC response in the same form. Each tool calls the gRPC ComputeService
+// servicer, so it validates, answers and fails exactly as gRPC does. The
+// permission each tool requires is in authz.go.
+
+// ComputeProvider is implemented by a ServiceProvider that serves the gRPC
+// ComputeService. The VM lifecycle tools call that servicer.
+type ComputeProvider interface {
+	// ComputeServiceServer returns the gRPC ComputeService servicer, or nil
+	// while no compute service is wired.
+	ComputeServiceServer() platformv1.ComputeServiceServer
 }
 
-// VMLifecycleProvider serves the VM lifecycle tools that have a gRPC
-// ComputeService twin (#304, #317). Each method answers with its RPC's
-// result and error class.
-type VMLifecycleProvider interface {
-	// VMCreate creates a VM, as CreateVM does.
-	VMCreate(ctx context.Context, spec VMCreateSpec) (interface{}, error)
-
-	// VMList lists every VM, as ListVMs does.
-	VMList(ctx context.Context) (interface{}, error)
-
-	// VMGet returns one VM, as GetVM does.
-	VMGet(ctx context.Context, vmID string) (interface{}, error)
-
-	// VMDelete deletes a VM, as DeleteVM does.
-	VMDelete(ctx context.Context, vmID string) (interface{}, error)
-
-	// VMStart starts a VM, as StartVM does.
-	VMStart(ctx context.Context, vmID string) (interface{}, error)
-
-	// VMStop stops a VM, as StopVM does.
-	VMStop(ctx context.Context, vmID string) (interface{}, error)
-
-	// VMReboot stops then starts a VM, as RebootVM does.
-	VMReboot(ctx context.Context, vmID string) (interface{}, error)
+// vmLifecycleTool is one VM lifecycle tool and the gRPC method it serves.
+type vmLifecycleTool struct {
+	description string
+	binding     grpcToolBinding[platformv1.ComputeServiceServer]
 }
 
-// vmLifecycleProvider returns the VMLifecycleProvider the configured service
-// implements, or nil when it implements none.
-func (r *ToolRegistry) vmLifecycleProvider() VMLifecycleProvider {
-	if p, ok := r.service.(VMLifecycleProvider); ok {
-		return p
+// vmLifecycleTools are the VM lifecycle tools bound to the gRPC
+// ComputeService.
+var vmLifecycleTools = map[string]vmLifecycleTool{
+	"vm_create": {
+		description: "Create a VM from config (name required; firmware, cpu, memory, disks, networks, tpm, secure_boot, labels); start boots it once created",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.CreateVM, "config"),
+	},
+	"vm_list": {
+		description: "List VMs, filtered by selector labels and states, one page at a time",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.ListVMs),
+	},
+	"vm_get": {
+		description: "Get a VM's configuration and state by id",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.GetVM, "id"),
+	},
+	"vm_delete": {
+		description: "Delete a VM by id; delete_disks also removes its disks",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.DeleteVM, "id"),
+	},
+	"vm_start": {
+		description: "Start a stopped VM",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.StartVM, "id"),
+	},
+	"vm_stop": {
+		description: "Stop a running VM; force skips the graceful shutdown and timeout_seconds bounds it",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.StopVM, "id"),
+	},
+	"vm_reboot": {
+		description: "Reboot a running VM; force resets it without a graceful shutdown",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.RebootVM, "id"),
+	},
+	"vm_suspend": {
+		description: "Suspend a running VM: pause it in memory",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.SuspendVM, "id"),
+	},
+	"vm_resume": {
+		description: "Resume a suspended VM",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.ResumeVM, "id"),
+	},
+}
+
+// registerVMLifecycleTools registers the VM lifecycle tools.
+func (r *ToolRegistry) registerVMLifecycleTools() {
+	for _, name := range slices.Sorted(maps.Keys(vmLifecycleTools)) {
+		tool := vmLifecycleTools[name]
+		r.addTool(mcpwire.ToolDefinition{
+			Name:        name,
+			Description: tool.description,
+			InputSchema: tool.binding.schema(),
+		})
+	}
+}
+
+// computeServiceServer is the gRPC ComputeService servicer the VM lifecycle
+// tools call, or nil while the service provider serves none.
+func (r *ToolRegistry) computeServiceServer() platformv1.ComputeServiceServer {
+	if provider, ok := r.service.(ComputeProvider); ok {
+		return provider.ComputeServiceServer()
 	}
 	return nil
 }
 
-// vmLifecycleByID is the shape of every lifecycle call that names one VM.
-type vmLifecycleByID func(VMLifecycleProvider, context.Context, string) (interface{}, error)
-
-// executeVMByID resolves the provider and the tool's "id" argument, then
-// makes the call.
-func (r *ToolRegistry) executeVMByID(ctx context.Context, args map[string]interface{}, call vmLifecycleByID) (interface{}, error) {
-	p := r.vmLifecycleProvider()
-	if p == nil {
-		return nil, ErrVMComputeNotConfigured
+// dispatchVMLifecycleTool runs a VM lifecycle tool. handled is false when
+// name is not a VM lifecycle tool, so the caller tries the next dispatcher.
+func (r *ToolRegistry) dispatchVMLifecycleTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, bool, error) {
+	tool, ok := vmLifecycleTools[name]
+	if !ok {
+		return nil, false, nil
 	}
-	id := getString(args, "id")
-	if id == "" {
-		return nil, ErrVMIDRequired
+	server := r.computeServiceServer()
+	if server == nil {
+		return nil, true, ErrVMComputeNotConfigured
 	}
-	return call(p, ctx, id)
-}
-
-func (r *ToolRegistry) executeVMGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMGet)
-}
-
-func (r *ToolRegistry) executeVMDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMDelete)
-}
-
-func (r *ToolRegistry) executeVMStart(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMStart)
-}
-
-func (r *ToolRegistry) executeVMStop(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMStop)
-}
-
-func (r *ToolRegistry) executeVMReboot(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMReboot)
-}
-
-func (r *ToolRegistry) executeVMList(ctx context.Context, _ map[string]interface{}) (interface{}, error) {
-	p := r.vmLifecycleProvider()
-	if p == nil {
-		return nil, ErrVMComputeNotConfigured
-	}
-	return p.VMList(ctx)
-}
-
-func (r *ToolRegistry) executeVMCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	p := r.vmLifecycleProvider()
-	if p == nil {
-		return nil, ErrVMComputeNotConfigured
-	}
-	spec, err := vmCreateSpec(args)
-	if err != nil {
-		return nil, err
-	}
-	return p.VMCreate(ctx, spec)
-}
-
-// vmCreateSpec reads the vm_create arguments. The name is required, and a
-// memory or cpus value the RPC's unsigned fields cannot carry is refused.
-func vmCreateSpec(args map[string]interface{}) (VMCreateSpec, error) {
-	spec := VMCreateSpec{
-		Name:       getString(args, "name"),
-		TPMEnabled: getBool(args, "tpm_enabled"),
-		SecureBoot: getBool(args, "secure_boot"),
-	}
-	if spec.Name == "" {
-		return VMCreateSpec{}, ErrVMNameRequired
-	}
-	if _, ok := args["memory"]; ok {
-		memory := getInt64(args, "memory")
-		if memory < 0 {
-			return VMCreateSpec{}, ErrInvalidArgument{Msg: "memory must not be negative"}
-		}
-		memoryMB := uint64(memory)
-		spec.MemoryMB = &memoryMB
-	}
-	if _, ok := args["cpus"]; ok {
-		cpus := getInt64(args, "cpus")
-		if cpus < 0 || cpus > math.MaxUint32 {
-			return VMCreateSpec{}, ErrInvalidArgument{Msg: "cpus must be between 0 and 4294967295"}
-		}
-		cores := uint32(cpus)
-		spec.CPUs = &cores
-	}
-	return spec, nil
+	result, err := tool.binding.call(server, ctx, args)
+	return result, true, err
 }

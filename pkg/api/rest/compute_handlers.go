@@ -105,6 +105,8 @@ func (h *ComputeHandlers) routes() []computeRoute {
 		{http.MethodPost, "/vms/{id}/start", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.StartVM)},
 		{http.MethodPost, "/vms/{id}/stop", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.StopVM)},
 		{http.MethodPost, "/vms/{id}/reboot", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.RebootVM)},
+		{http.MethodPost, "/vms/{id}/suspend", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.SuspendVM)},
+		{http.MethodPost, "/vms/{id}/resume", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.ResumeVM)},
 		{http.MethodGet, "/vms/{id}/metrics", scopeVMRead, computeRPC(h, platformv1.ComputeServiceServer.GetVMMetrics)},
 		{http.MethodPost, "/vms/{vmId}/migrate", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.MigrateVM)},
 

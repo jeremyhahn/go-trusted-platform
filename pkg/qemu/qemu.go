@@ -59,6 +59,11 @@ type VM struct {
 
 	// runtimeDir is the socket directory this VM created and must remove.
 	runtimeDir string
+
+	// createImage creates the disk image for CreateDisk and returns the
+	// tool's combined output.
+	// Overridable seam for tests; defaults to runQEMUImgCreate.
+	createImage func(format, path, size string) ([]byte, error)
 }
 
 // NewVM creates a new QEMU VM instance
@@ -77,9 +82,16 @@ func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 	}
 
 	return &VM{
-		config: config,
-		logger: logger,
+		config:      config,
+		logger:      logger,
+		createImage: runQEMUImgCreate,
 	}, nil
+}
+
+// runQEMUImgCreate creates a disk image with qemu-img and returns its
+// combined output.
+func runQEMUImgCreate(format, path, size string) ([]byte, error) {
+	return exec.Command("qemu-img", "create", "-f", format, path, size).CombinedOutput()
 }
 
 // CreateDisk creates a qcow2 disk image
@@ -106,8 +118,7 @@ func (vm *VM) CreateDisk() error {
 		return err
 	}
 	format := vm.config.diskFormat(p)
-	cmd := exec.Command("qemu-img", "create", "-f", format, vm.config.DiskPath, vm.config.DiskSize)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := vm.createImage(format, vm.config.DiskPath, vm.config.DiskSize); err != nil {
 		return &CommandOutputError{Msg: "failed to create disk", Err: err, Detail: ": " + string(output)}
 	}
 

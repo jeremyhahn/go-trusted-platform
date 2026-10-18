@@ -150,6 +150,12 @@ var probes = map[string]func(gw *supervisedGatewayd) bool{
 
 // supervisedGatewayd is one running `gatewayd serve`.
 type supervisedGatewayd struct {
+	// binary, args and logFile start a supervisor; launch reuses them for a
+	// successor.
+	binary  string
+	args    []string
+	logFile *os.File
+
 	cmd          *exec.Cmd
 	exited       chan struct{}
 	exitErr      error
@@ -269,6 +275,66 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	}
 }
 
+// TestGatewaydSupervisorDeathLeavesTheDatapath kills the supervisor itself.
+// The parent-death signal takes every child with it, so none outlives its
+// supervisor, and because that signal is SIGKILL none runs its stop path: the
+// bridge keeps every flow and group the datapath installed. A SIGTERM would
+// have withdrawn them. The successor's datapath then adopts the bridge
+// through the cookie-scoped reconcile, as it does after a datapath kill.
+func TestGatewaydSupervisorDeathLeavesTheDatapath(t *testing.T) {
+	gw := startSupervisedGatewayd(t)
+	before := gw.children(t)
+	gw.programmed = gw.bridge(t)
+
+	supervisor := gw.cmd.Process.Pid
+	if err := gw.cmd.Process.Kill(); err != nil {
+		t.Fatalf("kill gatewayd (pid %d): %v", supervisor, err)
+	}
+	deadline := time.NewTimer(relaunchBound)
+	defer deadline.Stop()
+	select {
+	case <-gw.exited:
+	case <-deadline.C:
+		t.Fatalf("gatewayd (pid %d) did not exit within %v of SIGKILL", supervisor, relaunchBound)
+	}
+	WaitFor(t, relaunchBound, 50*time.Millisecond, "every child to die with its supervisor", func() bool {
+		for _, pid := range before {
+			if !processGone(pid) {
+				return false
+			}
+		}
+		return true
+	})
+
+	left := gw.bridge(t)
+	if !slices.Equal(left.rules, gw.programmed.rules) {
+		t.Fatalf("bridge after the supervisor's death:\n%s\nwant it untouched:\n%s",
+			strings.Join(left.rules, "\n"), strings.Join(gw.programmed.rules, "\n"))
+	}
+	if !maps.Equal(left.generations, gw.programmed.generations) {
+		t.Fatalf("the supervisor's death moved the datapath generations %v -> %v",
+			gw.programmed.generations, left.generations)
+	}
+
+	gw.launch(t)
+	WaitFor(t, relaunchBound, 50*time.Millisecond, "the successor's datapath to adopt the bridge", gw.datapathReconciled)
+}
+
+// processGone reports whether pid has exited: no /proc entry, or a zombie
+// waiting for whichever process inherited it to reap it.
+func processGone(pid int) bool {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return true
+	}
+	end := bytes.LastIndexByte(stat, ')')
+	if end < 0 {
+		return false
+	}
+	fields := strings.Fields(string(stat[end+1:]))
+	return len(fields) > 0 && fields[0] == "Z"
+}
+
 // startSupervisedGatewayd runs `gatewayd serve` with the process model on
 // and waits until both supervised children serve.
 func startSupervisedGatewayd(t *testing.T) *supervisedGatewayd {
@@ -330,15 +396,10 @@ func startSupervisedGatewayd(t *testing.T) *supervisedGatewayd {
 	if err != nil {
 		t.Fatalf("create log: %v", err)
 	}
-	cmd := exec.Command(binary, "serve", "--config", configPath, "--data-dir", dataDir, "--log-format", "text")
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start gatewayd: %v", err)
-	}
 	gw := &supervisedGatewayd{
-		cmd:          cmd,
-		exited:       make(chan struct{}),
+		binary:       binary,
+		args:         []string{"serve", "--config", configPath, "--data-dir", dataDir, "--log-format", "text"},
+		logFile:      logFile,
 		logPath:      logPath,
 		baseURL:      "https://" + proxyAddress,
 		bgpAddress:   bgpAddress,
@@ -353,24 +414,43 @@ func startSupervisedGatewayd(t *testing.T) *supervisedGatewayd {
 			},
 		},
 	}
-	go func() {
-		gw.exitErr = cmd.Wait()
-		close(gw.exited)
-	}()
 	t.Cleanup(func() {
 		if err := logFile.Close(); err != nil {
 			t.Errorf("close gatewayd log: %v", err)
 		}
 	})
+	// stop reads the supervisor when the test ends, so it stops a successor
+	// a test launched as well as this one.
 	t.Cleanup(func() { gw.stop(t) })
+	gw.launch(t)
+	return gw
+}
+
+// launch starts a gatewayd supervisor on the prepared configuration and waits
+// for its datapath, proxy and routing children to serve. It is also how a test
+// starts the successor of a supervisor it killed: the configuration, bridge
+// and cgroup parent are the predecessor's.
+func (g *supervisedGatewayd) launch(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command(g.binary, g.args...)
+	cmd.Stdout = g.logFile
+	cmd.Stderr = g.logFile
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start gatewayd: %v", err)
+	}
+	exited := make(chan struct{})
+	g.cmd, g.exited, g.exitErr = cmd, exited, nil
+	go func() {
+		g.exitErr = cmd.Wait()
+		close(exited)
+	}()
 
 	WaitFor(t, 60*time.Second, 200*time.Millisecond, "the datapath, proxy and routing children to serve", func() bool {
-		gw.requireRunning(t)
-		children := gw.children(t)
+		g.requireRunning(t)
+		children := g.children(t)
 		return children["datapath"] != 0 && children["proxy"] != 0 && children["routing"] != 0 &&
-			gw.datapathProgrammed() && gw.proxyServes() && gw.bgpListens()
+			g.datapathProgrammed() && g.proxyServes() && g.bgpListens()
 	})
-	return gw
 }
 
 // awaitRelaunch waits, within relaunchBound, for a new child of the given
@@ -710,6 +790,9 @@ func (g *supervisedGatewayd) requireRunning(t *testing.T) {
 // stop sends SIGTERM, waits for a clean exit, and removes the cgroup parent
 // the run created; the supervisor removes each leaf as it stops the child.
 func (g *supervisedGatewayd) stop(t *testing.T) {
+	if g.cmd == nil {
+		return // the launch failed before a supervisor started
+	}
 	select {
 	case <-g.exited:
 	default:

@@ -83,9 +83,9 @@ Examples:
 	cmd.Flags().Int32Var(&pcrIndex, "pcr-index", -1, "PCR index to extend (0-23, required)")
 	cmd.Flags().StringVar(&data, "data", "", "hex-encoded data to extend into the PCR (required)")
 
-	_ = cmd.MarkFlagRequired("bundle-id")
-	_ = cmd.MarkFlagRequired("pcr-index")
-	_ = cmd.MarkFlagRequired("data")
+	cli.MarkFlagsRequired(cmd, "bundle-id")
+	cli.MarkFlagsRequired(cmd, "pcr-index")
+	cli.MarkFlagsRequired(cmd, "data")
 
 	return cmd
 }
@@ -169,8 +169,8 @@ Examples:
 	cmd.Flags().StringVar(&bundleID, "bundle-id", "", "bundle ID (required)")
 	cmd.Flags().Int32Var(&pcrIndex, "pcr-index", -1, "PCR index to read (0-23, required)")
 
-	_ = cmd.MarkFlagRequired("bundle-id")
-	_ = cmd.MarkFlagRequired("pcr-index")
+	cli.MarkFlagsRequired(cmd, "bundle-id")
+	cli.MarkFlagsRequired(cmd, "pcr-index")
 
 	return cmd
 }

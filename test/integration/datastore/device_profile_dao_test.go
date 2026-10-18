@@ -15,7 +15,7 @@
 
 // Package datastore provides integration tests for the QuicBaaS DeviceProfileDAO implementation.
 // These tests verify device profile-specific operations using real QuicBaaS with embedded PebbleDB.
-// Run via: make integration-test-datastore or INTEGRATION_TEST=1 go test ./test/integration/datastore/...
+// Run via: make integration-test-datastore
 package datastore
 
 import (
@@ -65,8 +65,6 @@ func createTestDeviceProfileWithMatchRules(name, model, macPrefix, serialPrefix 
 
 // TestDeviceProfileDAO_Save_NewProfile tests saving a new device profile with auto-generated ID.
 func TestDeviceProfileDAO_Save_NewProfile(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -99,8 +97,6 @@ func TestDeviceProfileDAO_Save_NewProfile(t *testing.T) {
 
 // TestDeviceProfileDAO_Save_UpdateProfile tests updating an existing device profile.
 func TestDeviceProfileDAO_Save_UpdateProfile(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -133,8 +129,6 @@ func TestDeviceProfileDAO_Save_UpdateProfile(t *testing.T) {
 
 // TestDeviceProfileDAO_Get_Success tests successful device profile retrieval.
 func TestDeviceProfileDAO_Get_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -155,8 +149,6 @@ func TestDeviceProfileDAO_Get_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_Get_NotFound tests retrieval of non-existent device profile.
 func TestDeviceProfileDAO_Get_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -174,8 +166,6 @@ func TestDeviceProfileDAO_Get_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_Delete_Success tests successful device profile deletion.
 func TestDeviceProfileDAO_Delete_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -203,8 +193,6 @@ func TestDeviceProfileDAO_Delete_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_GetByModel_Success tests retrieving device profile by model name.
 func TestDeviceProfileDAO_GetByModel_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -229,8 +217,6 @@ func TestDeviceProfileDAO_GetByModel_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_GetByModel_NotFound tests GetByModel with non-existent model.
 func TestDeviceProfileDAO_GetByModel_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -248,8 +234,6 @@ func TestDeviceProfileDAO_GetByModel_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_Success tests finding profile by MAC prefix.
 func TestDeviceProfileDAO_FindByMACPrefix_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -274,8 +258,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive tests case-insensitive MAC prefix matching.
 func TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -305,8 +287,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_NotFound tests FindByMACPrefix with no matching profile.
 func TestDeviceProfileDAO_FindByMACPrefix_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -324,8 +304,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_EmptyInput tests FindByMACPrefix with empty MAC address.
 func TestDeviceProfileDAO_FindByMACPrefix_EmptyInput(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -343,8 +321,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_EmptyInput(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_Success tests finding profile by serial prefix.
 func TestDeviceProfileDAO_FindBySerialPrefix_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -369,8 +345,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive tests case-insensitive serial prefix matching.
 func TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -400,8 +374,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_NotFound tests FindBySerialPrefix with no matching profile.
 func TestDeviceProfileDAO_FindBySerialPrefix_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -419,8 +391,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_EmptyInput tests FindBySerialPrefix with empty serial.
 func TestDeviceProfileDAO_FindBySerialPrefix_EmptyInput(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -438,8 +408,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_EmptyInput(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_ByMAC tests FindMatchingProfile matching by MAC prefix.
 func TestDeviceProfileDAO_FindMatchingProfile_ByMAC(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -461,8 +429,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_ByMAC(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_BySerial tests FindMatchingProfile matching by serial prefix.
 func TestDeviceProfileDAO_FindMatchingProfile_BySerial(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -484,8 +450,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_BySerial(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_ByModel tests FindMatchingProfile matching by model.
 func TestDeviceProfileDAO_FindMatchingProfile_ByModel(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -511,8 +475,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_ByModel(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria tests FindMatchingProfile with multiple criteria.
 func TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -550,8 +512,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_NotFound tests FindMatchingProfile with no matching profile.
 func TestDeviceProfileDAO_FindMatchingProfile_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -569,8 +529,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_Count tests counting device profiles.
 func TestDeviceProfileDAO_Count(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -599,8 +557,6 @@ func TestDeviceProfileDAO_Count(t *testing.T) {
 
 // TestDeviceProfileDAO_Page_FirstPage tests retrieving the first page of device profiles.
 func TestDeviceProfileDAO_Page_FirstPage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -634,8 +590,6 @@ func TestDeviceProfileDAO_Page_FirstPage(t *testing.T) {
 
 // TestDeviceProfileDAO_Page_MiddlePage tests retrieving a middle page of device profiles.
 func TestDeviceProfileDAO_Page_MiddlePage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -667,8 +621,6 @@ func TestDeviceProfileDAO_Page_MiddlePage(t *testing.T) {
 
 // TestDeviceProfileDAO_Page_EmptyResult tests requesting a page beyond available data.
 func TestDeviceProfileDAO_Page_EmptyResult(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -698,8 +650,6 @@ func TestDeviceProfileDAO_Page_EmptyResult(t *testing.T) {
 
 // TestDeviceProfileDAO_ConcurrentOperations tests concurrent device profile operations.
 func TestDeviceProfileDAO_ConcurrentOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -744,8 +694,6 @@ func TestDeviceProfileDAO_ConcurrentOperations(t *testing.T) {
 
 // TestDeviceProfileDAO_ConcurrentReadsAndWrites tests concurrent read and write operations.
 func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -804,8 +752,6 @@ func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
 
 // TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances tests data persists across DAO instances.
 func TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -849,8 +795,6 @@ func TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances(t *testing.T) {
 
 // TestDeviceProfileDAO_FullProfilePersistence tests that all profile fields persist correctly.
 func TestDeviceProfileDAO_FullProfilePersistence(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -969,8 +913,6 @@ func TestDeviceProfileDAO_FullProfilePersistence(t *testing.T) {
 
 // TestDeviceProfileDAO_GetByModel_FallbackScan tests that GetByModel falls back to scan.
 func TestDeviceProfileDAO_GetByModel_FallbackScan(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -1002,8 +944,6 @@ func TestDeviceProfileDAO_GetByModel_FallbackScan(t *testing.T) {
 
 // TestDeviceProfileDAO_UpdateMatchRules tests updating match rules on an existing profile.
 func TestDeviceProfileDAO_UpdateMatchRules(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 

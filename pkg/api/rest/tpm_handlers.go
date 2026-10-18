@@ -152,8 +152,9 @@ func (h *TPMHandlers) routes() []tpmRoute {
 		// Attestation key
 		{http.MethodGet, "/api/v1/tpm/ak", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetAK)},
 		{http.MethodPost, "/api/v1/tpm/ak", tpmScopeWrite, tpmRPC(h, platformv1.TPMServiceServer.CreateAK)},
-		{http.MethodDelete, "/api/v1/tpm/ak", tpmScopeDelete, tpmRPC(h, platformv1.TPMServiceServer.DeleteAK)},
-		{http.MethodDelete, "/api/v1/tpm/ak/{handle}", tpmScopeDelete, tpmRPC(h, platformv1.TPMServiceServer.DeleteAK)},
+		// DeleteAK refuses (the IAK is not evicted); the refusal is 412.
+		{http.MethodDelete, "/api/v1/tpm/ak", tpmScopeDelete, h.deleteAK()},
+		{http.MethodDelete, "/api/v1/tpm/ak/{handle}", tpmScopeDelete, h.deleteAK()},
 
 		// Credential activation (TPM2_MakeCredential, TPM2_ActivateCredential)
 		{http.MethodPost, "/api/v1/tpm/make-credential", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.MakeCredential)},
@@ -230,6 +231,12 @@ func tpmRPC[Req any, PReq interface {
 	proto.Message
 }, Resp proto.Message](h *TPMHandlers, rpc func(platformv1.TPMServiceServer, context.Context, PReq) (Resp, error)) http.HandlerFunc {
 	return protoRPC(h.protoResponder, h.tpmService, rpc)
+}
+
+// deleteAK serves DELETE /api/v1/tpm/ak through TPMService DeleteAK with the
+// key-delete status mapping, so its refusal answers 412.
+func (h *TPMHandlers) deleteAK() http.HandlerFunc {
+	return protoRPC(h.keyDeleteResponder(), h.tpmService, platformv1.TPMServiceServer.DeleteAK)
 }
 
 // tpmService returns the TPM service every route delegates to, or

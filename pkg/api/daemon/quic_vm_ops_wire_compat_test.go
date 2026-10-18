@@ -109,7 +109,7 @@ func TestVMOpsWireCompat_MigrateVMResponse(t *testing.T) {
 // TestVMOpsSubOpcodesAreVMFamily verifies the new operational VM sub-opcodes are
 // recognized as VM sub-opcodes (routed to handleVMPB) and NOT as container
 // sub-opcodes, so handleVMServiceOperation dispatches them to the VM pb handler
-// rather than the container handler or the flat VMHandler.
+// rather than the container handler.
 func TestVMOpsSubOpcodesAreVMFamily(t *testing.T) {
 	subs := []byte{
 		quicwire.OpVMMetrics,

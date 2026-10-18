@@ -40,6 +40,21 @@ type VMSnapshot struct {
 	Description string `json:"description,omitempty"`
 }
 
+// VMSuspender is implemented by orchestrators that can pause a running VM
+// in memory and continue it later. The QEMU orchestrator does it over the
+// QMP monitor (stop / cont). Protocol surfaces type-assert this interface on
+// the compute Orchestrator and reject the operation with a typed error when
+// the capability is absent.
+type VMSuspender interface {
+	// Suspend pauses a running VM. It returns ErrInstanceNotRunning when
+	// the VM is not running.
+	Suspend(ctx context.Context, instanceID string) error
+
+	// Resume continues a suspended VM. It returns ErrInstanceNotSuspended
+	// when the VM is not suspended.
+	Resume(ctx context.Context, instanceID string) error
+}
+
 // VMSnapshotter is the capability interface for internal (qcow2) VM
 // snapshots. Orchestrators that manage QEMU virtual machines implement it;
 // container orchestrators do not. Protocol surfaces type-assert this

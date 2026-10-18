@@ -269,6 +269,10 @@ served only from its own tenant:
 | Unix | none — peer-credential operator | served (the operator is not tenant-bound) | `InvalidArgument` |
 | MCP | the token's `tenant_id` claim, from the MCP authorized context | `PermissionDenied`, `ErrIAMTenantForbidden` | `InvalidArgument`, `tenant_id` is required |
 
+These tenant checks, and the unbound Unix peer-credential operator, are the
+platform's own; the IAM clean-up rows in [SPEC.md §Interfaces](../SPEC.md#interfaces)
+move them to go-qrdb, and `RequireOwnTenant` stays until go-qrdb #683 lands.
+
 On REST the extractor the guard reads is `RequestedTenant`
 (`pkg/webservice/v1/rest/iam/router.go`): the path's `{tenant}`, otherwise the
 `tenant_id` query. Every IAM route except the tenant-record routes, which are
@@ -332,11 +336,11 @@ method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `I
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Every one of the 477 registered tools is in the map: 465 carry a
+Every one of the 479 registered tools is in the map: 467 carry a
 `resource:action` permission and 12 are classified open (`""`) (measured from
 `NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
 `TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).
-Since #304 the classified tools include 30 VM and container tools
+Since #304 the classified tools include 32 VM and container tools
 ([`docs/compute/api.md`](../compute/api.md) §7). `iam_create_token` and
 `iam_revoke_token` carry `iam:write`, the scope of gRPC `CreateToken` and
 `RevokeToken`; like their twins they refuse every caller (§6).
@@ -364,19 +368,19 @@ carries the scope of its gRPC method, and its errors carry the same gRPC class
 | `platform_tpm_{info,ek,ek_cert,srk,iak,pcrs,eventlog,random,nv_read,make_credential}` | `tpm:read` |
 | `platform_tpm_{provision,ek_create,ek_import_cert,srk_create,iak_create,nv_write,activate_credential,seal}` | `tpm:write` |
 | `platform_tpm_unseal` | `tpm:write` — stricter than gRPC `Unseal` (`tpm:read`): an unseal tool never takes a read scope on MCP |
-| `platform_tpm_{clear,nv_delete}` | `tpm:delete` |
+| `platform_tpm_{clear,nv_delete,ek_delete,srk_delete,iak_delete}` | `tpm:delete` |
 | `vtpm_{get,validate,export,get_bundle_path,get_tpm_socket_path,get_nvram_path,is_running}`, `vtpm_template_{get,list}` | `vtpm:read` |
 | `vtpm_import`, `vtpm_template_{create,clone}` | `vtpm:write` |
 | `vtpm_template_delete` | `vtpm:delete` |
 | `vtpm_bundle_{create,get,list,delete,quote,pcr_read,pcr_extend,seal,unseal}` | the scope of the `vtpm_*` twin each one runs ([`docs/vtpm/api.md`](../vtpm/api.md) §5) |
 
-Still refused, with the reason:
-
-- `platform_tpm_{ek,srk,iak}_delete` — they flush a persistent handle, which
-  deletes nothing; gRPC `DeleteEK`/`DeleteSRK`/`DeleteAK` do the same. Making
-  them evict is an owner decision, not a classification.
-- `platform_tpm_{capabilities,platform,nv_list,pcr_extend,certify}` — no gRPC
-  or REST twin to take a scope from.
+`platform_tpm_{capabilities,platform,nv_list,certify}` (`tpm:read`) and
+`platform_tpm_pcr_extend` (`tpm:write`) take their QUIC or gRPC twin's scope;
+[`docs/tpm/api-reference-mcp.md`](../tpm/api-reference-mcp.md) is the full
+list. `platform_tpm_ek_delete` and `platform_tpm_srk_delete` flush a persistent
+handle, which deletes nothing, as gRPC `DeleteEK`/`DeleteSRK` do.
+`platform_tpm_iak_delete` refuses with `FailedPrecondition`, as `iak_delete`
+and gRPC `DeleteAK` do (#704).
 
 **The KMS and secret MCP tools are classified (#304).** Each of the 20 `kms_*`
 and 6 `secret_*` tools carries the scope of the gRPC method it mirrors
@@ -581,7 +585,9 @@ service with `FailedPrecondition` (#317, [`docs/daemon/api.md`](../daemon/api.md
 under `platform:read` with the other daemon reads, and its REST route is gated
 on the admin role, which carries no scope. Provisioning sessions record a
 tenant, but gRPC does not bind the caller to it, so neither does QUIC nor MCP:
-`provisioning:read` lists every tenant's sessions.
+`provisioning:read` lists every tenant's sessions. The admin-role REST gate and
+the platform-declared `provisioning:*` permissions are departures that the IAM
+clean-up rows in [SPEC.md §Interfaces](../SPEC.md#interfaces) move to go-qrdb.
 
 ---
 

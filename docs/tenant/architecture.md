@@ -683,6 +683,10 @@ Redemption does not always produce a member. `entities.Invitation` carries an
 it. This is how the system admin enrolls a tenant's *first* administrator
 without holding that tenant's credential: it mints a single-use invitation whose
 redemption binds the redeemer's own passkey and marks them tenant owner.
+Tenant ownership as a user flag and a token claim is the platform's own role
+model; the tenant-owner IAM clean-up row in
+[SPEC.md §Interfaces](../SPEC.md#interfaces) moves it to a go-qrdb role
+assignment.
 
 **Ownership is a property of the invitation, not of the redeemer.** The decision
 is made once, by the issuer, at creation time:

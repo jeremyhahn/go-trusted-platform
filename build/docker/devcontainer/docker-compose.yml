@@ -93,9 +93,6 @@ services:
       GOMODCACHE: /go/pkg/mod
       CGO_ENABLED: "1"
 
-      # Integration test flags
-      INTEGRATION_TEST: "1"
-
       # Networking configuration
       OVS_MANAGER: "tcp:127.0.0.1:6640"
 
@@ -218,7 +215,6 @@ services:
 
     environment:
       AUTO_START_OVS: "true"
-      INTEGRATION_TEST: "1"
       QEMU_ENABLE_KVM: "true"
 
     ulimits:

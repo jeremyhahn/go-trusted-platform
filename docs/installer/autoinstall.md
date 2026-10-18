@@ -223,6 +223,7 @@ First boot kills keyslot 0.
 |-------|---------|----------------------|
 | Config resolve | All three priorities fail | Drops to `/bin/sh`; install-log shows diagnostics |
 | Target | No local disk qualifies (not a `diskless-nbd` node) | `error`: stops before the installer runs |
+| Target | `diskless-nbd` node that did not enrol | The installer refuses with `ErrorTypeEnrollment` before the TPM or the export is touched; uploads log; **stops in the installer** ([engineering](engineering.md#enrolling-before-the-attach)) |
 | Target | `diskless-nbd` node whose `/dev/nbd0` is not attached to its export | The installer refuses with `ErrorTypeNBDTarget` before the TPM or the export is touched; uploads log; **stops in the installer** ([engineering](engineering.md#attaching-before-the-install)) |
 | Partition | Target disk missing or too small | Aborts; uploads log with the exit code; **stops in the installer** |
 | LUKS format | Entropy starvation, keyslot init fail | Aborts; uploads log; **stops in the installer** |

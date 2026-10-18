@@ -23,6 +23,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 )
 
 // TestWireGuardIsAbsentUnderFIPS: the kind is not Known, so a configuration
@@ -63,4 +65,32 @@ func TestRestore_DropsAWireGuardLeaseUnderFIPS(t *testing.T) {
 		l.DataPlane = DataPlaneKind("wireguard")
 		require.NoError(t, h.store.Put(context.Background(), l))
 	}, "data plane not offered")
+}
+
+func TestPlaneHost_CannotHostWireGuardUnderFIPS(t *testing.T) {
+	var log []string
+	_, err := NewPlaneHost(newManagedFakePlane("wireguard", &log))
+	var invalid *ErrInvalidConfig
+	require.True(t, errors.As(err, &invalid), "err = %v", err)
+	assert.Contains(t, invalid.Reason, "not offered by this build")
+
+	// A MASQUE-only host refuses a WireGuard peer as a plane it does not host.
+	host, err := NewPlaneHost(newManagedFakePlane(DataPlaneMASQUE, &log))
+	require.NoError(t, err)
+	peer := masquePeer("l1")
+	peer.DataPlane = "wireguard"
+	peer.WireguardPublicKey = bytesOf(0x01, 32)
+	refusal := host.InstallVPNPeer(context.Background(), &ipcv1.InstallVPNPeerRequest{Peer: peer}).GetRefusal()
+	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE, refusal.GetClass())
+}
+
+func TestNewDatapathPlane_RefusesWireGuardUnderFIPS(t *testing.T) {
+	_, err := NewDatapathPlane("wireguard", &refusingPeers{})
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "err = %v", err)
+	assert.Equal(t, DataPlaneKind("wireguard"), unavailable.Kind)
+
+	p, err := NewDatapathPlane(DataPlaneMASQUE, &refusingPeers{})
+	require.NoError(t, err)
+	assert.Equal(t, DataPlaneMASQUE, p.Kind())
 }

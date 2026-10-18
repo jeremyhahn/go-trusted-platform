@@ -15,7 +15,7 @@
 
 // Package datastore provides integration tests for the QuicBaaS GenericDAO implementation.
 // These tests require a real QuicBaaS instance with embedded PebbleDB.
-// Run via: make integration-test-datastore or INTEGRATION_TEST=1 go test ./test/integration/datastore/...
+// Run via: make integration-test-datastore
 package datastore
 
 import (
@@ -62,8 +62,6 @@ func newTestGenericDAO(storage quicbaas.Storage, logger *logging.Logger) *quicba
 
 // TestGenericDAO_Save_NewEntity tests saving a new entity with auto-generated ID.
 func TestGenericDAO_Save_NewEntity(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -95,8 +93,6 @@ func TestGenericDAO_Save_NewEntity(t *testing.T) {
 
 // TestGenericDAO_Save_UpdateExisting tests updating an existing entity.
 func TestGenericDAO_Save_UpdateExisting(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -130,8 +126,6 @@ func TestGenericDAO_Save_UpdateExisting(t *testing.T) {
 
 // TestGenericDAO_Get_Success tests successful entity retrieval.
 func TestGenericDAO_Get_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -157,8 +151,6 @@ func TestGenericDAO_Get_Success(t *testing.T) {
 
 // TestGenericDAO_Get_NotFound tests retrieval of non-existent entity.
 func TestGenericDAO_Get_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -178,8 +170,6 @@ func TestGenericDAO_Get_NotFound(t *testing.T) {
 
 // TestGenericDAO_Delete_Success tests successful entity deletion.
 func TestGenericDAO_Delete_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -211,8 +201,6 @@ func TestGenericDAO_Delete_Success(t *testing.T) {
 
 // TestGenericDAO_Delete_InvalidID tests deletion with zero ID.
 func TestGenericDAO_Delete_InvalidID(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -237,8 +225,6 @@ func TestGenericDAO_Delete_InvalidID(t *testing.T) {
 
 // TestGenericDAO_Count tests counting entities.
 func TestGenericDAO_Count(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -270,8 +256,6 @@ func TestGenericDAO_Count(t *testing.T) {
 
 // TestGenericDAO_Page_FirstPage tests retrieving the first page of entities.
 func TestGenericDAO_Page_FirstPage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -307,8 +291,6 @@ func TestGenericDAO_Page_FirstPage(t *testing.T) {
 
 // TestGenericDAO_Page_MiddlePage tests retrieving a middle page of entities.
 func TestGenericDAO_Page_MiddlePage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -342,8 +324,6 @@ func TestGenericDAO_Page_MiddlePage(t *testing.T) {
 
 // TestGenericDAO_Page_LastPage tests retrieving the last page of entities.
 func TestGenericDAO_Page_LastPage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -377,8 +357,6 @@ func TestGenericDAO_Page_LastPage(t *testing.T) {
 
 // TestGenericDAO_Page_BeyondLastPage tests requesting a page beyond available data.
 func TestGenericDAO_Page_BeyondLastPage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -410,8 +388,6 @@ func TestGenericDAO_Page_BeyondLastPage(t *testing.T) {
 
 // TestGenericDAO_ForEachPage_AllPages tests iterating through all pages.
 func TestGenericDAO_ForEachPage_AllPages(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -453,8 +429,6 @@ func TestGenericDAO_ForEachPage_AllPages(t *testing.T) {
 
 // TestGenericDAO_ForEachPage_StopIteration tests early termination of page iteration.
 func TestGenericDAO_ForEachPage_StopIteration(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -490,8 +464,6 @@ func TestGenericDAO_ForEachPage_StopIteration(t *testing.T) {
 
 // TestGenericDAO_ForEachPage_ErrorPropagation tests that errors from callback are propagated.
 func TestGenericDAO_ForEachPage_ErrorPropagation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -525,8 +497,6 @@ func TestGenericDAO_ForEachPage_ErrorPropagation(t *testing.T) {
 
 // TestGenericDAO_EntityType tests that EntityType returns the correct type name.
 func TestGenericDAO_EntityType(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -538,8 +508,6 @@ func TestGenericDAO_EntityType(t *testing.T) {
 
 // TestGenericDAO_ContextCancellation tests that context cancellation is respected.
 func TestGenericDAO_ContextCancellation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -574,8 +542,6 @@ func TestGenericDAO_ContextCancellation(t *testing.T) {
 
 // TestGenericDAO_DataPersistence tests that data persists across operations.
 func TestGenericDAO_DataPersistence(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -609,8 +575,6 @@ func TestGenericDAO_DataPersistence(t *testing.T) {
 
 // TestGenericDAO_WithRequestTimeout tests custom timeout configuration.
 func TestGenericDAO_WithRequestTimeout(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 

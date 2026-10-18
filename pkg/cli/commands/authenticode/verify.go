@@ -57,7 +57,7 @@ Examples:
 	cmd.Flags().StringVar(&certPath, "cert", "", "path to signing certificate (PEM) for trust verification (optional)")
 	cmd.Flags().StringVar(&input, "input", "", "path to signed PE/COFF file")
 
-	_ = cmd.MarkFlagRequired("input")
+	cli.MarkFlagsRequired(cmd, "input")
 
 	return cmd
 }

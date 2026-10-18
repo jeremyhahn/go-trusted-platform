@@ -30,7 +30,7 @@ import (
 // TestFlowCreation tests adding OpenFlow rules
 func TestFlowCreation(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-0"
 
@@ -55,7 +55,7 @@ func TestFlowCreation(t *testing.T) {
 // TestFlowDeletion tests removing OpenFlow rules
 func TestFlowDeletion(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-1"
 
@@ -89,7 +89,7 @@ func TestFlowDeletion(t *testing.T) {
 // TestFlowMatching tests flow matching criteria
 func TestFlowMatching(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-2"
 
@@ -141,7 +141,7 @@ func TestFlowMatching(t *testing.T) {
 // TestFlowActions tests various flow actions
 func TestFlowActions(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-3"
 
@@ -204,7 +204,7 @@ func TestFlowActions(t *testing.T) {
 // TestFlowTables tests using multiple flow tables
 func TestFlowTables(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-tables"
 
@@ -240,7 +240,7 @@ func TestFlowTables(t *testing.T) {
 // TestFlowPriority tests flow priority ordering
 func TestFlowPriority(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-priority"
 
@@ -272,7 +272,7 @@ func TestFlowPriority(t *testing.T) {
 // TestFlowStatistics tests flow statistics collection
 func TestFlowStatistics(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-stats"
 
@@ -297,7 +297,7 @@ func TestFlowStatistics(t *testing.T) {
 // TestFlowModification tests modifying existing flows
 func TestFlowModification(t *testing.T) {
 	requireOVSForTest(t)
-	skipIfNoOVSOfctl(t)
+	requireOVSOfctl(t)
 
 	bridgeName := "test-br-flow-mod"
 

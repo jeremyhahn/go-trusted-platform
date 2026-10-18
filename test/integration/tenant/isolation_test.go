@@ -336,8 +336,6 @@ func cleanupIsolationTestContext(t *testing.T, ctx context.Context, cmd TenantCo
 
 // TestTenantIsolation_MultiProtocol runs all tenant isolation tests across multiple protocols.
 func TestTenantIsolation_MultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
@@ -649,8 +647,6 @@ func testTenantIsolationQuotaOperations(t *testing.T, ctx context.Context, cmd T
 // 3. User from tenant A cannot list invitations for tenant B
 // 4. Invitation for tenant A cannot be used to join tenant B
 func TestTenantIsolation_Invitations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -722,8 +718,6 @@ func testInvitationIsolation(t *testing.T, ctx context.Context, cmd TenantComman
 // 2. User A cannot modify users from tenant B
 // 3. Listing users only returns users from same tenant
 func TestTenantIsolation_Users(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -793,8 +787,6 @@ func testUserIsolation(t *testing.T, ctx context.Context, cmd TenantCommands, pr
 // 2. Admin in tenant A has no privileges in tenant B
 // 3. Tenant owner of A cannot manage tenant B
 func TestTenantIsolation_Authorization(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -873,8 +865,6 @@ func testAuthorizationIsolation(t *testing.T, ctx context.Context, cmd TenantCom
 
 // TestTenantIsolation_CLI runs CLI-specific isolation tests.
 func TestTenantIsolation_CLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -890,8 +880,6 @@ func TestTenantIsolation_CLI(t *testing.T) {
 
 // TestTenantIsolation_REST runs REST-specific isolation tests.
 func TestTenantIsolation_REST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -907,8 +895,6 @@ func TestTenantIsolation_REST(t *testing.T) {
 
 // TestTenantIsolation_GRPC runs gRPC-specific isolation tests.
 func TestTenantIsolation_GRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -924,8 +910,6 @@ func TestTenantIsolation_GRPC(t *testing.T) {
 
 // TestTenantIsolation_QUIC runs QUIC-specific isolation tests.
 func TestTenantIsolation_QUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -941,8 +925,6 @@ func TestTenantIsolation_QUIC(t *testing.T) {
 
 // TestTenantIsolation_MCP runs MCP-specific isolation tests.
 func TestTenantIsolation_MCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -958,8 +940,6 @@ func TestTenantIsolation_MCP(t *testing.T) {
 
 // TestTenantIsolation_Unix runs Unix socket-specific isolation tests.
 func TestTenantIsolation_Unix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

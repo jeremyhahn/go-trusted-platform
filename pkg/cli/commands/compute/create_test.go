@@ -130,7 +130,7 @@ func TestNewCreateCommand_FlagDefaults(t *testing.T) {
 		"disk-size":   "20",
 		"firmware":    "uefi",
 		"secure-boot": "false",
-		"tpm":         "false",
+		"tpm":         "true",
 		"boot-device": "disk",
 		"start":       "false",
 	}

@@ -78,6 +78,24 @@ type DiscoveryOptions struct {
 	// bmcFactory so discovery shares the seam every other BMC call site in
 	// this package uses. When nil, bmc.NewDefaultClientFactory is used.
 	ClientFactory bmc.ClientFactory
+
+	// discoverMACs reads each node's NIC MACs. When nil, bmc.DiscoverMACs
+	// is used.
+	discoverMACs macDiscoverer
+}
+
+// macDiscoverer reads a node's NIC MACs from its BMC. It is a seam so a
+// test never dials the BMC address its config names, which would wait
+// out a real network timeout (#284).
+type macDiscoverer func(ctx context.Context, config *bmc.Config, logger *slog.Logger) ([]string, error)
+
+// discover reads the MACs through d, or through bmc.DiscoverMACs when d
+// is nil.
+func (d macDiscoverer) discover(ctx context.Context, config *bmc.Config, logger *slog.Logger) ([]string, error) {
+	if d == nil {
+		return bmc.DiscoverMACs(ctx, config, logger)
+	}
+	return d(ctx, config, logger)
 }
 
 // DiscoverNodes iterates all nodes, queries BMCs for MAC addresses on
@@ -133,7 +151,7 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger,
 		wg.Add(1)
 		go func(idx int, n *NodeConfig) {
 			defer wg.Done()
-			discovered, err := discoverBMCNode(ctx, n, o.TLSProvider, factory, logger)
+			discovered, err := discoverBMCNode(ctx, n, o.TLSProvider, factory, o.discoverMACs, logger)
 			resultCh <- discoveryResult{index: idx, node: discovered, err: err}
 		}(i, node)
 	}
@@ -159,7 +177,7 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger,
 }
 
 // discoverBMCNode performs MAC and system info discovery for a single BMC-managed node.
-func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSProvider, factory bmc.ClientFactory, logger *slog.Logger) (DiscoveredNode, error) {
+func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSProvider, factory bmc.ClientFactory, discoverMACs macDiscoverer, logger *slog.Logger) (DiscoveredNode, error) {
 	bmcConfig := buildBMCConfig(node, tlsProvider)
 
 	// Discover protocol if set to auto or empty.
@@ -204,7 +222,7 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSP
 	for _, m := range node.MACs {
 		add(m)
 	}
-	discovered, discoverErr := bmc.DiscoverMACs(ctx, bmcConfig, logger)
+	discovered, discoverErr := discoverMACs.discover(ctx, bmcConfig, logger)
 	if discoverErr != nil {
 		if len(macs) == 0 {
 			return DiscoveredNode{}, ErrMACDiscoveryFailed{

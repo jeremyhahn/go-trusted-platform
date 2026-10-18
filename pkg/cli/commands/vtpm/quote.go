@@ -61,9 +61,9 @@ Examples:
 	cmd.Flags().StringVar(&nonce, "nonce", "", "hex-encoded nonce for freshness (required)")
 	cmd.Flags().StringVar(&pcrs, "pcrs", "", "comma-separated list of PCR indices (required)")
 
-	_ = cmd.MarkFlagRequired("bundle-id")
-	_ = cmd.MarkFlagRequired("nonce")
-	_ = cmd.MarkFlagRequired("pcrs")
+	cli.MarkFlagsRequired(cmd, "bundle-id")
+	cli.MarkFlagsRequired(cmd, "nonce")
+	cli.MarkFlagsRequired(cmd, "pcrs")
 
 	return cmd
 }

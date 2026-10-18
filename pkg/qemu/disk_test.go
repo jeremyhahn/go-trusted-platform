@@ -17,8 +17,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -26,17 +26,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVMCreateDisk(t *testing.T) {
-	// Skip if qemu-img is not available
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		t.Skip("qemu-img not found in PATH")
-	}
+// errFakeImage is the failure fakeImageTool returns when told to fail.
+var errFakeImage = &MessageError{Msg: "fake qemu-img failure"}
 
+// fakeImageTool stands in for qemu-img: it records each call and writes the
+// image file, or fails with errFakeImage and some output.
+type fakeImageTool struct {
+	fail  bool
+	calls [][]string
+}
+
+func (f *fakeImageTool) create(format, path, size string) ([]byte, error) {
+	f.calls = append(f.calls, []string{format, path, size})
+	if f.fail {
+		return []byte("qemu-img: cannot create"), errFakeImage
+	}
+	return nil, os.WriteFile(path, []byte(format), 0600)
+}
+
+// newDiskTestVM returns a VM for diskPath whose qemu-img is fake.
+func newDiskTestVM(t *testing.T, diskPath string, fake *fakeImageTool) *VM {
+	t.Helper()
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.qcow2")
 	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
 	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
-
 	require.NoError(t, os.WriteFile(ovmfCode, []byte("mock"), 0644))
 	require.NoError(t, os.WriteFile(ovmfVars, []byte("mock"), 0644))
 
@@ -49,95 +62,85 @@ func TestVMCreateDisk(t *testing.T) {
 		OVMFCode: ovmfCode,
 		OVMFVars: ovmfVars,
 	}
-
 	vm, err := NewVM(config, logging.DefaultLogger())
 	require.NoError(t, err)
+	vm.createImage = fake.create
+	return vm
+}
 
-	// Create disk
-	err = vm.CreateDisk()
-	assert.NoError(t, err)
+func TestNewVMUsesQEMUImg(t *testing.T) {
+	faked := newDiskTestVM(t, filepath.Join(t.TempDir(), "test.qcow2"), &fakeImageTool{})
 
-	// Verify disk exists
-	_, err = os.Stat(diskPath)
-	assert.NoError(t, err)
+	vm, err := NewVM(faked.config, nil)
 
-	// Verify disk format using qemu-img
-	cmd := exec.Command("qemu-img", "info", "--output=json", diskPath)
-	output, err := cmd.CombinedOutput()
 	require.NoError(t, err)
-	assert.Contains(t, string(output), "qcow2")
+	assert.Equal(t, reflect.ValueOf(runQEMUImgCreate).Pointer(), reflect.ValueOf(vm.createImage).Pointer())
+}
+
+func TestVMCreateDisk(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "disks", "test.qcow2")
+	fake := &fakeImageTool{}
+	vm := newDiskTestVM(t, diskPath, fake)
+
+	require.NoError(t, vm.CreateDisk())
+
+	assert.Equal(t, [][]string{{"qcow2", diskPath, "1G"}}, fake.calls)
+	content, err := os.ReadFile(diskPath)
+	require.NoError(t, err)
+	assert.Equal(t, "qcow2", string(content))
+}
+
+func TestVMCreateDiskConfiguredFormat(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "test.raw")
+	fake := &fakeImageTool{}
+	vm := newDiskTestVM(t, diskPath, fake)
+	vm.config.DiskFormat = "raw"
+
+	require.NoError(t, vm.CreateDisk())
+
+	assert.Equal(t, [][]string{{"raw", diskPath, "1G"}}, fake.calls)
 }
 
 func TestVMCreateDiskAlreadyExists(t *testing.T) {
-	// Skip if qemu-img is not available
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		t.Skip("qemu-img not found in PATH")
-	}
+	diskPath := filepath.Join(t.TempDir(), "test.qcow2")
+	require.NoError(t, os.WriteFile(diskPath, []byte("existing"), 0600))
+	fake := &fakeImageTool{}
+	vm := newDiskTestVM(t, diskPath, fake)
 
-	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.qcow2")
-	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
-	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
+	require.NoError(t, vm.CreateDisk())
 
-	require.NoError(t, os.WriteFile(ovmfCode, []byte("mock"), 0644))
-	require.NoError(t, os.WriteFile(ovmfVars, []byte("mock"), 0644))
-
-	config := &Config{
-		DiskPath: diskPath,
-		Memory:   4096,
-		CPUs:     2,
-		DiskSize: "1G",
-		WorkDir:  tmpDir,
-		OVMFCode: ovmfCode,
-		OVMFVars: ovmfVars,
-	}
-
-	vm, err := NewVM(config, logging.DefaultLogger())
+	assert.Empty(t, fake.calls, "an existing disk must not be recreated")
+	content, err := os.ReadFile(diskPath)
 	require.NoError(t, err)
+	assert.Equal(t, "existing", string(content))
+}
 
-	// Create disk first time
-	err = vm.CreateDisk()
-	require.NoError(t, err)
+func TestVMCreateDiskToolFails(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "test.qcow2")
+	vm := newDiskTestVM(t, diskPath, &fakeImageTool{fail: true})
 
-	// Get file info
-	info1, err := os.Stat(diskPath)
-	require.NoError(t, err)
+	err := vm.CreateDisk()
 
-	// Try to create again - should not error, just warn
-	err = vm.CreateDisk()
-	assert.NoError(t, err)
-
-	// Verify file wasn't modified
-	info2, err := os.Stat(diskPath)
-	require.NoError(t, err)
-	assert.Equal(t, info1.ModTime(), info2.ModTime())
+	var cmdErr *CommandOutputError
+	require.ErrorAs(t, err, &cmdErr)
+	assert.ErrorIs(t, err, errFakeImage)
+	assert.Contains(t, err.Error(), "qemu-img: cannot create")
+	assert.NoFileExists(t, diskPath)
 }
 
 func TestVMCreateDiskInvalidPath(t *testing.T) {
-	tmpDir := t.TempDir()
-	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
-	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
+	// The disk directory sits under a regular file, so it cannot be created.
+	parent := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parent, nil, 0600))
+	fake := &fakeImageTool{}
+	vm := newDiskTestVM(t, filepath.Join(parent, "disks", "test.qcow2"), fake)
 
-	require.NoError(t, os.WriteFile(ovmfCode, []byte("mock"), 0644))
-	require.NoError(t, os.WriteFile(ovmfVars, []byte("mock"), 0644))
+	err := vm.CreateDisk()
 
-	// Use an invalid path that can't be created
-	config := &Config{
-		DiskPath: "/root/should-fail/test.qcow2",
-		Memory:   4096,
-		CPUs:     2,
-		DiskSize: "1G",
-		WorkDir:  tmpDir,
-		OVMFCode: ovmfCode,
-		OVMFVars: ovmfVars,
-	}
-
-	vm, err := NewVM(config, logging.DefaultLogger())
-	require.NoError(t, err)
-
-	// Should fail to create disk directory
-	err = vm.CreateDisk()
-	assert.Error(t, err)
+	var wrapped *WrappedError
+	require.ErrorAs(t, err, &wrapped)
+	assert.Equal(t, "failed to create disk directory", wrapped.Msg)
+	assert.Empty(t, fake.calls)
 }
 
 func TestVMInitializeNVRAM(t *testing.T) {

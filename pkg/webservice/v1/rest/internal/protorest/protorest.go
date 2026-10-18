@@ -234,6 +234,25 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 	}
 }
 
+// WriteIdentityDeleteError answers a failed device-identity delete: the key
+// deletes (IDevID DeleteIDevID / DeleteIAK, TPM DeleteAK) and the certificate
+// deletes (DeleteIDevIDCertificate / DeleteIAKCertificate). FailedPrecondition
+// — the key refusal ErrDeviceIdentityKeyNotDeletable, or no TPM — is 412, as on
+// the daemon listener: the SDK's REST transport reads 412 back as
+// FailedPrecondition, the gRPC class, where WriteError's shared 400 (#665)
+// would read as InvalidArgument. Every other error takes the shared mapping.
+func WriteIdentityDeleteError(w http.ResponseWriter, r *http.Request, writer response.HttpWriter, err error) {
+	if status.Code(err) != codes.FailedPrecondition {
+		WriteError(w, r, writer, err)
+		return
+	}
+	writer.Write(w, r, http.StatusPreconditionFailed, restwire.WebServiceResponse{
+		Code:    http.StatusPreconditionFailed,
+		Error:   err.Error(),
+		Success: false,
+	})
+}
+
 // QueryUint32 reads a query parameter and parses it as a uint32. Returns 0
 // when the parameter is missing. An invalid value returns ErrInvalidQuery.
 func QueryUint32(r *http.Request, name string) (uint32, error) {

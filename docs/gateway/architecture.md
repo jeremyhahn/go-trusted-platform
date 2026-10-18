@@ -244,6 +244,10 @@ exchange, authenticated with certificates whose private key lives behind the
 go-xkms PKCS#11 module (`pubkey` only, strict revocation). The policies require
 ESP, so a tunnel without an SA carries no traffic.
 
+platformd runs it (`sdn.overlay.ipsec`). gatewayd's `overlay` service starts
+no IPsec, so a VTEP hosted by gatewayd sends VXLAN in the clear over its
+underlay ([engineering.md](engineering.md#in-gatewayd)).
+
 charon is a node package, not a library: the install media, the factory
 image and the netboot sets carry the `trusted-platform-strongswan` and
 `trusted-platform-p11-host` apks (with their OpenRC services) and
@@ -362,7 +366,15 @@ hosts the refusals and the parent relays them; a backend that lands later
 lands in the child. `datapath` (`firewall`, `nat`, `load-balancer`, `nat64`,
 `hostfw`, `tunnels`, `overlay`) moved last. It is the one supervised process
 that is not unprivileged: it keeps uid 0 with exactly `CAP_NET_ADMIN` and
-`CAP_NET_RAW`, the capabilities its kernel programming needs. Only the
+`CAP_NET_RAW`, the capabilities its kernel programming needs. Every child,
+whatever its class, also runs under a seccomp filter that denies the kernel
+surface no gateway service uses (module load, mounts, namespaces, `ptrace`,
+`bpf`, `io_uring`, the keyring); a parser is additionally denied `execve`,
+which the datapath keeps because `nat64` runs `jool`. If the supervisor
+itself dies, the kernel kills every child (`SIGKILL`, not `SIGTERM`), so the
+datapath never runs its withdraw path: its flows stay in place for the
+successor's cookie-scoped reconcile, while a planned stop still withdraws them.
+Only the
 management VPN, which has no backend yet, keeps its in-process handler. The
 order still to come is `vpn` once it has a backend;
 [`engineering.md`](engineering.md) §The process model carries the state.
@@ -402,7 +414,16 @@ cannot be forged.
 | Service | Method | Who may call it |
 |---|---|---|
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
-| `DatapathService` | `ApplyDesired` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+| `DatapathService` | `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+
+The two VPN peer RPCs are the VPN `DataPlane` seam carried across the socket
+(`docs/vpn/architecture.md`): the datapath child owns the WireGuard (`!fips`)
+and MASQUE planes and installs or removes a leased peer on them, so the
+`CAP_NET_ADMIN` the planes need stays in that child and admission holds none.
+A plane's refusal comes back in the response as a typed class
+(invalid request, peer key invalid, peer conflict, not started, lease not
+found, unavailable); an RPC error means the child did not answer, and the
+caller treats it as a refusal.
 
 Each socket is mode `0660` in the service group, so a parser reaches the
 kernel-class socket through the filesystem before `SO_PEERCRED` decides. The

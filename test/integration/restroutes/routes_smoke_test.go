@@ -188,7 +188,7 @@ func newClient(t *testing.T) *http.Client {
 func TestRESTRoutes_AllRegistered(t *testing.T) {
 	endpoint := os.Getenv(envEndpoint)
 	if endpoint == "" {
-		t.Skipf("%s not set; skipping", envEndpoint)
+		t.Fatalf("%s not set; run via run-integration-tests.sh, which exports it for the running platformd", envEndpoint)
 	}
 	client := newClient(t)
 	for _, r := range allRoutes() {

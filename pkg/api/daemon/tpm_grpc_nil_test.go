@@ -67,7 +67,6 @@ func TestTPMGRPC_NilTPM(t *testing.T) {
 		{"DeleteSRK", func() error { _, err := svc.DeleteSRK(ctx, &platformv1.DeleteSRKRequest{}); return err }},
 		{"CreateAK", func() error { _, err := svc.CreateAK(ctx, &platformv1.CreateAKRequest{}); return err }},
 		{"GetAK", func() error { _, err := svc.GetAK(ctx, &platformv1.GetAKRequest{}); return err }},
-		{"DeleteAK", func() error { _, err := svc.DeleteAK(ctx, &platformv1.DeleteAKRequest{}); return err }},
 		{"Quote", func() error {
 			_, err := svc.Quote(ctx, &platformv1.QuoteRequest{Nonce: []byte("n"), PcrIndices: []uint32{0}})
 			return err

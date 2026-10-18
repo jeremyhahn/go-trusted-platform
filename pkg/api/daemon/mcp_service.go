@@ -3067,25 +3067,6 @@ func (p *MCPServiceProvider) TPMCreateIAK(ctx context.Context) (interface{}, err
 	}, nil
 }
 
-// TPMDeleteIAK deletes the Initial Attestation Key.
-func (p *MCPServiceProvider) TPMDeleteIAK(ctx context.Context) (interface{}, error) {
-	if p.tpm2Service == nil {
-		return nil, ErrServiceNotAvailable{Service: "tpm"}
-	}
-
-	iakAttrs, err := p.tpm2Service.IAKAttributes()
-	if err != nil {
-		return nil, err
-	}
-
-	p.tpm2Service.Flush(iakAttrs.TPMAttributes.Handle)
-
-	return map[string]interface{}{
-		"success": true,
-		"message": "IAK handle flushed",
-	}, nil
-}
-
 // tpmQuotes serves the quote tools on the provider's TPM, so an MCP quote is
 // bound to its connection and verified exactly as on every other transport
 // (#482).

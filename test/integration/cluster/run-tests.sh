@@ -20,6 +20,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$PROJECT_ROOT" print-build-tags)}"
+
 # =============================================================================
 # Environment Variables with Defaults
 # =============================================================================
@@ -27,10 +30,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 LOG_LEVEL="${LOG_LEVEL:-info}"
 TEST_TIMEOUT="${TEST_TIMEOUT:-15m}"
 TEST_VERBOSE="${TEST_VERBOSE:-true}"
-INTEGRATION_TEST="${INTEGRATION_TEST:-1}"
-# RAFT_CLUSTER_TEST enables data replication tests using simulated Raft cluster.
-# The test cluster uses a shared storage layer that propagates writes to all
-# nodes, simulating Raft replication behavior without requiring a real
+
+# The replication tests run whenever the suite is built with the integration
+# tags; no environment variable gates them. The test cluster uses a shared
+# storage layer that propagates writes to all nodes, simulating Raft replication behavior without requiring a real
 # multi-node QuicBaaS cluster.
 #
 # These tests verify that:
@@ -38,9 +41,6 @@ INTEGRATION_TEST="${INTEGRATION_TEST:-1}"
 # - CRL updates propagate across the cluster
 # - Failover preserves data integrity
 # - SDN state replicates correctly
-#
-# Default is now enabled (1) since tests use simulated replication.
-RAFT_CLUSTER_TEST="${RAFT_CLUSTER_TEST:-1}"
 
 # Exit codes for CI/CD integration
 EXIT_SUCCESS=0
@@ -98,14 +98,6 @@ run_tests() {
 
     cd "$PROJECT_ROOT"
 
-    # Check if tests compile first
-    log_step "Checking if tests compile..."
-    if ! go test -tags raft -c -o /dev/null ./test/integration/cluster/... 2>/dev/null; then
-        log_warn "Cluster tests have compile errors (likely go-quicbaas API incompatibility)"
-        log_warn "Skipping cluster tests until go-quicbaas is updated"
-        return 0
-    fi
-
     local verbose_flag=""
     if [ "$TEST_VERBOSE" = "true" ]; then
         verbose_flag="-v"
@@ -116,16 +108,16 @@ run_tests() {
         run_flag="-run $test_pattern"
     fi
 
-    log_step "Executing: go test $verbose_flag -tags raft -timeout $TEST_TIMEOUT $run_flag ./test/integration/cluster/..."
+    log_step "Executing: go test $verbose_flag -tags \"$BUILD_TAGS\" -timeout $TEST_TIMEOUT $run_flag ./test/integration/cluster/..."
 
-    if INTEGRATION_TEST="$INTEGRATION_TEST" RAFT_CLUSTER_TEST="$RAFT_CLUSTER_TEST" LOG_LEVEL="$LOG_LEVEL" \
-        go test $verbose_flag -tags raft -timeout "$TEST_TIMEOUT" -count=1 $run_flag \
+    if LOG_LEVEL="$LOG_LEVEL" \
+        go test $verbose_flag -tags "$BUILD_TAGS" -timeout "$TEST_TIMEOUT" -count=1 $run_flag \
         ./test/integration/cluster/...; then
         log_info "$test_name completed successfully"
         return 0
     else
         log_error "$test_name failed"
-        return 1
+        return $EXIT_TEST_FAILED
     fi
 }
 
@@ -169,8 +161,6 @@ show_help() {
     echo "  help            Show this help message"
     echo ""
     echo "Environment Variables:"
-    echo "  INTEGRATION_TEST   Set to '1' to enable integration tests (default: 1)"
-    echo "  RAFT_CLUSTER_TEST  Set to '1' to run data replication tests (default: 1)"
     echo "  LOG_LEVEL          Logging level: debug, info, warn, error (default: info)"
     echo "  TEST_TIMEOUT       Test timeout duration (default: 15m)"
     echo "  TEST_VERBOSE       Enable verbose output: true/false (default: true)"
@@ -195,8 +185,6 @@ main() {
     local command="${1:-all}"
 
     # Export for Go tests
-    export INTEGRATION_TEST
-    export RAFT_CLUSTER_TEST
     export LOG_LEVEL
 
     case "$command" in

@@ -14,13 +14,17 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -91,43 +95,49 @@ func (e ErrVMInvalidEvidence) Unwrap() error {
 	return e.Cause
 }
 
-// VMAttestVerifyMCPRequest carries decoded VM attestation evidence for the
-// vm_attest_verify tool.
-type VMAttestVerifyMCPRequest struct {
-	Quote     []byte
-	Signature []byte
-	// SignatureAlgorithm is the scheme the quote declares; an absent or
-	// unknown scheme fails verification.
-	SignatureAlgorithm string
-	Nonce              []byte
-	ExpectedPCRs       map[int][]byte
+// ErrVMInvalidPCRIndex indicates a negative include_pcrs entry: PCR
+// indices are unsigned.
+type ErrVMInvalidPCRIndex struct {
+	Index int
+}
+
+// Error returns a human-readable description of the error.
+func (e ErrVMInvalidPCRIndex) Error() string {
+	return fmt.Sprintf("vm: PCR index %d is negative", e.Index)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrVMInvalidPCRIndex) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // VMProvider is the optional interface a ServiceProvider can satisfy to
-// unlock the VM snapshot and attestation MCP tools. Implementations
-// delegate to the compute orchestrator's canonical VMSnapshotter /
-// VMAttester capabilities.
+// unlock the VM snapshot and attestation MCP tools. Each method answers
+// with its ComputeService RPC's result and error class.
 type VMProvider interface {
-	// VMSnapshotCreate creates an internal (memory + disk) VM snapshot.
-	VMSnapshotCreate(ctx context.Context, vmID, name string) (interface{}, error)
+	// VMSnapshotCreate creates a VM snapshot, as CreateSnapshot does.
+	VMSnapshotCreate(ctx context.Context, req *platformv1.CreateSnapshotRequest) (interface{}, error)
 
-	// VMSnapshotGet returns a single snapshot by name.
+	// VMSnapshotGet returns a single snapshot by id. It has no RPC of its
+	// own: it is ListSnapshots filtered to the snapshot.
 	VMSnapshotGet(ctx context.Context, vmID, snapshotID string) (interface{}, error)
 
-	// VMSnapshotList lists all snapshots for a VM.
+	// VMSnapshotList lists a VM's snapshots, as ListSnapshots does.
 	VMSnapshotList(ctx context.Context, vmID string) (interface{}, error)
 
-	// VMSnapshotDelete deletes a snapshot.
-	VMSnapshotDelete(ctx context.Context, vmID, snapshotID string) error
+	// VMSnapshotDelete deletes a snapshot, as DeleteSnapshot does.
+	VMSnapshotDelete(ctx context.Context, vmID, snapshotID string) (interface{}, error)
 
-	// VMSnapshotRestore restores a VM from a snapshot.
-	VMSnapshotRestore(ctx context.Context, vmID, snapshotID string) error
+	// VMSnapshotRestore restores a VM from a snapshot, as RestoreSnapshot
+	// does.
+	VMSnapshotRestore(ctx context.Context, vmID, snapshotID string) (interface{}, error)
 
-	// VMAttest generates a vTPM quote for a VM.
-	VMAttest(ctx context.Context, vmID string, nonce []byte, pcrs []int) (interface{}, error)
+	// VMAttest generates a VM's vTPM quote, as AttestVM does.
+	VMAttest(ctx context.Context, req *platformv1.AttestVMRequest) (interface{}, error)
 
-	// VMAttestVerify verifies VM attestation evidence.
-	VMAttestVerify(ctx context.Context, vmID string, req *VMAttestVerifyMCPRequest) (interface{}, error)
+	// VMAttestVerify verifies VM quote evidence, as VerifyVMAttestation
+	// does.
+	VMAttestVerify(ctx context.Context, req *platformv1.VerifyVMAttestationRequest) (interface{}, error)
 }
 
 // vmProvider returns the VMProvider interface if the configured service
@@ -139,20 +149,14 @@ func (r *ToolRegistry) vmProvider() VMProvider {
 	return nil
 }
 
-// vmToolHandler is the executor signature for VM lifecycle, snapshot and
-// attestation tools.
+// vmToolHandler is the executor signature for VM snapshot and attestation
+// tools.
 type vmToolHandler func(*ToolRegistry, context.Context, map[string]interface{}) (interface{}, error)
 
-// vmToolDispatch maps VM lifecycle, snapshot and attestation tool names to
-// executors for O(1) routing per project conventions.
+// vmToolDispatch maps VM snapshot and attestation tool names to executors
+// for O(1) routing per project conventions. The VM lifecycle tools are
+// bound to the gRPC ComputeService in vm_lifecycle_tools.go.
 var vmToolDispatch = map[string]vmToolHandler{
-	"vm_create":           (*ToolRegistry).executeVMCreate,
-	"vm_list":             (*ToolRegistry).executeVMList,
-	"vm_get":              (*ToolRegistry).executeVMGet,
-	"vm_delete":           (*ToolRegistry).executeVMDelete,
-	"vm_start":            (*ToolRegistry).executeVMStart,
-	"vm_stop":             (*ToolRegistry).executeVMStop,
-	"vm_reboot":           (*ToolRegistry).executeVMReboot,
 	"vm_snapshot_create":  (*ToolRegistry).executeVMSnapshotCreate,
 	"vm_snapshot_get":     (*ToolRegistry).executeVMSnapshotGet,
 	"vm_snapshot_list":    (*ToolRegistry).executeVMSnapshotList,
@@ -162,10 +166,13 @@ var vmToolDispatch = map[string]vmToolHandler{
 	"vm_attest_verify":    (*ToolRegistry).executeVMAttestVerify,
 }
 
-// dispatchVMTool looks up a VM snapshot/attestation tool and invokes it.
-// Returns (result, handled, err) so the caller can fall through when
-// handled is false (tool name doesn't belong to this dispatcher).
+// dispatchVMTool looks up a VM lifecycle, snapshot or attestation tool and
+// invokes it. Returns (result, handled, err) so the caller can fall through
+// when handled is false (tool name doesn't belong to this dispatcher).
 func (r *ToolRegistry) dispatchVMTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, bool, error) {
+	if result, handled, err := r.dispatchVMLifecycleTool(ctx, name, args); handled {
+		return result, true, err
+	}
 	fn, ok := vmToolDispatch[name]
 	if !ok {
 		return nil, false, nil
@@ -213,6 +220,8 @@ func vmToolBase64(args map[string]interface{}, key string) ([]byte, error) {
 // Executors
 // =============================================================================
 
+// executeVMSnapshotCreate takes vm_id and name, plus the optional
+// description, memory_snapshot and disk_snapshot of the snapshot config.
 func (r *ToolRegistry) executeVMSnapshotCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	p := r.vmProvider()
 	if p == nil {
@@ -226,31 +235,19 @@ func (r *ToolRegistry) executeVMSnapshotCreate(ctx context.Context, args map[str
 	if name == "" {
 		return nil, ErrSnapshotNameRequired
 	}
-	result, err := p.VMSnapshotCreate(ctx, vmID, name)
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
+	return p.VMSnapshotCreate(ctx, &platformv1.CreateSnapshotRequest{
+		VmId: vmID,
+		Config: &platformv1.SnapshotConfig{
+			Name:           name,
+			Description:    getString(args, "description"),
+			MemorySnapshot: getBool(args, "memory_snapshot"),
+			DiskSnapshot:   getBool(args, "disk_snapshot"),
+		},
+	})
 }
 
 func (r *ToolRegistry) executeVMSnapshotGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	p := r.vmProvider()
-	if p == nil {
-		return nil, ErrVMComputeNotConfigured
-	}
-	vmID, err := vmToolVMID(args)
-	if err != nil {
-		return nil, err
-	}
-	snapshotID, err := vmToolSnapshotID(args)
-	if err != nil {
-		return nil, err
-	}
-	result, err := p.VMSnapshotGet(ctx, vmID, snapshotID)
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
+	return r.executeVMSnapshotByID(ctx, args, VMProvider.VMSnapshotGet)
 }
 
 func (r *ToolRegistry) executeVMSnapshotList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -262,37 +259,21 @@ func (r *ToolRegistry) executeVMSnapshotList(ctx context.Context, args map[strin
 	if err != nil {
 		return nil, err
 	}
-	result, err := p.VMSnapshotList(ctx, vmID)
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
+	return p.VMSnapshotList(ctx, vmID)
 }
 
 func (r *ToolRegistry) executeVMSnapshotDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	p := r.vmProvider()
-	if p == nil {
-		return nil, ErrVMComputeNotConfigured
-	}
-	vmID, err := vmToolVMID(args)
-	if err != nil {
-		return nil, err
-	}
-	snapshotID, err := vmToolSnapshotID(args)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.VMSnapshotDelete(ctx, vmID, snapshotID); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"success":     true,
-		"vm_id":       vmID,
-		"snapshot_id": snapshotID,
-	}, nil
+	return r.executeVMSnapshotByID(ctx, args, VMProvider.VMSnapshotDelete)
 }
 
 func (r *ToolRegistry) executeVMSnapshotRestore(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	return r.executeVMSnapshotByID(ctx, args, VMProvider.VMSnapshotRestore)
+}
+
+// executeVMSnapshotByID runs a snapshot verb that names one snapshot of one
+// VM by the vm_id and snapshot_id arguments.
+func (r *ToolRegistry) executeVMSnapshotByID(ctx context.Context, args map[string]interface{},
+	call func(VMProvider, context.Context, string, string) (interface{}, error)) (interface{}, error) {
 	p := r.vmProvider()
 	if p == nil {
 		return nil, ErrVMComputeNotConfigured
@@ -305,16 +286,11 @@ func (r *ToolRegistry) executeVMSnapshotRestore(ctx context.Context, args map[st
 	if err != nil {
 		return nil, err
 	}
-	if err := p.VMSnapshotRestore(ctx, vmID, snapshotID); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"success":     true,
-		"vm_id":       vmID,
-		"snapshot_id": snapshotID,
-	}, nil
+	return call(p, ctx, vmID, snapshotID)
 }
 
+// executeVMAttest takes vm_id, a base64 nonce and the include_pcrs indices.
+// The quote is over the SHA-256 bank, the only one AttestVM accepts.
 func (r *ToolRegistry) executeVMAttest(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	p := r.vmProvider()
 	if p == nil {
@@ -329,14 +305,23 @@ func (r *ToolRegistry) executeVMAttest(ctx context.Context, args map[string]inte
 		return nil, ErrVMInvalidNonce{Cause: err}
 	}
 	pcrs := getIntSlice(args, "include_pcrs")
-
-	result, err := p.VMAttest(ctx, vmID, nonce, pcrs)
-	if err != nil {
-		return nil, err
+	indices := make([]uint32, 0, len(pcrs))
+	for _, idx := range pcrs {
+		if idx < 0 {
+			return nil, ErrVMInvalidPCRIndex{Index: idx}
+		}
+		indices = append(indices, uint32(idx))
 	}
-	return marshalResult(result)
+	return p.VMAttest(ctx, &platformv1.AttestVMRequest{
+		VmId:       vmID,
+		Nonce:      nonce,
+		PcrIndices: indices,
+	})
 }
 
+// executeVMAttestVerify takes vm_id, the base64 quote, signature and nonce,
+// the optional signature_algorithm, and expected_pcrs: a map of PCR index
+// to base64 SHA-256 value.
 func (r *ToolRegistry) executeVMAttestVerify(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	p := r.vmProvider()
 	if p == nil {
@@ -347,57 +332,74 @@ func (r *ToolRegistry) executeVMAttestVerify(ctx context.Context, args map[strin
 		return nil, err
 	}
 
-	quote, err := vmToolBase64(args, "quote")
+	quote, err := vmToolEvidence(args, "quote")
 	if err != nil {
-		return nil, ErrVMInvalidEvidence{Field: "quote", Cause: err}
+		return nil, err
 	}
-	if len(quote) == 0 {
-		return nil, ErrVMInvalidEvidence{Field: "quote"}
-	}
-	signature, err := vmToolBase64(args, "signature")
+	signature, err := vmToolEvidence(args, "signature")
 	if err != nil {
-		return nil, ErrVMInvalidEvidence{Field: "signature", Cause: err}
+		return nil, err
 	}
-	if len(signature) == 0 {
-		return nil, ErrVMInvalidEvidence{Field: "signature"}
-	}
-	nonce, err := vmToolBase64(args, "nonce")
+	nonce, err := vmToolEvidence(args, "nonce")
 	if err != nil {
-		return nil, ErrVMInvalidEvidence{Field: "nonce", Cause: err}
+		return nil, err
 	}
-	if len(nonce) == 0 {
-		return nil, ErrVMInvalidEvidence{Field: "nonce"}
+	expected, err := vmToolExpectedPCRs(args)
+	if err != nil {
+		return nil, err
 	}
 
-	req := &VMAttestVerifyMCPRequest{
+	return p.VMAttestVerify(ctx, &platformv1.VerifyVMAttestationRequest{
+		VmId:               vmID,
 		Quote:              quote,
 		Signature:          signature,
 		SignatureAlgorithm: getString(args, "signature_algorithm"),
 		Nonce:              nonce,
-	}
+		ExpectedPcrs:       expected,
+	})
+}
 
-	if raw, ok := args["expected_pcrs"].(map[string]interface{}); ok && len(raw) > 0 {
-		req.ExpectedPCRs = make(map[int][]byte, len(raw))
-		for key, value := range raw {
-			idx, convErr := strconv.Atoi(key)
-			if convErr != nil {
-				return nil, ErrVMInvalidEvidence{Field: "expected_pcrs", Cause: convErr}
-			}
-			encoded, ok := value.(string)
-			if !ok {
-				return nil, ErrVMInvalidEvidence{Field: "expected_pcrs"}
-			}
-			decoded, decErr := base64.StdEncoding.DecodeString(encoded)
-			if decErr != nil {
-				return nil, ErrVMInvalidEvidence{Field: "expected_pcrs", Cause: decErr}
-			}
-			req.ExpectedPCRs[idx] = decoded
-		}
-	}
-
-	result, err := p.VMAttestVerify(ctx, vmID, req)
+// vmToolEvidence extracts a required base64 evidence argument.
+func vmToolEvidence(args map[string]interface{}, field string) ([]byte, error) {
+	value, err := vmToolBase64(args, field)
 	if err != nil {
-		return nil, err
+		return nil, ErrVMInvalidEvidence{Field: field, Cause: err}
 	}
-	return marshalResult(result)
+	if len(value) == 0 {
+		return nil, ErrVMInvalidEvidence{Field: field}
+	}
+	return value, nil
+}
+
+// vmToolExpectedPCRs decodes the optional expected_pcrs argument, a map of
+// PCR index to base64 SHA-256 value, into SHA-256 PCR values in index order.
+func vmToolExpectedPCRs(args map[string]interface{}) ([]*platformv1.PCRValue, error) {
+	raw, ok := args["expected_pcrs"].(map[string]interface{})
+	if !ok || len(raw) == 0 {
+		return nil, nil
+	}
+	values := make([]*platformv1.PCRValue, 0, len(raw))
+	for key, value := range raw {
+		idx, err := strconv.ParseUint(key, 10, 32)
+		if err != nil {
+			return nil, ErrVMInvalidEvidence{Field: "expected_pcrs", Cause: err}
+		}
+		encoded, ok := value.(string)
+		if !ok {
+			return nil, ErrVMInvalidEvidence{Field: "expected_pcrs"}
+		}
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, ErrVMInvalidEvidence{Field: "expected_pcrs", Cause: err}
+		}
+		values = append(values, &platformv1.PCRValue{
+			Index: uint32(idx),
+			Value: decoded,
+			Bank:  platformv1.PCRBank_PCR_BANK_SHA256,
+		})
+	}
+	slices.SortFunc(values, func(a, b *platformv1.PCRValue) int {
+		return cmp.Compare(a.GetIndex(), b.GetIndex())
+	})
+	return values, nil
 }

@@ -73,11 +73,23 @@ import (
 // double), dnsGRPC stays nil and the delegated handlers report the service as
 // unavailable.
 func (h *QUICServiceHandler) rebuildDNSGRPC() {
-	if full, ok := h.dnsService.(dns.DNSService); ok {
+	if full := fullDNSService(h.dnsService); full != nil {
 		h.dnsGRPC = NewDNSServiceServer(full, h.logger.Slog())
 	} else {
 		h.dnsGRPC = nil
 	}
+}
+
+// fullDNSService returns the full dns.DNSService behind the narrow DNSService
+// the daemon config carries, or nil when svc is nil or does not implement it.
+// The gRPC/Unix servicer and the QUIC delegate both resolve the backend
+// through it, so every transport reaches the same instance.
+func fullDNSService(svc DNSService) dns.DNSService {
+	full, ok := svc.(dns.DNSService)
+	if !ok {
+		return nil
+	}
+	return full
 }
 
 // =============================================================================

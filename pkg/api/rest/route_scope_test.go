@@ -170,6 +170,8 @@ var computeRouteScopes = []guardedRoute{
 	{http.MethodPost, "/api/v1/compute/vms/vm-1/start", "vm:write"},
 	{http.MethodPost, "/api/v1/compute/vms/vm-1/stop", "vm:write"},
 	{http.MethodPost, "/api/v1/compute/vms/vm-1/reboot", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/suspend", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/resume", "vm:write"},
 	{http.MethodGet, "/api/v1/compute/vms/vm-1/metrics", "vm:read"},
 	{http.MethodPost, "/api/v1/compute/vms/vm-1/migrate", "vm:write"},
 	{http.MethodPost, "/api/v1/compute/vms/vm-1/disks", "vm:write"},

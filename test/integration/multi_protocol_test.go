@@ -30,6 +30,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -152,7 +153,6 @@ func AllProtocols() []ProtocolType {
 // =============================================================================
 
 const (
-	EnvIntegrationTest      = "INTEGRATION_TEST"
 	EnvPlatformRESTEndpoint = "PLATFORM_REST_ENDPOINT"
 	EnvPlatformGRPCEndpoint = "PLATFORM_GRPC_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
@@ -432,8 +432,6 @@ type TestMatrixEntry struct {
 	Service  ServiceType
 	Protocol ProtocolType
 	Adapter  ProtocolAdapter
-	Skip     bool
-	Reason   string
 }
 
 // BuildTestMatrix creates the full test matrix for all services and protocols.
@@ -449,7 +447,6 @@ func BuildTestMatrix() []TestMatrixEntry {
 				Service:  service,
 				Protocol: protocol,
 				Adapter:  createAdapter(protocol),
-				Skip:     false,
 			}
 			matrix = append(matrix, entry)
 		}
@@ -505,24 +502,45 @@ func (e ErrServiceUnavailable) Error() string {
 	return fmt.Sprintf("service %s unavailable: %s", e.Service, e.Reason)
 }
 
-// ErrTestSkipped indicates a test was intentionally skipped.
-type ErrTestSkipped struct {
-	Reason string
+// ErrSurfaceMissing is returned when a transport answers that it has no
+// endpoint for an operation this suite covers: the adapter declared
+// surface.ErrNoSurface, or the server answered codes.Unimplemented.
+// build/docker/devcontainer/run-integration-tests.sh starts platformd with
+// every transport (REST, gRPC, QUIC, MCP and the Unix socket) and exports
+// their endpoints, and every service must implement every transport, so a
+// missing endpoint is a failure, not a reason to skip.
+type ErrSurfaceMissing struct {
+	Service   string
+	Operation string
+	Transport string
+	Cause     error
 }
 
-func (e ErrTestSkipped) Error() string {
-	return fmt.Sprintf("test skipped: %s", e.Reason)
+func (e ErrSurfaceMissing) Error() string {
+	return fmt.Sprintf("%s %s has no %s endpoint: %v (every service implements every transport; "+
+		"run the suite with build/docker/devcontainer/run-integration-tests.sh, whose platformd serves them all)",
+		e.Service, e.Operation, e.Transport, e.Cause)
+}
+
+func (e ErrSurfaceMissing) Unwrap() error {
+	return e.Cause
 }
 
 // =============================================================================
 // Test Helper Functions
 // =============================================================================
 
-// SkipIfNotIntegration skips the test if not running in integration mode.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
+// surfaceMissing returns ErrSurfaceMissing when err says the adapter's
+// transport has no endpoint for the operation, and nil otherwise.
+func surfaceMissing(adapter ProtocolAdapter, service, operation string, err error) error {
+	if !surface.IsNotImplemented(err) {
+		return nil
+	}
+	return ErrSurfaceMissing{
+		Service:   service,
+		Operation: operation,
+		Transport: protocolName(adapter),
+		Cause:     err,
 	}
 }
 
@@ -784,8 +802,6 @@ func createTenantAdapter(protocol ProtocolType) tenant.TenantCommands {
 // TestMultiProtocolMatrix runs the complete test matrix across all services
 // and protocols. This is the main entry point for multi-protocol testing.
 func TestMultiProtocolMatrix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -798,10 +814,6 @@ func TestMultiProtocolMatrix(t *testing.T) {
 		testName := formatTestName(entry.Service, entry.Protocol)
 
 		t.Run(testName, func(t *testing.T) {
-			if entry.Skip {
-				t.Skipf("Skipping: %s", entry.Reason)
-			}
-
 			// Setup adapter
 			gate.RequireSetup(t, string(entry.Protocol), entry.Adapter.Setup(ctx, config))
 			defer func() {
@@ -903,8 +915,8 @@ func testCAInfo(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	defer cmd.Teardown()
 
 	result, err := cmd.Info(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA Info not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "Info", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "CA Info should succeed")
 	require.NotNil(t, result, "CA Info result should not be nil")
@@ -928,8 +940,8 @@ func testCAIssueCertificate(t *testing.T, ctx context.Context, adapter ProtocolA
 	}
 
 	result, err := cmd.IssueCertificate(ctx, opts)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA IssueCertificate not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "IssueCertificate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "CA IssueCertificate should succeed")
 	require.NotNil(t, result, "IssueCertificate result should not be nil")
@@ -953,8 +965,8 @@ func testCAGetCertificate(t *testing.T, ctx context.Context, adapter ProtocolAda
 		Algorithm:  "RSA-2048",
 		ValidDays:  30,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA IssueCertificate not implemented, cannot test GetCertificate", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "IssueCertificate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "Issue prerequisite certificate")
 	require.NotNil(t, issueResult)
@@ -963,8 +975,8 @@ func testCAGetCertificate(t *testing.T, ctx context.Context, adapter ProtocolAda
 	result, err := cmd.GetCertificate(ctx, ca.GetCertificateOptions{
 		CommonName: cn,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA GetCertificate not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "GetCertificate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "CA GetCertificate should succeed")
 	require.NotNil(t, result, "GetCertificate result should not be nil")
@@ -980,8 +992,8 @@ func testCAListCertificates(t *testing.T, ctx context.Context, adapter ProtocolA
 	defer cmd.Teardown()
 
 	result, err := cmd.ListCertificates(ctx, ca.ListCertificatesOptions{Limit: 10})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA ListCertificates not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "ListCertificates", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "CA ListCertificates should succeed")
 	require.NotNil(t, result, "ListCertificates result should not be nil")
@@ -1002,8 +1014,8 @@ func testCARevokeCertificate(t *testing.T, ctx context.Context, adapter Protocol
 		Algorithm:  "RSA-2048",
 		ValidDays:  30,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA IssueCertificate not implemented, cannot test RevokeCertificate", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "IssueCertificate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "Issue prerequisite certificate")
 	require.NotNil(t, issueResult)
@@ -1013,8 +1025,8 @@ func testCARevokeCertificate(t *testing.T, ctx context.Context, adapter Protocol
 		CommonName: cn,
 		Reason:     ca.RevocationReasonSuperseded,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA RevokeCertificate not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "RevokeCertificate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "CA RevokeCertificate should succeed")
 	require.NotNil(t, result, "RevokeCertificate result should not be nil")
@@ -1029,8 +1041,8 @@ func testCACRL(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	defer cmd.Teardown()
 
 	result, err := cmd.GetCRL(ctx, ca.GetCRLOptions{IncludeEntries: true})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: CA GetCRL not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "CA", "GetCRL", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "CA GetCRL should succeed")
 	require.NotNil(t, result, "GetCRL result should not be nil")
@@ -1082,8 +1094,8 @@ func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	defer cmd.Teardown()
 
 	result, err := cmd.Resolve(ctx, "localhost", "A")
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: DNS Resolve A not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "DNS Resolve A should succeed")
 	require.NotNil(t, result, "Resolve A result should not be nil")
@@ -1097,8 +1109,8 @@ func testDNSResolveAAAA(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	defer cmd.Teardown()
 
 	result, err := cmd.Resolve(ctx, "localhost", "AAAA")
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: DNS Resolve AAAA not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "DNS Resolve AAAA should succeed")
 	require.NotNil(t, result, "Resolve AAAA result should not be nil")
@@ -1112,8 +1124,8 @@ func testDNSResolveTXT(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	defer cmd.Teardown()
 
 	result, err := cmd.Resolve(ctx, "localhost", "TXT")
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: DNS Resolve TXT not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "DNS Resolve TXT should succeed")
 	require.NotNil(t, result, "Resolve TXT result should not be nil")
@@ -1133,8 +1145,8 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 		Value:      "10.0.0.1",
 		TTL:        300,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: DNS AddRecord not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "DNS", "AddRecord", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "DNS AddRecord should succeed")
 	require.NotNil(t, result, "AddRecord result should not be nil")
@@ -1157,14 +1169,14 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 		Value:      "10.0.0.2",
 		TTL:        300,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: DNS AddRecord not implemented, cannot test DeleteRecord", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "DNS", "AddRecord", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "DNS AddRecord prerequisite should succeed")
 
 	result, err := cmd.DeleteRecord(ctx, recordName, "A")
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: DNS DeleteRecord not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "DNS", "DeleteRecord", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "DNS DeleteRecord should succeed")
 	require.NotNil(t, result, "DeleteRecord result should not be nil")
@@ -1234,8 +1246,8 @@ func setupIAMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 func testIAMAuthenticate(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	result, err := cmd.ListUsers(ctx, iam.ListUsersOptions{TenantID: "default", Limit: 1})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM ListUsers not implemented (auth test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "ListUsers", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "IAM ListUsers should succeed as authentication proof")
 	require.NotNil(t, result)
@@ -1247,8 +1259,8 @@ func testIAMCreateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	result, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
 		TenantID: "default", Email: email, Name: "Matrix Test User",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateUser not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "IAM CreateUser should succeed")
 	require.NotNil(t, result)
@@ -1266,8 +1278,8 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
 		TenantID: "default", Email: email, Name: "Matrix Get User",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateUser not implemented, cannot test GetUser", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -1277,8 +1289,8 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	})
 
 	result, err := cmd.GetUser(ctx, iam.GetUserOptions{TenantID: "default", UserID: createResult.User.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM GetUser not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "GetUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1289,8 +1301,8 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 func testIAMListUsers(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	result, err := cmd.ListUsers(ctx, iam.ListUsersOptions{TenantID: "default", Limit: 10})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM ListUsers not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "ListUsers", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1303,8 +1315,8 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
 		TenantID: "default", Email: email, Name: "Matrix Update User",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateUser not implemented, cannot test UpdateUser", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -1317,8 +1329,8 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	result, err := cmd.UpdateUser(ctx, iam.UpdateUserOptions{
 		TenantID: "default", UserID: createResult.User.ID, Name: updatedName,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM UpdateUser not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "UpdateUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1332,16 +1344,16 @@ func testIAMDeleteUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
 		TenantID: "default", Email: email, Name: "Matrix Delete User",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateUser not implemented, cannot test DeleteUser", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
 
 	result, err := cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: "default", UserID: createResult.User.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM DeleteUser not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "DeleteUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1355,8 +1367,8 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 		TenantID: "default", ID: roleID, Name: "Matrix Test Role",
 		Description: "Role created by matrix integration test", Permissions: []string{"read", "write"},
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateRole not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1370,8 +1382,8 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 
 	email := fmt.Sprintf("matrix-assign-%d@example.com", time.Now().UnixNano())
 	userResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{TenantID: "default", Email: email, Name: "Matrix Assign User"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateUser not implemented, cannot test AssignRole", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, userResult)
@@ -1384,8 +1396,8 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
 		TenantID: "default", ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"read"},
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CreateRole not implemented, cannot test AssignRole", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, roleResult)
@@ -1397,8 +1409,8 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: "default", UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM AssignRole not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1410,8 +1422,8 @@ func testIAMCheckPermission(t *testing.T, ctx context.Context, adapter ProtocolA
 	result, err := cmd.CheckPermission(ctx, iam.CheckPermissionOptions{
 		TenantID: "default", SubjectID: "test-user", Action: "read", Resource: "certificates",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: IAM CheckPermission not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "IAM", "CheckPermission", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1484,8 +1496,8 @@ func testKMSCreateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	result, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt", Name: "Matrix Test Key",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1499,16 +1511,16 @@ func testKMSGetKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test KeyGet", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
 	t.Cleanup(func() { _, _ = cmd.KeyDelete(ctx, genResult.KeyID, kms.KeyDeleteOptions{Force: true}) })
 
 	result, err := cmd.KeyGet(ctx, genResult.KeyID, 0)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGet not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGet", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1518,8 +1530,8 @@ func testKMSGetKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testKMSListKeys(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	result, err := cmd.KeyList(ctx, kms.KeyListOptions{Limit: 10})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyList not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyList", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1532,8 +1544,8 @@ func testKMSSign(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test Sign", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
@@ -1542,8 +1554,8 @@ func testKMSSign(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	result, err := cmd.CryptoSign(ctx, kms.CryptoSignOptions{
 		KeyID: genResult.KeyID, Message: []byte("matrix test message"), HashAlgorithm: "SHA-256",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS CryptoSign not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "CryptoSign", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1556,8 +1568,8 @@ func testKMSVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test Verify", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
@@ -1567,8 +1579,8 @@ func testKMSVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	signResult, err := cmd.CryptoSign(ctx, kms.CryptoSignOptions{
 		KeyID: genResult.KeyID, Message: message, HashAlgorithm: "SHA-256",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS CryptoSign not implemented, cannot test Verify", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "CryptoSign", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, signResult)
@@ -1576,8 +1588,8 @@ func testKMSVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	result, err := cmd.CryptoVerify(ctx, kms.CryptoVerifyOptions{
 		KeyID: genResult.KeyID, Message: message, Signature: signResult.Signature, HashAlgorithm: "SHA-256",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS CryptoVerify not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "CryptoVerify", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1590,8 +1602,8 @@ func testKMSEncrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test Encrypt", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
@@ -1600,8 +1612,8 @@ func testKMSEncrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	result, err := cmd.CryptoEncrypt(ctx, kms.CryptoEncryptOptions{
 		KeyID: genResult.KeyID, Plaintext: []byte("matrix test plaintext"),
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS CryptoEncrypt not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "CryptoEncrypt", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1614,8 +1626,8 @@ func testKMSDecrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test Decrypt", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
@@ -1623,8 +1635,8 @@ func testKMSDecrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 
 	plaintext := []byte("matrix test plaintext for roundtrip")
 	encResult, err := cmd.CryptoEncrypt(ctx, kms.CryptoEncryptOptions{KeyID: genResult.KeyID, Plaintext: plaintext})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS CryptoEncrypt not implemented, cannot test Decrypt", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "CryptoEncrypt", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, encResult)
@@ -1632,8 +1644,8 @@ func testKMSDecrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	result, err := cmd.CryptoDecrypt(ctx, kms.CryptoDecryptOptions{
 		KeyID: genResult.KeyID, Ciphertext: encResult.Ciphertext, Nonce: encResult.Nonce, KeyVersion: encResult.KeyVersion,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS CryptoDecrypt not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "CryptoDecrypt", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1646,16 +1658,16 @@ func testKMSRotateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test RotateKey", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
 	t.Cleanup(func() { _, _ = cmd.KeyDelete(ctx, genResult.KeyID, kms.KeyDeleteOptions{Force: true}) })
 
 	result, err := cmd.KeyRotate(ctx, genResult.KeyID, true)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyRotate not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyRotate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1668,15 +1680,15 @@ func testKMSDeleteKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
 		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyGenerate not implemented, cannot test DeleteKey", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, genResult)
 
 	result, err := cmd.KeyDelete(ctx, genResult.KeyID, kms.KeyDeleteOptions{Force: true})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: KMS KeyDelete not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "KMS", "KeyDelete", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1732,8 +1744,8 @@ func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 	cmd := setupSDNAdapter(t, ctx, adapter)
 	bridgeID := fmt.Sprintf("mx-br-%d", time.Now().UnixNano()%100000)
 	result, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Test Bridge", Type: "ovs"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeCreate not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1744,15 +1756,15 @@ func testSDNGetNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	cmd := setupSDNAdapter(t, ctx, adapter)
 	bridgeID := fmt.Sprintf("mx-get-%d", time.Now().UnixNano()%100000)
 	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Get Bridge", Type: "ovs"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeCreate not implemented, cannot test BridgeGet", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = cmd.BridgeDelete(ctx, bridgeID, sdn.BridgeDeleteOptions{Force: true}) })
 
 	result, err := cmd.BridgeGet(ctx, bridgeID)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeGet not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeGet", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1761,8 +1773,8 @@ func testSDNGetNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 func testSDNListNetworks(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
 	result, err := cmd.BridgeList(ctx, sdn.BridgeListOptions{Limit: 10})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeList not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeList", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1772,14 +1784,14 @@ func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 	cmd := setupSDNAdapter(t, ctx, adapter)
 	bridgeID := fmt.Sprintf("mx-del-%d", time.Now().UnixNano()%100000)
 	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Delete Bridge", Type: "ovs"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeCreate not implemented, cannot test BridgeDelete", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 
 	result, err := cmd.BridgeDelete(ctx, bridgeID, sdn.BridgeDeleteOptions{})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeDelete not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeDelete", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1789,8 +1801,8 @@ func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	cmd := setupSDNAdapter(t, ctx, adapter)
 	bridgeID := fmt.Sprintf("mx-route-%d", time.Now().UnixNano()%100000)
 	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Route Bridge", Type: "ovs"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeCreate not implemented, cannot test FlowAdd", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = cmd.BridgeDelete(ctx, bridgeID, sdn.BridgeDeleteOptions{Force: true}) })
@@ -1799,8 +1811,8 @@ func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 		BridgeID: bridgeID, Priority: 100,
 		Match: sdn.FlowMatch{InPort: 1}, Actions: []sdn.FlowAction{{Type: "output", Port: 2}},
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN FlowAdd not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "FlowAdd", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1810,8 +1822,8 @@ func testSDNRemoveRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	cmd := setupSDNAdapter(t, ctx, adapter)
 	bridgeID := fmt.Sprintf("mx-rmrt-%d", time.Now().UnixNano()%100000)
 	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix RemoveRoute Bridge", Type: "ovs"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN BridgeCreate not implemented, cannot test FlowDelete", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = cmd.BridgeDelete(ctx, bridgeID, sdn.BridgeDeleteOptions{Force: true}) })
@@ -1820,15 +1832,15 @@ func testSDNRemoveRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 		BridgeID: bridgeID, Priority: 100,
 		Match: sdn.FlowMatch{InPort: 1}, Actions: []sdn.FlowAction{{Type: "output", Port: 2}},
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN FlowAdd not implemented, cannot test FlowDelete", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "FlowAdd", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, flowResult)
 
 	result, err := cmd.FlowDelete(ctx, bridgeID, flowResult.FlowID)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: SDN FlowDelete not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "SDN", "FlowDelete", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1891,8 +1903,8 @@ func testVTPMCreate(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	result, err := cmd.CreateBundle(ctx, vtpm.CreateBundleOptions{
 		Mode: pkgvtpm.BundleModePreAssigned, Hostname: hostname, EKAlgorithm: pkgvtpm.EKAlgorithmRSA,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM CreateBundle not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "CreateBundle", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1909,8 +1921,8 @@ func testVTPMGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	createResult, err := cmd.CreateBundle(ctx, vtpm.CreateBundleOptions{
 		Mode: pkgvtpm.BundleModePreAssigned, Hostname: hostname, EKAlgorithm: pkgvtpm.EKAlgorithmRSA,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM CreateBundle not implemented, cannot test GetBundle", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "CreateBundle", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -1918,8 +1930,8 @@ func testVTPMGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	t.Cleanup(func() { _, _ = cmd.DeleteBundle(ctx, vtpm.DeleteBundleOptions{ID: createResult.Bundle.ID}) })
 
 	result, err := cmd.GetBundle(ctx, vtpm.GetBundleOptions{ID: createResult.Bundle.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM GetBundle not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "GetBundle", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1930,8 +1942,8 @@ func testVTPMGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testVTPMList(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupVTPMAdapter(t, ctx, adapter)
 	result, err := cmd.ListBundles(ctx, vtpm.ListBundlesOptions{})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM ListBundles not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "ListBundles", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1943,16 +1955,16 @@ func testVTPMDelete(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	createResult, err := cmd.CreateBundle(ctx, vtpm.CreateBundleOptions{
 		Mode: pkgvtpm.BundleModePreAssigned, Hostname: hostname, EKAlgorithm: pkgvtpm.EKAlgorithmRSA,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM CreateBundle not implemented, cannot test DeleteBundle", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "CreateBundle", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.Bundle)
 
 	result, err := cmd.DeleteBundle(ctx, vtpm.DeleteBundleOptions{ID: createResult.Bundle.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM DeleteBundle not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "DeleteBundle", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1961,8 +1973,8 @@ func testVTPMDelete(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 func testVTPMQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupVTPMAdapter(t, ctx, adapter)
 	result, err := cmd.ListBundles(ctx, vtpm.ListBundlesOptions{})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM service not available for quote test", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "ListBundles", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "vTPM service should be responsive for quote operations")
 	require.NotNil(t, result)
@@ -1971,8 +1983,8 @@ func testVTPMQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testVTPMSeal(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupVTPMAdapter(t, ctx, adapter)
 	result, err := cmd.ListBundles(ctx, vtpm.ListBundlesOptions{})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM service not available for seal test", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "ListBundles", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "vTPM service should be responsive for seal operations")
 	require.NotNil(t, result)
@@ -1981,8 +1993,8 @@ func testVTPMSeal(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testVTPMUnseal(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupVTPMAdapter(t, ctx, adapter)
 	result, err := cmd.ListBundles(ctx, vtpm.ListBundlesOptions{})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: vTPM service not available for unseal test", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "vTPM", "ListBundles", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err, "vTPM service should be responsive for unseal operations")
 	require.NotNil(t, result)
@@ -2040,8 +2052,8 @@ func testDeviceRegister(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	result, err := cmd.RegisterDevice(ctx, device.RegisterDeviceOptions{
 		TenantID: "default", Serial: serial, Model: "matrix-test-device",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device RegisterDevice not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "RegisterDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2054,8 +2066,8 @@ func testDeviceGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	regResult, err := cmd.RegisterDevice(ctx, device.RegisterDeviceOptions{
 		TenantID: "default", Serial: serial, Model: "matrix-get-device",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device RegisterDevice not implemented, cannot test GetDevice", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "RegisterDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, regResult)
@@ -2064,8 +2076,8 @@ func testDeviceGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	result, err := cmd.FindBySerial(ctx, device.FindBySerialOptions{
 		TenantID: "default", Serial: serial,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device FindBySerial not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "FindBySerial", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2074,8 +2086,8 @@ func testDeviceGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testDeviceList(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDeviceAdapter(t, ctx, adapter)
 	result, err := cmd.ListDevices(ctx, device.ListDevicesOptions{TenantID: "default"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device ListDevices not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "ListDevices", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2087,8 +2099,8 @@ func testDeviceUpdate(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	regResult, err := cmd.RegisterDevice(ctx, device.RegisterDeviceOptions{
 		TenantID: "default", Serial: serial, Model: "matrix-update-device",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device RegisterDevice not implemented, cannot test UpdateDevice", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "RegisterDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, regResult)
@@ -2097,8 +2109,8 @@ func testDeviceUpdate(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	result, err := cmd.UpdateDevice(ctx, device.UpdateDeviceOptions{
 		TenantID: "default", DeviceID: fmt.Sprintf("%d", regResult.Device.ID), Model: "updated-model",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device UpdateDevice not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "UpdateDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2110,8 +2122,8 @@ func testDeviceDelete(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	regResult, err := cmd.RegisterDevice(ctx, device.RegisterDeviceOptions{
 		TenantID: "default", Serial: serial, Model: "matrix-delete-device",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device RegisterDevice not implemented, cannot test DeleteDevice", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "RegisterDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, regResult)
@@ -2120,8 +2132,8 @@ func testDeviceDelete(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	result, err := cmd.DeleteDevice(ctx, device.DeleteDeviceOptions{
 		TenantID: "default", DeviceID: fmt.Sprintf("%d", regResult.Device.ID),
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device DeleteDevice not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "DeleteDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2130,8 +2142,8 @@ func testDeviceDelete(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 func testDeviceStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDeviceAdapter(t, ctx, adapter)
 	result, err := cmd.ListDevices(ctx, device.ListDevicesOptions{TenantID: "default"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Device service not available for status test", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Device", "ListDevices", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2181,8 +2193,12 @@ func setupAttestationAdapter(t *testing.T, ctx context.Context, adapter Protocol
 func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-test"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Attestation GetVMIdentity not implemented", protocolName(adapter))
+	var gap surface.ErrNoSurface
+	if errors.As(err, &gap) {
+		t.Skipf("%s: %v", protocolName(adapter), gap)
+	}
+	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+		t.Fatal(missing)
 	}
 	// A not-found error is acceptable; it means the service is reachable
 }
@@ -2190,32 +2206,48 @@ func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter Prot
 func testAttestationSubmitQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-submit-test"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Attestation service not available for quote submission", protocolName(adapter))
+	var gap surface.ErrNoSurface
+	if errors.As(err, &gap) {
+		t.Skipf("%s: %v", protocolName(adapter), gap)
+	}
+	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+		t.Fatal(missing)
 	}
 }
 
 func testAttestationVerifyQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-verify-test"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Attestation service not available for quote verification", protocolName(adapter))
+	var gap surface.ErrNoSurface
+	if errors.As(err, &gap) {
+		t.Skipf("%s: %v", protocolName(adapter), gap)
+	}
+	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+		t.Fatal(missing)
 	}
 }
 
 func testAttestationGetStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-status-test"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Attestation service not available for status test", protocolName(adapter))
+	var gap surface.ErrNoSurface
+	if errors.As(err, &gap) {
+		t.Skipf("%s: %v", protocolName(adapter), gap)
+	}
+	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+		t.Fatal(missing)
 	}
 }
 
 func testAttestationPolicyEvaluation(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-policy-test"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Attestation service not available for policy evaluation", protocolName(adapter))
+	var gap surface.ErrNoSurface
+	if errors.As(err, &gap) {
+		t.Skipf("%s: %v", protocolName(adapter), gap)
+	}
+	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+		t.Fatal(missing)
 	}
 }
 
@@ -2263,8 +2295,8 @@ func setupDaemonAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 func testPlatformHealth(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDaemonAdapter(t, ctx, adapter)
 	result, err := cmd.Health(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Daemon Health not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Daemon", "Health", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2274,8 +2306,8 @@ func testPlatformHealth(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 func testPlatformStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDaemonAdapter(t, ctx, adapter)
 	result, err := cmd.Status(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Daemon Status not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Daemon", "Status", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2286,8 +2318,8 @@ func testPlatformStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 func testPlatformVersion(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDaemonAdapter(t, ctx, adapter)
 	result, err := cmd.Version(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Daemon Version not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Daemon", "Version", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2297,8 +2329,8 @@ func testPlatformVersion(t *testing.T, ctx context.Context, adapter ProtocolAdap
 func testPlatformMetrics(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDaemonAdapter(t, ctx, adapter)
 	result, err := cmd.Health(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Daemon Health not implemented (metrics test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Daemon", "Health", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2311,8 +2343,8 @@ func testPlatformMetrics(t *testing.T, ctx context.Context, adapter ProtocolAdap
 func testPlatformConfiguration(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupDaemonAdapter(t, ctx, adapter)
 	result, err := cmd.ListServices(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Daemon ListServices not implemented (configuration test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Daemon", "ListServices", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2363,8 +2395,8 @@ func setupPXEAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 func testPXEGetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupPXEAdapter(t, ctx, adapter)
 	result, err := cmd.GetStatus(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: PXE GetStatus not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2374,8 +2406,8 @@ func testPXESetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAda
 	cmd := setupPXEAdapter(t, ctx, adapter)
 	mac := fmt.Sprintf("00:11:22:33:%02x:%02x", time.Now().UnixNano()%256, (time.Now().UnixNano()/256)%256)
 	result, err := cmd.RegisterDevice(ctx, pxe.RegisterDeviceOptions{MACAddress: mac, PortID: "test-port"})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: PXE RegisterDevice not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "PXE", "RegisterDevice", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2387,8 +2419,8 @@ func testPXESetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAda
 func testPXEListBootImages(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupPXEAdapter(t, ctx, adapter)
 	result, err := cmd.ListDevices(ctx, pxe.ListDevicesOptions{})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: PXE ListDevices not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "PXE", "ListDevices", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2397,8 +2429,8 @@ func testPXEListBootImages(t *testing.T, ctx context.Context, adapter ProtocolAd
 func testPXEUploadBootImage(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupPXEAdapter(t, ctx, adapter)
 	result, err := cmd.GetStatus(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: PXE service not available for boot image upload test", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2407,8 +2439,8 @@ func testPXEUploadBootImage(t *testing.T, ctx context.Context, adapter ProtocolA
 func testPXEDeleteBootImage(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupPXEAdapter(t, ctx, adapter)
 	result, err := cmd.GetStatus(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: PXE service not available for boot image deletion test", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2463,8 +2495,8 @@ func setupTPMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 func testIDevIDGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTPMAdapter(t, ctx, adapter)
 	result, err := cmd.Info(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: TPM Info not implemented (IDevID test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "TPM", "Info", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2473,8 +2505,8 @@ func testIDevIDGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testIDevIDCreate(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTPMAdapter(t, ctx, adapter)
 	result, err := cmd.EKCertificate(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: TPM EKCertificate not implemented (IDevID create test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "TPM", "EKCertificate", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2483,8 +2515,8 @@ func testIDevIDCreate(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 func testIDevIDVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTPMAdapter(t, ctx, adapter)
 	result, err := cmd.Info(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: TPM Info not implemented (IDevID verify test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "TPM", "Info", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2493,8 +2525,8 @@ func testIDevIDVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 func testIDevIDRevoke(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTPMAdapter(t, ctx, adapter)
 	result, err := cmd.Info(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: TPM Info not implemented (IDevID revoke test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "TPM", "Info", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2503,8 +2535,8 @@ func testIDevIDRevoke(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 func testLDevIDGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTPMAdapter(t, ctx, adapter)
 	result, err := cmd.Info(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: TPM Info not implemented (LDevID get test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "TPM", "Info", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2513,8 +2545,8 @@ func testLDevIDGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testLDevIDCreate(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTPMAdapter(t, ctx, adapter)
 	result, err := cmd.Info(ctx)
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: TPM Info not implemented (LDevID create test)", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "TPM", "Info", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2578,8 +2610,8 @@ func testTenantCreate(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 		Name:        tenantName,
 		DisplayName: "Matrix Integration Test Tenant",
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant CreateTenant not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "CreateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2594,8 +2626,8 @@ func testTenantGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTenantAdapter(t, ctx, adapter)
 	tenantName := fmt.Sprintf("matrix-get-%d", time.Now().UnixNano())
 	createResult, err := cmd.CreateTenant(ctx, tenant.CreateTenantOptions{Name: tenantName})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant CreateTenant not implemented, cannot test GetTenant", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "CreateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -2603,8 +2635,8 @@ func testTenantGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	t.Cleanup(func() { _, _ = cmd.DeleteTenant(ctx, tenant.DeleteTenantOptions{TenantID: createResult.Tenant.ID}) })
 
 	result, err := cmd.GetTenant(ctx, tenant.GetTenantOptions{TenantID: createResult.Tenant.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant GetTenant not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "GetTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2615,8 +2647,8 @@ func testTenantGet(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 func testTenantList(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupTenantAdapter(t, ctx, adapter)
 	result, err := cmd.ListTenants(ctx, tenant.ListTenantsOptions{Limit: 10})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant ListTenants not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "ListTenants", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2626,8 +2658,8 @@ func testTenantUpdate(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupTenantAdapter(t, ctx, adapter)
 	tenantName := fmt.Sprintf("matrix-upd-%d", time.Now().UnixNano())
 	createResult, err := cmd.CreateTenant(ctx, tenant.CreateTenantOptions{Name: tenantName})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant CreateTenant not implemented, cannot test UpdateTenant", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "CreateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -2638,8 +2670,8 @@ func testTenantUpdate(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	result, err := cmd.UpdateTenant(ctx, tenant.UpdateTenantOptions{
 		TenantID: createResult.Tenant.ID, DisplayName: &updatedDisplay,
 	})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant UpdateTenant not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "UpdateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2649,16 +2681,16 @@ func testTenantDelete(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupTenantAdapter(t, ctx, adapter)
 	tenantName := fmt.Sprintf("matrix-del-%d", time.Now().UnixNano())
 	createResult, err := cmd.CreateTenant(ctx, tenant.CreateTenantOptions{Name: tenantName})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant CreateTenant not implemented, cannot test DeleteTenant", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "CreateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.Tenant)
 
 	result, err := cmd.DeleteTenant(ctx, tenant.DeleteTenantOptions{TenantID: createResult.Tenant.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant DeleteTenant not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "DeleteTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2668,8 +2700,8 @@ func testTenantQuota(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	cmd := setupTenantAdapter(t, ctx, adapter)
 	tenantName := fmt.Sprintf("matrix-quota-%d", time.Now().UnixNano())
 	createResult, err := cmd.CreateTenant(ctx, tenant.CreateTenantOptions{Name: tenantName})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant CreateTenant not implemented, cannot test GetQuotas", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "CreateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -2677,8 +2709,8 @@ func testTenantQuota(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Cleanup(func() { _, _ = cmd.DeleteTenant(ctx, tenant.DeleteTenantOptions{TenantID: createResult.Tenant.ID}) })
 
 	result, err := cmd.GetQuotas(ctx, tenant.GetQuotasOptions{TenantID: createResult.Tenant.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant GetQuotas not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "GetQuotas", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2688,8 +2720,8 @@ func testTenantUsage(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	cmd := setupTenantAdapter(t, ctx, adapter)
 	tenantName := fmt.Sprintf("matrix-usage-%d", time.Now().UnixNano())
 	createResult, err := cmd.CreateTenant(ctx, tenant.CreateTenantOptions{Name: tenantName})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant CreateTenant not implemented, cannot test GetUsage", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "CreateTenant", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
@@ -2697,8 +2729,8 @@ func testTenantUsage(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Cleanup(func() { _, _ = cmd.DeleteTenant(ctx, tenant.DeleteTenantOptions{TenantID: createResult.Tenant.ID}) })
 
 	result, err := cmd.GetUsage(ctx, tenant.GetUsageOptions{TenantID: createResult.Tenant.ID})
-	if surface.IsNotImplemented(err) {
-		t.Skipf("%s: Tenant GetUsage not implemented", protocolName(adapter))
+	if missing := surfaceMissing(adapter, "Tenant", "GetUsage", err); missing != nil {
+		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -2711,8 +2743,6 @@ func testTenantUsage(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 // TestServiceProtocolByName runs tests for a specific service across all protocols.
 // Usage: go test -run "TestServiceProtocolByName/ca" -tags=integration
 func TestServiceProtocolByName(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
@@ -2748,8 +2778,6 @@ func TestServiceProtocolByName(t *testing.T) {
 // TestProtocolByName runs tests for a specific protocol across all services.
 // Usage: go test -run "TestProtocolByName/REST" -tags=integration
 func TestProtocolByName(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 

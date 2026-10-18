@@ -64,7 +64,7 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 |--------|-------------|
 | `GetAK` | Get Attestation Key |
 | `CreateAK` | Create Attestation Key |
-| `DeleteAK` | Delete Attestation Key |
+| `DeleteAK` | Refused with `FailedPrecondition`: the AK is the IAK, which is not deleted |
 
 ### Attestation Operations
 
@@ -357,7 +357,8 @@ All errors follow standard gRPC status codes.
 The socket serves the same `IDevIDService` as gRPC, so `DeleteIDevID` and
 `DeleteIAK` are refused with `FailedPrecondition` until the owner rules on
 eviction: the key stays in the TPM and nothing is changed — no key, no
-certificate, no state (#304). `DeleteIDevIDCertificate` and
+certificate, no state (#304). `TPMService.DeleteAK` names the same IAK and
+is refused the same way (#704). `DeleteIDevIDCertificate` and
 `DeleteIAKCertificate` delete the certificates.
 
 ```go

@@ -37,7 +37,7 @@ The signing process:
 | PE32/PE32+ Support | Both 32-bit and 64-bit PE formats |
 | Signature Verification | Verify existing Authenticode signatures |
 | Certificate Extraction | Extract signing certificate from signed binaries |
-| RFC3161 Timestamps | Optional timestamping support (placeholder) |
+| RFC3161 Timestamps | Optional TSA countersignature, embedded and verified; a failed stamp fails signing |
 
 ## Architecture
 

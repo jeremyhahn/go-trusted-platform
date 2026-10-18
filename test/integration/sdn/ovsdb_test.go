@@ -58,7 +58,7 @@ type Interface struct {
 
 // TestOVSDBConnection tests basic OVSDB connectivity
 func TestOVSDBConnection(t *testing.T) {
-	skipIfOVSDBConnectFails(t, ovsdbAddress)
+	requireOVSDBAt(t, ovsdbAddress)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -78,7 +78,7 @@ func TestOVSDBConnection(t *testing.T) {
 
 	err = ovs.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB at %s: %v", ovsdbAddress, err)
+		t.Fatal(missing("a connection to OVSDB at "+ovsdbAddress, err))
 	}
 	defer ovs.Close()
 
@@ -98,7 +98,7 @@ func TestOVSDBConnection(t *testing.T) {
 
 // TestOVSDBOperations tests basic CRUD operations
 func TestOVSDBOperations(t *testing.T) {
-	skipIfOVSDBConnectFails(t, ovsdbAddress)
+	requireOVSDBAt(t, ovsdbAddress)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -118,7 +118,7 @@ func TestOVSDBOperations(t *testing.T) {
 
 	err = ovs.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB at %s: %v", ovsdbAddress, err)
+		t.Fatal(missing("a connection to OVSDB at "+ovsdbAddress, err))
 	}
 	defer ovs.Close()
 
@@ -139,7 +139,7 @@ func TestOVSDBOperations(t *testing.T) {
 
 // TestOVSDBTransactions tests transaction support
 func TestOVSDBTransactions(t *testing.T) {
-	skipIfOVSDBConnectFails(t, ovsdbAddress)
+	requireOVSDBAt(t, ovsdbAddress)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -159,7 +159,7 @@ func TestOVSDBTransactions(t *testing.T) {
 
 	err = ovs.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB at %s: %v", ovsdbAddress, err)
+		t.Fatal(missing("a connection to OVSDB at "+ovsdbAddress, err))
 	}
 	defer ovs.Close()
 
@@ -181,7 +181,7 @@ func TestOVSDBTransactions(t *testing.T) {
 
 // TestOVSDBReconnection tests reconnection handling
 func TestOVSDBReconnection(t *testing.T) {
-	skipIfOVSDBConnectFails(t, ovsdbAddress)
+	requireOVSDBAt(t, ovsdbAddress)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -199,7 +199,7 @@ func TestOVSDBReconnection(t *testing.T) {
 
 	err = ovs.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB at %s: %v", ovsdbAddress, err)
+		t.Fatal(missing("a connection to OVSDB at "+ovsdbAddress, err))
 	}
 	defer ovs.Close()
 
@@ -218,7 +218,7 @@ func TestOVSDBReconnection(t *testing.T) {
 	// Reconnect
 	err = ovs.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping reconnection test: cannot reconnect to OVSDB: %v", err)
+		t.Fatalf("cannot reconnect to OVSDB at %s after a successful connect: %v", ovsdbAddress, err)
 	}
 	assert.True(t, ovs.Connected(), "Client should be reconnected")
 }
