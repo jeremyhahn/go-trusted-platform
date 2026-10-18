@@ -16,11 +16,15 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -121,6 +125,20 @@ func TestRESTDeviceAttest_UnknownDeviceIsNotAVerdict(t *testing.T) {
 		"a device that does not exist cannot be evaluated, so it is an error, not verified=false")
 }
 
+// Evidence with no PCR values cannot be evaluated; that is a 400 the
+// caller can correct, not a 500 (#949). The body is the integration
+// suite's forged shape.
+func TestRESTDeviceAttest_UnusableEvidenceIsBadRequest(t *testing.T) {
+	f := newQuoteFixture(t)
+	router := restAttestRouter(t, f)
+
+	code, body := postRESTAttest(t, router, f.device.ID,
+		[]byte(`{"quote":"eA==","signature":"eA==","nonce":"eA=="}`))
+
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.Contains(t, fmt.Sprint(body), "pcrs are required")
+}
+
 // quicAttestHandler builds the live QUIC dispatcher's device handler over
 // the fixture's real DeviceGRPCService.
 func quicAttestHandler(t *testing.T, f *quoteFixture) *QUICServiceHandler {
@@ -161,6 +179,38 @@ func TestQUICDeviceAttest_RefusesForgedQuote(t *testing.T) {
 	assert.False(t, decoded.GetSignatureValid())
 	assert.Equal(t, "failed", decoded.GetAttestationStatus())
 	assert.NotEmpty(t, decoded.GetMessage())
+}
+
+// QUIC answers evidence with no PCR values with StatusInvalidArgument, the
+// status REST's 400 and gRPC's InvalidArgument carry (#949).
+func TestQUICDeviceAttest_UnusableEvidenceIsInvalidArgument(t *testing.T) {
+	f := newQuoteFixture(t)
+	h := quicAttestHandler(t, f)
+
+	payload, err := quicwire.EncodePayload(&platformv1.AttestDeviceRequest{
+		DeviceId: itoa(f.device.ID),
+		Evidence: []byte(`{"quote":"eA==","signature":"eA==","nonce":"eA=="}`),
+	})
+	require.NoError(t, err)
+	resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpDeviceAttest,
+		Payload: payload,
+	})
+
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+}
+
+// TestMCPDeviceAttest_UnusableEvidenceIsInvalidArgument pins the MCP class:
+// the MCP provider hands back the verifier's typed error, and MCP classifies
+// it through errclass, so the error itself must report InvalidArgument.
+func TestMCPDeviceAttest_UnusableEvidenceIsInvalidArgument(t *testing.T) {
+	err := fmt.Errorf("device_attest: %w", ErrInvalidAttestationEvidence{Reason: "pcrs are required"})
+	if got := mcpErrorClass(err); got != codes.InvalidArgument {
+		t.Fatalf("MCP class = %v, want InvalidArgument", got)
+	}
+	if got := mcpErrorClass(ErrDeviceOperationFailed{Operation: "attest", Cause: errors.New("store down")}); got == codes.InvalidArgument {
+		t.Fatalf("an operation failure must not be classified InvalidArgument")
+	}
 }
 
 func TestQUICDeviceAttest_AcceptsGenuineQuote(t *testing.T) {

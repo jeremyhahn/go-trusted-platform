@@ -169,6 +169,14 @@ func assertRESTLikeGRPC(t *testing.T, op tenantParityOp, caller, subject string,
 	_, grpcErr := grpcSide.callGRPC(op, caller, subject)
 	restCode, restRefusal := restSide.callREST(t, op, caller, subject)
 
+	if !wantRefused && op.gap {
+		// Admitted, then refused as the declared gap
+		// (docs/tenant/engineering.md §6).
+		require.Equal(t, codes.Unimplemented, status.Code(grpcErr), "gRPC admits %s: %v", caller, grpcErr)
+		assert.Equal(t, http.StatusNotImplemented, restCode, "REST admits %s: %s", caller, restRefusal)
+		assert.Equal(t, before, restSide.snapshot(), "REST changed nothing")
+		return
+	}
 	if !wantRefused {
 		require.NoError(t, grpcErr, "gRPC admits %s", caller)
 		assert.Less(t, restCode, http.StatusMultipleChoices, "REST admits %s: %s", caller, restRefusal)

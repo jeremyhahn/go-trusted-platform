@@ -707,19 +707,6 @@ func (e ErrMCPServerNotConfigured) Error() string {
 }
 
 // =============================================================================
-// vTPM Service Errors
-// =============================================================================
-
-// ErrVTPMOperationNotImplemented is returned when a vTPM operation is not yet implemented
-type ErrVTPMOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrVTPMOperationNotImplemented) Error() string {
-	return fmt.Sprintf("vTPM operation not implemented: %s", e.Operation)
-}
-
-// =============================================================================
 // Device Service Errors
 // =============================================================================
 
@@ -848,6 +835,12 @@ type ErrInvalidAttestationEvidence struct {
 
 func (e ErrInvalidAttestationEvidence) Error() string {
 	return fmt.Sprintf("invalid attestation evidence: %s", e.Reason)
+}
+
+// GRPCStatus classifies unusable evidence as the caller's fault on every
+// transport, including MCP, which classifies the typed error it is handed.
+func (e ErrInvalidAttestationEvidence) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrDeviceOperationFailed is returned when a device operation fails
@@ -1536,17 +1529,6 @@ func (e ErrKMSDataKeyGenerationFailed) Error() string {
 
 func (e ErrKMSDataKeyGenerationFailed) Unwrap() error {
 	return e.Cause
-}
-
-// ErrKMSOperationNotImplemented is returned when a KMS operation is not yet
-// implemented in the backend adapter. This allows partial KMS service wiring
-// where implemented operations work while unimplemented ones return a clear error.
-type ErrKMSOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrKMSOperationNotImplemented) Error() string {
-	return fmt.Sprintf("KMS operation not implemented: %s", e.Operation)
 }
 
 // ErrKMSSDKGap is returned by a KMS, crypto or DEK RPC the go-quicbaas SDK

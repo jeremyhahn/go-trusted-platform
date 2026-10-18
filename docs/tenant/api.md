@@ -28,17 +28,25 @@ MCP: 19 tools in two naming families — see §5.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | List tenants | `GET /api/v1/tenants` | `ListTenants` | `0xDB`–`0xEB` range | `tenant_list` | ✅ |
-| Create tenant | `POST /api/v1/tenants` | `CreateTenant` | as above | `tenant_create` | ✅ |
+| Create tenant | `POST /api/v1/tenants` | `CreateTenant` | as above | `tenant_create` | declared gap¹ |
 | Get tenant | `GET /api/v1/tenants/{id}` | `GetTenant` | as above | `tenant_get` | ✅ |
 | Get tenant by name | `GET /api/v1/tenants/by-name/{name}` | `GetTenantByName` | as above | `tenant_get_by_name` | ✅ |
-| Update tenant | `PUT /api/v1/tenants/{id}` | `UpdateTenant` | as above | `tenant_update` | ✅ |
+| Update tenant | `PUT /api/v1/tenants/{id}` | `UpdateTenant` | as above | `tenant_update` | declared gap¹ |
 | Delete tenant | `DELETE /api/v1/tenants/{id}` | `DeleteTenant` | as above | `tenant_delete` | ✅ |
-| Suspend tenant | `POST /api/v1/tenants/{id}/suspend` | `SuspendTenant` | as above | `tenant_suspend` | ✅ |
-| Resume tenant | `POST /api/v1/tenants/{id}/resume` | `ResumeTenant` | as above | `tenant_resume` | ✅ |
+| Suspend tenant | `POST /api/v1/tenants/{id}/suspend` | `SuspendTenant` | as above | `tenant_suspend` | declared gap¹ |
+| Resume tenant | `POST /api/v1/tenants/{id}/resume` | `ResumeTenant` | as above | `tenant_resume` | declared gap¹ |
 | Sync tenants | `POST /api/v1/tenants/sync` | `Sync` | as above | `tenant_sync` | ✅ |
 
 `by-name` is a separate route because tenant IDs and tenant names are different
 keys; `{id}` will not match a name.
+
+¹ **Declared gap until a go-quicbaas tag persists the IAM tenant's metadata and
+status.** The pinned go-quicbaas IAM tenant update stores neither, so the
+display name, state, quota limits, labels and annotations cannot be stored
+(`docs/tenant/engineering.md` §6). On every transport a write that would change
+one of them is refused with `ErrTenantFieldNotPersisted`, naming the fields:
+`Unimplemented` on gRPC, Unix, QUIC and MCP, `501` on REST. A create with only a
+name, or a write that restates the stored values, succeeds.
 
 ---
 
@@ -47,7 +55,7 @@ keys; `{id}` will not match a name.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Get quotas | `GET /api/v1/tenants/{id}/quotas` | `GetQuotas` | `0xDB`–`0xEB` | `tenant_get_quotas` | ✅ |
-| Update quotas | `PUT /api/v1/tenants/{id}/quotas` | `UpdateQuotas` | as above | `tenant_update_quotas` | ✅ |
+| Update quotas | `PUT /api/v1/tenants/{id}/quotas` | `UpdateQuotas` | as above | `tenant_update_quotas` | declared gap¹ |
 | Get usage | `GET /api/v1/tenants/{id}/usage` | `GetUsage` | as above | `tenant_get_usage` | ✅ |
 | Check quota | `POST /api/v1/tenants/{id}/quota-check` | `CheckQuota` | as above | `tenant_check_quota` | ✅ |
 
@@ -55,7 +63,9 @@ keys; `{id}` will not match a name.
 body: it answers "would this fit", not "what is the current usage". That is
 `usage`.
 
-**An update changes limits, never usage (#304).** `UpdateQuotas` starts from
+**An update changes limits, never usage (#304).** Until the declared gap of §2
+closes, a limit other than the configured default is refused with
+`ErrTenantFieldNotPersisted`. `UpdateQuotas` starts from
 the tenant's current quotas and overwrites only the sections the request
 carries; a section left out keeps its limits. The manager takes only limits
 from any request, so the usage counters survive every update. The gRPC
@@ -335,7 +345,7 @@ control plane, which #159 additionally restricts to the system tenant. See
 | `0x08` | `StatusResourceExhausted` | 429 | `ErrQuotaExceeded`, `ErrResourceLimitReached` |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrConfigValidation` |
 | `0x0A` | `StatusUnavailable` | 503 | Tenant service not wired in |
-| `0x0B` | `StatusNotImplemented` | 501 | `ErrBarrierNotSupported` |
+| `0x0B` | `StatusNotImplemented` | 501 | `ErrBarrierNotSupported`, `ErrTenantFieldNotPersisted` (§2 declared gap) |
 
 `ErrInvalidState` and `ErrInvalidTransition` map to 409: the request is
 well-formed and the tenant is in a state that does not permit it. Same-state

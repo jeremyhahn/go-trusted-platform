@@ -107,6 +107,40 @@ func TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests(t *testing.T) 
 	}
 }
 
+// Evidence the verifier cannot use is the caller's fault, so it is
+// InvalidArgument -- not Internal, which tells the caller to retry a
+// request that can never succeed (#949). The last case is the forged
+// shape the integration suite sends: a quote, signature and nonce but no
+// PCR values.
+func TestDeviceGRPCService_AttestDevice_UnusableEvidenceIsInvalidArgument(t *testing.T) {
+	f := newQuoteFixture(t)
+	svc := f.grpcService(t)
+
+	tests := []struct {
+		name     string
+		evidence string
+		reason   string
+	}{
+		{"not json", `not json`, "JSON-encoded"},
+		{"no quote", `{"signature":"eA==","nonce":"eA=="}`, "quote is required"},
+		{"no signature", `{"quote":"eA==","nonce":"eA=="}`, "signature is required"},
+		{"no nonce", `{"quote":"eA==","signature":"eA=="}`, "nonce is required"},
+		{"no pcrs", `{"quote":"eA==","signature":"eA==","nonce":"eA=="}`, "pcrs are required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
+				DeviceId: itoa(f.device.ID),
+				Evidence: []byte(tt.evidence),
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Contains(t, status.Convert(err).Message(), tt.reason)
+		})
+	}
+}
+
 func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	f := newQuoteFixture(t)
 

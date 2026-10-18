@@ -953,6 +953,11 @@ func (s *TenantGRPCServer) toGRPCError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	var notPersisted tenant.ErrTenantFieldNotPersisted
+	if errors.As(err, &notPersisted) {
+		return status.Error(codes.Unimplemented, err.Error())
+	}
+
 	// Default to internal error for unknown error types
 	return status.Error(codes.Internal, err.Error())
 }

@@ -55,14 +55,6 @@ func TestErrDeviceProfileServiceNotAvailable(t *testing.T) {
 	}
 }
 
-func TestErrKMSOperationNotImplemented(t *testing.T) {
-	err := ErrKMSOperationNotImplemented{Operation: "Encrypt"}
-	expected := "KMS operation not implemented: Encrypt"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrInvalidCertificatePEM(t *testing.T) {
 	err := ErrInvalidCertificatePEM{}
 	expected := "invalid PEM-encoded certificate"
