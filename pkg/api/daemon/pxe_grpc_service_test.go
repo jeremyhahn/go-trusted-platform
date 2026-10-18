@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -1275,6 +1276,40 @@ func TestPXEGRPCService_SetPXEService(t *testing.T) {
 	svc.SetPXEService(mockService)
 
 	assert.NotNil(t, svc.pxeService)
+}
+
+// TestPXEGRPCService_StopBackend proves daemon Stop closes the iPXE servers a
+// StartService call left running, and leaves an idle or absent backend alone.
+func TestPXEGRPCService_StopBackend(t *testing.T) {
+	logger := logging.DefaultLogger()
+	ctx := context.Background()
+
+	t.Run("no backend", func(t *testing.T) {
+		assert.NoError(t, NewPXEGRPCService(logger, nil).stopBackend(ctx))
+	})
+
+	t.Run("running backend is stopped", func(t *testing.T) {
+		backend := newMockPXEService()
+		backend.running = true
+		require.NoError(t, NewPXEGRPCService(logger, backend).stopBackend(ctx))
+		assert.False(t, backend.running)
+	})
+
+	t.Run("idle backend is not stopped", func(t *testing.T) {
+		backend := newMockPXEService()
+		backend.stopErr = pxe.ErrServiceNotRunning{}
+		assert.NoError(t, NewPXEGRPCService(logger, backend).stopBackend(ctx),
+			"Stop on an idle backend would answer ErrServiceNotRunning")
+	})
+
+	t.Run("stop failure is returned", func(t *testing.T) {
+		backend := newMockPXEService()
+		backend.running = true
+		backend.stopErr = pxe.ErrProvisioningFailed{Reason: "failed to stop iPXE server"}
+		err := NewPXEGRPCService(logger, backend).stopBackend(ctx)
+		var target pxe.ErrProvisioningFailed
+		assert.True(t, errors.As(err, &target), "got %v", err)
+	})
 }
 
 // TestPXEGRPCService_FilterFromProto tests filter conversion from proto.

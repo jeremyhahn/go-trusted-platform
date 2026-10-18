@@ -214,34 +214,37 @@ type ServerConfig struct {
 type Config = ServerConfig
 
 // BootEntry represents a bootable ISO/image entry.
+//
+// The yaml and mapstructure tags are the keys of a boot entry in platformd's
+// pxe.boot-entries list (pkg/compute/pxe Config).
 type BootEntry struct {
 	// Name is the identifier for the entry.
-	Name string
+	Name string `yaml:"name" mapstructure:"name"`
 
 	// Description is the human-readable description.
-	Description string
+	Description string `yaml:"description" mapstructure:"description"`
 
 	// ISOURL is the URL to the ISO file.
-	ISOURL string
+	ISOURL string `yaml:"iso-url,omitempty" mapstructure:"iso-url"`
 
 	// Kernel is the path or URL to the kernel.
-	Kernel string
+	Kernel string `yaml:"kernel,omitempty" mapstructure:"kernel"`
 
 	// Initrd is the path or URL to the initrd.
-	Initrd string
+	Initrd string `yaml:"initrd,omitempty" mapstructure:"initrd"`
 
 	// Args are the kernel arguments.
-	Args string
+	Args string `yaml:"args,omitempty" mapstructure:"args"`
 
 	// Architecture restricts the entry to clients of one iPXE build
 	// architecture ("x86_64", "arm64", "i386"; iPXE's ${buildarch}).
 	// Empty means every client. The menu offers only the entries a
 	// client can run, because a kernel for the other architecture fails
 	// after the download with no useful message.
-	Architecture string
+	Architecture string `yaml:"architecture,omitempty" mapstructure:"architecture"`
 
 	// AutoInstall is the path to the autoinstall config.
-	AutoInstall string
+	AutoInstall string `yaml:"auto-install,omitempty" mapstructure:"auto-install"`
 }
 
 // DefaultServerConfig returns a ServerConfig with sensible defaults.

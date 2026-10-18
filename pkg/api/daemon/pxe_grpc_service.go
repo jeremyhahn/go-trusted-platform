@@ -65,6 +65,16 @@ func (s *PXEGRPCService) requireService() error {
 	return nil
 }
 
+// stopBackend stops the backend's iPXE servers when StartService left them
+// running. The backend stays initialized, so a daemon started again serves
+// the same device registry.
+func (s *PXEGRPCService) stopBackend(ctx context.Context) error {
+	if s.pxeService == nil || !s.pxeService.IsRunning() {
+		return nil
+	}
+	return s.pxeService.Stop(ctx)
+}
+
 // =============================================================================
 // Device Registration and Management
 // =============================================================================

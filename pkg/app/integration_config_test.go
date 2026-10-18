@@ -15,6 +15,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"regexp"
@@ -24,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
@@ -165,6 +167,28 @@ func TestIntegrationConfig_DNSTypoRefused(t *testing.T) {
 	var unknown *config.ErrUnknownConfigKeys
 	require.True(t, errors.As(err, &unknown), "got %v", err)
 	assert.Equal(t, "dns", unknown.Section)
+}
+
+// TestIntegrationConfig_BuildsThePXEService proves the integration platformd
+// builds a PXE backend from its pxe: section on the sdn: plan and bridge, so
+// the root suite's pxe rows reach a service instead of SERVICE_NOT_CONFIGURED.
+func TestIntegrationConfig_BuildsThePXEService(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+
+	require.NotNil(t, a.PXEConfig, "pxe section")
+	assert.True(t, a.PXEConfig.Enabled)
+	assert.Equal(t, "127.0.0.1", a.PXEConfig.BindHost, "the iPXE servers stay on loopback")
+	assert.Greater(t, a.PXEConfig.HTTPPort, 1024, "unprivileged HTTP port")
+	assert.Greater(t, a.PXEConfig.TFTPPort, 1024, "unprivileged TFTP port")
+	require.Len(t, a.PXEConfig.BootEntries, 1)
+
+	plan, err := a.NetworkPlan()
+	require.NoError(t, err)
+	svc, err := pxe.NewConfiguredService(context.Background(), a.PXEConfig, plan, a.SDNConfig.OVS.Bridge, nil)
+	require.NoError(t, err)
+	assert.False(t, svc.Status().Running, "building the service binds no port")
+	assert.Equal(t, uint16(404), svc.Status().QuarantineVLAN)
+	assert.Equal(t, uint16(405), svc.Status().ProvisioningVLAN)
 }
 
 // TestIntegrationConfig_NTPConsumesFromLoopbackOnly pins the ntp section the

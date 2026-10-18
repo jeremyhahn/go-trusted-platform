@@ -46,6 +46,21 @@ sdn:
   enabled: true
   environment: {id: 4, ula: fd12:3456:789a::/48}
   ovs: {socket: /var/run/openvswitch/db.sock, bridge: br-fabric}
+pxe:
+  enabled: true
+  bind-host: 192.0.2.1
+  http-port: 8080
+  tftp-port: 69
+  local-files-dir: /var/lib/platform/pxe/files
+  installs-dir: /var/lib/platform/pxe/installs
+  boot-entries:
+    - name: alpine
+      description: Alpine installer
+      kernel: /data/vmlinuz
+      initrd: /data/initramfs
+      args: console=ttyS0
+      architecture: x86_64
+      auto-install: true
 `
 
 const strictStalePlatform = `
@@ -83,6 +98,9 @@ func TestCheckPlatformConfigYAML(t *testing.T) {
 
 	err = CheckPlatformConfigYAML([]byte("sdn:\n  enabled: true\n  networks: []\n  transit: {vlan: 10}\n"))
 	assert.Equal(t, []string{"sdn.networks", "sdn.transit"}, unknownPaths(t, err))
+
+	err = CheckPlatformConfigYAML([]byte("pxe:\n  enabled: true\n  http-prot: 8080\n  boot-entries:\n    - {name: a, description: b, kernal: /vmlinuz}\n"))
+	assert.Equal(t, []string{"pxe.boot-entries[0].kernal", "pxe.http-prot"}, unknownPaths(t, err))
 }
 
 func platformViper(t *testing.T, doc string) *viper.Viper {

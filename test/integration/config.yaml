@@ -268,6 +268,28 @@ ntp:
     startup-gate:
       block-until-synced: false
 
+# Gives the daemon's PXE servicer a backend, so the root suite's pxe matrix
+# rows and the pxe suite reach a real device registry and provisioning state
+# machine on every transport. Without a pxe: section every PXE call answers
+# SERVICE_NOT_CONFIGURED (docs/ipxe/api.md).
+#
+# The quarantine and provisioning VLANs come from the sdn: environment below
+# and the bridge from sdn.ovs.bridge. Building the service binds no port; the
+# iPXE HTTP and TFTP listeners open only on StartService, which no suite
+# calls, and then on unprivileged loopback ports.
+pxe:
+  enabled: true
+  bind-host: 127.0.0.1
+  http-port: 18069
+  tftp-port: 16969
+  local-files-dir: /tmp/platformd-integration/pxe/files
+  installs-dir: /tmp/platformd-integration/pxe/installs
+  boot-entries:
+    - name: platform
+      description: Platform installer
+      kernel: /tmp/platformd-integration/pxe/files/vmlinuz
+      initrd: /tmp/platformd-integration/pxe/files/initramfs
+
 # =============================================================================
 # SDN CONFIGURATION
 # =============================================================================

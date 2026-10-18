@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -156,6 +157,11 @@ type Config struct {
 	// DNSService is the DNS service implementation.
 	// When set, the daemon will register DNS operations on QUIC and MCP.
 	DNSService DNSService
+
+	// PXEService is the PXE provisioning backend a pxe: section builds
+	// (pxe.NewConfiguredService). Nil leaves the PXE servicer without one,
+	// so every PXE call answers SERVICE_NOT_CONFIGURED.
+	PXEService pxe.Service
 
 	// ComputeOrchestrator is the compute orchestrator for VM and container operations.
 	// When set, the daemon will register the Compute gRPC service.
