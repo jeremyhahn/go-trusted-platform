@@ -10,6 +10,9 @@
 
 set -e
 
+# shellcheck source=build/docker/devcontainer/swtpm-provision.sh
+source /usr/local/lib/devcontainer/swtpm-provision.sh
+
 # =============================================================================
 # Environment Setup
 # =============================================================================
@@ -225,9 +228,12 @@ start_swtpm() {
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
 
-    # Initialize TPM state
+    # Provision it like shipped hardware, with an EK and an EK certificate
     echo "Initializing swtpm state..."
-    swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+    if ! provision_swtpm_state /tmp/swtpm; then
+        echo "ERROR: the swtpm has no EK and EK certificate"
+        return 1
+    fi
 
     # Start swtpm daemon
     echo "Starting swtpm daemon..."
