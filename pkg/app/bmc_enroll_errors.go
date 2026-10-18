@@ -73,6 +73,29 @@ func (e ErrBMCEnrollCredStore) Error() string {
 
 func (e ErrBMCEnrollCredStore) Unwrap() error { return e.Cause }
 
+// ErrBMCEnrollDNSRegister is returned when the dns-register step cannot write
+// the BMC's A record into the internal zone.
+type ErrBMCEnrollDNSRegister struct {
+	DeviceID uint64
+	Cause    error
+}
+
+func (e ErrBMCEnrollDNSRegister) Error() string {
+	return fmt.Sprintf("app: BMC enrollment (device %d): dns-register failed: %v", e.DeviceID, e.Cause)
+}
+
+func (e ErrBMCEnrollDNSRegister) Unwrap() error { return e.Cause }
+
+// ErrBMCDNSInvalidAddress is returned when the BMC address an A record would
+// point at is not an IPv4 address.
+type ErrBMCDNSInvalidAddress struct {
+	Address string
+}
+
+func (e ErrBMCDNSInvalidAddress) Error() string {
+	return fmt.Sprintf("app: BMC A record needs an IPv4 address, got %q", e.Address)
+}
+
 // ErrBMCEnrollDeviceSave is returned when the device entity cannot be
 // updated with the BMCEnrollment stamp at the end of the ceremony.
 type ErrBMCEnrollDeviceSave struct {

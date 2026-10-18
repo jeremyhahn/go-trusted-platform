@@ -444,10 +444,14 @@ func TestRunEnrollCore_StepDNSRegister_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from dnsRegister")
 	}
-	// Error wraps as ErrBMCEnrollCredStore (dns-register uses same typed wrapper).
+	// A DNS failure is reported as one, not as a credential store failure.
+	var dnsErr ErrBMCEnrollDNSRegister
+	if !errors.As(err, &dnsErr) {
+		t.Errorf("err type = %T, want ErrBMCEnrollDNSRegister", err)
+	}
 	var credErr ErrBMCEnrollCredStore
-	if !errors.As(err, &credErr) {
-		t.Errorf("err type = %T, want ErrBMCEnrollCredStore", err)
+	if errors.As(err, &credErr) {
+		t.Errorf("err = %v, must not be ErrBMCEnrollCredStore", err)
 	}
 }
 
