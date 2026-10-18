@@ -65,6 +65,10 @@ var (
 	// ErrUnsupportedArch is returned when Config.Arch names no profile
 	ErrUnsupportedArch = errors.New("unsupported guest architecture")
 
+	// ErrKVMUnavailable is the reason a guest that asked for KVM runs TCG:
+	// the KVM device cannot be opened read-write
+	ErrKVMUnavailable = errors.New("KVM device not usable")
+
 	// ErrFirmwareMissing is returned when the architecture needs a firmware
 	// image (Config.Firmware) and it is unset or absent
 	ErrFirmwareMissing = errors.New("firmware image not found")

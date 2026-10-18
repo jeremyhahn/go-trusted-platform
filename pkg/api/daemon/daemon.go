@@ -978,10 +978,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	logger.Info("DNS gRPC service registered")
 
 	// Create the PXE gRPC service. Every transport serves this one
-	// instance. platformd never sets its backend (PXE is a gateway-role
-	// service and the platformd config has no pxe: section), so each call
-	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
-	pxeGRPCService := NewPXEGRPCService(logger, nil)
+	// instance, over the backend an enabled pxe: section builds
+	// (config.PXEService). A node without one builds it with no backend,
+	// and each call answers Unavailable with SERVICE_NOT_CONFIGURED
+	// (requireService).
+	pxeGRPCService := NewPXEGRPCService(logger, config.PXEService)
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
 	}
@@ -2821,6 +2822,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Stop the iPXE servers a StartService call left running on the PXE
+	// backend, so their HTTP and TFTP ports close with the daemon.
+	d.stopPXEBackend(ctx)
+
 	// Stop tenant service if available
 	if d.tenantService != nil {
 		if err := d.tenantService.Stop(ctx); err != nil {
@@ -3162,6 +3167,17 @@ func (d *Daemon) DNSGRPCServiceServer() *DNSServiceServer {
 // Returns nil if not configured.
 func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
 	return d.pxeGRPCService
+}
+
+// stopPXEBackend stops the PXE backend's iPXE servers during Stop. A failure
+// is logged, not returned: the rest of the teardown still runs.
+func (d *Daemon) stopPXEBackend(ctx context.Context) {
+	if d.pxeGRPCService == nil {
+		return
+	}
+	if err := d.pxeGRPCService.stopBackend(ctx); err != nil {
+		d.logger.Warn("PXE backend stop failed", "error", err)
+	}
 }
 
 // NTPGRPCServiceServer returns the NTP gRPC service backing /api/v1/ntp.

@@ -16,6 +16,7 @@ package app
 import (
 	"github.com/spf13/viper"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -34,6 +35,7 @@ type strictSection struct {
 var strictSections = []strictSection{
 	{name: "network", target: func() any { return &installer.NetworkConfig{} }},
 	{name: "sdn", target: func() any { return &sdn.Config{} }},
+	{name: "pxe", target: func() any { return &pxe.Config{} }},
 }
 
 // CheckPlatformConfigViper refuses unknown keys in the strictly checked

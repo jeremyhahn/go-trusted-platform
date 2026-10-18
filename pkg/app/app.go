@@ -54,6 +54,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
@@ -367,6 +368,7 @@ type App struct {
 	SecretsConfig    *SecretsConfig                `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
 	BMCConfig        *bmc.Config                   `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
 	SDNConfig        *sdn.Config                   `yaml:"sdn,omitempty" json:"sdn,omitempty" mapstructure:"sdn"`
+	PXEConfig        *pxe.Config                   `yaml:"pxe,omitempty" json:"pxe,omitempty" mapstructure:"pxe"`
 	ComputeConfig    *compute.OrchestratorConfig   `yaml:"compute,omitempty" json:"compute,omitempty" mapstructure:"compute"`
 	SwitchConfigs    []switchmgmt.Config           `yaml:"switches,omitempty" json:"switches,omitempty" mapstructure:"switches"`
 	PublicIPv4       net.IP                        `yaml:"-" json:"-" mapstructure:"-"`

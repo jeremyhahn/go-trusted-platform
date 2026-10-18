@@ -175,10 +175,9 @@ declare -A TARGET_NO_DAEMON=(
 # the suite itself sets: cold-start and barrier-gate need the shared daemon
 # NOT running; diskimage, netboot, nat64 and ipsec need inputs only their make targets
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
-# packages already listed (sdn, root, ipxe). pxe stays runnable by name but
-# is out of the default set: platformd builds its PXE service with no
-# backend, so every PXE call answers SERVICE_NOT_CONFIGURED. bootstrap stays
-# runnable by name but is out of the default set too: its DANE tests need TLSA
+# packages already listed (sdn, root, ipxe). pxe runs on the shared platformd,
+# whose PXE backend config.yaml's pxe: section builds. bootstrap stays
+# runnable by name but is out of the default set: its DANE tests need TLSA
 # records for _8443._tcp.localhost., and the shared daemon-only platformd
 # publishes none (no webservices, DANE off, no zone holds localhost.).
 # secureboot stays runnable by name but is out of the default set as well: its
@@ -196,7 +195,7 @@ ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode bmc ca ceremony cli compute
     container daemon device dns fido2 iam iso kms luks network
-    ntp objectstorage piv provision proxy quic registry restroutes sdn
+    ntp objectstorage piv provision proxy pxe quic registry restroutes sdn
     secrets tenant vpn vtpm tpm
 )
 

@@ -431,7 +431,9 @@ non-empty. Kernel and initrd fetches 404 while everything before them worked,
 which is exactly the confusing shape this produces.
 
 **The console's Networking → PXE page says PXE is not available on this node.**
-Not a fault. PXE is served by the **gateway** role, so on a control plane the
+Not a fault. PXE is served by the **gateway** role, and by a platformd node
+only when its config has an enabled `pxe:` section
+([engineering.md](engineering.md) §4). On any other node the
 `/api/v1/pxe/*` endpoints answer 503 with the discriminator
 `SERVICE_NOT_CONFIGURED`, and the page renders the reporting gateways' PXE
 telemetry — status, listen address, boots served — from

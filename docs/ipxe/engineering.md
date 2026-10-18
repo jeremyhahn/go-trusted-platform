@@ -231,12 +231,13 @@ directory holding an extracted ISO.**
 `ServerConfig` is a **Go struct, not a YAML surface.** `pkg/ipxe` has no
 config-file loader and reads **no environment variables**. Callers construct it:
 `pkg/bootstrap/container` from `cmd/pxeboot` flags plus a manifest,
-`pkg/compute/pxe` from platform config, `testenv.go` from
+`pkg/compute/pxe` from platformd's `pxe:` section (below), `testenv.go` from
 `DefaultTestEnvConfig`.
 
 | Field | Type | `DefaultServerConfig()` |
 |---|---|---|
 | `Interface` | string | `""` |
+| `BindHost` | string | `DefaultBindHost` = `""` (every interface); HTTP and TFTP only, must be an IP literal |
 | `HTTPPort` | int | `DefaultHTTPPort` = `8080` |
 | `TFTPPort` | int | `DefaultTFTPPort` = `69` |
 | `ExternalURL` | string | `""` → auto-detected by `NewServer` |
@@ -314,6 +315,45 @@ bootfile map — and answers every client (`RespondToAll`), because on its
 isolated bridge it is the only DHCP server and the booted OS's own client
 needs a lease too. `FirmwareSigner` and `FirmwareOverrides` pass through
 to the `ServerConfig`.
+
+### platformd `pxe:` section
+
+platformd builds a PXE backend from a top-level `pxe:` section
+(`pkg/compute/pxe.Config` and `NewConfiguredService`,
+`pkg/compute/pxe/section.go`) and gives it to the one PXE servicer that gRPC,
+QUIC, MCP, REST and the Unix socket share. The section is checked strictly: an
+unknown or mistyped key under `pxe:` fails the config load
+(`pkg/app/config_strict.go`).
+
+| Key | Type | Default | `ServerConfig` field and rule |
+|---|---|---|---|
+| `enabled` | bool | `false` | builds the backend |
+| `bind-host` | string | `""` (every interface) | `BindHost`; an IP literal |
+| `http-port` | int | `0` → `8080` | `HTTPPort`; 1–65535 |
+| `tftp-port` | int | `0` → `69` | `TFTPPort`; 1–65535 |
+| `local-files-dir` | string | `""` → `/var/lib/ipxe` | `LocalFilesDir` |
+| `installs-dir` | string | `""` → `/data/installs` | `InstallsDir` |
+| `boot-entries` | list | none | `BootEntries`; **at least one** |
+
+A `boot-entries` item has `name` and `description` (both required), `iso-url`,
+`kernel` and `initrd` (at least one of the three), `args`, `architecture`
+(`x86_64`, `arm64` or `i386`; empty offers the entry to every client) and
+`auto-install`. Every other `ServerConfig` field keeps its
+`DefaultServerConfig()` value.
+
+The section needs `sdn:`. The quarantine and provisioning VLANs come from the
+quarantine and provisioning zones of the network plan `sdn.environment`
+derives (`App.NetworkPlan`), and the bridge from `sdn.ovs.bridge`. An enabled
+section fails platformd startup (`ErrServeStartup`, phase `PXE service`) when
+SDN is off or the plan lacks either zone, when the two VLANs are equal or
+outside 1–4094, when `sdn.ovs.bridge` is empty, or when the `ServerConfig`
+above does not validate: the operator asked for a service the node cannot
+serve.
+
+Building the backend binds no port. The iPXE HTTP and TFTP listeners open only
+on `StartService`, and daemon Stop stops a server `StartService` left running.
+With no `pxe:` section, or `enabled: false`, the servicer has no backend and
+every PXE call answers `SERVICE_NOT_CONFIGURED` ([api.md](api.md)).
 
 ## 5. Error semantics
 

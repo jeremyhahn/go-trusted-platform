@@ -219,10 +219,15 @@ install-completion webhook `POST /api/v1/pxe/webhook/complete` presents no
 credential (#238). See [api.md](api.md) §6 and
 [`docs/ipxe/api.md`](../ipxe/api.md) §5.
 
-**Test coverage.** Two provisioning integration suites do not exercise what they
-appear to: the PXE suite reaches a platformd with no PXE backend, so every call
-answers `SERVICE_NOT_CONFIGURED`, and the authenticode multi-protocol test has
-all five adapters commented out. See
+**PXE on platformd.** platformd serves PXE only when its config has an enabled
+`pxe:` section, which needs `sdn:` (VLANs from the network plan, bridge from
+`sdn.ovs.bridge`); without one every PXE call answers
+`SERVICE_NOT_CONFIGURED`. See
+[`docs/ipxe/engineering.md`](../ipxe/engineering.md) §4.
+
+**Test coverage.** The PXE suite reaches the integration platformd's real PXE
+backend on every transport. The authenticode multi-protocol test does not
+exercise what it appears to: all five adapters are commented out. See
 [engineering.md](engineering.md) §7.
 
 ---

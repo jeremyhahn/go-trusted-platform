@@ -44,6 +44,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container" // registers the local-container orchestrator factory
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -513,6 +514,33 @@ func wireDaemonDNSService(logger *logging.Logger, a *app.App, cfg *daemon.Config
 	logger.Info("DNS service configured for daemon")
 }
 
+// wireDaemonPXEService builds the PXE backend an enabled pxe: section
+// describes, on the node's network plan and sdn.ovs.bridge, and hands it to
+// the daemon's gRPC, QUIC, MCP, REST and Unix transports. A node without the
+// section, or with enabled false, keeps the backend-less PXE servicer, which
+// answers SERVICE_NOT_CONFIGURED. An enabled section that does not build is a
+// startup failure: the operator asked for a service the node cannot serve.
+func wireDaemonPXEService(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config) error {
+	if a == nil || cfg == nil || a.PXEConfig == nil || !a.PXEConfig.Enabled {
+		return nil
+	}
+	plan, err := a.NetworkPlan()
+	if err != nil {
+		return ErrServeStartup{Phase: "PXE service network plan", Cause: err}
+	}
+	bridge := ""
+	if a.SDNConfig != nil && a.SDNConfig.OVS != nil {
+		bridge = a.SDNConfig.OVS.Bridge
+	}
+	svc, err := pxe.NewConfiguredService(ctx, a.PXEConfig, plan, bridge, logger)
+	if err != nil {
+		return ErrServeStartup{Phase: "PXE service", Cause: err}
+	}
+	cfg.PXEService = svc
+	logger.Info("PXE service configured for daemon")
+	return nil
+}
+
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
 // quicbaas SDK CertificateService and binds it to the supplied
 // daemon.Config so that gRPC TCP, QUIC, REST and MCP HTTP listeners present a
@@ -889,6 +917,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			logger.Info("CA service wired for daemon gRPC")
 		}
 		wireDaemonDNSService(logger, App, daemonConfig)
+		if err := wireDaemonPXEService(ctx, logger, App, daemonConfig); err != nil {
+			return err
+		}
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -1645,6 +1676,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			logger.Info("device template service wired for daemon gRPC")
 		}
 		wireDaemonDNSService(logger, App, config)
+		if err := wireDaemonPXEService(ctx, logger, App, config); err != nil {
+			return err
+		}
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
