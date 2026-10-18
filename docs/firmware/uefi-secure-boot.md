@@ -1,10 +1,13 @@
 # Secure Boot
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Background on UEFI Secure Boot, its keys and shim.
+
 UEFI Secure Boot (SB) is a verification mechanism for ensuring that code launched by a computer's UEFI firmware is trusted. It is designed to protect a system against malicious code being loaded and executed early in the boot process, before the operating system has been loaded.
 
 SB works using cryptographic checksums and signatures. Each program that is loaded by the firmware includes a signature and a checksum, and before allowing execution the firmware will verify that the program is trusted by validating the checksum and the signature. When SB is enabled on a system, any attempt to execute an untrusted program will not be allowed. This stops unexpected / unauthorised code from running in the UEFI environment.
 
-![Secure Boot Flow](../assets/secureboot-flow.svg?raw=true "Secure Boot Flow")
+![Secure Boot Flow](../assets/secureboot-flow.svg "Secure Boot Flow")
 
 # Concepts
 
@@ -90,7 +93,7 @@ Shim is developed by a collaborative effort between different Linux distribution
 
 # Related
 
-[Building a Trusted Platform ISO](../ISO.md)
+[Building a Trusted Platform ISO](../installer/iso-building.md)
 
 
 # References

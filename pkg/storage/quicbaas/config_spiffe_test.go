@@ -122,3 +122,31 @@ func TestToQuicBaaSConfig_WebAuthnRP(t *testing.T) {
 	assert.Equal(t, "Trusted Platform", cfg.IAM.WebAuthn.RPDisplayName)
 	assert.Equal(t, []string{"https://cp.example.com:8443"}, cfg.IAM.WebAuthn.RPOrigins)
 }
+
+// TestToQuicBaaSConfig_WebAuthnRequiresResidentKey proves the embedded
+// relying party is told to require a resident key at registration: browser
+// login is usernameless, so a credential the authenticator cannot discover
+// would enrol and then never sign in (#662).
+func TestToQuicBaaSConfig_WebAuthnRequiresResidentKey(t *testing.T) {
+	c := &Config{
+		DataDir:           t.TempDir(),
+		SPIFFETrustDomain: "example.internal",
+		WebAuthnRPID:      "cp.example.com",
+		WebAuthnRPOrigins: []string{"https://cp.example.com:8443"},
+	}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	assert.Equal(t, "required", cfg.IAM.WebAuthn.ResidentKeyRequirement)
+}
+
+// TestToQuicBaaSConfig_WebAuthnResidentKeyWithoutRP proves the requirement
+// does not hang on the operator configuring a relying party: a node that
+// leaves the RP to be derived from the issuer URL must not fall back to the
+// upstream "preferred" default, which lets a non-discoverable credential enrol.
+func TestToQuicBaaSConfig_WebAuthnResidentKeyWithoutRP(t *testing.T) {
+	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "example.internal"}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	require.Empty(t, cfg.IAM.WebAuthn.RPID, "the RP is left to upstream derivation")
+	assert.Equal(t, "required", cfg.IAM.WebAuthn.ResidentKeyRequirement)
+}

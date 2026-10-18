@@ -1,5 +1,8 @@
 # Firmware API Reference
 
+> **Status: NORMATIVE** · Scope: planned `platformctl firmware`, `platformctl ota` and `platformctl vtpm` bundle commands; none is implemented
+> Conflicts with this document are defects. Fix them here first.
+
 CLI commands and API for Trusted Platform Firmware.
 
 ## platformctl firmware Commands

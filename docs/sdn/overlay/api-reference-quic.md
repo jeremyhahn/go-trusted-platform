@@ -1,5 +1,8 @@
 # VXLAN Overlay QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The overlay opcodes of the platform QUIC protocol.
+
 ## Overview
 
 | Property | Value |

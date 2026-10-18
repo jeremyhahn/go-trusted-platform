@@ -348,9 +348,12 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 
 // CreateInvitation creates a new invitation via REST
 func (a *RESTAdapter) CreateInvitation(ctx context.Context, opts CreateInvitationOptions) (*CreateInvitationResult, error) {
-	body := map[string]string{
+	body := map[string]interface{}{
 		"email": opts.Email,
 		"role":  opts.Role,
+	}
+	if opts.ExpiresIn > 0 {
+		body["expires_in"] = opts.ExpiresIn
 	}
 
 	path := "/api/v1/invitations"

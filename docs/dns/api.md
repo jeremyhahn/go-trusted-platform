@@ -42,19 +42,18 @@ MCP: **two parallel tool families** — see §3.
 | Get record | `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
 | Update record | `MISSING — docs/13 G7` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`) | `dns_record_update` | ✅ |
 | Delete record | `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` | `DeleteRecord` | `OpDNSDeleteRecord` (`0x21`) | `dns_delete_record`, `dns_record_delete` | ✅ |
-| Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `dns_zone_sign` | ✅ |
+| DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `dns_zone_dnssec_status` | ✅ |
 | Resolve | `GET /api/v1/dns/resolve?fqdn={fqdn}&type={type}` | `Resolve` | `OpDNSResolve` (`0x29`) | `dns_resolve`, `dns_lookup` | ✅ |
 | Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `dns_register` | ✅ |
 | Get DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetConfig` (`0x2A`) | `MISSING — docs/13 G7` | — |
 | DNS metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetMetrics` (`0x2C`) | `MISSING — docs/13 G7` | — |
 
 Two shapes stand out:
 
-- **DNSSEC — signing and status — exists only on REST, gRPC and embedded.** No
-  QUIC, no MCP. Signing a zone is the operation that matters most and is
-  reachable on the fewest transports.
+- **DNSSEC — signing and status — has no QUIC opcode.** REST, gRPC, MCP
+  (`dns_zone_sign`, `dns_zone_dnssec_status`) and embedded carry it.
 - **Two operational reads are QUIC-only**: get config and metrics. An operator
   on REST cannot read DNS metrics.
 - **There is no update-config or flush-cache verb on any transport.**
@@ -95,7 +94,7 @@ is a 400 (gRPC `InvalidArgument`). See
 
 **Read this before writing an MCP client.**
 
-Twenty DNS tool names exist for roughly ten capabilities, in two families:
+Twenty-two DNS tool names exist for fourteen capabilities, in two families:
 
 | Older family (`pkg/api/mcp/tools.go`) | Newer family (`pkg/api/mcp/dns_tools.go`) |
 |---|---|
@@ -109,6 +108,8 @@ Twenty DNS tool names exist for roughly ten capabilities, in two families:
 | `dns_delete_record` | `dns_record_delete` |
 | — | `dns_record_update` |
 | `dns_resolve` | `dns_lookup` |
+| — | `dns_zone_sign`, `dns_zone_dnssec_status` |
+| — | `dns_register` |
 
 **Both families are in the authorization map, under `dns:*` scopes.** The older
 family's permissions are listed in `pkg/api/mcp/authz.go` (`dns_add_record` →
@@ -139,13 +140,12 @@ therefore answers and fails as gRPC does: the gRPC status passes through, so
 
 `dns_create_zone` and `dns_zone_create` now need the same scope.
 
-**The Go SDK's MCP transport calls the older family.** Its route table
-(`grpcMethodToMCPToolMap`, `sdk/go/transport/mcp/adapter.go`) sends
-`DNSService` calls to `dns_create_zone`, `dns_list_zones` and the other older
-names, with the request in its proto JSON form. `dns_create_zone` reads the
-zone from `zone`, but `CreateZoneRequest` names it `name`, so SDK `CreateZone`
-over MCP is refused with the zone name missing even when a backend is
-configured. Settling the canonical family settles this route too.
+**The Go SDK's MCP transport calls the newer family.** Its route table
+(`dnsToolMap`, `sdk/go/transport/mcp/dns.go`) sends each of the 13
+`DNSService` methods to its newer tool, with the request and the reply in
+their proto JSON form — `CreateZone` to `dns_zone_create`, `Resolve` to
+`dns_lookup`, `SignZone` to `dns_zone_sign`. The older tools take FQDN-shaped
+arguments no request message carries, so the SDK never calls them.
 
 Which family is canonical, and whether the other is removed or aliased, is
 still open.
@@ -192,7 +192,7 @@ positions described above are unchanged. See
 | `0x02` | `StatusNotFound` | 404 | Unknown zone or record |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | Resolver or key-store failure |
-| `0x06` | `StatusAlreadyExists` | 409 | `ErrZoneAlreadyExists` |
+| `0x06` | `StatusAlreadyExists` | 500 | `ErrZoneAlreadyExists` (REST `Register` only; REST `CreateZone` saves over an existing zone) |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `dns:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrRecordTypeNotSupported`, `ErrInvalidResolverAddress`, `ErrInvalidResolverPort` |
 | `0x0A` | `StatusUnavailable` | 503 | No DNS backend: the daemon has no `dns:` section |

@@ -1,5 +1,9 @@
 % platformd ca info | Trusted Platform Commands Manual
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> `platformd` has only `serve` and `version`; the CA, TPM and PKCS #11 verbs
+> are `platformctl` commands, documented in each feature folder's `cli.md`.
+
 # NAME
 
 **ca info** - Displays Certificate Authority information
@@ -18,7 +22,7 @@ about a Certificate Authority.
 
 ## References
 
-[common options](common/options.md) collection of common options that provide
+[common options](../common/options.md) collection of common options that provide
 information many users may expect.
 
 # NOTES

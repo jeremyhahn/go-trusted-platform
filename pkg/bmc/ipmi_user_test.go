@@ -266,6 +266,12 @@ func TestCreateUser_HappyPath(t *testing.T) {
 	if m.calls[2].cmd != cmdSetUserAccess {
 		t.Errorf("call[2] = 0x%02x, want SetUserAccess", m.calls[2].cmd)
 	}
+	// User management commands live in the App network function.
+	for i, c := range m.calls {
+		if c.netFn != netFnApp {
+			t.Errorf("call[%d] netFn = 0x%02x, want App (0x%02x)", i, c.netFn, netFnApp)
+		}
+	}
 	// SetUserName payload: byte 0 = slot, bytes 1.. = name
 	if m.calls[0].data[0] != 2 {
 		t.Errorf("name slot = %d, want 2", m.calls[0].data[0])

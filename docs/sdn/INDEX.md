@@ -1,5 +1,8 @@
 # SDN Documentation Index
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Index of the SDN documents.
+
 Complete documentation for the Software-Defined Networking (SDN) components in go-trusted-platform.
 
 ## Quick Navigation
@@ -88,8 +91,8 @@ firewall/
 ### Gateway Node
 
 Documented in the [docs/gateway/](../gateway/) feature folder
-(architecture, engineering, cli, api, user); `gateway/README.md` here is only
-a pointer to it.
+(architecture, engineering, cli, api, user); `docs/sdn/` has no gateway
+folder of its own.
 
 ### BGP Routing
 
@@ -201,19 +204,21 @@ See: [fabric/configuration.md](./fabric/configuration.md)
 
 ### Minimal Gateway
 
+gatewayd reads the top-level `gateway:` section (`sdn.gateway` carries only
+`enabled`):
+
 ```yaml
-sdn:
-  gateway:
+gateway:
+  enabled: true
+  node-id: 1                    # unsigned integer
+
+  overlay:
     enabled: true
-    node-id: gw-01
-    
-    overlay:
-      enabled: true
-      vtep-ip: 10.0.0.1
-    
-    firewall:
-      enabled: true
-      # ... firewall config
+    local-vtep: 10.0.0.1
+
+  firewall:
+    enabled: true
+    # ... firewall config
 ```
 
 See: [gateway/user.md — Configuring the daemon](../gateway/user.md#configuring-the-daemon)
@@ -224,7 +229,7 @@ Each service exposes APIs via multiple protocols:
 
 | Service | REST | gRPC | QUIC | MCP | Unix |
 |---------|------|------|------|-----|------|
-| Fabric | [ref](./fabric/api-reference.md) | N/A | N/A | N/A | N/A |
+| Fabric | No ([Go API only](./fabric/api-reference.md)) | No | No | No | No |
 | Firewall | No | No | No | No | No |
 | Gateway | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md#1-the-six-transports) |
 | BGP | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md#1-the-six-transports) |
@@ -301,16 +306,19 @@ See: [user.md — Troubleshooting](./user.md#troubleshooting), and for the gatew
 ### Unit Tests
 
 ```bash
-make test                          # All tests
-make test-sdn-fabric              # Fabric tests
-make test-sdn-gateway             # Gateway tests
+make test                                   # All tests
+make test-pkg PKG=./pkg/sdn/fabric/...      # Fabric tests
+make test-pkg PKG=./pkg/sdn/gateway/...     # Gateway tests
+make coverage-sdn                           # SDN coverage
+make bench-sdn-gateway                      # Gateway benchmarks
 ```
 
 ### Integration Tests
 
 ```bash
 make integration-test              # All integration tests
-make integration-test-sdn-gateway  # Gateway integration
+make integration-test-sdn          # SDN suite (devcontainer)
+make integration-test-sdn-full     # SDN suite, full
 ```
 
 See: [testing.md](./testing.md) for comprehensive testing guide
@@ -353,16 +361,9 @@ To update SDN documentation:
 2. Keep examples current with code
 3. Update cross-references in this INDEX.md
 4. Test configuration examples
-5. Run spell-check: `make check-docs`
 
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-04-13 | Initial comprehensive SDN documentation (Phase 7) |
-
----
-
-**Last Updated**: 2026-04-13
-**Documentation Version**: 1.0
-**Status**: Production-ready

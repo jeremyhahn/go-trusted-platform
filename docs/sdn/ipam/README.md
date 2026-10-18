@@ -1,5 +1,8 @@
 # IPAM (IP Address Management)
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Overview of the IPAM package.
+
 IP Address Management service providing pool-based IP allocation with support for multiple storage backends, lease management, and distributed environments.
 
 ## Overview
@@ -10,8 +13,8 @@ The IPAM package implements a complete IP address management solution for go-tru
 - Automatic and specific IP address allocation
 - Lease management with expiration and renewal
 - Multiple storage backends (Memory, QuicBaaS, DHT)
-- Lock-free concurrent allocation using bitmap tracking
-- Integration with SDN overlay and gateway components
+- Bitmap allocation tracking with atomic words (memory backend)
+- Allocation for the gateway's VPN clients and the VTEP records the gateway admits
 
 ## Status
 
@@ -19,13 +22,13 @@ The IPAM package implements a complete IP address management solution for go-tru
 |-----------|--------|-------------|
 | Core Allocator | Complete | Pool and allocation management interface |
 | Pool Management | Complete | CRUD operations for IP pools |
-| Bitmap Allocation | Complete | Lock-free O(1) allocation tracking |
+| Bitmap Allocation | Complete | Atomic-word bitmap; the next free bit is found by scanning words |
 | Lease Management | Complete | Expiration, renewal, inactivity timeout |
 | Memory Backend | Complete | In-memory storage for development/testing |
-| QuicBaaS Backend | Complete | Raft-based distributed storage |
-| DHT Backend | Complete | P2P distributed allocation (platform_p2p build) |
-| Batch Operations | Complete | Bulk allocation and release |
-| Reservations | Complete | IP reservation support |
+| QuicBaaS Backend | Defect | Persistent in the QuicBaaS KV, but allocation has no compare-and-swap or retry (see below); not built with `platform_p2p` |
+| DHT Backend | Complete, not wired | P2P allocation (`platform_p2p` build only); nothing calls `app.RegisterDHTIPAMBackend`, so `backend: dht` fails at start |
+| Batch Operations | Memory backend only | `ipam.BatchAllocator` (`AllocateBatch`, `ReleaseBatch`) |
+| Reservations | Memory backend only | `ipam.ReservationAllocator` (`Reserve`, `Unreserve`, `ListReservations`) |
 
 ## Package Structure
 
@@ -34,7 +37,9 @@ pkg/sdn/ipam/
 +-- types.go              # Pool, Allocation, AllocationRequest, PoolStats
 +-- allocator.go          # Allocator interface, factory, iterators
 +-- pool.go               # Pool calculations, IP offset conversion
-+-- bitmap.go             # Lock-free bitmap for allocation tracking
++-- bitmap.go             # Atomic-word bitmap for allocation tracking
++-- window.go             # Reserved prefixes and the dynamic window (RangeStart-RangeEnd)
++-- utils.go              # Usable-address helpers
 +-- errors.go             # Typed errors for IPAM operations
 +-- backends/
     +-- memory.go         # In-memory backend (testing/development)
@@ -55,6 +60,7 @@ An IP pool defines an allocatable address space:
 | `Name` | Human-readable pool name |
 | `CIDR` | Network prefix (e.g., `10.0.0.0/24`) |
 | `Gateway` | Optional gateway address; always reserved |
+| `Zone` | Underlay zone of a zone pool (e.g. `control-plane`); empty otherwise |
 | `Reserved` | Prefixes that are never allocatable |
 | `RangeStart`, `RangeEnd` | Dynamic allocation window (`Allocate`); unset = whole CIDR |
 | `DefaultLeaseDuration` | Default allocation lease time |
@@ -90,6 +96,7 @@ An allocation represents an IP address assigned to a device:
 ```go
 import (
     "context"
+    "fmt"
     "net/netip"
     "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
     "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
@@ -153,7 +160,7 @@ if err != nil {
 pool := &ipam.Pool{
     ID:                   "dhcp-pool",
     Name:                 "DHCP Pool",
-    CIDR:                 netip.MustParsePrefix("192.168.1.0/24"),
+    CIDR:                 netip.MustParsePrefix("192.0.2.0/24"),
     DefaultLeaseDuration: 24 * time.Hour,
     InactivityTimeout:    7 * 24 * time.Hour,
 }
@@ -174,8 +181,9 @@ fmt.Printf("Expired %d allocations\n", len(expired))
 ### IP Reservation
 
 ```go
-// Cast to ReservationAllocator for reservation support
-reservator, ok := backend.(ipam.ReservationAllocator)
+// Reservations are an optional interface; only the memory backend has them.
+var allocator ipam.Allocator = backend
+reservator, ok := allocator.(ipam.ReservationAllocator)
 if !ok {
     return errors.New("backend does not support reservations")
 }
@@ -207,42 +215,64 @@ backend := backends.NewMemoryBackend()
 
 **Characteristics:**
 - No persistence (data lost on restart)
-- Fast allocation (O(1) with bitmap)
-- Thread-safe with mutex protection
-- Supports all IPAM features
+- One bit per usable address; the next free address is found by scanning
+  64-bit words from the window start
+- Thread-safe: one `sync.RWMutex` guards the backend's maps and bitmaps
+- The only backend with batch and reservation support
+- Pools of at most 2^24 addresses (an IPv4 /8, an IPv6 /104); larger ones
+  fail with `ErrPoolTooLarge`, because the bitmap is sized from
+  `CalculatePoolSize`
+
+The memory backend is platformd's default (`sdn.ipam.backend` empty or
+`memory`, `pkg/app/sdn.go:480`).
 
 ### QuicBaaS Backend
 
-Production backend using QuicBaaS for distributed, consistent storage:
+Persistent backend over the QuicBaaS KV. It takes any `backends.QuicBaaSClient`
+(`IsStarted`, `Put`, `Get`, `Delete`, `List`, `Query`); platformd adapts its
+QuicBaaS SDK client to it (`pkg/app/sdn_ipam_backends.go:36`):
 
 ```go
-client := quicbaas.NewClient(config)
 backend, err := backends.NewQuicBaaSBackend(client, &backends.QuicBaaSBackendConfig{
-    MaxRetries: 10,
-    Logger:     logger,
+    Logger: logger,
 })
 ```
 
 **Characteristics:**
-- Persistent storage via Raft consensus
-- Strongly consistent across nodes
-- Automatic retry on conflicts
-- Secondary indexes for name/CIDR lookup
+- Persistent; replicated by the QuicBaaS store's Raft
+- Name and CIDR lookups go through index entries stored beside the pools
+- Built only without `platform_p2p` (`//go:build !platform_p2p`)
+- Allocation is not atomic: `Allocate` reads the pool, picks a free address
+  and writes it with a plain `Put`, so concurrent allocators can pick the
+  same address and the last writer wins
+- A failed pool write returns `ErrPoolOperationFailed`; there is no retry
+  (`MaxRetries` is accepted and has no effect)
+- Known limitation: atomic allocation needs a conditional put in the
+  go-quicbaas SDK, which it does not offer yet (see
+  [architecture.md](architecture.md#quicbaas-concurrency))
 
 ### DHT Backend (P2P)
 
 Distributed backend for P2P environments (requires `platform_p2p` build tag):
 
 ```go
-node := p2p.NewNode(config)
-backend, err := backends.NewDHTBackend(node)
+node, err := p2p.NewNode(nodeConfig) // pkg/sdn/gateway/p2p
+backend, err := backends.NewDHTBackend(node, ipam.WithLogger(logger))
 ```
 
+`NewDHTBackend` refuses a nil node, a node without a DHT, or one without a peer
+ID (`ErrDHTBackendInit`).
+
 **Characteristics:**
-- Decentralized allocation via Kademlia DHT
-- Claim-based eventual consistency
+- Decentralized allocation via Kademlia DHT (keys under `/ipam/pool/`,
+  `/ipam/alloc/`, `/ipam/device/`)
+- Claim-based eventual consistency (`ErrClaimConflict`, `ErrVerificationFailed`)
 - Random IP selection to reduce conflicts
 - Local caching for pool metadata
+
+platformd selects it with `sdn.ipam.backend: dht` only after
+`app.RegisterDHTIPAMBackend(node)`; nothing calls that today, so the
+placeholder factory refuses at start (`pkg/app/sdn_ipam_backends_p2p.go:38`).
 
 ## IPv4 vs IPv6 Handling
 
@@ -250,10 +280,12 @@ The IPAM package handles both address families:
 
 | Aspect | IPv4 | IPv6 |
 |--------|------|------|
-| Pool Size | `2^(32-prefix) - 2` (network/broadcast) | `2^(128-prefix)` |
+| Pool Size (`CalculatePoolSize`) | `2^(32-prefix) - 2` (network/broadcast) | `2^(128-prefix)`, saturating at 2^64 − 1 for `/64` and wider |
 | Network Address | Excluded from allocation | Included |
 | Broadcast | Excluded from allocation | N/A (no broadcast) |
 | Point-to-Point | /31 and /32 include all addresses | /127 and /128 include all |
+
+`Pool.TotalIPs` is that size less the gateway and the `Reserved` prefixes.
 
 ```go
 // IPv4 pool
@@ -267,7 +299,7 @@ ipv4Pool := &ipam.Pool{
 ipv6Pool := &ipam.Pool{
     ID:   "v6-pool",
     Name: "IPv6 Network",
-    CIDR: netip.MustParsePrefix("2001:DB8:1234::/64"),  // 2^64 IPs
+    CIDR: netip.MustParsePrefix("2001:DB8:1234::/64"),  // size 2^64 − 1; the memory backend refuses it (ErrPoolTooLarge)
 }
 ```
 
@@ -275,20 +307,23 @@ ipv6Pool := &ipam.Pool{
 
 ### SDN Gateway Integration
 
-IPAM provides IP allocation for edge gateway mode:
+The gateway's VPN service leases each client's tunnel address from IPAM
+(`pkg/sdn/gateway/services/vpn/admission.go:462`):
 
 ```go
-// Gateway allocates IP for onboarding device
-alloc, err := ipam.Allocate(ctx, &ipam.AllocationRequest{
-    PoolID:   "edge-ipv6",
-    DeviceID: device.PeerID,
-    Hostname: device.Hostname,
-    Metadata: map[string]string{
-        "onboarded_at": time.Now().Format(time.RFC3339),
-        "vtep_ip":      vtepIP.String(),
-    },
+alloc, err := allocator.Allocate(ctx, &ipam.AllocationRequest{
+    PoolID:        pool.ID,
+    DeviceID:      deviceID,
+    Description:   "vpn lease",
+    Tags:          []string{"vpn", "tenant:" + tenantID},
+    LeaseDuration: leaseTTL,
 })
 ```
+
+On restart it re-claims recorded leases with `AllocateSpecific`
+(`services/vpn/restore.go`). VTEP admission (`pkg/sdn/gateway/vtep_admission.go`)
+only reads: it looks up platformd's fabric-zone allocations
+(`GetAllocation`, `GetAllocationsByDevice`) to admit a VTEP.
 
 ### DHT Network Integration
 
@@ -300,11 +335,9 @@ IPAM coordinates with DHT for distributed allocation:
 
 ### Overlay Network Integration
 
-IPAM provides addressing for VXLAN overlay networks:
-
-- Allocates IP addresses for VTEP endpoints
-- Coordinates with EVPN for MAC/IP advertisement
-- Supports tenant-specific pools via tags
+`overlay.WithIPAM` (`pkg/sdn/overlay/options.go:80`) stores an allocator on the
+overlay controller, but the controller never reads it and no caller passes
+one: the overlay allocates nothing from IPAM today.
 
 ## Documentation
 
@@ -324,8 +357,9 @@ See [SDN CLI Usage](../cli-usage.md) for complete IPAM CLI commands:
 # List pools
 platformctl sdn ipam pool list
 
-# Create pool
-platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
+# Create pool (--id is generated when omitted; optional --zone, --description,
+# --reserved, --range-start, --range-end)
+platformctl sdn ipam pool create --id prod-v4 --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
 
 # Allocate IP
 platformctl sdn ipam allocate --pool-id prod-v4 --device-id vm-001 --hostname webserver

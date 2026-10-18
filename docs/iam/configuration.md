@@ -52,16 +52,16 @@ quicbaas:
   consistency-level: linearizable
 
   # Raft address advertised to peers (cluster members only)
-  raft-address: "192.168.1.10:63000"
+  raft-address: "192.0.2.10:63000"
 
   # Every cluster member as "id=host:port", this node included. When set,
   # raft-address must be routable, and deployment-id and the three Raft TLS
   # files are required (see docs/cluster/user.md).
   deployment-id: 100
   join-addresses:
-    - "1=192.168.1.10:63000"
-    - "2=192.168.1.11:63000"
-    - "3=192.168.1.12:63000"
+    - "1=192.0.2.10:63000"
+    - "2=192.0.2.11:63000"
+    - "3=192.0.2.12:63000"
   raft-tls-cert-file: /etc/trusted-platform/raft/tls.crt
   raft-tls-key-file: /etc/trusted-platform/raft/tls.key
   raft-tls-ca-file: /etc/trusted-platform/raft/ca.crt

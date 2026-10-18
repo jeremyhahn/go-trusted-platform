@@ -192,6 +192,7 @@ func init() {
 	rootCmd.AddCommand(kms.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(luks.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(appsvc.NewMessagingCommand(getCommonFlags))
+	rootCmd.AddCommand(appsvc.NewObjectStorageCommand(getCommonFlags))
 	rootCmd.AddCommand(ntpcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(piv.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(profile.NewCommand(getCommonFlags))

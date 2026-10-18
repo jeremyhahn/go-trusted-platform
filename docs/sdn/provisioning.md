@@ -1,5 +1,8 @@
 # Device Provisioning Flow
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The SDN side of device provisioning.
+
 ## Overview
 
 Device provisioning uses RFC 8555 (ACME) for certificate enrollment with
@@ -8,25 +11,29 @@ access with explicit client activation.
 
 ## Network Phases
 
+VLANs follow the environment numbering in
+[configuration.md](configuration.md#zone-based-network-configuration); the
+examples use environment 4.
+
 | Phase | VLAN | Access | Purpose |
 |-------|------|--------|---------|
-| Provisioning | 998 | Limited | ACME enrollment only |
-| Production | Profile-defined | Full | Normal operation |
-| Quarantine | 666 | Isolated | Compliance remediation |
-| Blocked | N/A | None | Certificate revoked |
+| Provisioning | provisioning zone (405) | Limited | DHCP, DNS, TFTP, ACME enrollment |
+| Admitted | the profile's admitted network | The zones of its role | Normal operation |
+| Quarantine | quarantine zone (404) | Isolated | Zone mismatch, remediation |
+| Blocked | N/A | None | Certificate expired or revoked |
 
 ## Provisioning Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                       PROVISIONING VLAN (998)                       │
+│                       PROVISIONING VLAN (405)                       │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 1. Device boots, receives DHCP lease (10.99.98.x)                   │
+│ 1. Device boots, receives DHCP lease (10.4.5.x)                     │
 │ 2. Device initiates ACME enrollment (enroll-01 challenge)           │
 │ 3. Server validates TPM attestation, issues IDevID                  │
 │ 4. SDNEnrollmentHook marks port as "enrolled"                       │
 │ 5. Device uses IDevID for mTLS: GET /api/v1/device/profile          │
-│ 6. Device receives full profile with production network config      │
+│ 6. Device receives full profile with admitted network config        │
 │ 7. Device prepares for network transition                           │
 │ 8. Device signals ready: POST /api/v1/device/activate               │
 └────────────────────────────────┬────────────────────────────────────┘
@@ -34,17 +41,17 @@ access with explicit client activation.
                      ┌───────────▼───────────┐
                      │   SERVER ACTIVATES    │
                      │  - Transition port    │
-                     │    to production      │
+                     │    to admitted        │
                      │  - Apply 802.1X       │
                      │    policy             │
                      │  - Update OVS flows   │
                      └───────────┬───────────┘
                                  │
 ┌────────────────────────────────▼────────────────────────────────────┐
-│                    PRODUCTION VLAN (from profile)                   │
+│                     ADMITTED VLAN (from profile)                    │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 9. Device applies production network config                         │
-│ 10. Device operational on production network                        │
+│ 9. Device applies admitted network config                           │
+│ 10. Device operational on admitted network                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -56,11 +63,11 @@ access with explicit client activation.
 Device                             DHCP Server
    │                                     │
    │──── DHCPDISCOVER ──────────────────>│
-   │<─── DHCPOFFER (10.99.98.x) ─────────│
+   │<─── DHCPOFFER (10.4.5.x) ───────────│
    │──── DHCPREQUEST ───────────────────>│
    │<─── DHCPACK ────────────────────────│
    │                                     │
-   │ Device now has IP in VLAN 998       │
+   │ Device now has IP in VLAN 405       │
 ```
 
 ### Step 2: ACME Enrollment
@@ -91,41 +98,44 @@ Device                             ACME Server
 
 ### Step 3: Enrollment Hook
 
+The ACME order-finalize hook (`NewSDNEnrollmentHookAdapter`,
+`pkg/webservice/v1/registry.go`) calls the SDN enrollment hook for TCG CSR
+enrollments only. In outline (`pkg/sdn/policy/enrollment_hook.go`):
+
 ```go
-// SDN enrollment hook triggered
 func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
-    // 1. Extract MAC from client IP via ARP
-    macAddr := h.macExtractor(event.ClientIP)
+    // Serialize against activation of the same serial
+    unlock := h.LockSerial(event.ProductSerial)
+    defer unlock()
 
-    // 2. Look up device profile
+    // 1. Find the device profile: by serial, then by the MAC behind the
+    //    client IP (ARP)
     profile, err := h.findProfileBySerial(event.ProductSerial)
+    if profile == nil {
+        profile, err = h.findProfileByMAC(h.macExtractor(event.ClientIP))
+    }
 
-    // 3. Get port ID from MAC. A miss is not an error: the device enrolled
+    // 2. Get port ID from MAC. A miss is not an error: the device enrolled
     //    before attaching to the fabric (e.g. over the management LAN).
+    macAddr := h.macExtractor(event.ClientIP)
     portID, ok := h.GetPortByMAC(macAddr)
     if !ok {
         // Record the pending activation with the MAC and defer the
         // transition; activation resolves the port once it exists.
         h.pendingActivations.Store(event.ProductSerial, &PendingActivation{
-            MAC:         macAddr,
-            Profile:     profile,
-            Certificate: event.Certificate,
+            MAC: macAddr, Profile: profile, Certificate: event.Certificate,
         })
         return nil
     }
 
-    // 4. Transition to Enrolled state (known port only)
+    // 3. Transition to Enrolled state (known port only)
     err = h.policyEngine.SetPortState(portID, PortStateEnrolled)
 
-    // 5. Store pending activation (the MAC lets a deferred port be
+    // 4. Store pending activation (the MAC lets a deferred port be
     //    resolved at activation)
     h.pendingActivations.Store(event.ProductSerial, &PendingActivation{
-        PortID:      portID,
-        MAC:         macAddr,
-        Profile:     profile,
-        Certificate: event.Certificate,
+        PortID: portID, MAC: macAddr, Profile: profile, Certificate: event.Certificate,
     })
-
     return nil
 }
 ```
@@ -141,7 +151,7 @@ Device                             Platform Server
    │<─── 200 OK ─────────────────────────│
    │     {                               │
    │       "serialNumber": "ABC123",     │
-   │       "productionNetwork": {        │
+   │       "admittedNetwork": {          │
    │         "vlan": 100,                │
    │         "useDHCP": true,            │
    │         "gateway": "10.0.1.1"       │
@@ -160,10 +170,10 @@ Device                             Platform Server
    │                                     │
    │     Server:                         │
    │     - Look up pending activation    │
-   │     - Build production policy       │
+   │     - Build admitted policy         │
    │     - Apply policy to port          │
    │     - Set VLAN via OVSDB            │
-   │     - Install production flows      │
+   │     - Install admitted flows        │
    │                                     │
    │<─── 200 OK ─────────────────────────│
    │     {                               │
@@ -215,12 +225,15 @@ Retrieves device profile using mTLS with IDevID.
 ```json
 {
   "serialNumber": "ABC123",
-  "productionNetwork": {
+  "admittedNetwork": {
     "vlan": 100,
     "useDHCP": true,
-    "staticIP": "",
     "gateway": "10.0.1.1",
     "dns": ["10.0.1.53"]
+  },
+  "provisioningNetwork": {
+    "vlan": 405,
+    "useDHCP": true
   },
   "acls": [
     {
@@ -237,21 +250,25 @@ Retrieves device profile using mTLS with IDevID.
 }
 ```
 
+`staticIP`, `gateway`, `dns`, `provisioningNetwork`, `acls` and `rateLimit`
+are omitted when empty.
+
 **Errors:**
 | Code | Description |
 |------|-------------|
-| 401 | Invalid or missing client certificate |
-| 403 | Certificate not authorized for this device |
+| 400 | No device serial in the request context |
+| 401 | No TLS, no client certificate, a certificate that does not verify for client auth, or no device serial in the certificate |
 | 404 | Profile not found for device serial |
+| 500 | Profile retrieval is not configured on this server |
 
 ### POST /api/v1/device/activate
 
-Signals device is ready for production network transition.
+Signals device is ready for the admitted network transition.
 
 **Request:**
 - Method: POST
 - Authentication: mTLS with IDevID certificate
-- Body: Empty or optional metadata
+- Body: none (the handler does not read it)
 
 **Response (200 OK):**
 ```json
@@ -308,10 +325,11 @@ Signals device is ready for production network transition.
 **Errors:**
 | Code | Description |
 |------|-------------|
+| 400 | No device serial in the request context |
 | 401 | Invalid or missing client certificate |
-| 404 | No pending activation for device |
+| 404 | No pending activation for device (including a device already activated: a successful activation consumes it) |
 | 404 | No port registered for the device MAC (not yet attached to the fabric — retry after attaching; the pending activation is retained) |
-| 409 | Device already activated |
+| 500 | Activation is not configured on this server (no SDN enrollment) |
 | 500 | Failed to apply network policy |
 | 500 | Pending activation superseded by a concurrent re-enrollment — nothing was applied, the switch was never touched; a retry prechecks the current record |
 | 500 | Physical switch commit failed after SDN activation — SDN side authorized, physical port verified closed on the provisioning VLAN, pending activation reinstated (retry activation, no re-enrollment needed) |
@@ -331,111 +349,96 @@ when `status` is `quarantined`, never the admitted VLAN.
 ```go
 const (
     PortStateUnconnected   PortState = iota
-    PortStateProvisioning  // VLAN 998, limited access
-    PortStateEnrolled      // Still VLAN 998, awaiting activation
-    PortStateAuthorized    // Production VLAN, full access
-    PortStateQuarantined   // VLAN 666, remediation required
+    PortStateProvisioning  // Provisioning VLAN, limited access
+    PortStateEnrolled      // Still on the provisioning VLAN, awaiting activation
+    PortStateUnauthorized  // 802.1X: not authenticated
+    PortStateAuthenticating // 802.1X: authentication in progress
+    PortStateAuthorized    // Admitted, the zones of its role
+    PortStateQuarantined   // Quarantine VLAN, remediation required
     PortStateBlocked       // DROP all traffic
 )
 ```
 
 ### State Machine
 
+The provisioning path (`pkg/sdn/policy/state.go`; the 802.1X states are in
+[802.1x.md](802.1x.md)):
+
 ```
                  device_connect
-Unconnected ──────────────────────────> Provisioning
-                                              │
-                                              │ enrollment_complete
+Unconnected ──────────────────────────> Provisioning <──────────────┐
+                                              │                     │
+                                              │ enrollment_complete │ re-enroll
+                                              ▼                     │
+                                          Enrolled ─────────────────┤
+                                              │                     │
+                                              │ client_activates    │
+                                              ▼                     │
+                                         Authorized <─────────────┐ │
+                                              │                   │ │
+                                 zone mismatch│                   │ remediation
+                                 at activation│                   │ complete
+                                              ▼                   │ │
+                                        Quarantined ──────────────┘ │
+                                              │  └──────────────────┘
+                                              │ remediation fails
                                               ▼
-                                          Enrolled
-                                              │
-                                              │ client_activates
-                                              ▼
-                                         Authorized <─────────────┐
-                                              │                   │
-                                cert_expired/ │                   │ remediation
-                                compliance    │                   │ complete
-                                              ▼                   │
-                                        Quarantined ──────────────┘
-                                              │
-                                              │ cert_revoked
-                                              ▼
-                                           Blocked
+                                           Blocked ──> Unconnected / Provisioning (admin)
 ```
+
+An expired or revoked certificate moves an Authorized port straight to
+Blocked. Any state can move to Blocked.
 
 ## Provisioning Network Flows
 
-OVS flows for provisioning VLAN allow limited access:
-
-```
-# DHCP (UDP 67, 68)
-priority=100,udp,tp_dst=67,actions=normal
-priority=100,udp,tp_dst=68,actions=normal
-
-# DNS (UDP/TCP 53, 8053)
-priority=100,udp,tp_dst=53,actions=normal
-priority=100,tcp,tp_dst=53,actions=normal
-priority=100,udp,tp_dst=8053,actions=normal
-priority=100,tcp,tp_dst=8053,actions=normal
-
-# HTTPS to platform server (443, 8443)
-priority=100,tcp,tp_dst=443,actions=normal
-priority=100,tcp,tp_dst=8443,actions=normal
-
-# Drop all other traffic
-priority=0,actions=drop
-```
+The provisioning zone's OpenFlow rules (ARP, DHCP, DNS, TFTP, ACME, package
+repositories, optional ICMP, default drop) are listed with their priorities
+in [configuration.md](configuration.md#per-zone-openflow-templates).
 
 ## Client Implementation
 
+`pkg/provisioning` is the device-side client for both endpoints:
+
 ```go
-// After receiving IDevID from ACME enrollment:
-
-// 1. Create mTLS client with IDevID
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{idevidCert},
-    RootCAs:      caCertPool,
-}
-client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
-
-// 2. Fetch device profile
-resp, err := client.Get("https://platform.example.com/api/v1/device/profile")
+// After receiving the IDevID from ACME enrollment:
+client, err := provisioning.NewClient(&provisioning.ClientConfig{
+    ServerURL:      "https://platform.example.com:8443",
+    Certificate:    idevidCert,
+    PrivateKey:     idevidKey,
+    CACertPool:     caCertPool,
+    TLSCertificate: &idevidChain, // leaf plus intermediates
+}, logger)
 if err != nil {
     return err
 }
-var profile DeviceProfile
-json.NewDecoder(resp.Body).Decode(&profile)
+defer func() {
+    if err := client.Close(); err != nil {
+        logger.Warn("closing provisioning client", "error", err)
+    }
+}()
 
-// 3. Prepare for network transition
-saveProductionConfig(profile.ProductionNetwork)
-
-// 4. Signal ready for activation
-resp, err = client.Post("https://platform.example.com/api/v1/device/activate",
-    "application/json", nil)
+// GET /api/v1/device/profile, then POST /api/v1/device/activate
+profile, activation, err := client.FetchProfileAndActivate(ctx)
 if err != nil {
     return err
 }
 
-// 5. Server has transitioned port - apply new network config
-time.Sleep(500 * time.Millisecond) // Allow OVS transition
-applyNetworkConfig(profile.ProductionNetwork)
-
-// 6. Verify connectivity on production network
-if err := waitForConnectivity(profile.ProductionNetwork.Gateway); err != nil {
-    return err
-}
-
-log.Println("Successfully transitioned to production network")
+// "activated": apply profile.AdmittedNetwork.
+// "quarantined": the port is on activation.VLAN, the quarantine VLAN.
+applyNetworkConfig(profile.AdmittedNetwork, activation)
 ```
+
+`FetchProfile`, `Activate`, `Heartbeat` and `BootDelivery` are also available
+on their own.
 
 ## Security Considerations
 
-1. **Provisioning Network Isolation** - VLAN 998 only reaches platform server
+1. **Provisioning Network Isolation** - the provisioning zone reaches only DHCP, DNS, TFTP, ACME and package repositories
 2. **mTLS Required** - Profile endpoint requires valid IDevID
 3. **No Unauthenticated Access** - All device data requires certificate auth
 4. **Server-Side Transition** - Client cannot force VLAN change
 5. **Attestation Required** - IDevID only issued after TPM attestation
-6. **Certificate Binding** - MAC address bound to certificate during enrollment
+6. **MAC Binding** - the pending activation records the device MAC seen at enrollment
 
 ## Error Recovery
 
@@ -458,23 +461,17 @@ If activation fails:
 If network transition fails after activation:
 1. Device may lose connectivity briefly
 2. Device should retry profile fetch and activation
-3. Server-side timeout returns port to provisioning
+3. A failed physical switch commit leaves the port closed on the provisioning
+   VLAN and reinstates the pending activation; there is no server-side timeout
 
 ## Monitoring
 
-### Key Metrics
+No provisioning metrics are exported. The hook and the activation handler log
+each step:
 
-| Metric | Description |
-|--------|-------------|
-| provisioning_duration | Time from boot to enrollment |
-| enrollment_success_rate | Successful enrollments / attempts |
-| activation_duration | Time from enrollment to activation |
-| transition_failures | Failed network transitions |
-
-### Log Events
-
-```json
-{"level":"info","msg":"device enrolled","serial":"ABC123","port":"eth1","vlan":998}
-{"level":"info","msg":"device activated","serial":"ABC123","port":"eth1","vlan":100}
-{"level":"warn","msg":"activation failed","serial":"ABC123","error":"..."}
+```
+level=INFO msg="device enrolled successfully, awaiting activation" port_id=... previous_state=... new_state=enrolled serial=ABC123
+level=INFO msg="activating device" serial=ABC123 port_id=... profile=...
+Device ABC123 activation complete: status=activated vlan=100 zone=... port=...
+SDN activation failed for device ABC123: ...
 ```

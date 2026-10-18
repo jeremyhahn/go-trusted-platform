@@ -1063,7 +1063,7 @@ func TestOverlayHandlerProxy(t *testing.T) {
 	t.Run("hands everything to the handler once built", func(t *testing.T) {
 		overlay := &admissionOverlay{}
 		proxy := &overlayHandlerProxy{}
-		proxy.set(overlay)
+		proxy.set(overlay, nil)
 
 		require.NoError(t, proxy.RevokeVTEP(ctx, admissionVTEP))
 		assert.Equal(t, []netip.Addr{admissionVTEP}, proxy.RefusedVTEPs())

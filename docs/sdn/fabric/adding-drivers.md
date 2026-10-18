@@ -1,5 +1,8 @@
 # Adding Switch Vendor Drivers
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How to write a switch vendor driver for `pkg/sdn/fabric`.
+
 This guide explains how to implement a new fabric driver for a switch vendor (e.g., Arista EOS, Juniper).
 
 ## Overview
@@ -10,7 +13,8 @@ Each vendor driver is a separate package in `pkg/sdn/fabric/{vendor}/` that impl
 
 ```
 pkg/sdn/fabric/
-├── driver.go              # Driver interface
+├── config.go              # FabricConfig and its validation
+├── driver.go              # Driver interface and registry
 ├── types.go               # Shared types
 ├── manager.go             # Manager implementation
 ├── errors.go              # Shared error types
@@ -41,7 +45,7 @@ import (
 
 // driver implements the fabric.Driver interface for {Vendor}.
 type driver struct {
-    config SwitchConfig
+    config fabric.SwitchConfig
     logger *slog.Logger
     // Add vendor-specific fields (SSH client, API client, etc.)
 }
@@ -49,7 +53,7 @@ type driver struct {
 // NewDriver creates a driver for {Vendor}.
 func NewDriver(cfg fabric.SwitchConfig, logger *slog.Logger) (fabric.Driver, error) {
     if logger == nil {
-        logger = slog.New(slog.DiscardHandler())
+        logger = slog.New(slog.DiscardHandler)
     }
     return &driver{
         config: cfg,
@@ -201,6 +205,7 @@ package vendor
 import (
     "regexp"
     "strconv"
+    "strings"
 )
 
 // ParseVLANList parses "show vlan" output to extract VLAN IDs
@@ -338,10 +343,11 @@ func TestSetPortAccess(t *testing.T) {
 
 ## Step 7: Register the Driver in the Main Module
 
-Update the root `__init__.go` or ensure the package is imported somewhere to trigger the `init()` function:
+The `init()` from Step 2 runs only when some binary imports the package. The Nexus driver registers
+itself in `pkg/sdn/fabric/nexus/driver.go`:
 
 ```go
-// In pkg/sdn/fabric/nexus/init.go or similar
+// pkg/sdn/fabric/nexus/driver.go
 package nexus
 
 import (
@@ -349,14 +355,14 @@ import (
 )
 
 func init() {
-    fabric.RegisterDriver("cisco-nexus", NewDriver)
+    fabric.RegisterDriver(vendorName, NewDriver) // vendorName = "cisco-nexus"
 }
 ```
 
 For your new vendor:
 
 ```go
-// In pkg/sdn/fabric/{vendor}/init.go
+// In pkg/sdn/fabric/{vendor}/driver.go
 package vendor
 
 import (
@@ -368,10 +374,10 @@ func init() {
 }
 ```
 
-Ensure the package is imported in the main daemon:
+Import the package from the binary that builds the fabric manager. No binary does today, Nexus
+included (see [README](README.md#status)):
 
 ```go
-// In cmd/platformd/main.go or similar
 import (
     _ "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric/nexus"
     _ "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric/vendor"  // Your new vendor
@@ -382,10 +388,10 @@ import (
 
 See `pkg/sdn/fabric/nexus/` for a complete reference implementation with:
 
-- SSH connection pooling
-- NX-OS CLI command execution
-- Output parsing for VLANs, ports, and LAGs
-- Error handling and recovery
+- SSH through an enclave-backed private key and a pinned host key (no trust-on-first-use)
+- An `Executor` seam (`Execute`, `ExecuteBatch`) that tests replace via `NewDriverWithExecutor`
+- NX-OS CLI command templates (`commands.go`)
+- Output parsing of `show running-config interface` so a converged port is left untouched
 
 ## Testing Your Driver
 
@@ -399,7 +405,8 @@ go test ./pkg/sdn/fabric/... -v
 
 ## Adding Driver to Documentation
 
-Update `pkg/sdn/fabric/README.md` "Supported Vendors" table to include your new driver.
+Add the vendor name to the `vendor` row in [configuration.md](configuration.md#switches) and
+document any vendor-specific fields there.
 
 ## Next Steps
 
@@ -435,15 +442,13 @@ func (d *driver) EnsureVLAN(ctx context.Context, vlan uint16, name string) error
 
 ### Error Handling
 
-Wrap vendor-specific errors in fabric errors:
+Return the driver's own typed errors. The manager wraps every driver operation failure in
+`fabric.ErrDriverOperation` (switch ID, operation, cause) and a `Connect` failure in
+`fabric.ErrDriverConnect`, so the driver does not wrap again:
 
 ```go
 if err := d.executeCommand(ctx, cmd); err != nil {
-    return fabric.ErrVLANConfiguration{
-        VLAN:   vlan,
-        Switch: d.config.ID,
-        Cause:  err,
-    }
+    return ErrSSHConnection{Host: d.config.MgmtIP, Err: err}
 }
 ```
 

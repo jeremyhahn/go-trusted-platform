@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdktenant "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tenant"
 )
 
@@ -214,8 +215,9 @@ type ComputeUsageSummary struct {
 
 // NetworkUsageSummary is a network usage representation
 type NetworkUsageSummary struct {
-	Bridges UsageItem `json:"bridges" yaml:"bridges"`
-	Ports   UsageItem `json:"ports" yaml:"ports"`
+	Bridges       UsageItem `json:"bridges" yaml:"bridges"`
+	Ports         UsageItem `json:"ports" yaml:"ports"`
+	BandwidthMbps UsageItem `json:"bandwidth_mbps" yaml:"bandwidth_mbps"`
 }
 
 // StorageUsageSummary is a storage usage representation
@@ -230,39 +232,40 @@ type UsageItem struct {
 	Max  int64 `json:"max" yaml:"max"`
 }
 
-// toUsageSummary converts a domain Tenant to UsageSummary.
-// Note: The quota messages only contain max values, not usage. This returns 0 for used
-// values. To get actual usage, you would need to query TenantUsage separately.
-func toUsageSummary(tenantID string, t *sdktenant.Tenant) *UsageSummary {
-	summary := &UsageSummary{
-		TenantID: tenantID,
-		Compute:  ComputeUsageSummary{},
-		Network:  NetworkUsageSummary{},
-		Storage:  StorageUsageSummary{},
+// toUsageSummary pairs what a tenant uses with its quota. Storage space in use
+// is the tenant's disk usage in GB, set against its volume quota in GB. A
+// quota the tenant does not have reads as 0, which the table shows as
+// unlimited.
+func toUsageSummary(t *sdktenant.Tenant, usage *platformv1.TenantUsage) *UsageSummary {
+	compute := t.ComputeQuota
+	if compute == nil {
+		compute = &sdktenant.ComputeQuota{}
+	}
+	network := t.NetworkQuota
+	if network == nil {
+		network = &sdktenant.NetworkQuota{}
+	}
+	storage := t.StorageQuota
+	if storage == nil {
+		storage = &sdktenant.StorageQuota{}
 	}
 
-	if t.ComputeQuota != nil {
-		summary.Compute = ComputeUsageSummary{
-			VMs:        UsageItem{Used: 0, Max: t.ComputeQuota.MaxVMs},
-			Containers: UsageItem{Used: 0, Max: t.ComputeQuota.MaxContainers},
-			VCPUs:      UsageItem{Used: 0, Max: t.ComputeQuota.MaxVCPUs},
-			MemoryMB:   UsageItem{Used: 0, Max: t.ComputeQuota.MaxMemoryMB},
-		}
+	return &UsageSummary{
+		TenantID: t.ID,
+		Compute: ComputeUsageSummary{
+			VMs:        UsageItem{Used: usage.GetVms(), Max: compute.MaxVMs},
+			Containers: UsageItem{Used: usage.GetContainers(), Max: compute.MaxContainers},
+			VCPUs:      UsageItem{Used: usage.GetVcpus(), Max: compute.MaxVCPUs},
+			MemoryMB:   UsageItem{Used: usage.GetMemoryMb(), Max: compute.MaxMemoryMB},
+		},
+		Network: NetworkUsageSummary{
+			Bridges:       UsageItem{Used: usage.GetBridges(), Max: network.MaxBridges},
+			Ports:         UsageItem{Used: usage.GetPorts(), Max: network.MaxPorts},
+			BandwidthMbps: UsageItem{Used: usage.GetBandwidthMbps(), Max: network.MaxBandwidthMbps},
+		},
+		Storage: StorageUsageSummary{
+			VolumesGB: UsageItem{Used: usage.GetDiskGb(), Max: storage.MaxVolumesGB},
+			Snapshots: UsageItem{Used: usage.GetSnapshots(), Max: storage.MaxSnapshots},
+		},
 	}
-
-	if t.NetworkQuota != nil {
-		summary.Network = NetworkUsageSummary{
-			Bridges: UsageItem{Used: 0, Max: t.NetworkQuota.MaxBridges},
-			Ports:   UsageItem{Used: 0, Max: t.NetworkQuota.MaxPorts},
-		}
-	}
-
-	if t.StorageQuota != nil {
-		summary.Storage = StorageUsageSummary{
-			VolumesGB: UsageItem{Used: 0, Max: t.StorageQuota.MaxVolumesGB},
-			Snapshots: UsageItem{Used: 0, Max: t.StorageQuota.MaxSnapshots},
-		}
-	}
-
-	return summary
 }

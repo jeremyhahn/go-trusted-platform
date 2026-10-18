@@ -33,6 +33,12 @@ type MemoryBackendConfig struct {
 	Clock func() time.Time
 }
 
+// maxMemoryPoolSize bounds the addresses one memory-backend pool may hold.
+// The backend tracks a pool with one bit per usable address, so the bound
+// caps a pool's bitmap at 2 MiB: an IPv4 /8 or an IPv6 /104. Larger pools,
+// such as an IPv6 /64, belong to the QuicBaaS backend, which keeps no bitmap.
+const maxMemoryPoolSize = 1 << 24
+
 // MemoryBackend implements ipam.Allocator using in-memory storage.
 // It is safe for concurrent use and designed for testing and single-node development.
 type MemoryBackend struct {
@@ -85,6 +91,9 @@ func (m *MemoryBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error {
 
 	if err := m.validatePool(pool); err != nil {
 		return err
+	}
+	if ipam.CalculatePoolSize(pool.CIDR) > maxMemoryPoolSize {
+		return &ipam.ErrPoolTooLarge{CIDR: pool.CIDR, Max: maxMemoryPoolSize}
 	}
 
 	m.mu.Lock()

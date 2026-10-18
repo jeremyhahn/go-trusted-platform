@@ -156,6 +156,10 @@ platformctl luks enroll-passphrase --device /dev/<device> \
 
 Output: `slot`, `token_id`.
 
+`--require-pin` is refused by the daemon (`ErrLUKSFIDO2PINUnsupported`, an
+invalid-request error) and nothing is written, until the SDK ships a
+PIN-capable fido2 handler (SDK seam #584). Use `--require-uv`.
+
 ```
 platformctl luks enroll-fido2 --device /dev/<device> \
     --existing-passphrase '<existing>' --credential-id '<base64url-id>' --require-uv

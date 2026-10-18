@@ -56,7 +56,6 @@ func (m *opsMockBackend) AttachContainer(ctx context.Context, id string, opts Ex
 type staticAttachSession struct {
 	out      chan AttachChunk
 	exitCode int
-	closed   bool
 }
 
 func newStaticAttachSession(chunks []AttachChunk, exitCode int) *staticAttachSession {
@@ -70,7 +69,7 @@ func newStaticAttachSession(chunks []AttachChunk, exitCode int) *staticAttachSes
 
 func (s *staticAttachSession) Output() <-chan AttachChunk { return s.out }
 func (s *staticAttachSession) Wait() (int, error)         { return s.exitCode, nil }
-func (s *staticAttachSession) Close() error               { s.closed = true; return nil }
+func (s *staticAttachSession) Close() error               { return nil }
 
 func newOpsOrchestrator(t *testing.T, backend PodmanBackend) (*Orchestrator, *Container) {
 	t.Helper()

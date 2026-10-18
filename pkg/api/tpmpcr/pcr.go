@@ -76,3 +76,9 @@ func Extend(tpm Extender, index int, hashAlg string, data []byte) error {
 	}
 	return tpm.ExtendPCR(index, hashAlg, data)
 }
+
+// ExtendedMessage is the status message every transport returns for a
+// successful extend of the PCR at index.
+func ExtendedMessage(index int) string {
+	return fmt.Sprintf("PCR %d extended", index)
+}

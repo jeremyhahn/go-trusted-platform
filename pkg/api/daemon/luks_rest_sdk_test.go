@@ -210,14 +210,14 @@ func luksRESTCases() []luksRESTCase {
 			func(ctx context.Context, c *lukssdk.GRPCClient, device string) (any, error) {
 				return c.EnrollFIDO2(ctx, &lukssdk.EnrollFIDO2Request{
 					Device: device, ExistingPassphrase: luksTestExisting, CredentialID: "cred-1",
-					RequirePIN: true, RequireUV: true,
+					RequireUV: true,
 				})
 			},
 			isLUKSError[*lukssdk.ErrEnrollFIDO2Failed],
 			func(t *testing.T, reply any, b *luksWireBackend) {
 				want := LUKSEnrollFIDO2Request{
 					Device: "/dev/sda", ExistingPassphrase: luksTestExisting, CredentialID: "cred-1",
-					RequirePIN: true, RequireUV: true,
+					RequireUV: true,
 				}
 				if b.fido2 == nil || *b.fido2 != want {
 					t.Errorf("backend got %+v", b.fido2)

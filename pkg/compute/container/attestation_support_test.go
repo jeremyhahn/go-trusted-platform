@@ -259,7 +259,6 @@ type mockHostTPM struct {
 	extendCalls []extendCall
 	quoteCalls  int
 	verifyCalls int
-	readCalls   int
 
 	extendErr error
 	readErr   error
@@ -330,7 +329,6 @@ func (m *mockHostTPM) ReadPCRs(pcrList []uint) ([]orchestration.PCRBank, error) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.readCalls++
 	if m.readErr != nil {
 		return nil, m.readErr
 	}

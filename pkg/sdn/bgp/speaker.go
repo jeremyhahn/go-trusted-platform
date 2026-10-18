@@ -1179,13 +1179,16 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 		}
 	}
 
-	// Configure address families, each with its own prefix limit.
+	// Configure address families, each with its own prefix limit. Under
+	// graceful restart each family is also named in the capability: GoBGP
+	// sends one tuple per family whose MpGracefulRestart is enabled, and a
+	// capability with no tuples preserves no routes across a restart.
 	for _, af := range cfg.Families() {
 		family := s.addressFamilyToAPI(af)
 		if family == nil {
 			continue
 		}
-		peer.AfiSafis = append(peer.AfiSafis, &api.AfiSafi{
+		afiSafi := &api.AfiSafi{
 			Config: &api.AfiSafiConfig{
 				Enabled: true,
 				Family:  family,
@@ -1195,7 +1198,13 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 				MaxPrefixes:          cfg.PrefixLimit(af),
 				ShutdownThresholdPct: prefixLimitWarnPct,
 			},
-		})
+		}
+		if peer.GracefulRestart != nil {
+			afiSafi.MpGracefulRestart = &api.MpGracefulRestart{
+				Config: &api.MpGracefulRestartConfig{Enabled: true},
+			}
+		}
+		peer.AfiSafis = append(peer.AfiSafis, afiSafi)
 	}
 
 	// Set admin state

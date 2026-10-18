@@ -4,7 +4,7 @@
 # Uses the devcontainer image and builds binaries at runtime.
 #
 # Prerequisites:
-#   docker build -t go-trusted-platform-dev:latest build/docker/devcontainer/
+#   make build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest
 #
 # Usage:
 #   docker compose up -d                    # Start all services

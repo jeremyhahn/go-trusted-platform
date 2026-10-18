@@ -53,8 +53,8 @@ import (
 //	0x54      scheduler category
 //	0x55      messaging category
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
-//	0x69      vm (ext cat)      0xB5-0xBA iam roles
-//	                            0xBB-0xBF reserved (iam groups, removed)
+//	0x60      objectstorage cat 0xB5-0xBA iam roles
+//	0x69      vm (ext cat)      0xBB-0xBF reserved (iam groups, removed)
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
 //	0x6F      container         0xCC-0xCF switch/kms-ext/secrets/prov cats
 //	0x70-0x7F attestation       0xD0-0xDA kms crypto
@@ -142,6 +142,7 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"cache":          {payload: []byte{quicwire.CacheSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: cache"},
 	"scheduler":      {payload: []byte{quicwire.SchedulerSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: scheduler"},
 	"messaging":      {payload: []byte{quicwire.MessagingSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: messaging"},
+	"objectstorage":  {payload: []byte{quicwire.ObjectStorageSubHeadObject}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: objectstorage"},
 	"pxe":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: pxe"},
 }
 
@@ -213,7 +214,8 @@ var quicWireOwners = []struct {
 	{0x54, 0x54, "scheduler"},
 	{0x55, 0x55, "messaging"},
 	{0x56, 0x5F, "tpm2"},
-	{0x60, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
+	{0x60, 0x60, "objectstorage"},
+	{0x61, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
 	{0x69, 0x69, "vm"},
 	{0x6A, 0x6A, "reserved"}, // retired VMGetState (#704), unclassified
 	{0x6B, 0x6E, "tpm2"},
@@ -393,6 +395,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpCacheCategory":             {value: quicwire.OpCacheCategory, mode: wireDirect, family: "cache"},
 	"OpSchedulerCategory":         {value: quicwire.OpSchedulerCategory, mode: wireDirect, family: "scheduler"},
 	"OpMessagingCategory":         {value: quicwire.OpMessagingCategory, mode: wireDirect, family: "messaging"},
+	"OpObjectStorageCategory":     {value: quicwire.OpObjectStorageCategory, mode: wireDirect, family: "objectstorage"},
 	"OpIDevIDGenerate":            {value: quicwire.OpIDevIDGenerate, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDInfo":                {value: quicwire.OpIDevIDInfo, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDDelete":              {value: quicwire.OpIDevIDDelete, mode: wireDirect, family: "tpm2"},

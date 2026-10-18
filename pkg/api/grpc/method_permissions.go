@@ -133,6 +133,8 @@ func buildGRPCMethodPermissions() map[string]string {
 		schedulerRes = "scheduler"
 		messagingRes = "messaging"
 
+		objectStorageRes = "objectstorage"
+
 		platform     = "platform"
 		attestation  = "attestation"
 		bmc          = "bmc"
@@ -287,6 +289,15 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.MessagingService/GetStats":        scope(messagingRes, read),
 		"/platform.v1.MessagingService/GetDedupStats":   scope(messagingRes, read),
 		"/platform.v1.MessagingService/GetChannelStats": scope(messagingRes, read),
+
+		"/platform.v1.ObjectStorageService/PutObject":         scope(objectStorageRes, write),
+		"/platform.v1.ObjectStorageService/GetObject":         scope(objectStorageRes, read),
+		"/platform.v1.ObjectStorageService/DeleteObject":      scope(objectStorageRes, del),
+		"/platform.v1.ObjectStorageService/HeadObject":        scope(objectStorageRes, read),
+		"/platform.v1.ObjectStorageService/ListObjects":       scope(objectStorageRes, read),
+		"/platform.v1.ObjectStorageService/CopyObject":        scope(objectStorageRes, write),
+		"/platform.v1.ObjectStorageService/ListObjectsByTag":  scope(objectStorageRes, read),
+		"/platform.v1.ObjectStorageService/ListTenantObjects": scope(objectStorageRes, read),
 
 		// ---------------------------------------------------------------------
 		// Proxy (ProxyService) — reverse-proxy route/pool source of truth
@@ -905,34 +916,37 @@ func buildGRPCMethodPermissions() map[string]string {
 		// reads, seal and NV writes are writes; removing keys or clearing the
 		// TPM is a delete.
 		// ---------------------------------------------------------------------
-		"/platform.v1.TPMService/Info":                scope(tpm, read),
-		"/platform.v1.TPMService/GetAK":               scope(tpm, read),
-		"/platform.v1.TPMService/GetEK":               scope(tpm, read),
-		"/platform.v1.TPMService/GetEKCertificate":    scope(tpm, read),
-		"/platform.v1.TPMService/GetSRK":              scope(tpm, read),
-		"/platform.v1.TPMService/GetEventLog":         scope(tpm, read),
-		"/platform.v1.TPMService/GetPCRs":             scope(tpm, read),
-		"/platform.v1.TPMService/GetRandom":           scope(tpm, read),
-		"/platform.v1.TPMService/Quote":               scope(tpm, read),
-		"/platform.v1.TPMService/VerifyQuote":         scope(tpm, read),
-		"/platform.v1.TPMService/Certify":             scope(tpm, read),
-		"/platform.v1.TPMService/ReadNVRAM":           scope(tpm, read),
-		"/platform.v1.TPMService/Unseal":              scope(tpm, read),
-		"/platform.v1.TPMService/MakeCredential":      scope(tpm, read),
-		"/platform.v1.TPMService/ActivateCredential":  scope(tpm, write),
-		"/platform.v1.TPMService/CreateAK":            scope(tpm, write),
-		"/platform.v1.TPMService/CreateEK":            scope(tpm, write),
-		"/platform.v1.TPMService/CreateSRK":           scope(tpm, write),
-		"/platform.v1.TPMService/DefineNVRAM":         scope(tpm, write),
-		"/platform.v1.TPMService/WriteNVRAM":          scope(tpm, write),
-		"/platform.v1.TPMService/ImportEKCertificate": scope(tpm, write),
-		"/platform.v1.TPMService/Provision":           scope(tpm, write),
-		"/platform.v1.TPMService/Seal":                scope(tpm, write),
-		"/platform.v1.TPMService/DeleteAK":            scope(tpm, del),
-		"/platform.v1.TPMService/DeleteEK":            scope(tpm, del),
-		"/platform.v1.TPMService/DeleteSRK":           scope(tpm, del),
-		"/platform.v1.TPMService/UndefineNVRAM":       scope(tpm, del),
-		"/platform.v1.TPMService/Clear":               scope(tpm, del),
+		"/platform.v1.TPMService/Info":                  scope(tpm, read),
+		"/platform.v1.TPMService/GetCapabilities":       scope(tpm, read),
+		"/platform.v1.TPMService/GetPlatformAttributes": scope(tpm, read),
+		"/platform.v1.TPMService/ExtendPCR":             scope(tpm, write),
+		"/platform.v1.TPMService/GetAK":                 scope(tpm, read),
+		"/platform.v1.TPMService/GetEK":                 scope(tpm, read),
+		"/platform.v1.TPMService/GetEKCertificate":      scope(tpm, read),
+		"/platform.v1.TPMService/GetSRK":                scope(tpm, read),
+		"/platform.v1.TPMService/GetEventLog":           scope(tpm, read),
+		"/platform.v1.TPMService/GetPCRs":               scope(tpm, read),
+		"/platform.v1.TPMService/GetRandom":             scope(tpm, read),
+		"/platform.v1.TPMService/Quote":                 scope(tpm, read),
+		"/platform.v1.TPMService/VerifyQuote":           scope(tpm, read),
+		"/platform.v1.TPMService/Certify":               scope(tpm, read),
+		"/platform.v1.TPMService/ReadNVRAM":             scope(tpm, read),
+		"/platform.v1.TPMService/Unseal":                scope(tpm, read),
+		"/platform.v1.TPMService/MakeCredential":        scope(tpm, read),
+		"/platform.v1.TPMService/ActivateCredential":    scope(tpm, write),
+		"/platform.v1.TPMService/CreateAK":              scope(tpm, write),
+		"/platform.v1.TPMService/CreateEK":              scope(tpm, write),
+		"/platform.v1.TPMService/CreateSRK":             scope(tpm, write),
+		"/platform.v1.TPMService/DefineNVRAM":           scope(tpm, write),
+		"/platform.v1.TPMService/WriteNVRAM":            scope(tpm, write),
+		"/platform.v1.TPMService/ImportEKCertificate":   scope(tpm, write),
+		"/platform.v1.TPMService/Provision":             scope(tpm, write),
+		"/platform.v1.TPMService/Seal":                  scope(tpm, write),
+		"/platform.v1.TPMService/DeleteAK":              scope(tpm, del),
+		"/platform.v1.TPMService/DeleteEK":              scope(tpm, del),
+		"/platform.v1.TPMService/DeleteSRK":             scope(tpm, del),
+		"/platform.v1.TPMService/UndefineNVRAM":         scope(tpm, del),
+		"/platform.v1.TPMService/Clear":                 scope(tpm, del),
 
 		// ---------------------------------------------------------------------
 		// Tenants (TenantService). Per-tenant barrier and DEK operations change

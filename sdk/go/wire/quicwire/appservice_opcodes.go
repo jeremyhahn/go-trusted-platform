@@ -15,14 +15,17 @@ package quicwire
 
 // Application service category opcodes.
 //
-// CacheService, SchedulerService and MessagingService — the services
-// platformd serves over the composed go-quicbaas SDK — each multiplex under
-// one category: payload[0] selects the sub-operation and payload[1:] carries
-// the MessagePack-encoded platform.v1 request. The server-side dispatcher
-// lives at pkg/api/daemon/quic_app_services.go, and the SDK QUIC adapter
-// mapping at sdk/go/transport/quic/aac_app_services.go.
+// CacheService, SchedulerService, MessagingService and ObjectStorageService —
+// the services platformd serves over the composed go-quicbaas SDK — each
+// multiplex under one category: payload[0] selects the sub-operation and
+// payload[1:] carries the MessagePack-encoded platform.v1 request. The
+// server-side dispatcher lives at pkg/api/daemon/quic_app_services.go, and
+// the SDK QUIC adapter mapping at sdk/go/transport/quic/aac_app_services.go.
 //
-// They take 0x53-0x55, the rest of the block reserved after OpNTPCategory.
+// Cache, Scheduler and Messaging take 0x53-0x55, the rest of the block
+// reserved after OpNTPCategory. ObjectStorage takes 0x60, the first of the
+// top-level bytes the VM opcodes left when they moved under
+// OpVMExtendedCategory.
 const (
 	// OpCacheCategory multiplexes the cache sub-operations.
 	OpCacheCategory byte = 0x53
@@ -32,6 +35,9 @@ const (
 
 	// OpMessagingCategory multiplexes the messaging sub-operations.
 	OpMessagingCategory byte = 0x55
+
+	// OpObjectStorageCategory multiplexes the object storage sub-operations.
+	OpObjectStorageCategory byte = 0x60
 )
 
 // Cache sub-opcodes for the OpCacheCategory (0x53) category opcode.
@@ -110,4 +116,33 @@ const (
 
 	// MessagingSubGetChannelStats returns the counters of one channel.
 	MessagingSubGetChannelStats byte = 0x08
+)
+
+// Object storage sub-opcodes for the OpObjectStorageCategory (0x60) category
+// opcode.
+const (
+	// ObjectStorageSubPutObject stores an object.
+	ObjectStorageSubPutObject byte = 0x01
+
+	// ObjectStorageSubGetObject returns an object with its data.
+	ObjectStorageSubGetObject byte = 0x02
+
+	// ObjectStorageSubDeleteObject removes an object.
+	ObjectStorageSubDeleteObject byte = 0x03
+
+	// ObjectStorageSubHeadObject returns the metadata of an object.
+	ObjectStorageSubHeadObject byte = 0x04
+
+	// ObjectStorageSubListObjects lists the objects under a key prefix.
+	ObjectStorageSubListObjects byte = 0x05
+
+	// ObjectStorageSubCopyObject copies an object to a new key.
+	ObjectStorageSubCopyObject byte = 0x06
+
+	// ObjectStorageSubListObjectsByTag lists the objects whose tag has a
+	// value.
+	ObjectStorageSubListObjectsByTag byte = 0x07
+
+	// ObjectStorageSubListTenantObjects lists the objects one tenant owns.
+	ObjectStorageSubListTenantObjects byte = 0x08
 )

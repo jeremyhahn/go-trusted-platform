@@ -73,7 +73,7 @@ are the compatibility surface.
 
 An IPv6-only client zone (RFC 6146 NAT64 with RFC 6147 DNS64, and RFC 6877
 464XLAT for clients that need literal IPv4) is a Phase 5 feature. The spike
-measured the alternatives on 2026-09-08 and the decision is below. The
+measured the alternatives; the decision is below. The
 translator, its pipeline gate and its health are implemented (#601,
 `pkg/sdn/gateway/services/nat64`), and gateway nodes install the Jool
 packages and load the module for an enabled `nat64:` section (#603); DNS64
@@ -244,9 +244,10 @@ exchange, authenticated with certificates whose private key lives behind the
 go-xkms PKCS#11 module (`pubkey` only, strict revocation). The policies require
 ESP, so a tunnel without an SA carries no traffic.
 
-platformd runs it (`sdn.overlay.ipsec`). gatewayd's `overlay` service starts
-no IPsec, so a VTEP hosted by gatewayd sends VXLAN in the clear over its
-underlay ([engineering.md](engineering.md#in-gatewayd)).
+platformd runs it (`sdn.overlay.ipsec`), and so does gatewayd's `overlay`
+service with `gateway.overlay.ipsec` enabled
+([engineering.md](engineering.md#overlay-ipsec-in-gatewayd)). Without it, a VTEP
+hosted by gatewayd sends VXLAN in the clear over its underlay.
 
 charon is a node package, not a library: the install media, the factory
 image and the netboot sets carry the `trusted-platform-strongswan` and
@@ -275,9 +276,8 @@ media is in [`docs/installer/cli.md`](../installer/cli.md).
    No route is signed; route signing is a design (epic #553, ruling R11).
 5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
-   dual-homed onto a data zone. Gateways should expose it by default. Owner
-   design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in
-   non-FIPS builds. Today the config defines only `wireguard` and the section
+   dual-homed onto a data zone. Gateways should expose it by default. It is
+   IPsec in FIPS builds, and WireGuard only in non-FIPS builds. Today the config defines only `wireguard` and the section
    is refused at start (#558).
 6. **The host itself.** Traffic *to* the gateway's own addresses never crosses
    the OVS pipeline; the nftables host filter (`services/hostfw`) is the only
@@ -369,11 +369,15 @@ that is not unprivileged: it keeps uid 0 with exactly `CAP_NET_ADMIN` and
 `CAP_NET_RAW`, the capabilities its kernel programming needs. Every child,
 whatever its class, also runs under a seccomp filter that denies the kernel
 surface no gateway service uses (module load, mounts, namespaces, `ptrace`,
-`bpf`, `io_uring`, the keyring); a parser is additionally denied `execve`,
-which the datapath keeps because `nat64` runs `jool`. If the supervisor
+`bpf`, `io_uring`, the keyring) and refuses a socket outside the process's
+address families (`AF_UNIX`, `AF_INET`, `AF_INET6`, `AF_NETLINK`; never
+`AF_PACKET`); a parser is additionally denied `execve`, which the datapath
+keeps because `nat64` runs `jool`. If the supervisor
 itself dies, the kernel kills every child (`SIGKILL`, not `SIGTERM`), so the
 datapath never runs its withdraw path: its flows stay in place for the
-successor's cookie-scoped reconcile, while a planned stop still withdraws them.
+successor to adopt (cookie-scoped reconcile for the flow tables, a matching
+GRE tunnel kept; see [engineering.md](engineering.md)), while a planned stop
+still withdraws them.
 Only the
 management VPN, which has no backend yet, keeps its in-process handler. The
 order still to come is `vpn` once it has a backend;
@@ -414,7 +418,8 @@ cannot be forged.
 | Service | Method | Who may call it |
 |---|---|---|
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
-| `DatapathService` | `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+| `DatapathService` | `ApplyDesired` | the supervisor's uid alone: it replaces the whole desired document, firewall included |
+| `DatapathService` | `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
 
 The two VPN peer RPCs are the VPN `DataPlane` seam carried across the socket
 (`docs/vpn/architecture.md`): the datapath child owns the WireGuard (`!fips`)
@@ -432,9 +437,12 @@ kernel-class child stays root but keeps only `CAP_NET_ADMIN` and `CAP_NET_RAW`
 and is not in the service group, so it could not chown the socket itself.
 
 The supervisor is root and the parser class runs unprivileged, so the uid is
-the whole authorization question. `Policy` is the per-service uid table; an RPC for a service it does not know is
+the whole authorization question. `Policy` is the per-method uid table; an RPC for a method it does not name is
 refused (`ErrUnknownService`), so the policy fails closed rather than defaulting
-to allow. Structured documents ride as JSON inside the messages:
+to allow. The table is per method, not per service, because the parsers'
+surface on the datapath is narrow (R14): a parser that is compromised can
+install or remove a VPN peer it was leased, and cannot send a desired document
+that rewrites the firewall, NAT or tunnels. Structured documents ride as JSON inside the messages:
 `gwstate.Snapshot` and `gwstate.DesiredConfig` are already the schema the
 control plane, the reporter and the reconciler share, and both ends of the
 socket are the same binary — redeclaring them in proto would be a second schema
@@ -462,7 +470,7 @@ It is deliberately not a `ServiceHandler`.
 |---|---|
 | Flows | table 0 → `goto_table:10`, table 10 → `goto_table:30`, table 20 → `goto_table:30`, table 30 → terminal; all **priority 0**, so a platformd flow in table 0 still wins its match and a service gate or divert still outranks the default. The table-20 flow is the miss for the conntrack gate every datapath service routes into: it belongs to the pipeline so that no service can forget it (NAT and NAT64 alone once dropped every frame they did not claim) or delete it from under another (#614) |
 | Cookie | `CookiePipeline` `0xF1BE0000…` under the gateway's `0xF1BE` owner prefix |
-| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is runnable when the overlay service is enabled and the runtime injects OVS/OpenFlow, IPAM, device lookup and verdict dependencies; gatewayd then hands the overlapping table defaults to the overlay handler. Owner design decision (2026-09-26): the overlay is required (#709) |
+| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is runnable when the overlay service is enabled and the runtime injects OVS/OpenFlow, IPAM, device lookup and verdict dependencies; gatewayd then hands the overlapping table defaults to the overlay handler. The overlay is required (#709) |
 | `fail_mode` | held at **`secure`** while the pipeline is installed, restored on removal — a controller loss must not fall back to `NORMAL` around the firewall. On a bridge with no configured controller, Open vSwitch **flushes every flow** when `fail_mode` changes (`connmgr_set_fail_mode`), so the mode is set *before* the pipeline is installed and only when it differs; installing first left a secure bridge with no pipeline (#614, measured on OVS 3.5). A bridge provisioned `secure` — the mode `docs/sdn/cli.md` prescribes — is never flushed by gatewayd; one provisioned `standalone` loses every flow on it, platformd's included, when gatewayd starts and again when it stops |
 | Ownership | recorded in the bridge's `external_ids` (`tp-pipeline-owner=gatewayd:<id>`, `tp-pipeline-terminal`); a bridge another gateway holds is refused (`ErrPipelineOwned`); a crashed gateway's own stale record is reclaimed |
 | When | only when a datapath service (firewall, NAT, load balancer, overlay) is enabled and a runtime is injected; a proxy-only or telemetry-only gateway leaves the bridge untouched |
@@ -501,10 +509,10 @@ into gatewayd is #596):
   `fhrp.Transport` and `fhrp.Programmer`, and the speaker (`fhrp.Speaker`)
   has the gateway service shape (`Start/Stop/Active/Health`). **`pkg/sdn/fhrp`
   is not wired into gatewayd yet (#596)**: no handler builds it today.
-- **Overlay segments**, which include the public address block (owner design
-  decision 2026-09-26: `public` is an overlay, not a VLAN) — the **EVPN distributed anycast gateway** (RFC 9135)
-  the overlay pipeline already programs per VNI in
-  `pkg/sdn/gateway/modes/overlay.go` (`installAnycastGatewayFlows`): every
+- **Overlay segments**, which include the public address block (`public` is
+  an overlay, not a VLAN) — the **EVPN distributed anycast gateway** (RFC 9135)
+  the overlay pipeline programs per VNI in
+  `pkg/sdn/gateway/modes/overlay_flows.go` (`flowBuilder.segment`): every
   gateway answers for the segment's gateway MAC/IP locally, so there is no
   election to run.
 

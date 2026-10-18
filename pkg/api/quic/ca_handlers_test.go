@@ -114,7 +114,6 @@ type mockCA struct {
 	defaultSigAlg x509.SignatureAlgorithm
 	validity      int
 	certStore     *mockCertStore
-	issuedCerts   []*x509.Certificate
 	revokedCerts  []*x509.Certificate
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
@@ -134,7 +133,6 @@ func newMockCA() *mockCA {
 		defaultSigAlg: x509.ECDSAWithSHA256,
 		validity:      365,
 		certStore:     newMockCertStore(),
-		issuedCerts:   make([]*x509.Certificate, 0),
 		revokedCerts:  make([]*x509.Certificate, 0),
 		generateCRL:   true,
 		privateKey:    privateKey,
@@ -164,7 +162,6 @@ func (m *mockCA) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicK
 }
 func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
@@ -800,6 +797,8 @@ func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 
 	assert.Equal(t, "REVOKED", revokeResp.Status)
 	assert.Equal(t, int32(1), revokeResp.Reason)
+	require.Len(t, ca.revokedCerts, 1, "a REVOKED reply must mean the CA revoked the certificate")
+	assert.Equal(t, cert.SerialNumber, ca.revokedCerts[0].SerialNumber)
 }
 
 func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {
@@ -889,6 +888,7 @@ func TestCAHandler_HandleRevoke_NotFound(t *testing.T) {
 	resp := handler.HandleRequest(context.Background(), req)
 
 	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	assert.Empty(t, ca.revokedCerts, "an unknown serial must revoke nothing")
 }
 
 func TestCAHandler_HandleRevoke_NilCertStore(t *testing.T) {
@@ -2671,8 +2671,6 @@ type mockCANoCRL struct {
 	defaultSigAlg x509.SignatureAlgorithm
 	validity      int
 	certStore     *mockCertStore
-	issuedCerts   []*x509.Certificate
-	revokedCerts  []*x509.Certificate
 	privateKey    *ecdsa.PrivateKey
 }
 
@@ -2690,8 +2688,6 @@ func newMockCANoCRL() *mockCANoCRL {
 		defaultSigAlg: x509.ECDSAWithSHA256,
 		validity:      365,
 		certStore:     newMockCertStore(),
-		issuedCerts:   make([]*x509.Certificate, 0),
-		revokedCerts:  make([]*x509.Certificate, 0),
 		privateKey:    privateKey,
 	}
 }
@@ -2719,14 +2715,12 @@ func (m *mockCANoCRL) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.Pu
 }
 func (m *mockCANoCRL) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCANoCRL) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
-	m.revokedCerts = append(m.revokedCerts, cert)
+func (m *mockCANoCRL) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return nil
 }
 func (m *mockCANoCRL) CABundle() ([]byte, error) { return m.rootCert.Raw, nil }
@@ -2848,7 +2842,6 @@ func (m *mockCARenewFails) IssueCertificate(_ context.Context, req *xkmsca.CACer
 		return nil, errors.New("renewal failed")
 	}
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
@@ -2994,33 +2987,6 @@ func TestCAHandler_HandleList_LimitTriggersSlicing(t *testing.T) {
 	assert.Equal(t, 1, len(listResp.Certificates))
 	assert.Equal(t, int32(2), listResp.TotalCount)
 	assert.True(t, listResp.HasMore)
-}
-
-// Test handleCRL with revoked certificates
-func TestCAHandler_HandleCRL_WithRevokedCerts(t *testing.T) {
-	logger := logging.DefaultLogger()
-	ca := newMockCA()
-	handler := NewCAHandler(logger, ca, nil)
-
-	// Add some revoked certificates to the CRL by revoking them first
-	cert := generateTestCertificate("revoked.example.com", false, ca.intermCert, ca.privateKey)
-	ca.certStore.StoreCertificate(cert)
-	ca.revokedCerts = append(ca.revokedCerts, cert)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpCACRL,
-		Payload: nil,
-	}
-
-	resp := handler.HandleRequest(context.Background(), req)
-
-	require.Equal(t, quicwire.StatusOK, resp.Status)
-
-	var crlResp CACRLResponse
-	err := quicwire.DecodePayload(resp.Payload, &crlResp)
-	require.NoError(t, err)
-
-	assert.NotEmpty(t, crlResp.CRL)
 }
 
 // mockCAWithRevokedCRL is a mock CA that generates CRL with revoked entries

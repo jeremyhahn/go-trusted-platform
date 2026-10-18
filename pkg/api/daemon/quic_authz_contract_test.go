@@ -58,6 +58,7 @@ var quicSubOpcodePrefixes = map[string]byte{
 	"CacheSub":         quicwire.OpCacheCategory,
 	"SchedulerSub":     quicwire.OpSchedulerCategory,
 	"MessagingSub":     quicwire.OpMessagingCategory,
+	"ObjectStorageSub": quicwire.OpObjectStorageCategory,
 }
 
 // assertOperationClassified fails unless the operation is in the catalog or
@@ -187,6 +188,14 @@ func TestQUICAuthzContract_ScopesMatchGRPC(t *testing.T) {
 		{"/platform.v1.MessagingService/GetStats", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetStats}},
 		{"/platform.v1.MessagingService/GetDedupStats", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetDedupStats}},
 		{"/platform.v1.MessagingService/GetChannelStats", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetChannelStats}},
+		{"/platform.v1.ObjectStorageService/PutObject", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubPutObject}},
+		{"/platform.v1.ObjectStorageService/GetObject", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubGetObject}},
+		{"/platform.v1.ObjectStorageService/DeleteObject", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubDeleteObject}},
+		{"/platform.v1.ObjectStorageService/HeadObject", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubHeadObject}},
+		{"/platform.v1.ObjectStorageService/ListObjects", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubListObjects}},
+		{"/platform.v1.ObjectStorageService/CopyObject", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubCopyObject}},
+		{"/platform.v1.ObjectStorageService/ListObjectsByTag", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubListObjectsByTag}},
+		{"/platform.v1.ObjectStorageService/ListTenantObjects", quicwire.OpObjectStorageCategory, []byte{quicwire.ObjectStorageSubListTenantObjects}},
 		{"/platform.v1.PXEService/ListDevices", quicwire.OpPXEListDevices, nil},
 		{"/platform.v1.PXEService/GetDevice", quicwire.OpPXEGetDevice, nil},
 		{"/platform.v1.PXEService/RegisterDevice", quicwire.OpPXERegisterDevice, nil},

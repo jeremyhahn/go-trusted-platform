@@ -325,6 +325,15 @@ func vpnGatewayStatusToPb(gateway *vpn.GatewayStatus) *platformv1.VPNGatewayStat
 	for i := range state.Leases {
 		out.Leases = append(out.Leases, vpnLeaseToPb(&state.Leases[i]))
 	}
+	out.Revocations = state.Revocations
+	out.PostureViolations = state.PostureViolations
+	if h := state.Reattest; h != nil {
+		out.Reattest = &platformv1.VPNDurationHistogram{Count: h.Count, SumSeconds: h.SumSeconds}
+		for _, b := range h.Buckets {
+			out.Reattest.Buckets = append(out.Reattest.Buckets,
+				&platformv1.VPNHistogramBucket{UpperBoundSeconds: b.UpperBoundSeconds, Count: b.Count})
+		}
+	}
 	return out
 }
 

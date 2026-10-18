@@ -1,5 +1,8 @@
 # IPAM Configuration Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> IPAM pools and where they come from.
+
 ## Overview
 
 IPAM holds the platform's address pools and their allocations. Since the
@@ -69,10 +72,13 @@ layout and budgets.
 | `cidr` | prefix | Yes | Address space; may not overlap a derived pool or a reserved range |
 | `gateway` | address | No | Gateway address; always reserved |
 | `zone` | string | No | A declared underlay zone; overlay pools carry none |
-| `dns` | []address | No | DNS servers handed out with leases |
+| `dns` | []address | No | Parsed; IPAM does not read it today |
 | `range-start`, `range-end` | address | No | Dynamic allocation window; set both or neither |
 | `lease-duration` | duration | No | Default lease duration (0 = never expires) |
-| `dhcp` | bool | No | Serve DHCP from this pool |
+| `dhcp` | bool | No | Parsed; IPAM does not read it today (no daemon serves DHCP, see [DHCP](../dhcp/README.md)) |
+
+A pool's ID is its name, for derived and explicit pools alike
+(`pkg/app/sdn.go:572`).
 
 ### Validation
 
@@ -89,9 +95,12 @@ layout and budgets.
 ## Seeding Semantics
 
 The derived pools and `sdn.ipam.pools` are **seeds**, not runtime state. At
-control-plane startup each pool is created if no pool of that name exists in
-the backend; an existing pool and its allocations are never mutated or
-deleted. Removing a pool from configuration does not delete it from the
+control-plane startup (`sdn.environment` is required; without it seeding fails
+with `sdn.ErrEnvironmentRequired`) each pool is created if no pool of that name
+exists in the backend; an existing pool and its allocations are never mutated
+or deleted. An existing pool whose CIDR, gateway, range or reserved prefixes
+differ from the seed stops startup with `ErrSDNIPAMPoolDrift`
+(`pkg/app/sdn.go:553`). Removing a pool from configuration does not delete it from the
 backend. Pre-release, the upgrade path is wipe and re-bootstrap, so a
 changed environment means a fresh backend.
 
@@ -100,14 +109,21 @@ changed environment means a fresh backend.
 | Backend | Persistence | Consistency | Use |
 |---------|-------------|-------------|-----|
 | `memory` (default) | none | strong, single instance | development, tests |
-| `quicbaas` | Raft log and snapshots (via the quicbaas SDK) | strong | production |
+| `quicbaas` | Raft log and snapshots (via the quicbaas SDK) | each write replicated; allocation has no compare-and-swap, so concurrent allocators race and the last writer wins ([README](README.md#quicbaas-backend)) | production |
 | `dht` | DHT, replicated | eventual, claim-based | P2P (`platform_p2p` build tag) |
 
 `quicbaas` needs the top-level `quicbaas:` client (`sdn.ErrIPAMBackendUnconfigured`
-otherwise); `dht` in a binary built without `platform_p2p` fails with
-`sdn.ErrIPAMBackendP2PRequired`. All three backends apply the same window
+otherwise) and is not built under `platform_p2p`; `dht` in a binary built
+without `platform_p2p` fails with `sdn.ErrIPAMBackendP2PRequired`, and with it
+still fails until something calls `app.RegisterDHTIPAMBackend` (nothing does
+today). Any other name is `sdn.ErrIPAMBackendUnknown`. All three backends apply the same window
 rules: `memory` and `quicbaas` hand out the lowest free address of the window,
 `dht` draws random addresses inside it.
+
+`quicbaas` writes with no condition, so two allocators racing on one pool can
+both get the same address. A failed pool write returns `ErrPoolOperationFailed`.
+Known limitation: atomic allocation waits on a conditional put in the
+go-quicbaas SDK ([architecture.md](architecture.md#quicbaas-concurrency)).
 
 ## Pool Size
 
@@ -119,6 +135,10 @@ addresses and the dynamic window together: a zone pool whose window
 `ErrPoolExhausted` while `available` still counts the static addresses
 `.2`–`.49` that `AllocateSpecific` can take. Very large IPv6 pools saturate at
 the maximum `uint64`.
+
+The `memory` backend keeps one bit per usable address, so it refuses a pool of
+more than 2^24 addresses (an IPv4 `/8`, an IPv6 `/104`) with
+`*ipam.ErrPoolTooLarge`. An IPv6 `/64` pool needs the `quicbaas` backend.
 
 ## Zone-Filtered Queries
 

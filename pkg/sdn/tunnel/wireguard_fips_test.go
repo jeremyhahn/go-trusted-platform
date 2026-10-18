@@ -18,10 +18,12 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	vnl "github.com/vishvananda/netlink"
 )
 
 // TestWireGuard_RefusedUnderFIPS pins the FIPS rule: the transport is
@@ -39,4 +41,16 @@ func TestWireGuard_RefusedUnderFIPS(t *testing.T) {
 	m := newManagerWithOps(testLogger(), newMockNetlinkOps(), WithKeyProvider(&mockKeys{}))
 	require.True(t, errors.As(m.createWireGuard(context.Background(), cfg), &unavailable))
 	require.True(t, errors.As(m.rekeyWireGuard(context.Background(), cfg), &unavailable))
+}
+
+// TestWireGuard_NothingAdoptedUnderFIPS: a FIPS build never keeps a
+// WireGuard link it finds, whatever it looks like.
+func TestWireGuard_NothingAdoptedUnderFIPS(t *testing.T) {
+	m := newManagerWithOps(testLogger(), newMockNetlinkOps())
+	link := &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: "wg", MTU: 1420, Flags: net.FlagUp}}
+
+	adopt, err := m.adoptWireGuard(context.Background(), link, TunnelConfig{Name: "wg", Transport: TransportWireGuard})
+
+	require.NoError(t, err)
+	assert.False(t, adopt)
 }

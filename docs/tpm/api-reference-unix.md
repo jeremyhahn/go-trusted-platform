@@ -1,11 +1,18 @@
 # TPM Unix Socket API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How to reach the TPM service over the local socket. The cross-transport
+> contract is [api.md](api.md).
+
 Socket Path: `/run/platformd.sock`
 Protocol: gRPC over Unix domain socket
 
 ## Overview
 
-The Unix socket interface provides local IPC for CLI tools and local services. It uses the same gRPC protocol as the TCP interface but over a Unix domain socket for secure local communication without TLS overhead.
+The Unix socket interface provides local IPC for CLI tools and local services.
+It serves the same gRPC services as the TCP interface, over a Unix domain
+socket and without TLS. The path is `platformd serve --socket-path` (default
+`/run/platformd.sock`).
 
 ## Connection
 
@@ -37,6 +44,8 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 | Method | Description |
 |--------|-------------|
 | `Info` | Get TPM device information |
+| `GetCapabilities` | List the algorithms, commands and ECC curves the TPM implements |
+| `GetPlatformAttributes` | Describe the TPM device and its provisioned EK, SRK and IAK |
 | `Provision` | Provision TPM with owner authorization |
 | `Clear` | Clear TPM and reset authorization |
 
@@ -75,6 +84,9 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 | `Certify` | IAK certifies a persistent key (TPM2_Certify) |
 | `GetEventLog` | Get TPM event log |
 | `GetPCRs` | Read PCR values |
+| `ExtendPCR` | Extend a PCR with data (`tpm:write`) |
+| `MakeCredential` | Create a TPM2_MakeCredential challenge |
+| `ActivateCredential` | Activate a challenge and recover the wrapped secret |
 
 ### Seal and Unseal Operations
 
@@ -108,7 +120,7 @@ if err != nil {
     return err
 }
 
-fmt.Printf("Manufacturer: %s\n", resp.Manufacturer.Name)
+fmt.Printf("Manufacturer: %s\n", resp.GetManufacturer().GetName())
 fmt.Printf("FIPS Mode: %v\n", resp.FipsMode)
 ```
 
@@ -144,9 +156,7 @@ nonce := make([]byte, 32)
 rand.Read(nonce)
 
 resp, err := client.Quote(ctx, &platformv1.QuoteRequest{
-    AkHandle:   0x81010002,
     PcrIndices: []uint32{0, 1, 2, 3, 7, 8, 9},
-    PcrBank:    platformv1.PCRBank_PCR_BANK_SHA256,
     Nonce:      nonce,
 })
 if err != nil {
@@ -156,6 +166,10 @@ if err != nil {
 fmt.Printf("Quote length: %d bytes\n", len(resp.Quote))
 fmt.Printf("Signature length: %d bytes\n", len(resp.Signature))
 ```
+
+A request that did not arrive over TLS is refused (the quote is bound to the
+TLS connection, #482), so over the Unix socket `Quote` fails; quote over gRPC
+TCP. See [Attestation](attestation.md#quote-request-example).
 
 ### Read PCRs
 
@@ -177,10 +191,9 @@ for _, pcr := range resp.PcrValues {
 
 ```go
 resp, err := client.Seal(ctx, &platformv1.SealRequest{
-    Data:         []byte("my-secret-data"),
-    Cn:           "app-secret",
-    ParentHandle: 0x81000002,
-    Password:     sealPassword,
+    Data:     []byte("my-secret-data"),
+    Cn:       "app-secret",
+    Password: sealPassword,
 })
 if err != nil {
     return err
@@ -197,9 +210,8 @@ unavailable until go-quicbaas re-exports the TPM PolicyPCR primitives
 
 ```go
 resp, err := client.Unseal(ctx, &platformv1.UnsealRequest{
-    Cn:           "app-secret",
-    ParentHandle: 0x81000002,
-    Password:     sealPassword,
+    Cn:       "app-secret",
+    Password: sealPassword,
 })
 if err != nil {
     return err
@@ -207,6 +219,9 @@ if err != nil {
 
 fmt.Printf("Unsealed data: %s\n", string(resp.Data))
 ```
+
+The daemon seals under the SSRK; Unseal reads only `cn` and `password`. See
+[Sealing](sealing.md).
 
 ### Get Random Bytes
 
@@ -267,7 +282,8 @@ if err != nil {
 
 ## CLI Usage
 
-The `platformctl` CLI uses the Unix socket by default:
+The `platformctl` CLI uses the Unix socket by default: its default context
+`local` names `/run/platformd.sock` (`pkg/cli/config.go`).
 
 ```bash
 # Get TPM info
@@ -276,19 +292,8 @@ platformctl tpm info
 # Provision TPM
 platformctl tpm provision --owner-password secure-password
 
-# Get Endorsement Key
-platformctl tpm ek get
-
-# Read PCRs
-platformctl tpm pcr read --indices 0,1,2,3,7,8,9 --bank SHA256
-
-# Generate quote
-platformctl tpm quote \
-  --nonce dGVzdG5vbmNl \
-  --pcr-indices 0,1,2,3,7,8,9
-
-# Get random bytes
-platformctl tpm random --num-bytes 32
+# Endorsement Key
+platformctl tpm ek info
 
 # Seal data (--pcrs is refused until go-quicbaas #1171)
 platformctl tpm seal --cn app-secret --data "plaintext-data" --password "$PW"
@@ -296,6 +301,9 @@ platformctl tpm seal --cn app-secret --data "plaintext-data" --password "$PW"
 # Unseal data
 platformctl tpm unseal --cn app-secret --password "$PW"
 ```
+
+`platformctl tpm` has no PCR read, quote or random command; see
+[CLI Usage](cli-usage.md).
 
 ### Unix Socket Configuration
 
@@ -311,44 +319,30 @@ platformctl tpm info
 
 ## Permissions
 
-The Unix socket requires appropriate permissions:
+The daemon creates the socket with mode `0660` (`SocketMode`,
+`pkg/api/daemon/config.go`). It sets no group: the socket keeps the owner and
+group of the `platformd` process, so a client must run as that user or in that
+group.
 
-```bash
-# Default socket location
-/run/platformd.sock
-
-# Typical permissions
-srw-rw---- 1 root platform 0 Jan 15 10:00 /run/platformd.sock
-```
-
-Users must be in the `platform` group to access the socket:
-
-```bash
-sudo usermod -aG platform $USER
-```
-
-Verify permissions:
 ```bash
 ls -la /run/platformd.sock
-getent group platform
 ```
 
 ## Security Considerations
 
 1. **Local Only**: Unix sockets only accept local connections
-2. **File Permissions**: Socket access controlled by filesystem permissions
-3. **No TLS Required**: Secure by virtue of local-only access
-4. **Audit Logging**: All operations logged with caller UID/GID
-5. **SO_PEERCRED**: Server validates caller identity via SO_PEERCRED
-6. **No Network Exposure**: Cannot be accessed remotely
+2. **File Permissions**: Socket access is controlled by the socket's mode
+3. **No TLS**: The socket serves plain gRPC; TLS-bound calls such as `Quote`
+   are refused
+4. **SO_PEERCRED**: The server reads the caller's kernel-verified UID/GID/PID
+   and puts them in the request context (`pkg/util/peercred`)
+5. **No Network Exposure**: Cannot be accessed remotely
 
 ## Performance Benefits
 
 - No TLS handshake overhead
-- No network framing overhead
-- Direct kernel-to-kernel communication
-- Lower latency than TCP/gRPC
-- Suitable for high-frequency operations
+- No TCP/IP stack
+- Suitable for high-frequency local operations
 
 ## Error Handling
 
@@ -407,8 +401,8 @@ for i := 0; i < 100; i++ {
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PLATFORMCTL_CONTEXT` | platformctl context to use; a local context names the socket | the config's current context (`/run/platformd.sock`) |
-| `GRPC_GO_LOG_VERBOSITY_LEVEL` | gRPC log level (0-99) | 0 |
-| `GRPC_GO_LOG_SEVERITY_LEVEL` | gRPC log level (info, warning, error) | info |
+| `GRPC_GO_LOG_VERBOSITY_LEVEL` | grpc-go log verbosity (0-99) | 0 |
+| `GRPC_GO_LOG_SEVERITY_LEVEL` | grpc-go log severity (info, warning, error) | error |
 
 ## Debugging
 
@@ -416,7 +410,7 @@ Enable gRPC debug logging:
 
 ```bash
 export GRPC_GO_LOG_VERBOSITY_LEVEL=99
-export GRPC_GO_LOG_SEVERITY_LEVEL=debug
+export GRPC_GO_LOG_SEVERITY_LEVEL=info
 platformctl tpm info
 ```
 
@@ -429,7 +423,8 @@ stat /run/platformd.sock
 # Test connection with nc
 nc -U /run/platformd.sock
 
-# Test with grpcurl
-grpcurl -plaintext -unix /run/platformd.sock \
-  platform.v1.TPMService.Info
+# Test with grpcurl (the daemon registers no reflection service)
+grpcurl -plaintext -unix \
+  -import-path pkg/api/grpc/proto -proto tpm.proto \
+  /run/platformd.sock platform.v1.TPMService.Info
 ```

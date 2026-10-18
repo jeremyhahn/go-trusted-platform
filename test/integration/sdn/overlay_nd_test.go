@@ -120,7 +120,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 
 	ofClient := bridge.createClient(t)
 	ovsClient := newOVSDBClient(t)
-	handler := startOverlayND(ctx, t, ovsClient, ofClient, ep.HostIf)
+	handler := startOverlay(ctx, t, ovlNDBridge, netip.MustParseAddr("10.70.9.1"), ovsClient, ofClient, ep.HostIf)
 	dumpBridgeOnFailure(t, bridge.name)
 
 	require.NoError(t, handler.AddVNI(ctx, ovlNDVNI, ovlNDVLAN))
@@ -262,19 +262,20 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 	})
 }
 
-// startOverlayND starts an overlay without a control plane on the bridge,
-// with accessPort carrying its VLANs, and stops it at cleanup.
-func startOverlayND(ctx context.Context, t *testing.T, ovsClient *ovs.Client,
-	ofClient *openflow.Client, accessPort string) *modes.OverlayModeHandler {
+// startOverlay starts an overlay without a control plane on bridge, with
+// localIP its VTEP and accessPort carrying its VLANs, and stops it at
+// cleanup.
+func startOverlay(ctx context.Context, t *testing.T, bridge string, localIP netip.Addr,
+	ovsClient *ovs.Client, ofClient *openflow.Client, accessPort string) *modes.OverlayModeHandler {
 	t.Helper()
 	cfg := &modes.OverlayModeConfig{
 		VTEPConfig: &vxlan.VTEPConfig{
-			LocalIP:       netip.MustParseAddr("10.70.9.1"),
+			LocalIP:       localIP,
 			UnderlayIface: "eth0",
 			UnderlayMTU:   vxlan.MinimumUnderlayMTU,
 			VXLANPort:     vxlan.DefaultVXLANPort,
 		},
-		BridgeName: ovlNDBridge,
+		BridgeName: bridge,
 		AccessPort: accessPort,
 		Logger:     slog.Default(),
 	}
@@ -301,7 +302,7 @@ func startOverlayND(ctx context.Context, t *testing.T, ovsClient *ovs.Client,
 func ovlNDFloodPackets(ctx context.Context, t *testing.T, client *ovs.Client) int64 {
 	t.Helper()
 	flows, err := client.GetFlowStats(ctx, ovlNDBridge,
-		fmt.Sprintf("table=%d,cookie=0x%x/0xffffffffffffffff", modes.TableEgress, modes.OverlayCookie))
+		fmt.Sprintf("table=%d,cookie=0x%x/0x%x", modes.TableEgress, modes.OverlayCookie, ovs.OwnerCookieMask))
 	require.NoError(t, err, "dump table %d", modes.TableEgress)
 	for _, flow := range flows {
 		if flow.Priority != 0 {

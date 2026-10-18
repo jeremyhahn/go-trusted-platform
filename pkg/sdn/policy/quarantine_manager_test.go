@@ -49,12 +49,12 @@ func (s *memDeviceStore) SaveDevice(_ context.Context, d *entities.Device) error
 func (s *memDeviceStore) GetDevice(_ context.Context, id uint64) (*entities.Device, error) {
 	d, ok := s.devices[id]
 	if !ok {
-		return nil, &errQMNotFound{id: id}
+		return nil, &errQMNotFound{}
 	}
 	return d, nil
 }
 
-type errQMNotFound struct{ id uint64 }
+type errQMNotFound struct{}
 
 func (e *errQMNotFound) Error() string { return "device not found" }
 

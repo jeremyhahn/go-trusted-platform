@@ -66,9 +66,12 @@ func TestBuildTPMQuoteArgs_RefusesWrongArgs(t *testing.T) {
 // reaches the tools instead of codes.Unimplemented.
 func TestTPMQuoteMethodsAreRouted(t *testing.T) {
 	want := map[string]string{
-		platformv1.TPMService_Quote_FullMethodName:       "platform_tpm_quote",
-		platformv1.TPMService_VerifyQuote_FullMethodName: "platform_tpm_verify_quote",
-		platformv1.TPMService_Certify_FullMethodName:     "platform_tpm_certify",
+		platformv1.TPMService_Quote_FullMethodName:                 "platform_tpm_quote",
+		platformv1.TPMService_VerifyQuote_FullMethodName:           "platform_tpm_verify_quote",
+		platformv1.TPMService_Certify_FullMethodName:               "platform_tpm_certify",
+		platformv1.TPMService_GetCapabilities_FullMethodName:       "platform_tpm_capabilities",
+		platformv1.TPMService_GetPlatformAttributes_FullMethodName: "platform_tpm_platform",
+		platformv1.TPMService_ExtendPCR_FullMethodName:             "platform_tpm_pcr_extend",
 	}
 	for method, tool := range want {
 		if got := grpcMethodToMCPToolMap[method]; got != tool {

@@ -91,6 +91,19 @@ func TestErrors_Unwrap(t *testing.T) {
 	})
 }
 
+func TestErrXfrmReply(t *testing.T) {
+	t.Run("names the SA and the cause", func(t *testing.T) {
+		err := &ErrXfrmReply{Spi: 0x1001, Reason: "unparsable attributes", Cause: io.EOF}
+		assert.Equal(t, "xfrm state spi 0x1001: unparsable attributes: EOF", err.Error())
+		assert.ErrorIs(t, err, io.EOF)
+	})
+	t.Run("without a cause", func(t *testing.T) {
+		err := &ErrXfrmReply{Spi: -1, Reason: "short reply"}
+		assert.Equal(t, "xfrm state spi 0xffffffff: short reply", err.Error(), "the SPI is the kernel's u32")
+		assert.NoError(t, err.Unwrap())
+	})
+}
+
 func TestErrors_TypeAssertions(t *testing.T) {
 	t.Run("ErrTunnelNotFound type assertion", func(t *testing.T) {
 		var err error = &ErrTunnelNotFound{Name: "gre1"}

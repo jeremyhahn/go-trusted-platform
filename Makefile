@@ -1018,7 +1018,7 @@ build-public-html:
 	@# Ensure devcontainer image exists
 	@if ! docker images | grep -q "$(DEVCONTAINER_IMAGE)"; then \
 		echo "Building devcontainer image (first time only)..."; \
-		docker build -t $(DEVCONTAINER_IMAGE) build/docker/devcontainer/; \
+		$(MAKE) build-devcontainer; \
 	fi
 	@# Run the build inside devcontainer (web/ is now part of the monorepo)
 	docker run --rm \
@@ -1810,6 +1810,11 @@ coverage-ntp:
 integration-test-ntp: build-devcontainer
 	$(call run-integration-suite,ntp)
 
+## integration-test-objectstorage: Run object storage multi-protocol integration tests in devcontainer
+.PHONY: integration-test-objectstorage
+integration-test-objectstorage: build-devcontainer
+	$(call run-integration-suite,objectstorage)
+
 # VPN (management-VPN control plane) Tests
 #
 # These use the fully assembled $(BUILD_TAGS), never a literal list, so every
@@ -2017,12 +2022,24 @@ define run-integration-suite
 endef
 
 .PHONY: integration-test
-## integration-test: Run all integration tests in development container
-## Starts OVS, swtpm, and platformd before running tests.
+## integration-test: Run all integration suites in the integration image
+## The CI standard's integration stage (handbook ci-standard.md §1). Builds the
+## integration stage of build/docker/devcontainer/Dockerfile as $(IT_IMAGE) and
+## runs compose.yaml's integration service under the project $(IT_PROJECT):
+## its entrypoint is the suite runner, which starts OVS, swtpm and platformd,
+## and `all` selects the runner's ALL_TARGETS. The stack is torn down on every
+## exit and the target exits with the suites' status. CI passes a per-run
+## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
-## The runner's `all` keyword selects every suite.
-integration-test: build-devcontainer
-	$(call run-integration-suite,all)
+integration-test: docker-build-it
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@status=0; \
+	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
+		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
+		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" || status=$$?; \
+	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) \
+		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes; \
+	exit $$status
 
 .PHONY: integration-test-webservice
 integration-test-webservice: docker-builder-load
@@ -2089,14 +2106,75 @@ integration-test-secrets-local:
 # =============================================================================
 # Development Container
 # =============================================================================
+# build/docker/devcontainer/Dockerfile builds from the repository root in the
+# template's stages (handbook devcontainer.md §1): `toolchain`, the image every
+# CI stage runs in, and `integration`, the image the integration suites run in.
+# scripts/tool-pins.sh holds the base image and tool pins; both make and the
+# Dockerfile read it, so the image and the Makefile agree on every version.
+include scripts/tool-pins.sh
+
+DEVCONTAINER_DOCKERFILE := build/docker/devcontainer/Dockerfile
+DEVCONTAINER_COMPOSE := build/docker/devcontainer/compose.yaml
 DEVCONTAINER_IMAGE := trusted-platform-dev:latest
 DEVCONTAINER_NAME := trusted-platform-devcontainer
 
+# The toolchain image is tagged with a hash of everything baked into it, so a
+# change to the Dockerfile, a pin or a module list builds a new tag and an
+# unchanged tree reuses the old one. Recursive (=) so the hash runs only when a
+# target needs it.
+TOOLCHAIN_INPUTS := $(DEVCONTAINER_DOCKERFILE) scripts/tool-pins.sh \
+	go.mod go.sum sdk/go/go.mod sdk/go/go.sum \
+	$(wildcard build/tools-src/*/go.mod build/tools-src/*/go.sum)
+TOOLCHAIN_TAG = $(shell cat $(TOOLCHAIN_INPUTS) | sha256sum | cut -c1-16)
+TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
+
+# The integration image and the compose project `make integration-test` uses.
+# CI passes per-run values.
+IT_IMAGE ?= go-trusted-platform-it:local
+IT_PROJECT ?= go-trusted-platform-it
+
+# A KEY=value file with the forge credentials the module download needs
+# (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
+# reaches the build only as the gomodauth BuildKit secret, never as a layer or
+# a build argument; .dockerignore keeps the default path out of the context.
+MODULE_ENV_FILE ?= .devcontainer/.env
+
+# The docker build arguments every devcontainer stage shares. $(comma) because a
+# literal comma inside $(if ...) would end its condition.
+comma := ,
+DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
+	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
+	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
+	-f $(DEVCONTAINER_DOCKERFILE)
+
+.PHONY: docker-build
+## docker-build: Build the toolchain image and the integration image
+docker-build: docker-build-it
+	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
+
+.PHONY: docker-build-it
+## docker-build-it: Build the integration image as $(IT_IMAGE)
+docker-build-it:
+	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+
+.PHONY: toolchain-image
+## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
+toolchain-image:
+	@echo $(TOOLCHAIN_IMAGE)
+
+.PHONY: docker-run
+## docker-run: Run CMD in the toolchain image with the checkout mounted (CMD='make lint')
+docker-run:
+	@test -n "$(CMD)" || { echo "usage: make docker-run CMD='make lint'" >&2; exit 2; }
+	GO_TRUSTED_PLATFORM_TOOLCHAIN_TAG=$(TOOLCHAIN_TAG) \
+	GO_TRUSTED_PLATFORM_UID=$$(id -u) GO_TRUSTED_PLATFORM_GID=$$(id -g) \
+		docker compose -f $(DEVCONTAINER_COMPOSE) run --rm toolchain sh -c '$(CMD)'
+
 .PHONY: build-devcontainer
-## build-devcontainer: Build the development container with all tooling
+## build-devcontainer: Build the interactive development container (the integration stage)
 build-devcontainer:
 	@echo "Building development container..."
-	@docker build -t $(DEVCONTAINER_IMAGE) build/docker/devcontainer/
+	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(DEVCONTAINER_IMAGE) .
 
 .PHONY: devcontainer-shell
 ## devcontainer-shell: Start an interactive shell in the development container
@@ -2917,7 +2995,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # the package is endpoints.go and endpoints_test.go alone, which check that the
 # shared endpoint helpers read the variables run-integration-tests.sh exports,
 # built from the ports it gives platformd. Every other file keeps the tag.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/
+#
+# scripts/depscheck added 2026-10-15 (#927): `make deps-check`'s parse and
+# decision logic, tested over testdata fixtures with no network. Discovery
+# lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
+# unit stage.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
@@ -3346,6 +3429,16 @@ GOVULN_MODULES := . sdk/go
 #       https://pkg.go.dev/vuln/GO-2026-4736.
 GOVULN_ALLOW := GO-2026-4736
 
+# Each module is scanned in two steps (#940). The symbol scan builds SSA and a
+# call graph for the whole import closure; on module . it outgrew the CI job's
+# 12 GiB memory limit and was OOM-killed, and neither GOMEMLIMIT nor scanning
+# the packages in groups bounds it (cmd/platformctl alone keeps a >5 GB live
+# heap). So every package is first scanned for vulnerable IMPORTS
+# (-scan package, no SSA, well under 1 GiB). A called vulnerability is always
+# an imported one, so when every imported ID is allowlisted the symbol scan's
+# verdict is already known and it is not run. Only an imported ID outside the
+# allowlist runs the symbol scan, which decides as before whether the code calls
+# it; if that scan cannot complete, the target fails.
 .PHONY: vuln
 ## vuln: Run vulnerability scan with govulncheck (allowlist: GOVULN_ALLOW)
 vuln:
@@ -3356,19 +3449,26 @@ vuln:
 		echo "$(YELLOW)  Install with: make install-govulncheck$(RESET)"; \
 		exit 1; \
 	fi; \
-	FAILED=0; \
-	for mod in $(GOVULN_MODULES); do \
-		echo "$(CYAN)  scanning module $$mod$(RESET)"; \
-		OUT=$$(cd $$mod && $$GOVULNCHECK_BIN ./... 2>&1); STATUS=$$?; \
+	scan() { \
+		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 ./... 2>&1); STATUS=$$?; \
 		echo "$$OUT"; \
 		if [ $$STATUS -ne 0 ] && [ $$STATUS -ne 3 ]; then \
-			echo "$(RED)✗ govulncheck could not complete in $$mod (exit $$STATUS)$(RESET)"; \
+			echo "$(RED)✗ govulncheck -scan $$2 could not complete in $$1 (exit $$STATUS)$(RESET)"; \
 			echo "$(RED)  A scan that fails to run is not a pass — fix the error above.$(RESET)"; \
 			exit 1; \
 		fi; \
 		FOUND=$$(echo "$$OUT" | sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9][0-9-]*\).*/\1/p' | sort -u); \
 		for id in $(GOVULN_ALLOW); do FOUND=$$(echo "$$FOUND" | grep -vx "$$id" || true); done; \
 		FOUND=$$(echo $$FOUND); \
+	}; \
+	FAILED=0; \
+	for mod in $(GOVULN_MODULES); do \
+		echo "$(CYAN)  scanning module $$mod (imported packages)$(RESET)"; \
+		scan $$mod package; \
+		if [ -n "$$FOUND" ]; then \
+			echo "$(CYAN)  $$mod imports $$FOUND outside the allowlist; scanning module $$mod (called symbols)$(RESET)"; \
+			scan $$mod symbol; \
+		fi; \
 		if [ -n "$$FOUND" ]; then \
 			echo "$(RED)✗ $$mod: vulnerabilities outside the documented allowlist: $$FOUND$(RESET)"; \
 			echo "$(RED)  Fix them or record an exception in GOVULN_ALLOW with a reason and a date.$(RESET)"; \
@@ -3378,9 +3478,8 @@ vuln:
 	if [ $$FAILED -ne 0 ]; then exit 1; fi; \
 	echo "$(GREEN)✓ Vulnerability scan complete (only allowlisted no-fix findings remain)$(RESET)"
 
-# Directories excluded from the filesystem scan, kept identical to the
-# skip-dirs list in .github/workflows/ci.yml so `make trivy` and CI agree
-# (devops.md §4). test/ and vbmc/ are harnesses and examples/ is a sample tree —
+# Directories excluded from the filesystem scan. CI runs this same target
+# through `make security` in the toolchain image (devops.md §4). test/ and vbmc/ are harnesses and examples/ is a sample tree —
 # none ship in a release. web/node_modules is a build artifact; web/ itself is
 # NOT skipped, because the Next.js frontend is shipped and its lockfiles are in
 # scope. Suppressions belong in .trivyignore with a reason and a date, not here.
@@ -4129,9 +4228,10 @@ docker-platform-push:
 		-f build/docker/$(APPNAME)/Dockerfile-alpine .
 
 
-# Docker run targets
-.PHONY: docker-run
-docker-run: build-debug
+# Docker run targets. docker-run itself runs a command in the toolchain image
+# (Development Container section); this is the interactive builder shell.
+.PHONY: docker-run-debug
+docker-run-debug: build-debug
 	docker run -it --privileged \
 	-v .:/mnt \
 	-v /dev/bus/usb:/dev/bus/usb \
@@ -4630,6 +4730,18 @@ deps-latest:
 	  V=$$(go list -m -versions "$$m" 2>/dev/null | tr " " "\n" | tail -1); \
 	  if [ -n "$$V" ] && [ "$$V" != "$$m" ]; then go get "$$m@$$V" || exit 1; fi; \
 	done; go mod tidy'
+
+# deps-check is the CI standard's latest-version stage (handbook ci-standard.md
+# §1, devops.md §4). scripts/depscheck fails when a direct require or a version
+# replace in go.mod or sdk/go/go.mod is behind its latest version and its line
+# carries no comment naming the reason (devops.md §9). First-party modules are
+# compared with their highest tag including -alpha, the version deps-latest
+# moves to (dependency-resolution.md §3). It needs the module proxy and the dev
+# Gitea: under GOPROXY=off it fails with that reason instead of passing.
+.PHONY: deps-check
+## deps-check: Fail when a dependency is behind its latest version without a go.mod reason comment
+deps-check:
+	@$(GO) run ./scripts/depscheck -go $(GO) . sdk/go
 
 # ---- release-alpha: handbook template release-alpha v2.4.0 ----
 # make release-alpha VERSION=vX.Y.Z-alpha cuts an internal alpha from main

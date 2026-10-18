@@ -1,5 +1,8 @@
 # Dynamic DNS (DDNS)
 
+> **Status: REFERENCE**
+> Dynamic DNS updates to platform zones.
+
 ## Overview
 
 Dynamic DNS (DDNS) enables programmatic updates to DNS records without manual zone file editing. The Trusted Platform implements RFC 2136 DNS UPDATE protocol with TSIG authentication for secure, automated record management.
@@ -221,7 +224,7 @@ platformctl dns update mydevice.internal --auto
 
 ```bash
 # Register A record with explicit IP
-platformctl dns update mydevice.internal 192.168.1.100
+platformctl dns update mydevice.internal 192.0.2.100
 
 # Register AAAA record for IPv6
 platformctl dns update mydevice.internal 2001:db8::1 --type AAAA
@@ -271,7 +274,7 @@ if err != nil {
 // Add A record
 err = client.UpdateA(ctx, ddns.OpAdd, &entities.ARecord{
     Name:  "server1",
-    Value: "192.168.1.50",
+    Value: "192.0.2.50",
     TTL:   3600,
 })
 if err != nil {
@@ -281,7 +284,7 @@ if err != nil {
 // Update (replace) A record
 err = client.UpdateA(ctx, ddns.OpUpdate, &entities.ARecord{
     Name:  "server1",
-    Value: "192.168.1.51",
+    Value: "192.0.2.51",
     TTL:   3600,
 })
 
@@ -317,12 +320,12 @@ batch := ddns.NewBatch()
 // Add multiple records to batch
 batch.Add(ddns.OpAdd, &entities.ARecord{
     Name:  "web1",
-    Value: "192.168.1.10",
+    Value: "192.0.2.10",
     TTL:   3600,
 })
 batch.Add(ddns.OpAdd, &entities.ARecord{
     Name:  "web2",
-    Value: "192.168.1.11",
+    Value: "192.0.2.11",
     TTL:   3600,
 })
 batch.Add(ddns.OpDelete, &entities.ARecord{
@@ -556,10 +559,10 @@ RetryConfig{
 
 ```bash
 # Register device with default TTL
-platformctl dns update myhost.example.internal 192.168.1.100
+platformctl dns update myhost.example.internal 192.0.2.100
 
 # Register with custom TTL
-platformctl dns update myhost.example.internal 192.168.1.100 --ttl 7200
+platformctl dns update myhost.example.internal 192.0.2.100 --ttl 7200
 
 # Auto-detect IP and register
 platformctl dns update myhost.example.internal --auto
@@ -574,10 +577,10 @@ platformctl dns delete myhost.example.internal
 platformctl dns delete myhost.example.internal --all
 
 # Dry run to see what would happen
-platformctl dns update myhost.example.internal 192.168.1.100 --dry-run
+platformctl dns update myhost.example.internal 192.0.2.100 --dry-run
 
 # Use specific server
-platformctl dns update myhost.example.internal 192.168.1.100 \
+platformctl dns update myhost.example.internal 192.0.2.100 \
   --server ns1.example.internal:53
 ```
 
@@ -597,7 +600,7 @@ platformctl dns update myhost.example.internal 192.168.1.100 \
 
 ```bash
 # Enable debug logging
-platformctl dns update myhost.internal 192.168.1.100 --verbose
+platformctl dns update myhost.internal 192.0.2.100 --verbose
 
 # Check TSIG key configuration
 platformctl dns tsig list
@@ -787,10 +790,10 @@ Use the `--attest` flag to perform attestation-gated updates:
 
 ```bash
 # Update with attestation
-platformctl dns update myhost.secure.example.com 192.168.1.100 --attest
+platformctl dns update myhost.secure.example.com 192.0.2.100 --attest
 
 # Specify attestation service
-platformctl dns update myhost.secure.example.com 192.168.1.100 \
+platformctl dns update myhost.secure.example.com 192.0.2.100 \
   --attest \
   --attestation-service https://attest.example.com:8443
 
@@ -884,7 +887,7 @@ if err != nil {
 // Perform attested update
 err = client.UpdateA(ctx, ddns.OpAdd, &entities.ARecord{
     Name:  "myhost",
-    Value: "192.168.1.100",
+    Value: "192.0.2.100",
     TTL:   3600,
 })
 ```

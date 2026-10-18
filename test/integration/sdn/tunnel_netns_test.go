@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"golang.zx2c4.com/wireguard/wgctrl"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
@@ -41,6 +43,8 @@ const (
 	tunEchoPort  = 18179
 	espSPIOut    = 0x5001
 	espSPIIn     = 0x5002
+	wgHostPort   = 51820
+	wgPeerPort   = 51821
 )
 
 // staticKeys is the test KeyProvider: fixed AES-256-GCM material for both
@@ -54,6 +58,31 @@ func (s staticKeys) Key(_ context.Context, ref string) ([]byte, error) {
 }
 
 func espKeyBytes(b byte) []byte { return bytes.Repeat([]byte{b}, 36) }
+
+// peerESP programs the peer's side of the host's ESP tunnel: the peer's
+// outbound SA mirrors the host's inbound one and vice versa.
+func peerESP(t *testing.T, ph *netlink.Handle, outKey, inKey []byte) {
+	t.Helper()
+	hostIP, peerIP := net.ParseIP(tunHostOuter), net.ParseIP(tunPeerOuter)
+	for _, s := range []*netlink.XfrmState{
+		{Src: peerIP, Dst: hostIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Spi: espSPIIn, Reqid: espSPIOut, ReplayWindow: 128, ESN: true,
+			Aead: &netlink.XfrmStateAlgo{Name: "rfc4106(gcm(aes))", Key: inKey, ICVLen: 128}},
+		{Src: hostIP, Dst: peerIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Spi: espSPIOut, Reqid: espSPIOut, ReplayWindow: 128, ESN: true,
+			Aead: &netlink.XfrmStateAlgo{Name: "rfc4106(gcm(aes))", Key: outKey, ICVLen: 128}},
+	} {
+		require.NoError(t, ph.XfrmStateAdd(s))
+	}
+	host32 := &net.IPNet{IP: hostIP.To4(), Mask: net.CIDRMask(32, 32)}
+	peer32 := &net.IPNet{IP: peerIP.To4(), Mask: net.CIDRMask(32, 32)}
+	for _, p := range []*netlink.XfrmPolicy{
+		{Src: peer32, Dst: host32, Proto: 47, Dir: netlink.XFRM_DIR_OUT, Action: netlink.XFRM_POLICY_ALLOW,
+			Tmpls: []netlink.XfrmPolicyTmpl{{Src: peerIP, Dst: hostIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Reqid: espSPIOut}}},
+		{Src: host32, Dst: peer32, Proto: 47, Dir: netlink.XFRM_DIR_IN, Action: netlink.XFRM_POLICY_ALLOW,
+			Tmpls: []netlink.XfrmPolicyTmpl{{Src: hostIP, Dst: peerIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Reqid: espSPIOut}}},
+	} {
+		require.NoError(t, ph.XfrmPolicyAdd(p))
+	}
+}
 
 // TestTunnel_NetNS_GREPinnedToUplink brings up a GRE tunnel between two
 // namespaces with the host side managed by tunnel.Manager, pinned to an
@@ -136,36 +165,13 @@ func TestTunnel_NetNS_IPsecProtectsTheCarrier(t *testing.T) {
 	defer ph.Close()
 
 	keys := staticKeys{material: map[string][]byte{"k/out": espKeyBytes(0xA5), "k/in": espKeyBytes(0x5A)}}
-	peerSAs := func(outKey, inKey []byte) {
-		hostIP, peerIP := net.ParseIP(tunHostOuter), net.ParseIP(tunPeerOuter)
-		// Peer's outbound mirrors the host's inbound and vice versa.
-		for _, s := range []*netlink.XfrmState{
-			{Src: peerIP, Dst: hostIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Spi: espSPIIn, Reqid: espSPIOut, ReplayWindow: 128, ESN: true,
-				Aead: &netlink.XfrmStateAlgo{Name: "rfc4106(gcm(aes))", Key: inKey, ICVLen: 128}},
-			{Src: hostIP, Dst: peerIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Spi: espSPIOut, Reqid: espSPIOut, ReplayWindow: 128, ESN: true,
-				Aead: &netlink.XfrmStateAlgo{Name: "rfc4106(gcm(aes))", Key: outKey, ICVLen: 128}},
-		} {
-			require.NoError(t, ph.XfrmStateAdd(s))
-		}
-		host32 := &net.IPNet{IP: hostIP.To4(), Mask: net.CIDRMask(32, 32)}
-		peer32 := &net.IPNet{IP: peerIP.To4(), Mask: net.CIDRMask(32, 32)}
-		for _, p := range []*netlink.XfrmPolicy{
-			{Src: peer32, Dst: host32, Proto: 47, Dir: netlink.XFRM_DIR_OUT, Action: netlink.XFRM_POLICY_ALLOW,
-				Tmpls: []netlink.XfrmPolicyTmpl{{Src: peerIP, Dst: hostIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Reqid: espSPIOut}}},
-			{Src: host32, Dst: peer32, Proto: 47, Dir: netlink.XFRM_DIR_IN, Action: netlink.XFRM_POLICY_ALLOW,
-				Tmpls: []netlink.XfrmPolicyTmpl{{Src: hostIP, Dst: peerIP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Reqid: espSPIOut}}},
-		} {
-			require.NoError(t, ph.XfrmPolicyAdd(p))
-		}
-	}
-
 	require.NoError(t, ph.LinkAdd(&netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: "pgre2"},
 		Local: net.ParseIP(tunPeerOuter), Remote: net.ParseIP(tunHostOuter)}))
 	addrUp(t, ph, "pgre2", tunPeerInner+"/30")
 	listenWithin(peerNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort)))
 
 	// Peer programmed with the WRONG inbound key first: traffic must not flow.
-	peerSAs(espKeyBytes(0xA5), espKeyBytes(0xFF))
+	peerESP(t, ph, espKeyBytes(0xA5), espKeyBytes(0xFF))
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	var mgr *tunnel.Manager
@@ -201,7 +207,7 @@ func TestTunnel_NetNS_IPsecProtectsTheCarrier(t *testing.T) {
 	for i := range peerPolicies {
 		require.NoError(t, ph.XfrmPolicyDel(&peerPolicies[i]))
 	}
-	peerSAs(espKeyBytes(0xA5), espKeyBytes(0x5A))
+	peerESP(t, ph, espKeyBytes(0xA5), espKeyBytes(0x5A))
 	require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))),
 		"matching ESP keys carry the GRE tunnel")
 
@@ -229,8 +235,201 @@ func TestTunnel_NetNS_IPsecProtectsTheCarrier(t *testing.T) {
 	assert.Empty(t, states, "SAs removed with the tunnel")
 }
 
+// TestTunnel_NetNS_IPsecRelaunchKeepsLiveSAs relaunches an IPsec tunnel's
+// manager over the kernel state its killed predecessor left (#557). The
+// carrier and both SAs are adopted, not recreated: the outbound SA keeps its
+// install time and packet counter, and traffic flows after the relaunch.
+func TestTunnel_NetNS_IPsecRelaunchKeepsLiveSAs(t *testing.T) {
+	require.Equal(t, 0, os.Geteuid(), "the tunnel test needs root (NET_ADMIN); run it in the devcontainer")
+	hostNS, peerNS, hh, ph := twoNamespaces(t, "espr")
+	defer hh.Close()
+	defer ph.Close()
+
+	keys := staticKeys{material: map[string][]byte{"k/out": espKeyBytes(0xA5), "k/in": espKeyBytes(0x5A)}}
+	peerESP(t, ph, espKeyBytes(0xA5), espKeyBytes(0x5A))
+	require.NoError(t, ph.LinkAdd(&netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: "pgre3"},
+		Local: net.ParseIP(tunPeerOuter), Remote: net.ParseIP(tunHostOuter)}))
+	addrUp(t, ph, "pgre3", tunPeerInner+"/30")
+	echo := net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))
+	listenWithin(peerNS, t, echo)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg := tunnel.TunnelConfig{
+		Name: "hgre3", Type: tunnel.TunnelTypeGRE, Transport: tunnel.TransportIPsec,
+		Local: tunHostOuter, Remote: tunPeerOuter, TunnelIP: tunHostInner + "/30",
+		IPsec: &tunnel.IPsecConfig{KeyRef: "k/out", PeerKeyRef: "k/in", SPIOut: espSPIOut, SPIIn: espSPIIn},
+	}
+	// The first manager is never closed: its carrier, SAs and policies stay
+	// in the kernel, as a SIGKILL leaves them.
+	inNS(t, hostNS, func() {
+		killed := tunnel.NewManager(logger, tunnel.WithKeyProvider(keys))
+		require.NoError(t, killed.EnsureTunnel(context.Background(), cfg))
+	})
+	require.NoError(t, dialWithin(hostNS, t, echo), "the first manager's tunnel carries traffic")
+	carrier, err := hh.LinkByName("hgre3")
+	require.NoError(t, err)
+	before := hostOutSA(t, hh)
+	require.NotZero(t, before.Statistics.Packets, "precondition: the outbound SA has carried traffic")
+
+	var relaunched *tunnel.Manager
+	inNS(t, hostNS, func() {
+		relaunched = tunnel.NewManager(logger, tunnel.WithKeyProvider(keys))
+		require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
+	})
+	t.Cleanup(func() { inNS(t, hostNS, func() { _ = relaunched.Close() }) })
+
+	adopted, err := hh.LinkByName("hgre3")
+	require.NoError(t, err)
+	assert.Equal(t, carrier.Attrs().Index, adopted.Attrs().Index, "the carrier is adopted")
+	states, err := hh.XfrmStateList(netlink.FAMILY_V4)
+	require.NoError(t, err)
+	assert.Len(t, states, 2, "no SA is added beside the live ones")
+	kept := hostOutSA(t, hh)
+	assert.Equal(t, before.Statistics.AddTime, kept.Statistics.AddTime, "the outbound SA is the one installed before the relaunch")
+	assert.GreaterOrEqual(t, kept.Statistics.Packets, before.Statistics.Packets, "its counters were not reset")
+	require.NoError(t, dialWithin(hostNS, t, echo), "traffic flows after the relaunch")
+}
+
+// hostOutSA is the host's outbound SA as the kernel holds it.
+func hostOutSA(t *testing.T, hh *netlink.Handle) *netlink.XfrmState {
+	t.Helper()
+	sa, err := hh.XfrmStateGet(&netlink.XfrmState{
+		Src: net.ParseIP(tunHostOuter), Dst: net.ParseIP(tunPeerOuter),
+		Proto: netlink.XFRM_PROTO_ESP, Spi: espSPIOut,
+	})
+	require.NoError(t, err)
+	return sa
+}
+
 // twoNamespaces builds host and peer namespaces joined by a veth pair
 // (tun0 in host, tun1 in peer) with the outer addresses on them.
+// TestTunnel_NetNS_WireGuardRelaunchAdopts brings up a WireGuard tunnel
+// between two namespaces, leaves its device behind as a killed process
+// does, and proves a relaunched manager adopts it: the same interface, the
+// same session, the stale peer gone, traffic still flowing. A changed key is
+// not adopted: the device is recreated.
+func TestTunnel_NetNS_WireGuardRelaunchAdopts(t *testing.T) {
+	require.Equal(t, 0, os.Geteuid(), "the tunnel test needs root (NET_ADMIN); run it in the devcontainer")
+	hostNS, peerNS, hh, ph := twoNamespaces(t, "wg")
+	defer hh.Close()
+	defer ph.Close()
+
+	hostKey, err := wgtypes.GeneratePrivateKey()
+	require.NoError(t, err)
+	peerKey, err := wgtypes.GeneratePrivateKey()
+	require.NoError(t, err)
+	keys := staticKeys{material: map[string][]byte{"wg/host": hostKey[:]}}
+
+	// Peer side: a WireGuard device by hand that knows the host's key.
+	require.NoError(t, ph.LinkAdd(&netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: "pwg1"}}))
+	peerConfigure(t, peerNS, "pwg1", peerKey, hostKey.PublicKey())
+	addrUp(t, ph, "pwg1", tunPeerInner+"/30")
+	listenWithin(peerNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort)))
+
+	cfg := tunnel.TunnelConfig{
+		Name: "hwg1", Transport: tunnel.TransportWireGuard,
+		Local: tunHostOuter, Remote: tunPeerOuter, TunnelIP: tunHostInner + "/30",
+		WireGuard: &tunnel.WireGuardConfig{
+			KeyRef: "wg/host", PeerPublicKey: peerKey.PublicKey().String(),
+			ListenPort: wgHostPort, RemotePort: wgPeerPort,
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	ensure := func() *tunnel.Manager {
+		var mgr *tunnel.Manager
+		inNS(t, hostNS, func() {
+			mgr = tunnel.NewManager(logger, tunnel.WithKeyProvider(keys))
+			require.NoError(t, mgr.EnsureTunnel(context.Background(), cfg))
+		})
+		t.Cleanup(func() { inNS(t, hostNS, func() { _ = mgr.Close() }) })
+		return mgr
+	}
+
+	// The first manager is never closed: its device stays, as a kill leaves it.
+	ensure()
+	require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))))
+	first, err := hh.LinkByName("hwg1")
+	require.NoError(t, err)
+	session := hostDevice(t, hostNS, "hwg1").Peers[0].LastHandshakeTime
+	require.False(t, session.IsZero(), "precondition: the first manager completed a handshake")
+
+	// A peer nobody configured, as a predecessor could have left it.
+	stale, err := wgtypes.GeneratePrivateKey()
+	require.NoError(t, err)
+	inNS(t, hostNS, func() {
+		c, err := wgctrl.New()
+		require.NoError(t, err)
+		defer c.Close()
+		_, staleNet, err := net.ParseCIDR("10.255.99.0/24")
+		require.NoError(t, err)
+		require.NoError(t, c.ConfigureDevice("hwg1", wgtypes.Config{Peers: []wgtypes.PeerConfig{{
+			PublicKey: stale.PublicKey(), AllowedIPs: []net.IPNet{*staleNet},
+		}}}))
+	})
+
+	t.Run("RelaunchAdoptsTheDevice", func(t *testing.T) {
+		ensure()
+		adopted, err := hh.LinkByName("hwg1")
+		require.NoError(t, err)
+		assert.Equal(t, first.Attrs().Index, adopted.Attrs().Index, "the relaunch kept the interface")
+		device := hostDevice(t, hostNS, "hwg1")
+		require.Len(t, device.Peers, 1, "the stale peer is removed by the diff")
+		assert.Equal(t, peerKey.PublicKey(), device.Peers[0].PublicKey)
+		assert.Equal(t, session, device.Peers[0].LastHandshakeTime, "the session survived the relaunch")
+		require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))))
+	})
+
+	t.Run("ChangedKeyRecreatesTheDevice", func(t *testing.T) {
+		rotated, err := wgtypes.GeneratePrivateKey()
+		require.NoError(t, err)
+		keys.material["wg/host"] = rotated[:]
+		ensure()
+		recreated, err := hh.LinkByName("hwg1")
+		require.NoError(t, err)
+		assert.NotEqual(t, first.Attrs().Index, recreated.Attrs().Index, "a device with another key is not adopted")
+		assert.Equal(t, rotated.PublicKey(), hostDevice(t, hostNS, "hwg1").PublicKey)
+
+		// The peer learns the new key: traffic flows over the new device.
+		peerConfigure(t, peerNS, "pwg1", peerKey, rotated.PublicKey())
+		require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))))
+	})
+}
+
+// peerConfigure keys the peer namespace's WireGuard device and makes the
+// host's public key its only peer.
+func peerConfigure(t *testing.T, peerNS netns.NsHandle, name string, key wgtypes.Key, host wgtypes.Key) {
+	t.Helper()
+	_, hostNet, err := net.ParseCIDR(tunHostInner + "/32")
+	require.NoError(t, err)
+	listen := wgPeerPort
+	inNS(t, peerNS, func() {
+		c, err := wgctrl.New()
+		require.NoError(t, err)
+		defer c.Close()
+		require.NoError(t, c.ConfigureDevice(name, wgtypes.Config{
+			PrivateKey: &key, ListenPort: &listen, ReplacePeers: true,
+			Peers: []wgtypes.PeerConfig{{
+				PublicKey: host, AllowedIPs: []net.IPNet{*hostNet},
+				Endpoint: &net.UDPAddr{IP: net.ParseIP(tunHostOuter), Port: wgHostPort},
+			}},
+		}))
+	})
+}
+
+// hostDevice reads a WireGuard device back from the host namespace.
+func hostDevice(t *testing.T, hostNS netns.NsHandle, name string) *wgtypes.Device {
+	t.Helper()
+	var device *wgtypes.Device
+	inNS(t, hostNS, func() {
+		c, err := wgctrl.New()
+		require.NoError(t, err)
+		defer c.Close()
+		device, err = c.Device(name)
+		require.NoError(t, err)
+	})
+	return device
+}
+
 func twoNamespaces(t *testing.T, tag string) (hostNS, peerNS netns.NsHandle, hh, ph *netlink.Handle) {
 	t.Helper()
 	hostNS = newNS(t)

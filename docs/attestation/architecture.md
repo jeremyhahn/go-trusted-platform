@@ -112,7 +112,7 @@ Any failure in step 4 or 5 denies. There is no partial result.
   policies still have no verb; that is a gap, recorded in [cli.md](cli.md)
   §1, not a decision.
 
-## The attestation reporting service (design of record, owner-ruled 2026-09-03)
+## The attestation reporting service (design of record)
 
 > **Status: DESIGN.** Tracked as #226. Sequenced behind go-xkms#274 → go-xkms#273
 > → go-qrdb#278. Nothing below is implemented yet; where this section and the
@@ -219,6 +219,37 @@ coexist, and the weaker one must never be invisible:
   real manifest and enshrines whatever the node booted first.
 - TOFU baselining is recorded as a **security event**: it is the moment trust was
   conferred without evidence.
+
+### Root-of-trust tier: hardware-rooted or software-rooted DICE identity
+
+A DICE device's identity is rooted in one of two ways, and the two are not
+equally strong (RFC 9334 §8.4, Strength of Function; §12.1, protections that
+range from process isolation to hardware against physical attack):
+
+- **hardware-rooted**: the DICE root secret is held in a secure element;
+- **software-rooted**: the device has no secure element (an AVR without one, for
+  example), so the root secret is held by the firmware alone and an attacker
+  who can read the device can forge its Evidence.
+
+As with baselines, the weaker tier must never be invisible:
+
+- The tier is a field on the report **and** the device, not an inference. It is
+  never derived from the device class, the profile or the certificate chain.
+- The console renders it beside every verdict. A software-rooted pass must not
+  look identical to a hardware-rooted pass.
+- Appraisal policy may require a minimum tier per device profile. The platform
+  applies it as the Relying Party (RFC 9334 §4.1, §7.1), in its Appraisal Policy
+  for Attestation Results (§4.2, §8.4), as a constraint on a claim of the result
+  (§8.5). A software-rooted device never satisfies a hardware-only requirement,
+  whatever its verdict, measurements or baseline.
+
+The tier comes from go-xkms. Its verifier appraises the DICE Evidence under its
+Appraisal Policy for Evidence (RFC 9334 §4.2, §8.5) and reports the root type on
+the DICE chain and on `attestation.Result`; the platform reads that root type
+through the go-quicbaas SDK re-export of go-xkms and computes none of its own.
+The SDK does not publish it yet ([SPEC.md](../SPEC.md), the DICE root type
+bullet under Interfaces). No document in `docs/reference/` defines the two tier
+names; they are the platform's labels for the go-xkms root type.
 
 ### Failure: deny service, then quarantine — and what must NOT trigger it
 
@@ -427,15 +458,13 @@ to be built around:
 
 Recorded on #377 as well, so the next design starts from the measured shape.
 
-### The control plane is a device in its own registry (#472, owner-ruled 2026-09-06)
+### The control plane is a device in its own registry (#472)
 
 The collector iterates device records. A control plane with no record is never
-collected, so the one machine that decides every other machine's verdict was
-the one machine nothing could attest — measured on the live fleet on
-2026-09-05, where `device list` returned two nodes and no control plane
-despite a fully provisioned control-plane TPM.
+collected, so the one machine that decides every other machine's verdict would
+be the one machine nothing could attest.
 
-The ruling is that **the control plane is enrolled as a device like any node**,
+**The control plane is enrolled as a device like any node**,
 and nodes verify it with the attested-peer primitive at connection time. There
 is no self-report path: a parallel "the control plane reports on itself" code
 path would be a second implementation of verification whose divergence from the
@@ -664,8 +693,8 @@ a MUST before trusting a quote.
 - **Expected state** is the `PCRBaseline` on the device's `DeviceProfile`
   (`source` = `signed` | `tofu`). Reported values must hash to the signed
   digest before they are compared. A profile without a baseline captures one
-  from the first quote whose every other check held (owner ruling: signed
-  manifest, TOFU fallback per profile); only the values the verifier proved
+  from the first quote whose every other check held (a signed manifest
+  first, TOFU as the per-profile fallback); only the values the verifier proved
   are captured, and the capture is a `pcr_baseline_captured` event.
 - **Channel binding is required on the collector's verifier, ignored on the
   transports (#482).** `DeviceQuoteVerifierForReporting` refuses evidence

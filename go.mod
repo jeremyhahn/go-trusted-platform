@@ -3,13 +3,13 @@ module github.com/jeremyhahn/go-trusted-platform
 go 1.27.2
 
 // VictoriaMetrics/metrics v1.18.1 requires deleted valyala/histogram repo
-replace github.com/VictoriaMetrics/metrics => github.com/VictoriaMetrics/metrics v1.35.1
+replace github.com/VictoriaMetrics/metrics => github.com/VictoriaMetrics/metrics v1.35.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 
 // mattn/go-ieproxy was deleted - use newer version
 replace github.com/mattn/go-ieproxy => github.com/mattn/go-ieproxy v0.0.12
 
 // Pin armon/go-metrics to v0.4.1 - newer versions declare as hashicorp/go-metrics
-replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
+replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1 // held: v0.7.0 declares its module path as github.com/hashicorp/go-metrics
 
 // Cross-repo dependencies resolve as normal Go modules fetched from the dev
 // Gitea server during development (gitconfig insteadOf + GOPRIVATE) and from
@@ -19,56 +19,56 @@ replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 // dependency is one-way: sdk/go requires nothing from this module (#840).
 
 require (
-	cloud.google.com/go/compute v1.64.0
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.0
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
+	cloud.google.com/go/compute v1.64.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6 v6.4.0
 	github.com/GeertJohan/yubigo v0.0.0-20190917122436-175bc097e60e
-	github.com/anatol/devmapper.go v0.0.0-20250316020617-2671eefd35d7
-	github.com/aws/aws-sdk-go-v2 v1.43.5
-	github.com/aws/aws-sdk-go-v2/config v1.32.36
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.35
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.200.0
-	github.com/aws/smithy-go v1.27.7
+	github.com/anatol/devmapper.go v0.0.0-20260315162726-c47dfb6cf674
+	github.com/aws/aws-sdk-go-v2 v1.43.5 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/aws/aws-sdk-go-v2/config v1.32.36 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.35 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.200.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/aws/smithy-go v1.27.7 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/boombuler/barcode v1.1.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/codegangsta/negroni v1.0.0
-	github.com/coredhcp/coredhcp v0.0.0-20260117135807-60ec8025cdfc
-	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495
+	github.com/coredhcp/coredhcp v0.0.0-20260117135807-60ec8025cdfc // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/coredns/coredns v1.14.7
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
-	github.com/fatih/color v1.18.0
+	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.4 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-tpm v0.9.8
-	github.com/google/go-tpm-tools v0.4.9
-	github.com/google/logger v1.1.1
+	github.com/google/go-tpm-tools v0.4.9 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/google/logger v1.1.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
-	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
-	github.com/jeremyhahn/go-codec v1.4.0
-	github.com/jeremyhahn/go-luks2 v0.2.0-alpha
-	github.com/jeremyhahn/go-quicbaas v0.14.0-alpha
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.14.0-alpha
+	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/jeremyhahn/go-codec v1.4.0 // held: v1.5.0-alpha is not in the module cache and cannot be fetched offline in #933; go-quicbaas, go-xkms and go-qrdb (every cached tag) still require v1.4.0
+	github.com/jeremyhahn/go-luks2 v0.2.0-alpha // held: v1.0.0-rc.4 lifts go-enclave to v0.8.0-alpha under go-qrdb, go-xkms and go-quicbaas (all on v0.5.0-alpha); later tags cannot be fetched offline in #933
+	github.com/jeremyhahn/go-quicbaas v0.14.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.14.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
-	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha
-	github.com/klauspost/compress v1.19.1
-	github.com/libp2p/go-libp2p v0.46.0
-	github.com/libp2p/go-libp2p-kad-dht v0.37.0
-	github.com/mdlayher/packet v1.1.2
-	github.com/mdobak/go-xerrors v1.0.0
-	github.com/miekg/dns v1.1.72
+	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/klauspost/compress v1.19.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/libp2p/go-libp2p v0.46.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/libp2p/go-libp2p-kad-dht v0.37.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/mdlayher/packet v1.1.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/mdobak/go-xerrors v1.0.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/miekg/dns v1.1.72 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/multiformats/go-multiaddr v0.16.1
-	github.com/open-policy-agent/opa v1.12.2
-	github.com/osrg/gobgp/v4 v4.9.0
+	github.com/open-policy-agent/opa v1.12.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/osrg/gobgp/v4 v4.9.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/ovn-org/libovsdb v0.0.0-20250702120510-8a0705fef3ad
-	github.com/pin/tftp/v3 v3.1.0
-	github.com/prometheus/client_golang v1.24.1
-	github.com/quic-go/connect-ip-go v0.2.0
-	github.com/quic-go/quic-go v0.63.0
+	github.com/pin/tftp/v3 v3.1.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/prometheus/client_golang v1.24.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/quic-go/connect-ip-go v0.2.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/quic-go/quic-go v0.63.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
@@ -76,17 +76,17 @@ require (
 	github.com/strongswan/govici v0.8.2
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/wailsapp/wails/v2 v2.12.0
+	github.com/wailsapp/wails/v2 v2.12.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/yosida95/uritemplate/v3 v3.0.2
-	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.60.0
-	golang.org/x/sync v0.23.0
-	golang.org/x/sys v0.48.0
-	golang.org/x/term v0.46.0
+	golang.org/x/crypto v0.57.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	golang.org/x/net v0.60.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	golang.org/x/sync v0.23.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	golang.org/x/sys v0.48.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	golang.org/x/term v0.46.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
-	google.golang.org/api v0.293.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688
-	google.golang.org/grpc v1.83.2
+	google.golang.org/api v0.293.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	google.golang.org/grpc v1.83.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1

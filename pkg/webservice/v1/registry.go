@@ -1036,8 +1036,8 @@ type RegistryParams struct {
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer
 	VPNServiceServer  platformv1.VPNServiceServer
-	// AppServiceServers are the daemon's Cache, Scheduler and Messaging
-	// servers, the instances behind every other transport.
+	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
+	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
 	SDNEnrollmentHook *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
@@ -1430,8 +1430,8 @@ func (registry *HandlerRegistry) SDNService() platformv1.SDNServiceServer {
 }
 
 // WebAuthnRestService returns the WebAuthn REST handler, or nil if
-// WebAuthn is not configured or no SDK client is wired. Callers must
-// check for nil before using the handler.
+// WebAuthn is not configured or no SDK client or tenant user service is
+// wired. Callers must check for nil before using the handler.
 func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	if !webauthn.IsConfigured(registry.params.WebAuthnConfig) {
 		registry.params.Logger.Warn("WebAuthn not configured, WebAuthn routes will not be registered")
@@ -1450,14 +1450,23 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.Warn("unified login driver not wired, WebAuthn routes will not be registered")
 		return nil
 	}
+	// Registration creates the user's workspace and mints its session
+	// there through the tenant user service. Without one the only tenant
+	// left for that session is the operating one, which a browser session
+	// never lands in (#662), so the surface is declined — as the login
+	// driver declines its fido2 factor for the same reason.
 	tus := registry.tenantUserService()
+	if tus == nil {
+		registry.params.Logger.Warn("tenant user service not wired, WebAuthn routes will not be registered")
+		return nil
+	}
 	// Wire the QuicBaaS IAM mirror so RegisterNewUser surfaces the
 	// freshly-registered user into /api/v1/iam/users. The mirror is
 	// constructed lazily here because TenantUserService is built at
 	// service-registry construction time, before the IAM client is
 	// available, and the cleanest decoupling is "the IAM REST adapter
 	// owns the mirror; the platform service receives it via setter."
-	if tus != nil && registry.params.IAMClient != nil {
+	if registry.params.IAMClient != nil {
 		mirror := restiam.NewQuicBaaSUserMirror(registry.params.IAMClient)
 		tus.SetIAMMirror(mirror)
 		registry.startIAMUserReconcile(mirror)
@@ -1465,7 +1474,6 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	params := webauthn.ServiceParams{
 		Config:                    registry.params.WebAuthnConfig,
 		Debug:                     registry.params.Debug,
-		JWTService:                registry.jwtService,
 		Logger:                    registry.params.Logger,
 		RegistrationService:       registry.params.ServiceRegistry.RegistrationService(),
 		ResponseWriter:            registry.params.HTTPWriter,
@@ -2098,8 +2106,8 @@ func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer 
 	return registry.params.VPNServiceServer
 }
 
-// AppServiceServers returns the daemon's Cache, Scheduler and Messaging
-// servers; a service the daemon does not wire is a nil interface.
+// AppServiceServers returns the daemon's Cache, Scheduler, Messaging and
+// ObjectStorage servers; a service the daemon does not wire is a nil interface.
 func (registry *HandlerRegistry) AppServiceServers() restapi.AppServiceServers {
 	return registry.params.AppServiceServers
 }

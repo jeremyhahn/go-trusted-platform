@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -307,51 +308,74 @@ func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	}
 }
 
-func TestPolicy_DatapathAdmitsTheDatapathUIDButNotControl(t *testing.T) {
-	// Control admits a uid nobody has; the datapath list admits us. Status
-	// must be refused while ApplyDesired succeeds.
+func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
+	// Control admits a uid nobody has; the datapath list admits us, as it
+	// admits the parser class. The VPN peer methods must answer while
+	// Status and ApplyDesired, the supervisor's alone, are refused: a
+	// compromised parser must not replace the firewall's desired document.
 	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{uint32(os.Getuid())}}
 	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, policy)
 
 	if _, err := client.Status(testContext(t)); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Status err = %v, want PermissionDenied", err)
 	}
-	if _, err := client.ApplyDesired(testContext(t), &gwstate.DesiredConfig{GatewayID: "gw-test"}); err != nil {
-		t.Fatalf("ApplyDesired: %v", err)
+	if _, err := client.ApplyDesired(testContext(t), &gwstate.DesiredConfig{GatewayID: "gw-test"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ApplyDesired err = %v, want PermissionDenied", err)
+	}
+	if _, err := client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}}); err != nil {
+		t.Fatalf("InstallVPNPeer: %v", err)
+	}
+	if _, err := client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"}); err != nil {
+		t.Fatalf("RemoveVPNPeer: %v", err)
 	}
 }
 
-func TestPolicyAdmit_TableAndUnknownService(t *testing.T) {
+func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 	p := Policy{DatapathUIDs: []uint32{1001}}
-	root := creds(0)
-	parser := creds(1001)
-	other := creds(1002)
-
-	control := ipcv1.ProcessControlService_ServiceDesc.ServiceName
-	datapath := ipcv1.DatapathService_ServiceDesc.ServiceName
-
-	if err := p.admit(control, root); err != nil {
-		t.Fatalf("root on control: %v", err)
+	cases := []struct {
+		method string
+		parser bool
+	}{
+		{ipcv1.ProcessControlService_Status_FullMethodName, false},
+		{ipcv1.ProcessControlService_Snapshot_FullMethodName, false},
+		{ipcv1.DatapathService_ApplyDesired_FullMethodName, false},
+		{ipcv1.DatapathService_InstallVPNPeer_FullMethodName, true},
+		{ipcv1.DatapathService_RemoveVPNPeer_FullMethodName, true},
 	}
-	if err := p.admit(datapath, root); err != nil {
-		t.Fatalf("root on datapath: %v", err)
-	}
-	if err := p.admit(datapath, parser); err != nil {
-		t.Fatalf("parser on datapath: %v", err)
-	}
-	var denied *ErrPeerDenied
-	if err := p.admit(control, parser); !errors.As(err, &denied) || denied.UID != 1001 {
-		t.Fatalf("parser on control = %v, want ErrPeerDenied", err)
-	}
-	if err := p.admit(datapath, other); !errors.As(err, &denied) {
-		t.Fatalf("other on datapath = %v, want ErrPeerDenied", err)
+	for _, tc := range cases {
+		if err := p.admit(tc.method, creds(0)); err != nil {
+			t.Fatalf("root on %s: %v", tc.method, err)
+		}
+		var denied *ErrPeerDenied
+		if err := p.admit(tc.method, creds(1002)); !errors.As(err, &denied) || denied.Method != tc.method {
+			t.Fatalf("other on %s = %v, want ErrPeerDenied naming the method", tc.method, err)
+		}
+		err := p.admit(tc.method, creds(1001))
+		if tc.parser && err != nil {
+			t.Fatalf("parser on %s: %v", tc.method, err)
+		}
+		if !tc.parser && (!errors.As(err, &denied) || denied.UID != 1001) {
+			t.Fatalf("parser on %s = %v, want ErrPeerDenied", tc.method, err)
+		}
 	}
 	var unknown *ErrUnknownService
-	if err := p.admit("gatewayd.ipc.v1.Nothing", root); !errors.As(err, &unknown) {
-		t.Fatalf("unknown service = %v, want ErrUnknownService", err)
+	for _, method := range []string{"/gatewayd.ipc.v1.DatapathService/Nothing", "/gatewayd.ipc.v1.Nothing/Status", ""} {
+		if err := p.admit(method, creds(0)); !errors.As(err, &unknown) || unknown.Method != method {
+			t.Fatalf("admit(%q) = %v, want ErrUnknownService", method, err)
+		}
 	}
-	if got := serviceOf("/gatewayd.ipc.v1.DatapathService/ApplyDesired"); got != datapath {
-		t.Fatalf("serviceOf = %q", got)
+}
+
+func TestPolicy_EveryContractMethodIsPlaced(t *testing.T) {
+	// A method added to ipc.proto without a policy entry would be refused
+	// to everyone, the supervisor included; this fails before that ships.
+	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc} {
+		for _, m := range desc.Methods {
+			method := "/" + desc.ServiceName + "/" + m.MethodName
+			if _, ok := methodAdmissions[method]; !ok {
+				t.Errorf("%s has no policy entry", method)
+			}
+		}
 	}
 }
 
@@ -507,7 +531,7 @@ func TestErrors_Messages(t *testing.T) {
 		err  error
 		want string
 	}{
-		{&ErrPeerDenied{Service: "svc", UID: 7, PID: 9}, "gatewayd ipc: uid 7 (pid 9) is not admitted to svc"},
+		{&ErrPeerDenied{Method: "svc", UID: 7, PID: 9}, "gatewayd ipc: uid 7 (pid 9) is not admitted to svc"},
 		{&ErrUnknownService{Method: "m"}, "gatewayd ipc: no peer policy for method \"m\""},
 		{&ErrSocketPath{Path: "/p", Op: "listen", Cause: errors.New("boom")}, "gatewayd ipc: listen \"/p\": boom"},
 		{&ErrDocument{Document: "snapshot", Cause: errors.New("bad")}, "gatewayd ipc: snapshot document: bad"},

@@ -1,6 +1,6 @@
 # Key Management — API
 
-> **Status: NORMATIVE** · Scope: KMS routes on every transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: KMS routes on every transport · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -14,7 +14,11 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.KMS` carries the service in-process.
 
-gRPC: `KeyManagementService`, 23 RPCs (`pkg/api/grpc/proto/kms.proto`).
+gRPC: `KeyManagementService`, 23 RPCs (`pkg/api/grpc/proto/kms.proto`). The
+daemon also serves the go-quicbaas `quicbaas.kms.v1` services `KeyManagement`,
+`SecretsManagement`, `Crypto` and `DEKManagement` on the same TCP and Unix
+listeners (`KMSService.RegisterGRPCServices`, `pkg/api/daemon/kms_service.go`).
+A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms` (`pkg/webservice/v1/rest/kms/router.go`).
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK `0xF0`–`0xF5`,
 plus a **KMS extended category opcode `0xCD`**.
@@ -32,15 +36,15 @@ MCP: 20 `kms_*` tools and 6 `secret_*` tools.
 | Get key | `GET /api/v1/kms/keys/{name}` | `GetKey` | as above | `kms_get_key` (`kms:read`) | ✅ |
 | Delete key | `DELETE /api/v1/kms/keys/{name}` | `DeleteKey` | as above | `kms_delete_key` (`kms:delete`) | ✅ |
 | Rotate key | `POST /api/v1/kms/keys/{name}/rotate` | `RotateKey` | as above | `kms_rotate_key` (`kms:write`) | ✅ |
-| Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `MISSING — docs/13 G7` | as above | `kms_revoke_key` (`kms:write`) | — |
+| Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `KeyManagement.RevokeKey` | as above | `kms_revoke_key` (`kms:write`) | — |
 | Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `MISSING — docs/13 G7` | ✅ |
 | List key versions | `GET /api/v1/kms/keys/{name}/versions` | `GetKeyVersions` | as above | `MISSING — docs/13 G7` | ✅ |
 | Export key | `MISSING — docs/13 G7` | `ExportKey` | as above | `kms_export_public_key` (`kms:read`) | ✅ |
-| Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `MISSING — docs/13 G7` | as above | `kms_get_key_metadata` (`kms:read`) | — |
-| Update key metadata | `PUT /api/v1/kms/keys/{name}/metadata` | `MISSING — docs/13 G7` | as above | `kms_update_key_metadata` (`kms:write`) | — |
-| Get key policy | `GET /api/v1/kms/keys/{name}/policy` | `MISSING — docs/13 G7` | as above | `kms_get_key_policy` (`kms:read`) | — |
-| Set key policy | `PUT /api/v1/kms/keys/{name}/policy` | `MISSING — docs/13 G7` | as above | `kms_set_key_policy` (`kms:write`) | — |
-| List algorithms | `GET /api/v1/kms/algorithms` | `MISSING — docs/13 G7` | as above | `kms_supported_algorithms` (`kms:read`) | — |
+| Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `KeyManagement.GetKeyMetadata` | as above | `kms_get_key_metadata` (`kms:read`) | — |
+| Update key metadata | `PUT /api/v1/kms/keys/{name}/metadata` | `KeyManagement.UpdateKeyMetadata` | as above | `kms_update_key_metadata` (`kms:write`) | — |
+| Get key policy | `GET /api/v1/kms/keys/{name}/policy` | `KeyManagement.GetKeyPolicy` | as above | `kms_get_key_policy` (`kms:read`) | — |
+| Set key policy | `PUT /api/v1/kms/keys/{name}/policy` | `KeyManagement.SetKeyPolicy` | as above | `kms_set_key_policy` (`kms:write`) | — |
+| List algorithms | `GET /api/v1/kms/algorithms` | `KeyManagement.GetSupportedAlgorithms` | as above | `kms_supported_algorithms` (`kms:read`) | — |
 | Backend status | `GET /api/v1/kms/backend/status` | `BackendStatus` | as above | `kms_backend_status` (`kms:read`) | ✅ |
 
 **`ExportKey` exists on gRPC and has no REST route.** The MCP tool is
@@ -48,7 +52,9 @@ MCP: 20 `kms_*` tools and 6 `secret_*` tools.
 `ExportKey` without that qualifier, which is a naming difference worth checking
 before assuming what crosses the boundary.
 
-Key **metadata and policy** are REST and MCP only — no gRPC RPC.
+Key **revocation, metadata, policy and the algorithm list** have no RPC on the
+platform `KeyManagementService`; gRPC serves them through
+`quicbaas.kms.v1.KeyManagement`.
 
 `POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
 (`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
@@ -97,32 +103,41 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Generate data key | `POST /api/v1/kms/data-keys` | `GenerateDataKey` | `0xF0`–`0xF5` | `kms_generate_data_key` (`kms:write`) | ✅ |
-| Generate wrapped data key | `POST /api/v1/kms/data-keys/wrapped` | `GenerateWrappedDataKey` | as above | `kms_generate_wrapped_data_key` (`kms:write`) | ✅ |
-| Create DEK | `POST /api/v1/kms/deks` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| List DEKs | `GET /api/v1/kms/deks` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Get DEK | `GET /api/v1/kms/deks/{path}` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| DEK status | `GET /api/v1/kms/deks/{path}/status` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Rotate DEK | `POST /api/v1/kms/deks/{path}/rotate` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Delete DEK | `DELETE /api/v1/kms/deks/{path}` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
+| Generate data key | `POST /api/v1/kms/data-keys` | `GenerateDataKey` | `0xD9` | `kms_generate_data_key` (`kms:write`) | ✅ |
+| Generate wrapped data key | `POST /api/v1/kms/data-keys/wrapped` | `GenerateWrappedDataKey` | `0xDA` | `kms_generate_wrapped_data_key` (`kms:write`) | ✅ |
+| Create DEK | `POST /api/v1/kms/deks` | `DEKManagement.CreateDEK` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| List DEKs | `GET /api/v1/kms/deks` | `DEKManagement.ListDEKs` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Get DEK | `GET /api/v1/kms/deks/{path}` | `DEKManagement.GetDEK` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| DEK status | `GET /api/v1/kms/deks/{path}/status` | `DEKManagement.GetDEKStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Rotate DEK | `POST /api/v1/kms/deks/{path}/rotate` | `DEKManagement.RotateDEK` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Delete DEK | `DELETE /api/v1/kms/deks/{path}` | `DEKManagement.DeleteDEK` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 
 | Secrets capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Store secret | `POST /api/v1/kms/secrets` | `MISSING — docs/13 G7` | secrets category `0xCE` | `secret_store` (`secrets:write`) | — |
-| List secrets | `GET /api/v1/kms/secrets` | `MISSING — docs/13 G7` | as above | `secret_list` (`secrets:list`) | — |
-| Get secret | `GET /api/v1/kms/secrets/{name}` | `MISSING — docs/13 G7` | as above | `secret_get` (`secrets:read`) | — |
-| Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `MISSING — docs/13 G7` | as above | `secret_delete` (`secrets:delete`) | — |
-| Get secret version | `GET /api/v1/kms/secrets/{name}/versions/{version}` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| List secret versions | `GET /api/v1/kms/secrets/{name}/versions` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Rotate secret | `POST /api/v1/kms/secrets/{name}/rotate` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Rollback secret | `POST /api/v1/kms/secrets/{name}/rollback` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Update secret status | `PUT /api/v1/kms/secrets/{name}/status` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Get rotation policy | `GET /api/v1/kms/secrets/{name}/policy` | `MISSING — docs/13 G7` | as above | `secret_get_rotation_policy` (`secrets:read`) | — |
-| Set rotation policy | `PUT /api/v1/kms/secrets/{name}/policy` | `MISSING — docs/13 G7` | as above | `secret_set_rotation_policy` (`secrets:write`) | — |
+| Store secret | `POST /api/v1/kms/secrets` | `SecretsManagement.StoreSecret` | secrets category `0xCE`, sub `0x01` | `secret_store` (`secrets:write`) | — |
+| List secrets | `GET /api/v1/kms/secrets` | `SecretsManagement.ListSecrets` | sub `0x03` | `secret_list` (`secrets:list`) | — |
+| Get secret | `GET /api/v1/kms/secrets/{name}` | `SecretsManagement.GetSecret` | sub `0x02` | `secret_get` (`secrets:read`) | — |
+| Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `SecretsManagement.DeleteSecret` | sub `0x04` | `secret_delete` (`secrets:delete`) | — |
+| Get secret version | `GET /api/v1/kms/secrets/{name}/versions/{version}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| List secret versions | `GET /api/v1/kms/secrets/{name}/versions` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Rotate secret | `POST /api/v1/kms/secrets/{name}/rotate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Rollback secret | `POST /api/v1/kms/secrets/{name}/rollback` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Update secret status | `PUT /api/v1/kms/secrets/{name}/status` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Get rotation policy | `GET /api/v1/kms/secrets/{name}/policy` | `SecretsManagement.GetRotationPolicy` | sub `0x06` | `secret_get_rotation_policy` (`secrets:read`) | — |
+| Set rotation policy | `PUT /api/v1/kms/secrets/{name}/policy` | `SecretsManagement.SetRotationPolicy` | sub `0x05` | `secret_set_rotation_policy` (`secrets:write`) | — |
 
-**Secrets and DEK management have no gRPC service at all.** They are REST, QUIC
-and (partially) MCP. That means the SDK's typed gRPC path cannot reach them, and
-an embedded-mode consumer cannot use them.
+**gRPC DEK and REST DEK are one store.** `DEKManagement` calls the same SDK DEK
+client (`Security().DEK()`) as the `/deks` routes, so a DEK created on one
+transport is read, rotated and deleted on the other.
+
+**Secret versions, rotate, rollback and status are not served on gRPC or MCP.**
+Seam: go-quicbaas embedded Secrets `GetVersion`, `ListVersions`, `Rotate`,
+`Rollback` and `UpdateStatus`. The pinned SDK's embedded dispatcher
+(`sdk/go/transport/embedded/transport.go` `unaryHandlers`) registers only
+`Store`, `Get`, `List`, `Delete` and `Ensure` for `quicbaas.Secrets`, so an
+embedded daemon answers the other five with an unknown-method error; its
+service also refuses a `deleted` status. The REST routes in the table reach the
+same SDK client and fail the same way on an embedded daemon.
 
 **The CLI cannot reach them either** — the entire `platformctl kms secrets`
 and `kms dek` subtrees are stubs that return typed
@@ -262,8 +277,8 @@ operations and large ciphertexts.
 | Key lifecycle (generate, import, get, metadata, list, update, enable, disable, delete, schedule/cancel deletion, rotate, policy) | The backend's class; `InvalidArgument` for a missing key ID or spec, an unsupported value, filter or cursor |
 | Crypto (encrypt, decrypt, sign, verify, MAC, data key, re-encrypt) | The backend's class; `InvalidArgument` for a missing input or a ciphertext the key did not seal |
 | Batch (REST) | `InvalidArgument` for an empty or oversize batch; 207 Multi-Status when some items fail (`pkg/api/rest/kms_handlers.go` `writeKMSError`) |
-| Secrets (`secret_*`, secret routes) | `InvalidArgument` for a missing ID; gRPC and QUIC still answer store and list failures `Internal` and read failures `NotFound`, whatever the cause |
-| DEK (`0xF0`–`0xF5`, DEK routes) | Create, rotate and delete failures `Internal`, get failures `NotFound`, whatever the cause; the REST 400/404 rules are in §4 |
+| Secrets (`secret_*`, secret routes, `SecretsManagement`) | `InvalidArgument` for a missing ID; gRPC and QUIC still answer store and list failures `Internal` and read failures `NotFound`, whatever the cause |
+| DEK (`DEKManagement`, DEK routes) | gRPC: `InvalidArgument` for a missing path; create, list, rotate and delete failures `Internal`, get and status failures `NotFound`, whatever the cause; the REST 400/404 rules are in §4 |
 | Rotation policy | Update failures `Internal`, get failures `NotFound`, whatever the cause |
 
 ### MCP answers in the gRPC classes (#304)

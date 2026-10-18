@@ -98,10 +98,10 @@ lives in platform services after `switch_root`.
 model, separate from `diskless` and leaving it unchanged: the node has no local
 disk, and its root is a **persistent, per-device block device** that the boot
 server exports over NBD on the provisioning segment (VLAN 405, `192.0.2.0/24`,
-pure L2 with no gateway — [sdn configuration](../sdn/configuration.md)). Per the
-#685 rulings the root is NBD + LUKS + TPM: the node LUKS2-encrypts its export
+pure L2 with no gateway — [sdn configuration](../sdn/configuration.md)). The root
+is NBD + LUKS + TPM (#685): the node LUKS2-encrypts its export
 and seals the key to its own TPM, so the boot server stores ciphertext only.
-NFS was ruled out. The export is reached only over TLS 1.3 after
+The root is never NFS. The export is reached only over TLS 1.3 after
 `NBD_OPT_STARTTLS`, and the node authenticates with its IDevID certificate,
 which chains to the platform anchor. The server picks the export from that
 verified identity and from nothing the client names. The server side is built
@@ -295,6 +295,29 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
      secure-wipe installer.luks (only if sealing succeeded)
    ⇒ switch_root
 ```
+
+**First provision, the EK and recovery (owner ruling 2026-10-17).** This is the
+contract; the implementation is tracked by #951, and until it lands the code
+still behaves as the superseded text in
+[docs/bootstrap/architecture.md](../bootstrap/architecture.md) (rejected
+designs) and [factory-reset.md](factory-reset.md) (Phase B) describes.
+
+- **First provision.** A fresh TPM with a valid EK and no sealed object on the
+  ESP (no `seal-platform.pub`) is first provision: firstboot provisions the TPM
+  and seals, and only then does the node serve.
+- **EK certificate.** A TPM without an EK certificate is refused unless the
+  admin relaxed the EK requirement. No firstboot setting for that exists today
+  (`RequireEKMatch` in `pkg/provisioning/configdelivery` governs only the
+  control plane's match against a prestaged EK certificate, and is a Go
+  parameter with no YAML key); the setting is to be added under #951.
+- **Recovery** means a seal that existed and broke. A TPM that never held a
+  seal is first provision, never recovery.
+- **SO PIN.** firstboot sets the owner hierarchy auth to the SO PIN with
+  `TPM2_HierarchyChangeAuth` (TPM 2.0 Part 3 §24.8) and hands the PIN to
+  `platformd` over the firstboot tmpfs handoff
+  (`/run/platform/firstboot-handoff/`), at the kms path the config names for it
+  (`platform.so-pin`, [docs/device-templates.md](../device-templates.md)
+  "Platform PINs"). The hierarchy auth is no longer left empty.
 
 A diskless node takes neither path. Its signed command line carries
 `platform_boot_model=diskless` and no `root=` or `rd.luks.*`, so the dracut

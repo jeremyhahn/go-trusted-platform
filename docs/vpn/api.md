@@ -1,6 +1,8 @@
 # Remote-Access VPN — API
 
-> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4), and the gateway lease record (§6) is served; the gateway's admission listener serves the client verbs over HTTPS (#557), and the client in `pkg/vpn/agent` speaks them (§5).** · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: `VPNService` and the gateway admission listener · Last verified: 2026-10-14
+> Conflicts with this document are defects. Fix them here first.
+> Partial today: the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4), and the gateway lease record (§6) is served; the gateway's admission listener serves the client verbs over HTTPS (#557), and the client in `pkg/vpn/agent` speaks them (§5).
 > §1–§4 describe `VPNService` as it is routed today. §5 is the gateway's
 > admission listener: routed, but `gatewayd` does not yet assemble the VPN
 > runtime that opens it (see [engineering.md](engineering.md) §1).
@@ -67,13 +69,19 @@ reports telemetry.
   "device_id": "laptop-1", "address": "10.8.0.2", "data_plane": "masque", "zones": ["management"],
   "issued_at_unix": 1760300000, "expires_at_unix": 1760328800, "renewals": 0}],
   "posture_policy_errors": [], "rejected_peers": [{"tenant_id": "acme", "device_id": "laptop-9",
-  "reason": "vpn: zone \"storage\" is not reachable through this service"}] }
+  "reason": "vpn: zone \"storage\" is not reachable through this service"}],
+  "revocations": {"expired": 4}, "posture_violations": {"secure-boot-enabled": 1},
+  "reattest": {"count": 9, "sum_seconds": 0.42, "buckets": [{"upper_bound_seconds": 0.005, "count": 0}, …]} }
 ```
 
 - The names above are the proto field names. REST bodies are protojson: it
   writes camelCase names (`tenantId`, `enrolledAtUnix`) and reads either form,
   and it encodes the 64-bit fields (the `*_unix` times, `admissions`,
-  `refusals`) as decimal strings. The JS SDK types follow that encoding.
+  `refusals`, the `revocations` and `posture_violations` counts, the
+  `reattest` counts) as decimal strings. The JS SDK types follow that encoding.
+- `revocations`, `posture_violations` and `reattest` are the counters behind
+  the `gatewayd_vpn_*` metrics ([engineering.md](engineering.md) §8);
+  `reattest.buckets` are cumulative.
 - `zones` narrows the gateway's `allow-to` set; empty means every allowed zone.
 - `enrolled_at_unix` and `updated_at_unix` are set by the service and ignored on
   write. Re-enrolling a device replaces its zones and keeps its first enrolment

@@ -28,12 +28,6 @@ import (
 // serviceRegistration - used by MockGRPCServer
 // =============================================================================
 
-// serviceRegistration tracks a registered gRPC service.
-type serviceRegistration struct {
-	desc *grpc.ServiceDesc
-	impl interface{}
-}
-
 // =============================================================================
 // MockQUICServer - implements QUICServerInterface
 // =============================================================================
@@ -473,22 +467,18 @@ type MockGRPCServer struct {
 	registerServiceCalled int
 	serveErr              error
 	listener              net.Listener
-	registeredServices    []serviceRegistration
 }
 
 // NewMockGRPCServer creates a new MockGRPCServer.
 func NewMockGRPCServer() *MockGRPCServer {
-	return &MockGRPCServer{
-		registeredServices: make([]serviceRegistration, 0),
-	}
+	return &MockGRPCServer{}
 }
 
 // RegisterService implements GRPCServerInterface.RegisterService.
-func (m *MockGRPCServer) RegisterService(desc *grpc.ServiceDesc, impl interface{}) {
+func (m *MockGRPCServer) RegisterService(_ *grpc.ServiceDesc, _ interface{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.registerServiceCalled++
-	m.registeredServices = append(m.registeredServices, serviceRegistration{desc: desc, impl: impl})
 }
 
 // Serve implements GRPCServerInterface.Serve.
@@ -561,15 +551,6 @@ func (m *MockGRPCServer) GetListener() net.Listener {
 	return m.listener
 }
 
-// GetRegisteredServices returns a copy of registered services.
-func (m *MockGRPCServer) GetRegisteredServices() []serviceRegistration {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]serviceRegistration, len(m.registeredServices))
-	copy(result, m.registeredServices)
-	return result
-}
-
 // Reset clears all call counts and errors.
 func (m *MockGRPCServer) Reset() {
 	m.mu.Lock()
@@ -580,7 +561,6 @@ func (m *MockGRPCServer) Reset() {
 	m.registerServiceCalled = 0
 	m.serveErr = nil
 	m.listener = nil
-	m.registeredServices = make([]serviceRegistration, 0)
 }
 
 // =============================================================================

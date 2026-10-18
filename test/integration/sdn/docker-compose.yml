@@ -2,9 +2,9 @@ version: '3.8'
 
 services:
   sdn-test:
-    build:
-      context: ../../../build/docker/devcontainer
-      dockerfile: Dockerfile
+    # Built by `make build-devcontainer`, never here.
+    image: trusted-platform-dev:latest
+    pull_policy: never
     container_name: go-trusted-platform-sdn-test
     privileged: true
     network_mode: host

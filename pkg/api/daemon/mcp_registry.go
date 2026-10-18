@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -119,15 +120,24 @@ func (p *MCPServiceProvider) SetRegistryService(svc grpcapi.RegistryService) {
 
 // RegistryList returns a paginated set of artifacts. `repository` and
 // `artifactType` are optional filters; pass empty / 0 to disable.
-func (p *MCPServiceProvider) RegistryList(ctx context.Context, repository string, artifactType int32, limit, offset int32) (interface{}, error) {
+func (p *MCPServiceProvider) RegistryList(ctx context.Context, query mcp.RegistryListQuery) (interface{}, error) {
 	if p.registryService == nil {
 		return nil, ErrRegistryNotConfigured{}
 	}
 	req := &grpcapi.RegistryListRequest{
-		Repository: repository,
-		Type:       grpcapi.ArtifactType(artifactType),
-		Limit:      limit,
-		Offset:     offset,
+		Repository: query.Repository,
+		Type:       grpcapi.ArtifactType(query.ArtifactType),
+		Limit:      query.Limit,
+		Offset:     query.Offset,
+		Cursor:     query.Cursor,
+		SortBy:     query.SortBy,
+		Ascending:  query.Ascending,
+	}
+	if len(query.MatchLabels) > 0 || len(query.MatchExpressions) > 0 {
+		req.Selector = &grpcapi.RegistryLabelSelector{
+			MatchLabels:      query.MatchLabels,
+			MatchExpressions: query.MatchExpressions,
+		}
 	}
 	resp, err := p.registryService.List(ctx, req)
 	if err != nil {

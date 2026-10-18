@@ -36,13 +36,12 @@ import (
 // provisioner without a live QuicBaaS SecretsService. It records every write so
 // the tests can assert idempotence.
 type fakeSecretStore struct {
-	mu      sync.Mutex
-	data    map[string][]byte
-	meta    map[string]map[string]string
-	writes  map[string]int
-	getErr  error
-	putErr  error
-	getCall int
+	mu     sync.Mutex
+	data   map[string][]byte
+	meta   map[string]map[string]string
+	writes map[string]int
+	getErr error
+	putErr error
 }
 
 func newFakeSecretStore() *fakeSecretStore {
@@ -56,7 +55,6 @@ func newFakeSecretStore() *fakeSecretStore {
 func (f *fakeSecretStore) GetSecret(_ context.Context, req *baasservice.GetSecretRequest) (*baasservice.GetSecretResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.getCall++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}

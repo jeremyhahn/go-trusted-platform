@@ -1028,8 +1028,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		platformv1.RegisterCacheServiceServer(server, appServices.cache)
 		platformv1.RegisterSchedulerServiceServer(server, appServices.scheduler)
 		platformv1.RegisterMessagingServiceServer(server, appServices.messaging)
+		platformv1.RegisterObjectStorageServiceServer(server, appServices.objectStorage)
 	}
-	logger.Info("Cache, Scheduler and Messaging gRPC services registered")
+	logger.Info("Cache, Scheduler, Messaging and ObjectStorage gRPC services registered")
 
 	// Create the Switch gRPC service. It has no switch backend yet, so every
 	// method answers Unavailable (not configured); the QUIC opcodes, the MCP

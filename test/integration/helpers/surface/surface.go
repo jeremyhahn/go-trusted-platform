@@ -12,9 +12,10 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package surface is the one place an integration suite decides that an
-// operation is "not implemented" on a transport and may be skipped.
+// operation is "not implemented" on a transport; RequireImplemented fails
+// the test on it with the gap's text.
 //
-// A skip needs a typed declaration: an adapter returns ErrNoSurface for an
+// A gap needs a typed declaration: an adapter returns ErrNoSurface for an
 // operation its transport has no endpoint for, or the server answers a gRPC
 // call with codes.Unimplemented. Error text is never matched, so a 404, an
 // unknown CLI flag, a timeout or a failed handshake fails the subtest
@@ -38,7 +39,7 @@ import (
 // ErrNoSurface declares that a transport has no endpoint for an operation.
 //
 // Its text deliberately avoids the phrase "not implemented": the
-// declaration is matched by type, and a reader of a skip message should
+// declaration is matched by type, and a reader of the failure should
 // see which surface is missing and where that gap is recorded.
 type ErrNoSurface struct {
 	// Transport names the transport, e.g. "QUIC" or "MCP".
@@ -78,7 +79,7 @@ func IsNotImplemented(err error) bool {
 // as the sentinel's exact text (REST body, gRPC status message, QUIC or MCP
 // error payload). The match is derived from the sentinel values themselves,
 // so a renamed or retired sentinel breaks the build instead of silently
-// widening the skip. A nil sentinel is ignored.
+// widening the match. A nil sentinel is ignored.
 func IsDeclaredRefusal(err error, refusals ...error) bool {
 	if err == nil {
 		return false
@@ -95,18 +96,20 @@ func IsDeclaredRefusal(err error, refusals ...error) bool {
 	return false
 }
 
-// Skipper is the part of testing.TB that SkipIfNotImplemented needs.
-type Skipper interface {
+// Fataler is the part of testing.TB that RequireImplemented needs.
+type Fataler interface {
 	Helper()
-	Skipf(format string, args ...any)
+	Fatalf(format string, args ...any)
 }
 
-// SkipIfNotImplemented skips the test when err declares a missing surface
-// (see IsNotImplemented). Any other error is left to the caller, which
-// fails the test with its text or asserts it as an expected refusal.
-func SkipIfNotImplemented(t Skipper, err error) {
+// RequireImplemented fails the test with the gap's own text when err
+// declares a missing surface (see IsNotImplemented), so a declared gap
+// is reported as a failure naming the transport and operation, never
+// passed over. Any other error is left to the caller, which fails the
+// test with its text or asserts it as an expected refusal.
+func RequireImplemented(t Fataler, err error) {
 	t.Helper()
 	if IsNotImplemented(err) {
-		t.Skipf("Declared gap: %v", err)
+		t.Fatalf("declared surface gap: %v", err)
 	}
 }

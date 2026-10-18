@@ -242,6 +242,9 @@ func TestWithServiceNameOverridesTheOpenRCUnit(t *testing.T) {
 	if !ok {
 		t.Fatal("rc-update was not invoked")
 	}
+	if call.Name != "rc-update" {
+		t.Fatalf("runlevel enable ran %q, want rc-update", call.Name)
+	}
 	if call.Args[1] != "chrony" {
 		t.Fatalf("rc-update service = %q, want chrony", call.Args[1])
 	}

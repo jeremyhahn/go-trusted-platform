@@ -865,15 +865,15 @@ func (v1Router *Router) vpnRoutes() {
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
-// appServiceRoutes mounts /cache, /scheduler and /messaging over the
-// daemon's Cache, Scheduler and Messaging servers, with the route table the
-// daemon REST listener serves. Like the VPN routes they are operator work
-// behind the admin gate, then each route's cache:, scheduler: or messaging:
-// scope, as on gRPC, QUIC and MCP.
+// appServiceRoutes mounts /cache, /scheduler, /messaging and /object-storage
+// over the daemon's Cache, Scheduler, Messaging and ObjectStorage servers,
+// with the route table the daemon REST listener serves. Like the VPN routes
+// they are operator work behind the admin gate, then each route's cache:,
+// scheduler:, messaging: or objectstorage: scope, as on gRPC, QUIC and MCP.
 func (v1Router *Router) appServiceRoutes() {
 	servers := v1Router.restHandlerRegistry.AppServiceServers()
-	if servers.Cache == nil && servers.Scheduler == nil && servers.Messaging == nil {
-		v1Router.logger.Debug("Application service servers are nil - cache, scheduler and messaging routes not registered")
+	if servers.Cache == nil && servers.Scheduler == nil && servers.Messaging == nil && servers.ObjectStorage == nil {
+		v1Router.logger.Debug("Application service servers are nil - cache, scheduler, messaging and object storage routes not registered")
 		return
 	}
 	guard := scopeRouteGuard{}

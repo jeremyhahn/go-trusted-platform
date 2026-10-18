@@ -104,7 +104,7 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | **Keying installer config by hostname** | The node does not know its hostname yet — that is what it is fetching. Config is keyed by MAC and published under **every** known MAC, so the fetch succeeds whichever NIC came up first. |
 | **Storing the LUKS key as a plain file on the EFI partition** | The EFI partition is unencrypted and readable by anyone with the disk. The key exists only inside `installer.luks`; `firstboot.Executor.Run` returns `ErrNoLUKSKey` rather than falling back to a plain key file. |
 | **Using the `pcr-banks` file as the "already provisioned" marker** | `pcr-banks` is written on every successful install boot, before sealing has necessarily completed, so treating it as a marker silently skips TPM provisioning — and therefore the enrollment ceremony — on every fresh first boot. The marker is `seal-platform.pub`, which only exists once a platform seal was actually written. |
-| **Setting the TPM hierarchy auth to a PIN generated during first boot** | The PIN is discarded when first boot exits, so every later operation that needs owner-hierarchy auth fails. `Install` is called with a nil SO PIN; hierarchy auth is left empty and the protection boundary is the per-key SRK auth the daemon sets later. |
+| **Setting the TPM hierarchy auth to a PIN generated during first boot** | The PIN is discarded when first boot exits, so every later operation that needs owner-hierarchy auth fails. `Install` is called with a nil SO PIN; hierarchy auth is left empty and the protection boundary is the per-key SRK auth the daemon sets later. **Superseded by the owner ruling of 2026-10-17:** the PIN is not discarded. firstboot sets the owner hierarchy auth to the SO PIN with `TPM2_HierarchyChangeAuth` and hands the PIN to `platformd` over the firstboot tmpfs handoff, at the SO PIN's configured kms path ([installer architecture](../installer/architecture.md), "First provision, the EK and recovery"). The implementation is tracked by #951; until it lands, the code still behaves as this row describes. |
 | **Deleting `luks-key.bin` as soon as the seal is written** | The seal has not been *proved* until a clean reboot unseals with it. Deleting the key first leaves a machine with no fallback if the next boot's PCR policy does not match. The key is preserved pending a seal-confirmation handshake, and the cost — key plaintext inside an encrypted container — is accepted deliberately. |
 | **Returning success when sealing fell back to a plain-key unlock** | The machine boots, so it looks fine, and the daemon then fails at startup with a policy error nobody connects to the install. `ErrSealingFallbackUsed` makes the fallback a non-zero exit so the init service does not mark itself started and first boot re-runs. |
 | **Rebooting automatically to verify the PCR seal** | On hardware where a PCR differs between the installer and production initramfs, every verify-reboot fails, falls back, and fires another verify-reboot. Verification is deferred to the next operator-initiated reboot; the keyfile fallback covers the gap. |
@@ -367,6 +367,35 @@ first, declared static IP second, hostname last — and uploads one device
 template per role, then creates one profile per node carrying the **merged**
 config (role template → platform globals → per-node overrides → injected node
 identity). Profile IDs are captured for Phase 6.
+
+The node reads its profile's config back at boot with
+`GET /api/v1/devices/config?mac=…` (or `?serial=…`). The route is
+unauthenticated by design, because its caller is a machine that is still
+booting and holds no credential, so the boundary is where it is served
+(#177, ruled 2026-10-14):
+
+- **Provisioning listener only.** Only a webservice with
+  `surface: provisioning` mounts the route, and that listener mounts nothing
+  else. Every full and edge listener answers it with the unknown-route `404`
+  (`WebServerV1.buildRoutes`, `pkg/webservice/webserver_v1.go:1234-1243`).
+- **Bound inside the provisioning zone.** Startup refuses a provisioning
+  listener unless its `bind-host` is an IP literal inside the provisioning
+  zone of the node's network plan (`webservice.ValidateProvisioningSurface`,
+  `pkg/webservice/provisioning.go:38`, called from `App.validateWebServices`
+  in `pkg/app/app.go`). That zone is the isolated provisioning VLAN, and its
+  flows, not the bound address alone, keep everything else off the route. A
+  host on that VLAN that knows or guesses a MAC or serial still reads that
+  profile's config.
+- **EK-bound challenge: PLANNED, blocked on the SDK.** The #177 follow-up
+  releases a config only to the machine whose EK the profile names. The SDK
+  has no activation the device can answer from the installer, before first
+  boot creates its IAK
+  ([`docs/provisioning/engineering.md`](../provisioning/engineering.md) §3,
+  Planned).
+
+The ruling and the route's shapes are in [`api.md`](api.md) §6; the trust
+boundary is in [`docs/device/architecture.md`](../device/architecture.md)
+§4.2.
 
 ### Phase 5 · Gateways and workers
 

@@ -31,7 +31,11 @@ QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
 (`pkg/api/daemon/quic_service.go:522`).
 MCP: the `attestation_*` tools. The five manifest tools call the gRPC
 `AttestationService` methods (`pkg/api/daemon/mcp_attestation_manifests.go`), so
-each answers with its gRPC twin's result and error class. A tool marked
+each answers with its gRPC twin's result and error class. The five quote and
+collection tools (`pkg/api/mcp/attestation_quote_tools.go`) take the gRPC
+request in protojson form and call the same servicer; the two that quote a
+caller's nonce bind it to the HTTPS connection and are refused over stdio
+(§5.1a). A tool marked
 "refused" is registered but has no backend and no scope, so every call is
 refused (§5).
 
@@ -42,11 +46,11 @@ refused (§5).
 | Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | ✅ |
 | Verify manifest | `POST /api/v1/attestation/manifests/verify` | `VerifyManifest` | `OpAttestVerifyManifest` (`0x7D`) | `attestation_verify_manifest` | ✅ |
 | Delete manifest | `DELETE /api/v1/attestation/manifests/{id}` | `DeleteManifest` | `MISSING — docs/13 G7` | `attestation_delete_manifest` | ✅ |
-| Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `MISSING — docs/13 G7` | refused — no TLS (§5.1a) |
-| Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `MISSING — docs/13 G7` | ✅ |
-| Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `MISSING — docs/13 G7` | refused — no TLS (§5.1a) |
-| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `MISSING — docs/13 G7` | ✅ |
-| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `MISSING — docs/13 G7` | ✅ |
+| Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `attestation_get_quote` (HTTPS only) | refused — no TLS (§5.1a) |
+| Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
+| Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
+| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `attestation_collect_vm` | ✅ |
+| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `attestation_collect_container` | ✅ |
 | Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `MISSING — docs/13 G7` | — |
 | Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `MISSING — docs/13 G7` | — |
@@ -153,8 +157,8 @@ gRPC twin:
 
 | Permission | MCP tools |
 |---|---|
-| `attestation:read` | `attestation_device_report`, `attestation_device_reports`, `attestation_caller_policy`, `attestation_device_verdicts_poll`, `attestation_get_manifest`, `attestation_list_manifests`, `attestation_verify_manifest` |
-| `attestation:write` | `attestation_device_refresh`, `attestation_create_manifest` |
+| `attestation:read` | `attestation_device_report`, `attestation_device_reports`, `attestation_caller_policy`, `attestation_device_verdicts_poll`, `attestation_get_manifest`, `attestation_list_manifests`, `attestation_verify_manifest`, `attestation_get_quote`, `attestation_verify_quote` |
+| `attestation:write` | `attestation_device_refresh`, `attestation_create_manifest`, `attestation_collect_host`, `attestation_collect_vm`, `attestation_collect_container` |
 | `attestation:delete` | `attestation_delete_manifest` |
 
 #304 deleted ten tools that no backend served: no gRPC method, and no REST
@@ -207,8 +211,8 @@ operation that has the node's TPM sign a caller's nonce:
 
 | Operation | Endpoints | The node returns |
 |---|---|---|
-| Collect host attestation | REST `POST /api/v1/attestation/host`; gRPC `CollectHostAttestation`; QUIC `0x72` (daemon), `0x7E` (`pkg/api/quic`) | `attestation.nonce` = the value quoted |
-| Get quote | REST `POST /api/v1/attestation/quote`; gRPC and Unix `GetAttestationQuote`; QUIC `0x70` | `channel_binding` beside the quote |
+| Collect host attestation | REST `POST /api/v1/attestation/host`; gRPC `CollectHostAttestation`; QUIC `0x72` (daemon), `0x7E` (`pkg/api/quic`); MCP `attestation_collect_host` | `attestation.nonce` = the value quoted |
+| Get quote | REST `POST /api/v1/attestation/quote`; gRPC and Unix `GetAttestationQuote`; QUIC `0x70`; MCP `attestation_get_quote` | `channel_binding` beside the quote |
 | TPM quote | REST `POST /api/v1/tpm/quote` (webservice and daemon REST); gRPC and Unix `TPMService.Quote`; QUIC `0x99`·`0x0F`; MCP `platform_tpm_quote` | `channel_binding` beside the quote |
 | TPM certify with a nonce | daemon REST `POST /api/v1/tpm/certify` | `channel_binding` beside the certify structure |
 

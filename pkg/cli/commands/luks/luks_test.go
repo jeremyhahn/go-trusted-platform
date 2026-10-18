@@ -124,6 +124,22 @@ func TestEnrollFIDO2_Flags(t *testing.T) {
 	}
 }
 
+// The daemon refuses --require-pin (#934); the help must say so rather than
+// promise a PIN-protected keyslot.
+func TestEnrollFIDO2_RequirePINHelpNamesTheRefusal(t *testing.T) {
+	cmd := NewCommand(testFlags())
+	sub, _, err := cmd.Find([]string{"enroll-fido2"})
+	if err != nil {
+		t.Fatalf("could not find enroll-fido2: %v", err)
+	}
+	if usage := sub.Flags().Lookup("require-pin").Usage; !strings.Contains(usage, "refused") || !strings.Contains(usage, "#584") {
+		t.Errorf("--require-pin usage = %q, want it to name the refusal and SDK seam #584", usage)
+	}
+	if !strings.Contains(sub.Long, "#584") {
+		t.Errorf("enroll-fido2 long help does not name SDK seam #584")
+	}
+}
+
 func TestEnrollTPM_Flags(t *testing.T) {
 	cmd := NewCommand(testFlags())
 	sub, _, err := cmd.Find([]string{"enroll-tpm"})

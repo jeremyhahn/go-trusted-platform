@@ -36,7 +36,6 @@ type fakeScheduler struct {
 	listErr       error
 	registerCalls int
 	scheduleCalls int
-	listCalls     int
 }
 
 func newFakeScheduler() *fakeScheduler {
@@ -72,7 +71,6 @@ func (f *fakeScheduler) ScheduleJob(_ context.Context, job *quicbaas.Job) error 
 func (f *fakeScheduler) ListJobs(_ context.Context, q *quicbaas.JobQuery) ([]*quicbaas.Job, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.listCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

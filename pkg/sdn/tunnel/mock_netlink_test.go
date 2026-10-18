@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"syscall"
 
 	vnl "github.com/vishvananda/netlink"
 )
@@ -45,17 +46,21 @@ type mockNetlinkOps struct {
 	rules        []vnl.Rule
 	routes       []vnl.Route
 	xfrmUpdates  int
+	// xfrmPolicyUpdates counts XfrmPolicyUpdate calls.
+	xfrmPolicyUpdates int
 
-	xfrmStateAddFn    func(*vnl.XfrmState) error
-	xfrmStateUpdateFn func(*vnl.XfrmState) error
-	xfrmStateDelFn    func(*vnl.XfrmState) error
-	xfrmPolicyAddFn   func(*vnl.XfrmPolicy) error
-	xfrmPolicyDelFn   func(*vnl.XfrmPolicy) error
-	ruleAddFn         func(*vnl.Rule) error
-	ruleDelFn         func(*vnl.Rule) error
-	ruleListFn        func(int) ([]vnl.Rule, error)
-	routeReplaceFn    func(*vnl.Route) error
-	routeDelFn        func(*vnl.Route) error
+	xfrmStateAddFn     func(*vnl.XfrmState) error
+	xfrmStateUpdateFn  func(*vnl.XfrmState) error
+	xfrmStateDelFn     func(*vnl.XfrmState) error
+	xfrmStateGetFn     func(*vnl.XfrmState) (*vnl.XfrmState, error)
+	xfrmPolicyUpdateFn func(*vnl.XfrmPolicy) error
+	xfrmPolicyDelFn    func(*vnl.XfrmPolicy) error
+	xfrmPolicyGetFn    func(*vnl.XfrmPolicy) (*vnl.XfrmPolicy, error)
+	ruleAddFn          func(*vnl.Rule) error
+	ruleDelFn          func(*vnl.Rule) error
+	ruleListFn         func(int) ([]vnl.Rule, error)
+	routeReplaceFn     func(*vnl.Route) error
+	routeDelFn         func(*vnl.Route) error
 }
 
 func newMockNetlinkOps() *mockNetlinkOps {
@@ -235,14 +240,68 @@ func (m *mockNetlinkOps) XfrmStateDel(state *vnl.XfrmState) error {
 	return errors.New("no such state")
 }
 
-func (m *mockNetlinkOps) XfrmPolicyAdd(policy *vnl.XfrmPolicy) error {
-	if m.xfrmPolicyAddFn != nil {
-		return m.xfrmPolicyAddFn(policy)
+// XfrmStateGet answers like the kernel: a copy of the matching SA, its key
+// copied too, or ESRCH.
+func (m *mockNetlinkOps) XfrmStateGet(state *vnl.XfrmState) (*vnl.XfrmState, error) {
+	if m.xfrmStateGetFn != nil {
+		return m.xfrmStateGetFn(state)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.xfrmStates {
+		if existing.Spi == state.Spi && existing.Dst.Equal(state.Dst) {
+			cp := *existing
+			if existing.Aead != nil {
+				aead := *existing.Aead
+				aead.Key = append([]byte(nil), existing.Aead.Key...)
+				cp.Aead = &aead
+			}
+			return &cp, nil
+		}
+	}
+	return nil, syscall.ESRCH
+}
+
+// XfrmPolicyUpdate replaces the policy with the same selector and
+// direction, or adds it.
+func (m *mockNetlinkOps) XfrmPolicyUpdate(policy *vnl.XfrmPolicy) error {
+	if m.xfrmPolicyUpdateFn != nil {
+		return m.xfrmPolicyUpdateFn(policy)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.xfrmPolicyUpdates++
+	if i := m.policyIndex(policy); i >= 0 {
+		m.xfrmPolicies[i] = policy
+		return nil
+	}
 	m.xfrmPolicies = append(m.xfrmPolicies, policy)
 	return nil
+}
+
+// XfrmPolicyGet answers like the kernel: the matching policy or ENOENT.
+func (m *mockNetlinkOps) XfrmPolicyGet(policy *vnl.XfrmPolicy) (*vnl.XfrmPolicy, error) {
+	if m.xfrmPolicyGetFn != nil {
+		return m.xfrmPolicyGetFn(policy)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i := m.policyIndex(policy); i >= 0 {
+		cp := *m.xfrmPolicies[i]
+		return &cp, nil
+	}
+	return nil, syscall.ENOENT
+}
+
+// policyIndex is the index of the policy with policy's selector and
+// direction, or -1. The caller holds m.mu.
+func (m *mockNetlinkOps) policyIndex(policy *vnl.XfrmPolicy) int {
+	for i, existing := range m.xfrmPolicies {
+		if existing.Dir == policy.Dir && existing.Src.String() == policy.Src.String() && existing.Dst.String() == policy.Dst.String() {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *mockNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
@@ -251,11 +310,9 @@ func (m *mockNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i, existing := range m.xfrmPolicies {
-		if existing.Dir == policy.Dir && existing.Src.String() == policy.Src.String() && existing.Dst.String() == policy.Dst.String() {
-			m.xfrmPolicies = append(m.xfrmPolicies[:i], m.xfrmPolicies[i+1:]...)
-			return nil
-		}
+	if i := m.policyIndex(policy); i >= 0 {
+		m.xfrmPolicies = append(m.xfrmPolicies[:i], m.xfrmPolicies[i+1:]...)
+		return nil
 	}
 	return errors.New("no such policy")
 }

@@ -120,6 +120,7 @@ func (r *ToolRegistry) registerTools() {
 
 	// Register Attestation tools
 	r.registerAttestationTools()
+	r.registerAttestationQuoteTools()
 	r.registerAttestationReportTools()
 	r.registerAttestationVerdictTools()
 
@@ -1939,6 +1940,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 			return result, err
 		}
 		if result, handled, err := r.dispatchAttestationManifestTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Attestation quote and collection tools call the gRPC
+		// AttestationService servicer through the attestationQuoteTools table.
+		if result, handled, err := r.dispatchAttestationQuoteTool(ctx, name, args); handled {
 			return result, err
 		}
 		if result, handled, err := r.dispatchDeviceProfileTool(ctx, name, args); handled {

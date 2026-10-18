@@ -66,10 +66,9 @@ func writeCallerBundle(t *testing.T, certs ...*x509.Certificate) string {
 	return path
 }
 
-type noopAuditor struct{ n int }
+type noopAuditor struct{}
 
 func (a *noopAuditor) RecordAdmission(context.Context, calleradmission.Decision) error {
-	a.n++
 	return nil
 }
 

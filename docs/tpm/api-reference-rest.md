@@ -1,5 +1,9 @@
 # TPM REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `/api/v1/tpm` routes of platformd's REST listener. The cross-transport
+> contract is [api.md](api.md).
+
 Base URL: `https://localhost:8443/api/v1/tpm`
 
 These are the routes platformd's own REST listener serves through
@@ -12,8 +16,8 @@ scope ([api.md](api.md) §9):
 
 | Scope | Routes |
 |-------|--------|
-| `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random`, `unseal` |
-| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `seal`; `PUT nvram` |
+| `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random`, `unseal` |
+| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `pcrs/extend`, `seal`; `PUT nvram` |
 | `tpm:delete` | `POST clear`, every `DELETE` |
 
 `GET`/`DELETE /iak`, `GET`/`DELETE /idevid` and `GET /device/attributes` are
@@ -65,6 +69,8 @@ Unix and embedded call — and speaks that RPC's messages
 | Route | RPC | Request fields (body, or parameters where shown) |
 |-------|-----|------|
 | `GET /info` | `Info` | none |
+| `GET /capabilities` | `GetCapabilities` | none |
+| `GET /platform` | `GetPlatformAttributes` | none |
 | `POST /provision` | `Provision` | `ownerPassword`, `endorsementPassword`, `createEk`, `createSrk`, `createAk`, `ekAttributes`, `srkAttributes`, `akAttributes` |
 | `POST /clear` | `Clear` | `ownerPassword`, `confirm` |
 | `GET /ek` | `GetEK` | `?algorithm=&handle=` |
@@ -84,6 +90,7 @@ Unix and embedded call — and speaks that RPC's messages
 | `POST /quote/verify` | `VerifyQuote` | `quote`, `signature`, `signatureAlgorithm`, `akPublic`, `nonce`, `expectedPcrs`, `channelBinding`, … |
 | `POST /certify` | `Certify` | `keyHandle`, `keyPassword`, `nonce` |
 | `GET /pcrs`, `POST /pcrs` | `GetPCRs` | `indices`, `bank` (`GET`: `?indices=0&indices=7&bank=PCR_BANK_SHA256`) |
+| `POST /pcrs/extend` | `ExtendPCR` | `index` (0-23), `hashAlg` (default `sha256`), `data` (base64, not empty) |
 | `GET /eventlog` | `GetEventLog` | `?format=` |
 | `POST /nvram` | `DefineNVRAM` | `index`, `size`, `password`, `attributes`, `parentPassword` |
 | `GET /nvram`, `GET /nvram/{index}` | `ReadNVRAM` | `index`, `password`, `offset`, `size` (`?offset=&size=` on the path form) |
@@ -159,12 +166,15 @@ A refused request, or an RPC error, is the standard error body:
 | Status | Cause |
 |--------|-------|
 | `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
-| `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`) |
+| `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`); the RPC's `Unauthenticated` |
 | `403 Forbidden` | The token is rejected or lacks the route's scope, or no token validator is configured (`ErrTPMForbidden`); the RPC's `PermissionDenied` |
 | `404 Not Found` | The RPC's `NotFound` |
 | `409 Conflict` | The RPC's `AlreadyExists` or `Aborted` |
+| `412 Precondition Failed` | `DELETE /ak` and `DELETE /ak/{handle}`: the RPC's `FailedPrecondition` |
 | `500 Internal Server Error` | Any other RPC error, or a response that cannot be encoded |
+| `501 Not Implemented` | The RPC's `Unimplemented` |
 | `503 Service Unavailable` | No TPM service (`ErrTPMServiceNotAvailable`), or the RPC's `Unavailable` |
+| `504 Gateway Timeout` | The RPC's `DeadlineExceeded` |
 
 ## cURL examples
 

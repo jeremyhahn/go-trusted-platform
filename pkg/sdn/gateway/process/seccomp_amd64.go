@@ -34,8 +34,10 @@ func nativeSeccompTable() (seccompTable, error) {
 		denied: slices.Concat(deniedSyscalls, []uint32{
 			unix.SYS_IOPL, unix.SYS_IOPERM, unix.SYS_MODIFY_LDT, unix.SYS_USELIB,
 		}),
-		exec:   execSyscalls,
-		clone:  unix.SYS_CLONE,
-		clone3: unix.SYS_CLONE3,
+		exec:       execSyscalls,
+		clone:      unix.SYS_CLONE,
+		clone3:     unix.SYS_CLONE3,
+		socket:     unix.SYS_SOCKET,
+		socketpair: unix.SYS_SOCKETPAIR,
 	}, nil
 }

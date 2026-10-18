@@ -1,5 +1,8 @@
 # Tunnel Configuration Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The tunnel configuration fields.
+
 ## TunnelConfig
 
 | Field | Type | Required | Default | Description |
@@ -30,7 +33,7 @@ not match the transport, is a validation error.
 | `spi-out` | uint32 | yes | - | Outbound SPI, non-zero |
 | `spi-in` | uint32 | yes | - | Inbound SPI, non-zero, different from `spi-out` |
 | `replay-window` | int | no | 128 | Anti-replay window in packets |
-| `rekey-interval` | duration | no | 8h | How often the reconcile loop calls `Rekey` |
+| `rekey-interval` | duration | no | 8h | Reported in the tunnel status; nothing calls `Rekey` on it yet |
 
 ### `wireguard` (non-FIPS builds only)
 
@@ -43,6 +46,9 @@ not match the transport, is a validation error.
 | `persistent-keepalive` | duration | no | 25s | Persistent keepalive |
 
 ## UplinkConfig
+
+The gateway reads these from its `routing-uplinks:` section; the gateway's
+`uplinks:` section is the NAT and NIC ports, a different type.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -62,7 +68,7 @@ range (`10.4.128.0/22` in environment 4 of the
 `/31` (`10.4.128.0/31` is the reserved gateway HA sync link).
 
 ```yaml
-uplinks:
+routing-uplinks:
   - name: ispa
     interface: eth6
     table: 101
@@ -122,7 +128,8 @@ tunnels:
 
 ## BGP AnnounceConfig
 
-Added to `BGPConfig.Announce` to declare prefixes for announcement:
+`BGPConfig.Announce` (`pkg/sdn/bgp/announce.go:21`) declares the prefixes to
+announce. The neighbors are `BGPConfig.Neighbors`, under the `peers:` key:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -138,7 +145,7 @@ bgp:
       - "203.0.113.0/24"
     ipv6:
       - "2001:db8::/36"
-  neighbors:
+  peers:
     - address: "10.4.128.3"
       asn: 64512
       description: "upstream relay over ISP A"

@@ -1,11 +1,15 @@
 # Fabric Configuration Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `sdn.fabric` schema and its validation.
+
 The `sdn.fabric` section describes the physical switches, their peer links and LAGs, and the port class
 of every platform port. It carries no VLAN numbers: VLANs, allowed lists and native VLANs are derived
 from `sdn.environment` by the network plan ([README](README.md)).
 
-Both decode paths accept the same YAML: `yaml.v3` (gatewayd, bootstrap) and viper with the platform
-decode hook (platformd).
+The types carry matching `yaml` and `mapstructure` tags, so `yaml.v3` and viper with the platform
+decode hook (platformd) accept the same YAML. `sdn.Config.Validate` runs `FabricConfig.Validate`
+(`pkg/sdn/config.go:297`).
 
 ## Top level
 
@@ -24,12 +28,15 @@ decode hook (platformd).
 | `vendor` | string | yes | Driver name (`cisco-nexus`) |
 | `model` | string | no | Hardware model |
 | `mgmt-ip` | string | yes | Management address used for SSH |
-| `credentials-ref` | string | no | Reference to stored credentials (`kms://…`) |
+| `credentials-ref` | string | no | Reference to stored credentials; parsed, but the Nexus driver does not read it |
 | `ssh-port` | int | no | SSH port (default 22) |
 | `ssh-user` | string | no | SSH user |
-| `ssh-password` | string | no | SSH password (secret) |
-| `ssh-key-path` | string | for SSH | Private key path; sealed into an enclave buffer on load |
-| `known-hosts-path` | string | for SSH | Directory of pinned host-key envelopes; there is no trust-on-first-use. See [Provisioning the host-key pin](#provisioning-the-host-key-pin) |
+| `ssh-password` | string | no | SSH password (secret); parsed, but the Nexus driver does not read it |
+| `ssh-key-path` | string | Nexus driver | Private key path; sealed into an enclave buffer on load |
+| `known-hosts-path` | string | Nexus driver | The pinned host-key envelopes live in the directory that contains this path; there is no trust-on-first-use. See [Provisioning the host-key pin](#provisioning-the-host-key-pin) |
+
+The Nexus driver authenticates with `ssh-key-path` only and refuses a switch that lacks
+`ssh-key-path` or `known-hosts-path` (`pkg/sdn/fabric/nexus/driver.go:117`).
 
 ### Provisioning the host-key pin
 
@@ -62,7 +69,7 @@ bin/deployer-pin \
 | `--host` | the switch's `mgmt-ip` |
 | `--port` | the switch's `ssh-port`, when it is not 22 |
 | `--owner` | the switch's `id` (`leaf-1` above) |
-| `--dir` | the directory that *contains* `known-hosts-path` (`known-hosts-path: /etc/platform/fabric/known_hosts` above), not the configured path itself |
+| `--dir` | the directory that *contains* `known-hosts-path` (`/etc/platform/fabric` above, for `known-hosts-path: /etc/platform/fabric/known_hosts`), not the configured path itself |
 | `--expect-fingerprint` | mandatory; a key matching none of them is not written and the command exits non-zero |
 
 Omitting `--owner` keys the pin by `--host`, and the driver, which looks it up by `id`, will not find it.
@@ -109,7 +116,7 @@ way with `--owner` set to the switch `name`
 |-----------|-------|
 | No switches; duplicate switch ID; switch without `vendor` or `mgmt-ip` | `ErrInvalidFabricConfig` |
 | Peer naming an undeclared switch | `ErrUnknownSwitch` |
-| Peer without peer-link ports; LAG without ID, members or port-channel ID | `ErrInvalidFabricConfig` |
+| Peer without `switch-a`, `switch-b` or peer-link ports; LAG without ID, members or port-channel ID | `ErrInvalidFabricConfig` |
 | Port without `switch-id` or `port` | `ErrInvalidPortRef` |
 | Port on an undeclared switch | `ErrUnknownSwitch` |
 | Unknown class | `ErrUnknownPortClass` |

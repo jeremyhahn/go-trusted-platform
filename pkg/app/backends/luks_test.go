@@ -18,6 +18,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -43,6 +45,64 @@ func TestLUKSBackend_EnrollFIDO2_NoHandler(t *testing.T) {
 	})
 	if !errors.Is(err, ErrLUKSFIDO2NotWired) {
 		t.Fatalf("expected ErrLUKSFIDO2NotWired, got %v", err)
+	}
+}
+
+// countingFIDO2Handler counts enrolment calls, so a test can tell whether the
+// backend reached the authenticator.
+type countingFIDO2Handler struct{ calls int }
+
+func (c *countingFIDO2Handler) EnrollCredential(ctx context.Context, credentialID string, requirePIN, requireUV bool) ([]byte, error) {
+	c.calls++
+	return make([]byte, 32), nil
+}
+
+// RequirePIN is refused before the handler or the device is touched, so no
+// keyslot or token can be written; the device here does not even exist.
+func TestLUKSBackend_EnrollFIDO2_RequirePINRefused(t *testing.T) {
+	device := newLUKSImage(t)
+	before := keyslotIDs(t, device)
+	h := &countingFIDO2Handler{}
+	b := NewLUKSBackend(logging.DefaultLogger())
+	b.SetFIDO2Handler(h)
+	_, err := b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+		Device:             device,
+		ExistingPassphrase: testLUKSPassphrase,
+		CredentialID:       "cred",
+		RequirePIN:         true,
+		RequireUV:          true,
+	})
+	if !errors.Is(err, ErrLUKSFIDO2PINUnsupported) {
+		t.Fatalf("expected ErrLUKSFIDO2PINUnsupported, got %v", err)
+	}
+	if h.calls != 0 {
+		t.Errorf("handler called %d times, want 0", h.calls)
+	}
+	if after := keyslotIDs(t, device); len(after) != len(before) {
+		t.Errorf("keyslots after a refused enrolment = %v, want %v", after, before)
+	}
+	if _, err := luks2.ExportToken(device, 0); !errors.Is(err, luks2.ErrTokenNotFound) {
+		t.Errorf("ExportToken(0) error = %v, want luks2.ErrTokenNotFound", err)
+	}
+}
+
+// RequireUV alone still reaches the handler and goes on to the device, which
+// is where this nonexistent one fails.
+func TestLUKSBackend_EnrollFIDO2_RequireUVReachesHandler(t *testing.T) {
+	h := &countingFIDO2Handler{}
+	b := NewLUKSBackend(logging.DefaultLogger())
+	b.SetFIDO2Handler(h)
+	_, err := b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+		Device:             "/tmp/nonexistent",
+		ExistingPassphrase: "old",
+		CredentialID:       "cred",
+		RequireUV:          true,
+	})
+	if err == nil || errors.Is(err, ErrLUKSFIDO2PINUnsupported) {
+		t.Fatalf("expected the device error, got %v", err)
+	}
+	if h.calls != 1 {
+		t.Errorf("handler called %d times, want 1", h.calls)
 	}
 }
 

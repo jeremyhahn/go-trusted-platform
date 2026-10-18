@@ -212,6 +212,7 @@ func TestLookupOperationPermission_UnclassifiedIsDenied(t *testing.T) {
 		{"unknown cache category sub", quicwire.OpCacheCategory, []byte{0x7F}},
 		{"unknown scheduler category sub", quicwire.OpSchedulerCategory, []byte{0x7F}},
 		{"unknown messaging category sub", quicwire.OpMessagingCategory, []byte{0x7F}},
+		{"unknown object storage category sub", quicwire.OpObjectStorageCategory, []byte{0x7F}},
 		{"unknown gateway sub", quicwire.OpGatewayCategory, []byte{0x7F}},
 		{"ipam category rejects non-ipam gateway sub", quicwire.OpIPAMCategory, []byte{quicwire.OpGatewaySetMode}},
 		{"unknown ceremony sub", quicwire.OpCeremonyCategory, []byte{0xEE}},

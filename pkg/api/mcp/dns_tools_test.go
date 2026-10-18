@@ -84,6 +84,24 @@ func (f *fakeMCPDNS) UpdateRecord(context.Context, *platformv1.UpdateRecordReque
 	return &platformv1.UpdateRecordResponse{}, nil
 }
 
+func (f *fakeMCPDNS) SignZone(_ context.Context, in *platformv1.SignZoneRequest) (*platformv1.SignZoneResponse, error) {
+	f.called = "SignZone"
+	if in.GetZoneName() == missingZone {
+		return nil, status.Error(codes.NotFound, "zone not found")
+	}
+	return &platformv1.SignZoneResponse{Zone: &platformv1.Zone{Name: in.GetZoneName()}}, nil
+}
+
+func (f *fakeMCPDNS) GetDNSSECStatus(_ context.Context, in *platformv1.GetDNSSECStatusRequest) (*platformv1.GetDNSSECStatusResponse, error) {
+	f.called = "GetDNSSECStatus"
+	return &platformv1.GetDNSSECStatusResponse{Status: &platformv1.DNSSECStatus{Enabled: true, ZoneSigned: in.GetZoneName() != ""}}, nil
+}
+
+func (f *fakeMCPDNS) Register(_ context.Context, in *platformv1.RegisterRequest) (*platformv1.RegisterResponse, error) {
+	f.called = "Register"
+	return &platformv1.RegisterResponse{Zone: &platformv1.Zone{Name: in.GetFqdn()}}, nil
+}
+
 // ListRecords serves two A records and an AAAA record named like one of
 // them, so a lookup must match the type as well as the name.
 func (f *fakeMCPDNS) ListRecords(_ context.Context, in *platformv1.ListRecordsRequest) (*platformv1.ListRecordsResponse, error) {
@@ -138,8 +156,11 @@ var dnsToolArgs = map[string]map[string]interface{}{
 		"old_record": map[string]interface{}{"type": "RECORD_TYPE_A", "a": map[string]interface{}{"name": "www", "value": "10.0.0.1"}},
 		"new_record": map[string]interface{}{"type": "RECORD_TYPE_A", "a": map[string]interface{}{"name": "www", "value": "10.0.0.9"}},
 	},
-	"dns_record_delete": {"zone_name": "example.internal.", "type": "RECORD_TYPE_A", "name": "www"},
-	"dns_lookup":        {"fqdn": "www.example.internal.", "type": "RECORD_TYPE_A"},
+	"dns_record_delete":      {"zone_name": "example.internal.", "type": "RECORD_TYPE_A", "name": "www"},
+	"dns_lookup":             {"fqdn": "www.example.internal.", "type": "RECORD_TYPE_A"},
+	"dns_zone_sign":          {"zone_name": "example.internal."},
+	"dns_zone_dnssec_status": {"zone_name": "example.internal."},
+	"dns_register":           {"fqdn": "host1.example.internal.", "ip": "10.0.0.7"},
 }
 
 // callDNSTool sends a tools/call through the server, as a client does.
@@ -156,16 +177,19 @@ func callDNSTool(ctx context.Context, server *Server, name string, args map[stri
 // scope. dns_record_get has no RPC and reads.
 func TestDNSTools_RequireTheirGRPCScope(t *testing.T) {
 	want := map[string]string{
-		"dns_zone_create":   platformv1.DNSService_CreateZone_FullMethodName,
-		"dns_zone_get":      platformv1.DNSService_GetZone_FullMethodName,
-		"dns_zone_list":     platformv1.DNSService_ListZones_FullMethodName,
-		"dns_zone_update":   platformv1.DNSService_UpdateZone_FullMethodName,
-		"dns_zone_delete":   platformv1.DNSService_DeleteZone_FullMethodName,
-		"dns_record_create": platformv1.DNSService_AddRecord_FullMethodName,
-		"dns_record_list":   platformv1.DNSService_ListRecords_FullMethodName,
-		"dns_record_update": platformv1.DNSService_UpdateRecord_FullMethodName,
-		"dns_record_delete": platformv1.DNSService_DeleteRecord_FullMethodName,
-		"dns_lookup":        platformv1.DNSService_Resolve_FullMethodName,
+		"dns_zone_create":        platformv1.DNSService_CreateZone_FullMethodName,
+		"dns_zone_get":           platformv1.DNSService_GetZone_FullMethodName,
+		"dns_zone_list":          platformv1.DNSService_ListZones_FullMethodName,
+		"dns_zone_update":        platformv1.DNSService_UpdateZone_FullMethodName,
+		"dns_zone_delete":        platformv1.DNSService_DeleteZone_FullMethodName,
+		"dns_record_create":      platformv1.DNSService_AddRecord_FullMethodName,
+		"dns_record_list":        platformv1.DNSService_ListRecords_FullMethodName,
+		"dns_record_update":      platformv1.DNSService_UpdateRecord_FullMethodName,
+		"dns_record_delete":      platformv1.DNSService_DeleteRecord_FullMethodName,
+		"dns_lookup":             platformv1.DNSService_Resolve_FullMethodName,
+		"dns_zone_sign":          platformv1.DNSService_SignZone_FullMethodName,
+		"dns_zone_dnssec_status": platformv1.DNSService_GetDNSSECStatus_FullMethodName,
+		"dns_register":           platformv1.DNSService_Register_FullMethodName,
 	}
 	permissions := toolPermissionCatalog()
 
@@ -284,6 +308,36 @@ func TestDNSTools_ReturnTheResponseInProtoNames(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{
 		"zone": map[string]interface{}{"name": "example.internal.", "ttl": float64(3600)},
 	}, result)
+}
+
+// Sign zone, DNSSEC status and register reach the RPC their gRPC twins call
+// (#704): before them, MCP had no DNSSEC or register verb.
+func TestDNSTools_DNSSECAndRegisterReachTheirRPC(t *testing.T) {
+	cases := map[string]string{
+		"dns_zone_sign":          "SignZone",
+		"dns_zone_dnssec_status": "GetDNSSECStatus",
+		"dns_register":           "Register",
+	}
+	for name, rpc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeMCPDNS{}
+			registry := newDNSTestRegistry(fake)
+
+			result, err := registry.ExecuteTool(context.Background(), name, dnsToolArgs[name])
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, result)
+			assert.Equal(t, rpc, fake.called)
+		})
+	}
+}
+
+func TestDNSTools_SignZoneReportsTheServicerClass(t *testing.T) {
+	registry := newDNSTestRegistry(&fakeMCPDNS{})
+
+	_, err := registry.ExecuteTool(context.Background(), "dns_zone_sign", map[string]interface{}{"zone_name": missingZone})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Equal(t, mcpwire.CodeForClass(codes.NotFound), toolErrorCode(err))
 }
 
 func TestDNSRecordGet_ReturnsTheRecordOfThatTypeAndName(t *testing.T) {

@@ -40,21 +40,15 @@ type mockMembershipManager struct {
 
 	// State
 	isLeader  bool
-	joined    bool
 	term      uint64
 	localNode *Node
 	nodes     NodeList
 	leader    *Node
 
 	// Tracking
-	bootstrapCalled  int
-	joinCalled       int
-	leaveCalled      int
-	addNodeCalled    int
-	removeNodeCalled int
-	getNodesCalled   int
-	getLeaderCalled  int
-	closeCalled      int
+	bootstrapCalled int
+	joinCalled      int
+	leaveCalled     int
 
 	// getNodesSignal, when set, receives a non-blocking send on every GetNodes
 	getNodesSignal chan struct{}
@@ -83,7 +77,6 @@ func newMockMembershipManager() *mockMembershipManager {
 			Term:   1,
 		},
 		isLeader: true,
-		joined:   false,
 	}
 }
 
@@ -94,7 +87,6 @@ func (m *mockMembershipManager) Bootstrap(ctx context.Context) error {
 	if m.bootstrapError != nil {
 		return m.bootstrapError
 	}
-	m.joined = true
 	return nil
 }
 
@@ -105,7 +97,6 @@ func (m *mockMembershipManager) Join(ctx context.Context, addresses []string) er
 	if m.joinError != nil {
 		return m.joinError
 	}
-	m.joined = true
 	return nil
 }
 
@@ -116,28 +107,24 @@ func (m *mockMembershipManager) Leave(ctx context.Context) error {
 	if m.leaveError != nil {
 		return m.leaveError
 	}
-	m.joined = false
 	return nil
 }
 
 func (m *mockMembershipManager) AddNode(ctx context.Context, nodeID uint64, address string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.addNodeCalled++
 	return m.addNodeError
 }
 
 func (m *mockMembershipManager) RemoveNode(ctx context.Context, nodeID uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.removeNodeCalled++
 	return m.removeNodeError
 }
 
 func (m *mockMembershipManager) GetNodes(ctx context.Context) (NodeList, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.getNodesCalled++
 	select {
 	case m.getNodesSignal <- struct{}{}:
 	default: // no listener, or a signal is already pending
@@ -155,7 +142,6 @@ func (m *mockMembershipManager) InvalidateCache() {
 func (m *mockMembershipManager) GetLeader(ctx context.Context) (*Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.getLeaderCalled++
 	if m.getLeaderError != nil {
 		return nil, m.getLeaderError
 	}
@@ -194,9 +180,6 @@ func (m *mockMembershipManager) GetTerm() uint64 {
 }
 
 func (m *mockMembershipManager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.closeCalled++
 	return nil
 }
 

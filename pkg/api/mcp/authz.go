@@ -190,6 +190,11 @@ func toolPermissionCatalog() map[string]string {
 	permissions["attestation_verify_manifest"] = "attestation:read"
 	permissions["attestation_create_manifest"] = "attestation:write"
 	permissions["attestation_delete_manifest"] = "attestation:delete"
+	// Quotes and collection (#704), each the scope of its gRPC method; the
+	// tool table carries it.
+	for name, tool := range attestationQuoteTools {
+		permissions[name] = tool.scope
+	}
 	permissions["device_provision"] = "device:write"
 
 	// Device profile tools (same scopes as the gRPC DeviceService profile

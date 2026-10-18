@@ -56,6 +56,7 @@ declare -A TARGET_PACKAGES=(
     [sdn]="./test/integration/sdn/..."
     [proxy]="./test/integration/proxy/..."
     [ntp]="./test/integration/ntp/..."
+    [objectstorage]="./test/integration/objectstorage/..."
     [vpn]="./test/integration/vpn/..."
     [tenant]="./test/integration/tenant/..."
     [iam]="./test/integration/iam/..."
@@ -185,8 +186,8 @@ ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli compute
     container daemon device dns fido2 iam invitation iso kms luks network
-    ntp piv provision proxy quic registry restroutes sdn secrets
-    tenant tpm user-registration vpn vtpm
+    ntp objectstorage piv provision proxy quic registry restroutes sdn
+    secrets tenant tpm user-registration vpn vtpm
 )
 
 RUN_TARGET="all"
@@ -676,13 +677,7 @@ start_vbmc() {
     if curl -sf http://127.0.0.1:8645/tls/ca -o /tmp/vbmc-ca.pem 2>/dev/null; then
         echo "vBMC CA cert downloaded to /tmp/vbmc-ca.pem"
     else
-        # Fallback: wget (in case curl is absent)
-        wget -q -O /tmp/vbmc-ca.pem http://127.0.0.1:8645/tls/ca 2>/dev/null || true
-        if [ -s /tmp/vbmc-ca.pem ]; then
-            echo "vBMC CA cert downloaded to /tmp/vbmc-ca.pem (via wget)"
-        else
-            echo "WARNING: could not download vBMC CA cert; GetWebCertificate tests may fail"
-        fi
+        echo "WARNING: could not download vBMC CA cert; GetWebCertificate tests may fail"
     fi
 
     # Generate a modified platformd config that adds trust.bmc so the daemon
@@ -826,9 +821,6 @@ abort_no_daemon() {
 
 setup_env_vars() {
     echo "=== Setting environment variables for adapters ==="
-
-    # helpers.SkipIfNotDevContainer checks this at runtime
-    export DEVCONTAINER="1"
 
     # Socket path for Unix adapters (daemon, sdn, vtpm, overlay, and the new
     # ceremony/piv/luks/fido2 suites that share the adapter pattern).

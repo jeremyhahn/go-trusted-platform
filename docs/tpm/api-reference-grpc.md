@@ -1,8 +1,12 @@
 # TPM gRPC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> `platform.v1.TPMService` messages over gRPC. The cross-transport contract is
+> [api.md](api.md).
+
 Package: `platform.v1`
 Service: `TPMService`
-Port: `9443`
+Port: `10443`
 
 ## Service Definition
 
@@ -10,6 +14,12 @@ Port: `9443`
 service TPMService {
   // Info returns TPM capabilities and information
   rpc Info(TPMInfoRequest) returns (TPMInfoResponse);
+
+  // GetCapabilities returns the algorithms, commands and ECC curves the TPM implements
+  rpc GetCapabilities(TPMCapabilitiesRequest) returns (TPMCapabilitiesResponse);
+
+  // GetPlatformAttributes describes the TPM device and its provisioned identity keys
+  rpc GetPlatformAttributes(TPMPlatformAttributesRequest) returns (TPMPlatformAttributesResponse);
 
   // Provision initializes the TPM with required keys
   rpc Provision(TPMProvisionRequest) returns (TPMProvisionResponse);
@@ -44,6 +54,11 @@ service TPMService {
   rpc Certify(CertifyRequest) returns (CertifyResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
+  rpc ExtendPCR(ExtendPCRRequest) returns (ExtendPCRResponse);
+
+  // Credential activation
+  rpc MakeCredential(MakeCredentialRequest) returns (MakeCredentialResponse);
+  rpc ActivateCredential(TPMActivateCredentialRequest) returns (TPMActivateCredentialResponse);
 
   // NVRAM operations
   rpc DefineNVRAM(DefineNVRAMRequest) returns (DefineNVRAMResponse);
@@ -68,6 +83,9 @@ enum KeyAlgorithm {
   KEY_ALGORITHM_ECDSA_P384 = 5;
   KEY_ALGORITHM_ECDSA_P521 = 6;
   KEY_ALGORITHM_ED25519 = 7;
+  KEY_ALGORITHM_DILITHIUM2 = 8;
+  KEY_ALGORITHM_DILITHIUM3 = 9;
+  KEY_ALGORITHM_DILITHIUM5 = 10;
 }
 
 enum PCRBank {
@@ -76,6 +94,7 @@ enum PCRBank {
   PCR_BANK_SHA256 = 2;
   PCR_BANK_SHA384 = 3;
   PCR_BANK_SHA512 = 4;
+  PCR_BANK_SM3_256 = 5;
 }
 ```
 
@@ -101,8 +120,21 @@ message TPMInfoResponse {
   bool is_simulator = 6;
   bool fips_mode = 7;
   map<string, string> properties = 8;
+  repeated NVIndex nv_indexes = 9;
+}
+
+message NVIndex {
+  uint32 handle = 1;
+  string type = 2;   // ordinary | counter | extend | bits | pin_pass | pin_fail
+  uint32 size = 3;
+  bool auth_read = 4;
+  bool auth_write = 5;
 }
 ```
+
+`properties["info"]` carries the TPM's text summary. `manufacturer`,
+`capabilities`, `max_nvram_size`, `fips_mode` and `nv_indexes` come from the
+TPM fixed properties; when that read fails they are left empty.
 
 **Go Example:**
 ```go
@@ -111,7 +143,7 @@ if err != nil {
     log.Fatal(err)
 }
 
-fmt.Printf("Manufacturer: %s\n", response.Manufacturer.Name)
+fmt.Printf("Manufacturer: %s\n", response.GetManufacturer().GetName())
 fmt.Printf("Version: %v\n", response.Version)
 fmt.Printf("FIPS Mode: %v\n", response.FipsMode)
 ```
@@ -188,8 +220,12 @@ Imports an EK certificate.
 ```protobuf
 message ImportEKCertificateRequest {
   bytes certificate = 1;
+  string format = 2;      // PEM or DER
+  uint32 nvram_index = 3;
 }
 ```
+
+Only `certificate` is read; an empty one is `InvalidArgument`.
 
 **Response:**
 ```protobuf
@@ -200,11 +236,16 @@ message ImportEKCertificateResponse {
 
 ### DeleteEK
 
-Flushes the EK handle from the TPM.
+Flushes the configured EK handle from the TPM. The request fields are not
+read.
 
 **Request:**
 ```protobuf
-message DeleteEKRequest {}
+message DeleteEKRequest {
+  uint32 handle = 1;
+  KeyAlgorithm algorithm = 2;
+  string password = 3;
+}
 ```
 
 **Response:**
@@ -262,11 +303,15 @@ message CreateSRKResponse {
 
 ### DeleteSRK
 
-Flushes the SRK handle from the TPM.
+Flushes the SSRK handle from the TPM. The request fields are not read.
 
 **Request:**
 ```protobuf
-message DeleteSRKRequest {}
+message DeleteSRKRequest {
+  uint32 handle = 1;
+  KeyAlgorithm algorithm = 2;
+  string password = 3;
+}
 ```
 
 **Response:**
@@ -332,7 +377,11 @@ evicted, so it answers as `IDevIDService.DeleteIAK` and the TPM is not touched
 
 **Request:**
 ```protobuf
-message DeleteAKRequest {}
+message DeleteAKRequest {
+  uint32 handle = 1;
+  KeyAlgorithm algorithm = 2;
+  string password = 3;
+}
 ```
 
 **Response:**
@@ -383,12 +432,15 @@ message SealResponse {
 **Example:**
 ```go
 response, err := client.Seal(ctx, &platformv1.SealRequest{
-    Data:         []byte("my-secret-data"),
-    Cn:           "app-secret",
-    ParentHandle: 0x81000002,
-    Password:     sealPassword,
+    Data:     []byte("my-secret-data"),
+    Cn:       "app-secret",
+    Password: sealPassword,
 })
 ```
+
+The daemon always seals under the SSRK: `parent_handle`, `parent_password` and
+`overwrite` are not read, and only `sealed_data` is returned. Unseal reads only
+`cn` and `password`. See [Sealing](sealing.md).
 
 ### Unseal
 
@@ -439,6 +491,9 @@ message QuoteResponse {
   bytes signature = 3;
   repeated PCRValue pcr_values = 4;
   bytes event_log = 5;
+  // TLS exporter of the request's connection; the TPM quoted
+  // SHA-256(nonce || channel_binding) (#482).
+  bytes channel_binding = 6;
   // The IAK's signature scheme, e.g. "SHA256-RSAPSS".
   string signature_algorithm = 7;
 }
@@ -450,12 +505,14 @@ nonce := make([]byte, 32)
 rand.Read(nonce)
 
 response, err := client.Quote(ctx, &platformv1.QuoteRequest{
-    AkHandle:   0x81010002,
     PcrIndices: []uint32{0, 1, 2, 3, 7, 8, 9},
-    PcrBank:    platformv1.PCRBank_PCR_BANK_SHA256,
     Nonce:      nonce,
 })
 ```
+
+Only `pcr_indices` and `nonce` are read; the quote is signed by the IAK.
+`pcr_values` is not filled. A request that did not arrive over TLS is refused.
+See [Attestation](attestation.md#quote-request-example).
 
 ### VerifyQuote
 
@@ -469,6 +526,8 @@ message VerifyQuoteRequest {
   bytes ak_public = 3;
   bytes nonce = 4;
   repeated PCRValue expected_pcrs = 5;
+  // When set, the quote must carry SHA-256(nonce || channel_binding).
+  bytes channel_binding = 6;
   // The scheme QuoteResponse declared; required, the signature is checked
   // under it.
   string signature_algorithm = 7;
@@ -484,6 +543,10 @@ message VerifyQuoteResponse {
   repeated PCRValue actual_pcrs = 4;
 }
 ```
+
+An empty `ak_public` verifies against the node's own IAK. `expected_pcrs` is
+not compared and `actual_pcrs` is not filled; see
+[Attestation](attestation.md#verification-example).
 
 ### Certify
 
@@ -544,6 +607,74 @@ message PCRValue {
 }
 ```
 
+### ExtendPCR
+
+Extends PCR `index` (0-23) in the `hash_alg` bank (`sha1`, `sha256`, `sha384`
+or `sha512`; `sha256` when empty) with `data`. Scope `tpm:write`. An index past
+23 or empty `data` is `InvalidArgument` and the TPM is not called; a bank the
+TPM does not have is the TPM's refusal; QUIC `0x12` and MCP `platform_tpm_pcr_extend` run the same validator
+(`pkg/api/tpmpcr`). A successful extend returns `status` with `success: true`
+and the message `PCR <index> extended`, the pair QUIC and MCP return.
+
+```protobuf
+message ExtendPCRRequest {
+  uint32 index = 1;
+  string hash_alg = 2;
+  bytes data = 3;
+}
+
+message ExtendPCRResponse {
+  Status status = 1;
+}
+```
+
+## Capabilities and Platform Attributes
+
+### GetCapabilities
+
+Returns TPM2_GetCapability's algorithm, command and ECC-curve names. Scope
+`tpm:read`. A list the TPM refuses is `FailedPrecondition` naming the list.
+
+```protobuf
+message TPMCapabilitiesRequest {}
+
+message TPMCapabilitiesResponse {
+  repeated string algorithms = 1;
+  repeated string commands = 2;
+  repeated string ecc_curves = 3;
+}
+```
+
+### GetPlatformAttributes
+
+Describes the TPM device and its provisioned EK, SRK and IAK. Scope
+`tpm:read`. An attribute the TPM cannot report is false or empty; a key that is
+not provisioned is absent.
+
+```protobuf
+message TPMPlatformAttributesRequest {}
+
+message TPMPlatformAttributesResponse {
+  string device = 1;
+  bool is_fips = 2;
+  bool pcr_extended = 3;
+  bool can_seal = 4;
+  bool is_simulator = 5;
+  string manufacturer = 6;
+  TPMKeyRef ek = 7;
+  TPMKeyRef srk = 8;
+  TPMKeyRef iak = 9;
+}
+
+message TPMKeyRef {
+  uint32 handle = 1;
+  string algorithm = 2;
+}
+```
+
+QUIC `0x17` / `0x1E` and MCP `platform_tpm_capabilities` /
+`platform_tpm_platform` read the same values through `pkg/api/tpmattrs`.
+
 ## Event Log
 
 ### GetEventLog
@@ -563,8 +694,27 @@ message GetEventLogResponse {
   bytes event_log = 1;
   string format = 2;
   uint64 event_count = 3;
+  repeated EventLogEntry entries = 4;
+}
+
+message EventLogEntry {
+  uint32 event_num = 1;
+  uint32 pcr_index = 2;
+  string event_type = 3;
+  uint32 digest_count = 4;
+  repeated EventDigest digests = 5;
+  uint32 event_size = 6;
+  string event_string = 7;
+}
+
+message EventDigest {
+  string algorithm_id = 1;
+  string digest = 2;
 }
 ```
+
+The request's `format` is not read: `event_log` is the raw log and `format` is
+always `tcg2`. When the log cannot be parsed, `entries` is empty.
 
 ## NVRAM Operations
 
@@ -578,7 +728,8 @@ message DefineNVRAMRequest {
   uint32 index = 1;
   uint32 size = 2;
   string password = 3;
-  repeated string attributes = 4;
+  repeated string attributes = 4;  // AUTHWRITE, AUTHREAD, ...
+  string parent_password = 5;      // owner hierarchy auth, when set
 }
 ```
 
@@ -625,6 +776,8 @@ Deletes an NVRAM index.
 ```protobuf
 message UndefineNVRAMRequest {
   uint32 index = 1;
+  string parent_password = 10;  // owner hierarchy auth, when set
+  string password = 2;
 }
 ```
 
@@ -690,6 +843,7 @@ gRPC status codes:
 | `NOT_FOUND` | Key or object not found |
 | `ALREADY_EXISTS` | Object already exists |
 | `INVALID_ARGUMENT` | Invalid request parameters |
+| `UNAVAILABLE` | The daemon has no TPM |
 | `PERMISSION_DENIED` | Authorization failed |
 | `FAILED_PRECONDITION` | PCR mismatch, TPM not ready, or a `Seal` naming PCRs (refused until go-quicbaas #1171); `IDevIDService.DeleteIDevID` and `DeleteIAK` and `TPMService.DeleteAK`, always |
 | `INTERNAL` | Server error |
@@ -719,6 +873,7 @@ if err != nil {
 import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials"
+    "google.golang.org/grpc/credentials/insecure"
     platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -728,7 +883,7 @@ if err != nil {
     return err
 }
 
-conn, err := grpc.Dial("localhost:9443", grpc.WithTransportCredentials(creds))
+conn, err := grpc.Dial("localhost:10443", grpc.WithTransportCredentials(creds))
 if err != nil {
     return err
 }

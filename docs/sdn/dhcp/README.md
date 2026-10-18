@@ -1,10 +1,19 @@
 # DHCP Service
 
-Dynamic Host Configuration Protocol (DHCP) service for go-trusted-platform providing IP address allocation integrated with the platform IPAM system.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Overview of the in-process DHCP server.
+
+Dynamic Host Configuration Protocol (DHCP) engine for go-trusted-platform providing IP address allocation integrated with the platform IPAM system.
+
+**No daemon runs this engine today.** `pkg/sdn/dhcp` has no importer outside
+its own tests. With `sdn.dhcp` enabled, platformd only logs the zones it would
+serve (`pkg/app/sdn.go:655`); gatewayd refuses its `dhcp:` section as planned,
+not implemented (`pkg/sdn/gateway/handlers.go:80`). The engine also drops its
+own replies today: see [Architecture](architecture.md#message-handling-pipeline).
 
 ## Overview
 
-The DHCP service implements a high-performance DHCP server using CoreDHCP as the underlying engine, with custom plugins for platform integration:
+The DHCP engine implements a DHCP server using CoreDHCP as the underlying engine, with custom plugins for platform integration:
 
 - Dynamic IP allocation from IPAM pools
 - Multi-interface support for network segmentation
@@ -16,9 +25,10 @@ The DHCP service implements a high-performance DHCP server using CoreDHCP as the
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| CoreDHCP Integration | Complete | Pure Go DHCP implementation |
+| Daemon wiring | Not wired | No daemon constructs `CoreDHCPServer` |
+| CoreDHCP Integration | Defect | Replies the IPAM plugin builds are never sent (`pkg/sdn/dhcp/coredhcp.go:263`) |
 | IPAM Plugin | Complete | IP allocation from IPAM pools |
-| PXE Plugin | Complete | PXE boot with architecture detection |
+| PXE Plugin | Standalone | PXE boot with architecture detection; `CoreDHCPServer` does not chain it |
 | Lease Management | Complete | O(1) lookup by IP or MAC |
 | Multi-Interface | Complete | Per-interface pool binding |
 | Statistics Collection | Complete | Lock-free atomic counters |
@@ -102,7 +112,8 @@ pkg/sdn/dhcp/
 ├── coredhcp.go           # CoreDHCP server implementation
 ├── lease_manager.go      # LeaseStore for lease tracking
 ├── plugin_ipam.go        # IPAM plugin for IP allocation
-└── plugin_pxe.go         # PXE plugin for boot support
+├── plugin_pxe.go         # PXE plugin for boot support
+└── zone_pool.go          # ResolvePoolForZone: explicit pool ID, else the zone's pool
 ```
 
 ## Quick Start
@@ -112,13 +123,16 @@ pkg/sdn/dhcp/
 ```go
 import (
     "context"
+    "net"
     "net/netip"
+    "time"
+
     "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/dhcp"
-    "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+    "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 )
 
-// Create IPAM allocator
-allocator := ipam.NewMemoryAllocator()
+// Create IPAM allocator (in-memory backend; it implements ipam.Allocator)
+allocator := backends.NewMemoryBackend()
 
 // Create server configuration
 config := &dhcp.ServerConfig{
@@ -126,11 +140,11 @@ config := &dhcp.ServerConfig{
         {
             Name:    "eth0",
             Network: dhcp.NetworkPrivate,
-            Address: netip.MustParseAddr("192.168.1.1"),
+            Address: netip.MustParseAddr("192.0.2.1"),
             PoolID:  "internal-pool",
             Options: dhcp.DHCPOptions{
                 SubnetMask: net.CIDRMask(24, 32),
-                Router:     netip.MustParseAddr("192.168.1.1"),
+                Router:     netip.MustParseAddr("192.0.2.1"),
                 DNS:        []netip.Addr{netip.MustParseAddr("8.8.8.8")},
                 DomainName: "example.local",
                 LeaseTime:  24 * time.Hour,
@@ -155,12 +169,15 @@ defer server.Stop(ctx)
 
 ### PXE Boot Configuration
 
+The PXE plugin is built on its own; `CoreDHCPServer` chains only the IPAM
+plugin, so an embedder must chain `pxe.Handler4()` itself.
+
 ```go
 import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/dhcp"
 
 // Create PXE plugin with architecture filters
 pxe, err := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),  // TFTP server
+    net.ParseIP("192.0.2.10"),  // TFTP server
     "pxelinux.0",                  // Default boot file
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchIntelX86:   "pxelinux.0",      // BIOS
@@ -206,31 +223,23 @@ Client                         Server
 
 ### IPAM Integration
 
-The DHCP service integrates with the platform IPAM system for IP allocation:
+The DHCP engine uses the platform IPAM system for IP allocation:
 
 - Allocate IPs from named pools
 - Track lease state in both DHCP and IPAM
-- Automatic release on lease expiration
+- Release on DHCPRELEASE and DHCPDECLINE
 - Support for specific IP requests
 
-### SDN Integration
+### Daemon Integration
 
-Works with the SDN subsystem for network provisioning:
-
-- Provisioning VLAN support
-- Port authentication awareness
-- Device onboarding workflows
-
-### Gateway Integration
-
-None. Gateway edge onboarding is planned, not implemented: gatewayd refuses
-the `edge:` and `dhcp:` sections at start (see [`docs/gateway/`](../../gateway/)).
+None today. platformd's `sdn.dhcp` section only reports the zones the node
+would serve; gatewayd refuses the `edge:` and `dhcp:` sections at start (see
+[`docs/gateway/`](../../gateway/)).
 
 ## CLI Commands
 
-There is currently no `platformctl sdn dhcp` command group. The DHCP
-server is configured via the `sdn.dhcp` YAML section and runs inside
-the daemon; lease and pool state is visible through the IPAM CLI:
+There is no `platformctl sdn dhcp` command group. Pool and allocation state
+lives in IPAM and is visible through the IPAM CLI:
 
 ```bash
 # Pools backing DHCP allocation

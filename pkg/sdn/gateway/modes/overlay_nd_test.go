@@ -442,7 +442,10 @@ func TestOverlayNDStopReportsPuntsLeftBehind(t *testing.T) {
 	assert.ErrorIs(t, err, errSwitchDown)
 }
 
-func TestOverlayStartRemovesPuntsACrashLeft(t *testing.T) {
+// A relaunch does not flush the punts a killed run left: their packet-ins
+// carry the ND cookie the new controller routes, so it answers them, and they
+// lapse at their hard timeout unless the new run refreshes them.
+func TestOverlayStartKeepsPuntsAKilledRunLeft(t *testing.T) {
 	f := newStoppedOverlay(t, nil)
 	ctx := context.Background()
 	left := openflow.NewFlowMod(0)
@@ -450,13 +453,16 @@ func TestOverlayStartRemovesPuntsACrashLeft(t *testing.T) {
 	left.Cookie = OverlayNDCookie
 	left.TableID = TableARP
 	left.Priority = priorityNDPunt
+	left.HardTimeout = overlayNDPuntHardTimeout
 	left.Match.AddInPort(ndAccessOFPort)
 	require.NoError(t, f.sw.SendFlowMods(ctx, []*openflow.FlowMod{left}))
 
 	require.NoError(t, f.handler.Start(ctx))
 	t.Cleanup(func() { assert.NoError(t, f.handler.Stop(ctx)) })
 
-	assert.False(t, f.sw.has("t=40 p=200 in_port=3 -> drop"), "the old run's punt is gone")
+	assert.True(t, f.sw.has("t=40 p=200 in_port=3 -> drop"), "the old run's punt keeps suppressing")
+	f.sw.expire()
+	assert.False(t, f.sw.has("t=40 p=200 in_port=3 -> drop"), "the old run's punt lapses at its hard timeout")
 }
 
 func TestOverlayNDFallsBackOnDrops(t *testing.T) {

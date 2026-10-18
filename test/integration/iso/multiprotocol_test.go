@@ -113,6 +113,131 @@ func testISOProtocol(t *testing.T, ctx context.Context, cmd ISOCommands) {
 }
 
 // =============================================================================
+// Fixtures
+// =============================================================================
+//
+// Extract, Customize, Build and the VM tests each need the artefact an earlier
+// step produces. The ensure* helpers return that artefact, producing it through
+// the adapter when no earlier subtest has, so any subtest can run on its own
+// (-run selects it) and a step that cannot produce its artefact fails the test
+// that needs it instead of letting it pass unrun.
+
+func alpineISOPath(workDir string) string {
+	return filepath.Join(workDir, fmt.Sprintf("alpine-standard-%s-%s.iso", DefaultAlpineVersion, DefaultArch))
+}
+
+func extractedISODir(workDir string) string {
+	return filepath.Join(workDir, "extracted-iso")
+}
+
+func builtISOPath(workDir string) string {
+	return filepath.Join(workDir, "test-output.iso")
+}
+
+func installedDiskPath(workDir string) string {
+	return filepath.Join(workDir, "test-install.qcow2")
+}
+
+// ensureAlpineISO returns the downloaded Alpine ISO, downloading it first.
+func ensureAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	isoPath := alpineISOPath(workDir)
+	if FileExists(isoPath) {
+		return isoPath
+	}
+
+	result, err := cmd.Download(ctx, DownloadOptions{
+		Version: DefaultAlpineVersion,
+		Mirror:  DefaultMirror,
+		Arch:    DefaultArch,
+		WorkDir: workDir,
+		Verify:  true,
+	})
+	if err != nil {
+		t.Fatalf("missing prerequisite: downloading the Alpine ISO fixture: %v", err)
+	}
+	if result != nil && result.ISOPath != "" {
+		isoPath = result.ISOPath
+	}
+	if !FileExists(isoPath) {
+		t.Fatalf("missing prerequisite: %v", ErrISONotFound{Path: isoPath})
+	}
+	return isoPath
+}
+
+// ensureExtractedISO returns the extracted ISO tree, extracting it first.
+func ensureExtractedISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	isoDir := extractedISODir(workDir)
+	if DirExists(isoDir) {
+		return isoDir
+	}
+
+	isoPath := ensureAlpineISO(t, ctx, cmd, workDir)
+	if _, err := cmd.Extract(ctx, ExtractOptions{ISO: isoPath, OutputDir: isoDir, WorkDir: workDir}); err != nil {
+		t.Fatalf("missing prerequisite: extracting the ISO fixture: %v", err)
+	}
+	if !DirExists(isoDir) {
+		t.Fatalf("missing prerequisite: %v", ErrDirectoryNotFound{Path: isoDir})
+	}
+	return isoDir
+}
+
+// ensureBuiltISO returns an ISO rebuilt from the extracted tree, building it first.
+func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	isoPath := builtISOPath(workDir)
+	if FileExists(isoPath) {
+		return isoPath
+	}
+
+	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
+	result, err := cmd.Build(ctx, BuildOptions{SourceDir: isoDir, Output: isoPath, VolumeID: "TEST_ISO", WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("missing prerequisite: building the ISO fixture: %v", err)
+	}
+	if result != nil && result.OutputISO != "" {
+		isoPath = result.OutputISO
+	}
+	if !FileExists(isoPath) {
+		t.Fatalf("missing prerequisite: %v", ErrISONotFound{Path: isoPath})
+	}
+	return isoPath
+}
+
+// installOptions installs isoPath onto the work directory's test disk.
+func installOptions(isoPath, workDir string) TestInstallOptions {
+	return TestInstallOptions{
+		ISO:        isoPath,
+		Disk:       installedDiskPath(workDir),
+		DiskSize:   "10G",
+		Memory:     4096,
+		CPUs:       2,
+		WorkDir:    workDir,
+		SecureBoot: false,
+		Debug:      true,
+	}
+}
+
+// ensureInstalledDisk returns a disk with the built ISO installed, installing it first.
+func ensureInstalledDisk(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	diskPath := installedDiskPath(workDir)
+	if FileExists(diskPath) {
+		return diskPath
+	}
+
+	isoPath := ensureBuiltISO(t, ctx, cmd, workDir)
+	if _, err := cmd.TestInstall(ctx, installOptions(isoPath, workDir)); err != nil {
+		t.Fatalf("missing prerequisite: installing the ISO fixture onto %s: %v", diskPath, err)
+	}
+	if !FileExists(diskPath) {
+		t.Fatalf("missing prerequisite: %v", ErrDiskNotFound{Path: diskPath})
+	}
+	return diskPath
+}
+
+// =============================================================================
 // Profile Tests
 // =============================================================================
 
@@ -348,9 +473,6 @@ func testExtractOperations(t *testing.T, ctx context.Context, cmd ISOCommands, w
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	// Extract requires an existing ISO
-	isoPath := filepath.Join(workDir, fmt.Sprintf("alpine-standard-%s-%s.iso", DefaultAlpineVersion, DefaultArch))
-
 	t.Run("ExtractNonExistentISO", func(t *testing.T) {
 		opts := ExtractOptions{
 			ISO:     "/nonexistent/path/alpine.iso",
@@ -366,12 +488,8 @@ func testExtractOperations(t *testing.T, ctx context.Context, cmd ISOCommands, w
 	})
 
 	t.Run("ExtractValidISO", func(t *testing.T) {
-		// Skip if ISO doesn't exist (requires download first)
-		if !FileExists(isoPath) {
-			t.Skipf("Skipping: ISO not found at %s (run download test first)", isoPath)
-		}
-
-		outputDir := filepath.Join(workDir, "extracted-iso")
+		isoPath := ensureAlpineISO(t, testCtx, cmd, workDir)
+		outputDir := extractedISODir(workDir)
 		opts := ExtractOptions{
 			ISO:       isoPath,
 			OutputDir: outputDir,
@@ -397,10 +515,7 @@ func testExtractOperations(t *testing.T, ctx context.Context, cmd ISOCommands, w
 	})
 
 	t.Run("ExtractWithForce", func(t *testing.T) {
-		if !FileExists(isoPath) {
-			t.Skip("Skipping: ISO not found")
-		}
-
+		isoPath := ensureAlpineISO(t, testCtx, cmd, workDir)
 		outputDir := filepath.Join(workDir, "extracted-iso-force")
 		opts := ExtractOptions{
 			ISO:       isoPath,
@@ -426,8 +541,6 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	isoDir := filepath.Join(workDir, "extracted-iso")
-
 	t.Run("CustomizeNonExistentDir", func(t *testing.T) {
 		opts := CustomizeOptions{
 			ISODir:  "/nonexistent/path/iso",
@@ -442,9 +555,7 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 	})
 
 	t.Run("CustomizeValidDir", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skipf("Skipping: ISO directory not found at %s (run extract test first)", isoDir)
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
 		opts := CustomizeOptions{
 			ISODir:  isoDir,
@@ -460,9 +571,7 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 	})
 
 	t.Run("CustomizeWithOverlay", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
 		// Create a simple overlay
 		overlayDir := filepath.Join(workDir, "overlay")
@@ -488,9 +597,7 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 	})
 
 	t.Run("CustomizeWithAutoinstall", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
 		opts := CustomizeOptions{
 			ISODir:      isoDir,
@@ -515,8 +622,7 @@ func testBuildOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wor
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 
-	isoDir := filepath.Join(workDir, "extracted-iso")
-	outputISO := filepath.Join(workDir, "test-output.iso")
+	outputISO := builtISOPath(workDir)
 
 	t.Run("BuildNonExistentDir", func(t *testing.T) {
 		opts := BuildOptions{
@@ -533,9 +639,7 @@ func testBuildOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wor
 	})
 
 	t.Run("BuildValidDir", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skipf("Skipping: ISO directory not found at %s", isoDir)
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
 		opts := BuildOptions{
 			SourceDir:   isoDir,
@@ -563,9 +667,7 @@ func testBuildOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wor
 	})
 
 	t.Run("BuildWithCustomLabel", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
 		customOutputISO := filepath.Join(workDir, "custom-label.iso")
 		opts := BuildOptions{
@@ -585,9 +687,7 @@ func testBuildOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wor
 	})
 
 	t.Run("BuildLabelTooLong", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
 		opts := BuildOptions{
 			SourceDir: isoDir,
@@ -778,43 +878,12 @@ func TestISOVMTests(t *testing.T) {
 }
 
 func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
-	// This test requires an ISO to be available
-	// Look for ISO in common locations
-	isoPath := ""
-	possiblePaths := []string{
-		filepath.Join(workDir, "test-output.iso"),
-		"trusted-alpine-dev-x86_64.iso",
-		"trusted-alpine-0.1.0-x86_64.iso",
-	}
-
-	for _, p := range possiblePaths {
-		if FileExists(p) {
-			isoPath = p
-			break
-		}
-	}
-
-	if isoPath == "" {
-		t.Skip("Skipping: No ISO available for installation test")
-	}
-
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
 
-	diskPath := filepath.Join(workDir, "test-install.qcow2")
+	isoPath := ensureBuiltISO(t, testCtx, cmd, workDir)
 
-	opts := TestInstallOptions{
-		ISO:        isoPath,
-		Disk:       diskPath,
-		DiskSize:   "10G",
-		Memory:     4096,
-		CPUs:       2,
-		WorkDir:    workDir,
-		SecureBoot: false,
-		Debug:      true,
-	}
-
-	result, err := cmd.TestInstall(testCtx, opts)
+	result, err := cmd.TestInstall(testCtx, installOptions(isoPath, workDir))
 	if err != nil {
 		t.Logf("TestInstall failed (may require interactive session): %v", err)
 		return
@@ -824,11 +893,7 @@ func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir s
 }
 
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
-	diskPath := filepath.Join(workDir, "test-install.qcow2")
-
-	if !FileExists(diskPath) {
-		t.Skip("Skipping: No installed disk available (run install test first)")
-	}
+	diskPath := ensureInstalledDisk(t, ctx, cmd, workDir)
 
 	testCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()

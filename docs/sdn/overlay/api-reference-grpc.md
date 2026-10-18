@@ -1,5 +1,8 @@
 # VXLAN Overlay gRPC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The overlay operations over gRPC.
+
 ## Overview
 
 | Property | Value |
@@ -57,7 +60,11 @@ See [api-reference.md](api-reference.md) for the shared data types
 `OverlayStatus`).
 
 `CreateVNI` answers `InvalidArgument` for a missing config, a VNI outside
-1-16777215, or a `vlan` above 4094 (0 maps no VLAN).
+1-16777215, or a `vlan` above 4094 (0 maps no VLAN), and `Unavailable`
+when the overlay controller is absent or stopped. It stores only `vni` and
+`vlan`: `name` and `labels` are dropped. `GetTunnelStats` requires
+`remote_vtep` (`InvalidArgument`) and answers `NotFound` when no tunnel
+matches; a `vni` of 0 matches the first tunnel to that VTEP.
 
 ## Example (grpcurl)
 

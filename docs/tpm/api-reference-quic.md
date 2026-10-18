@@ -1,5 +1,9 @@
 # TPM QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The TPM opcodes of the platform QUIC protocol. The cross-transport contract
+> is [api.md](api.md).
+
 Port: `9444` (UDP)
 Protocol: QUIC with TLS 1.3
 
@@ -11,11 +15,14 @@ The QUIC protocol uses a binary frame format with MessagePack encoding for low-l
 
 **Request:**
 ```
-+--------+------------+-------------+---------+
-| Opcode | Token Len  | Token       | Payload |
-| 1 byte | 2 bytes    | variable    | variable|
-+--------+------------+-------------+---------+
++--------+-----------+----------+-------------+---------+
+| Opcode | Token Len | Token    | Payload Len | Payload |
+| 1 byte | 2 bytes   | variable | 4 bytes     | variable|
++--------+-----------+----------+-------------+---------+
 ```
+
+Lengths are big-endian (`quicwire.WriteRequest`, `ReadResponse`). An error
+response carries the error text as its payload.
 
 **Response:**
 ```
@@ -25,9 +32,12 @@ The QUIC protocol uses a binary frame format with MessagePack encoding for low-l
 +--------+-------------+---------+
 ```
 
-## Category Opcode (0x27 - TPM2Category)
+## Category Opcode (0x99 - TPM2Category)
 
-TPM operations use a category opcode (0x27) with a sub-opcode in the first byte of the payload.
+TPM operations use a category opcode (`OpTPM2Category`, 0x99) with a sub-opcode
+in the first byte of the payload (`sdk/go/wire/quicwire/tpm_opcodes.go`). An
+unknown sub-opcode is `0x0B` NotImplemented; a daemon without a TPM answers
+`0x0A` Unavailable.
 
 ## Sub-Operation Codes
 
@@ -54,7 +64,7 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 
 | SubOp | Name | Description |
 |-------|------|-------------|
-| `0x09` | GetSRK | Retrieve Storage Root Key |
+| `0x09` | GetSRK | Retrieve a Storage Root Key: optional `handle`, the SSRK by default or the PlatformSRK |
 | `0x0A` | CreateSRK | Create Storage Root Key |
 | `0x0B` | DeleteSRK | Delete Storage Root Key |
 
@@ -74,6 +84,8 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 | `0x0F` | Quote | Generate quote over PCRs |
 | `0x10` | VerifyQuote | Verify quote signature |
 | `0x13` | EventLog | Get TPM event log |
+| `0x20` | MakeCred | Create a TPM2_MakeCredential challenge |
+| `0x21` | ActivateCred | Activate a challenge and recover the wrapped secret |
 | `0x22` | Certify | IAK certifies a persistent key (`TPM2CertifyRequest` → `TPM2CertifyResponse`) |
 
 ### PCR Operations
@@ -82,6 +94,12 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 |-------|------|-------------|
 | `0x11` | ReadPCRs | Read PCR values |
 | `0x12` | ExtendPCR | Extend PCR with data |
+
+### Random
+
+| SubOp | Name | Description |
+|-------|------|-------------|
+| `0x14` | Random | Random bytes from the TPM (`num_bytes`) |
 
 ### Seal/Unseal Operations
 
@@ -136,7 +154,15 @@ service wired `Unavailable` (api.md §8).
 | `0x00` | OK | Success |
 | `0x01` | InvalidRequest | Invalid request format |
 | `0x02` | NotFound | Resource not found |
+| `0x03` | Unauthorized | Missing or rejected token |
 | `0x04` | InternalError | Server error |
+| `0x05` | Timeout | Request timed out |
+| `0x06` | AlreadyExists | Resource already exists |
+| `0x07` | PermissionDenied | Scope missing |
+| `0x08` | ResourceExhausted | Limit reached |
+| `0x09` | InvalidArgument | Invalid request field |
+| `0x0A` | Unavailable | The daemon has no TPM |
+| `0x0B` | NotImplemented | Unknown sub-opcode |
 | `0x0C` | FailedPrecondition | The gRPC class `FailedPrecondition`: the operation is refused in the current state |
 
 ## Payload Encoding
@@ -193,6 +219,8 @@ type TPM2ClearRequest struct {
 }
 ```
 
+`owner_password` is passed to the TPM as the lockout authorization.
+
 **Response Payload:**
 ```go
 type TPM2StatusResponse struct {
@@ -226,12 +254,13 @@ type TPM2KeyResponse struct {
 {}
 ```
 
+The EK is created from the configured EK attributes.
+
 **Response Payload:**
 ```go
-type TPM2KeyResponse struct {
-    Handle    uint32 `codec:"handle"`
-    PublicKey []byte `codec:"public_key"`
-    Algorithm string `codec:"algorithm"`
+type TPM2StatusResponse struct {
+    Success   bool   `codec:"success"`
+    Message   string `codec:"message"`
     Timestamp int64  `codec:"timestamp"`
 }
 ```
@@ -242,6 +271,8 @@ type TPM2KeyResponse struct {
 ```messagepack
 {}
 ```
+
+The configured EK handle is flushed.
 
 **Response Payload:**
 ```go
@@ -302,12 +333,19 @@ type TPM2QuoteResponse struct {
     Signature          []byte `codec:"signature"`
     SignatureAlgorithm string `codec:"signature_algorithm"`
     EventLog           []byte `codec:"event_log"`
+    ChannelBinding     []byte `codec:"channel_binding"`
     Timestamp          int64  `codec:"timestamp"`
 }
 ```
 
-`TPM2VerifyQuoteRequest` (0x10) carries `signature_algorithm` back; the
-signature is checked under it and fails without it.
+The TPM quotes SHA-256(nonce || channel_binding), where `channel_binding` is
+the TLS exporter of the connection (#482). The types are in
+`sdk/go/wire/quicwire/tpm_quote.go`.
+
+`TPM2VerifyQuoteRequest` (0x10) carries `quote`, `signature`, `nonce`,
+`ak_public` (empty: the node's IAK), `channel_binding` and
+`signature_algorithm`; the signature is checked under `signature_algorithm`
+and fails without it.
 
 ### ReadPCRs (0x11)
 
@@ -321,10 +359,19 @@ type TPM2ReadPCRsRequest struct {
 **Response Payload:**
 ```go
 type TPM2ReadPCRsResponse struct {
-    PCRValues []map[string]interface{} `codec:"pcr_values"`
-    Timestamp int64                    `codec:"timestamp"`
+    PCRValues []*TPM2PCRValue `codec:"pcr_values"`
+    Timestamp int64           `codec:"timestamp"`
+}
+
+type TPM2PCRValue struct {
+    Index     uint32 `codec:"index"`
+    Bank      string `codec:"bank"`
+    Value     []byte `codec:"value"`
+    Timestamp int64  `codec:"timestamp"`
 }
 ```
+
+An empty `indices` reads PCRs 0-23.
 
 ### ExtendPCR (0x12)
 
@@ -351,10 +398,7 @@ type TPM2StatusResponse struct {
 **Request Payload:**
 ```go
 type TPM2SealRequest struct {
-    Data    []byte   `codec:"data"`
-    CN      string   `codec:"cn"`
-    Password string  `codec:"password"`
-    PCRs    []uint32 `codec:"pcr_indices"`
+    Data []byte `codec:"data"` // required
 }
 ```
 
@@ -362,19 +406,18 @@ type TPM2SealRequest struct {
 ```go
 type TPM2SealResponse struct {
     SealedData []byte `codec:"sealed_data"`
-    PublicKey  []byte `codec:"public_key"`
-    PrivateKey []byte `codec:"private_key"`
     Timestamp  int64  `codec:"timestamp"`
 }
 ```
+
+The QUIC request carries no name, password or PCR selection.
 
 ### Unseal (0x16)
 
 **Request Payload:**
 ```go
 type TPM2UnsealRequest struct {
-    CN       string `codec:"cn"`
-    Password string `codec:"password"`
+    CN string `codec:"cn"` // required
 }
 ```
 
@@ -463,6 +506,11 @@ gRPC, REST and MCP (`pkg/api/tpmnv`), the PCR checks with MCP
 ```go
 import (
     "crypto/tls"
+    "crypto/x509"
+    "os"
+    "time"
+
+    "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
     "github.com/quic-go/quic-go"
 )
 
@@ -474,7 +522,7 @@ caCertPool.AppendCertsFromPEM(caCert)
 tlsConfig := &tls.Config{
     MinVersion: tls.VersionTLS13,
     RootCAs:    caCertPool,
-    NextProtos: []string{"tpm-quic"},
+    NextProtos: []string{quicwire.ALPNProtocol}, // "platform-quic"
 }
 
 quicConfig := &quic.Config{
@@ -493,53 +541,48 @@ if err != nil {
 }
 defer stream.Close()
 
-// Send TPM Info request (category 0x27, sub-opcode 0x01)
-opcode := byte(0x27)
-subOpcode := byte(0x01)
-payload := []byte{subOpcode}
-request := append([]byte{opcode, 0, 0}, payload...)
+// Send TPM Info request (category 0x99, sub-opcode 0x01)
+err = quicwire.WriteRequest(stream, &quicwire.Request{
+    Opcode:  quicwire.OpTPM2Category,
+    Token:   token,
+    Payload: []byte{quicwire.SubOpTPM2Info},
+})
+if err != nil {
+    return err
+}
 
-stream.Write(request)
-
-// Read response
-status := make([]byte, 1)
-stream.Read(status)
-
-lenBuf := make([]byte, 4)
-stream.Read(lenBuf)
-
-respLen := binary.BigEndian.Uint32(lenBuf)
-respPayload := make([]byte, respLen)
-stream.Read(respPayload)
+resp, err := quicwire.ReadResponse(stream)
+if err != nil {
+    return err
+}
+// resp.Status is a status code; resp.Payload is the MessagePack response
 ```
 
 ## Protocol Constants
 
+From `sdk/go/wire/quicwire`:
+
 ```go
 const (
     // Max payload size: 16MB
-    MaxQUICPayloadSizeTPM uint32 = 16 * 1024 * 1024
+    MaxPayloadSize uint32 = 16 * 1024 * 1024
 
     // Max token size: 8KB
-    MaxQUICTokenSizeTPM uint16 = 8 * 1024
-
-    // Default timeout
-    DefaultQUICTimeoutTPM = 30 * time.Second
+    MaxTokenSize uint16 = 8 * 1024
 
     // Category opcode for TPM2
-    OpTPM2Category byte = 0x27
+    OpTPM2Category byte = 0x99
+
+    // TLS ALPN
+    ALPNProtocol = "platform-quic"
 )
 ```
 
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TPM_QUIC_ENDPOINT` | QUIC server address | `localhost:9444` |
+The port default is `DefaultQUICPort` (`pkg/config/daemon.go`).
 
 ## Notes
 
-- All timestamps are Unix epoch in milliseconds
+- All timestamps are Unix epoch in seconds
 - Binary data is encoded as byte arrays in MessagePack
 - Codec struct tags are required for proper serialization/deserialization
-- MessagePack encoding uses the latest protocol version
+- MessagePack is the default payload codec (`quicwire.DecodePayload`)

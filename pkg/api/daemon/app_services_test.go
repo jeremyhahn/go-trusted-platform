@@ -29,6 +29,7 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cache"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/messaging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/objectstorage"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/scheduler"
 )
 
@@ -255,12 +256,86 @@ func (f *fakeAppMessaging) GetChannelStats(_ context.Context, channel string) (*
 	return &messaging.ChannelStats{Name: channel, MessagesInHistory: 6}, nil
 }
 
+// fakeAppObjectStorage is the SDK's ObjectStorage group. The embedded
+// interface is nil: an operation the tests do not exercise panics.
+type fakeAppObjectStorage struct {
+	objectstorage.Client
+
+	err  error
+	name string
+}
+
+func (f *fakeAppObjectStorage) PutObject(_ context.Context, req *objectstorage.PutObjectRequest) (*objectstorage.PutObjectResponse, error) {
+	f.name = req.Key
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.PutObjectResponse{Key: req.Key, Version: 3, CreatedAt: 5_000_000}, nil
+}
+
+func (f *fakeAppObjectStorage) GetObject(_ context.Context, req *objectstorage.GetObjectRequest) (*objectstorage.GetObjectResponse, error) {
+	f.name = req.Key
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.GetObjectResponse{Key: req.Key, Value: []byte("data"), Size: 4}, nil
+}
+
+func (f *fakeAppObjectStorage) DeleteObject(_ context.Context, req *objectstorage.DeleteObjectRequest) (*objectstorage.DeleteObjectResponse, error) {
+	f.name = req.Key
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.DeleteObjectResponse{Key: req.Key, Success: true}, nil
+}
+
+func (f *fakeAppObjectStorage) HeadObject(_ context.Context, req *objectstorage.HeadObjectRequest) (*objectstorage.HeadObjectResponse, error) {
+	f.name = req.Key
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.HeadObjectResponse{Key: req.Key, Exists: true, ReplicaCount: 2}, nil
+}
+
+func (f *fakeAppObjectStorage) ListObjects(_ context.Context, req *objectstorage.ListObjectsRequest) (*objectstorage.ListObjectsResponse, error) {
+	f.name = req.Prefix
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.ListObjectsResponse{TotalCount: 1, Objects: []*objectstorage.ObjectSummary{{Key: req.Prefix + "a"}}}, nil
+}
+
+func (f *fakeAppObjectStorage) CopyObject(_ context.Context, req *objectstorage.CopyObjectRequest) (*objectstorage.CopyObjectResponse, error) {
+	f.name = req.SourceKey
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.CopyObjectResponse{Key: req.DestinationKey}, nil
+}
+
+func (f *fakeAppObjectStorage) ListByTag(_ context.Context, req *objectstorage.ListByTagRequest) (*objectstorage.ListByTagResponse, error) {
+	f.name = req.TagName
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.ListByTagResponse{TotalCount: 2}, nil
+}
+
+func (f *fakeAppObjectStorage) ListByTenant(_ context.Context, req *objectstorage.ListByTenantRequest) (*objectstorage.ListByTenantResponse, error) {
+	f.name = req.TenantID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &objectstorage.ListByTenantResponse{TotalCount: 3}, nil
+}
+
 // appServersWith builds the three gRPC services over the given fakes.
-func appServersWith(c *fakeAppCache, s *fakeAppScheduler, m *fakeAppMessaging) appServiceServers {
+func appServersWith(c *fakeAppCache, s *fakeAppScheduler, m *fakeAppMessaging, o *fakeAppObjectStorage) appServiceServers {
 	return appServiceServers{
-		cache:     NewCacheGRPCService(nil, appservices.NewCacheService(func() cache.Client { return c })),
-		scheduler: NewSchedulerGRPCService(nil, appservices.NewSchedulerService(func() scheduler.Client { return s })),
-		messaging: NewMessagingGRPCService(nil, appservices.NewMessagingService(func() messaging.Client { return m })),
+		cache:         NewCacheGRPCService(nil, appservices.NewCacheService(func() cache.Client { return c })),
+		scheduler:     NewSchedulerGRPCService(nil, appservices.NewSchedulerService(func() scheduler.Client { return s })),
+		messaging:     NewMessagingGRPCService(nil, appservices.NewMessagingService(func() messaging.Client { return m })),
+		objectStorage: NewObjectStorageGRPCService(nil, appservices.NewObjectStorageService(func() objectstorage.Client { return o })),
 	}
 }
 
@@ -273,7 +348,7 @@ type appServiceCall struct {
 
 // appServiceCalls returns one valid call of every RPC of the three services.
 func appServiceCalls(servers appServiceServers) map[string]appServiceCall {
-	c, s, m := servers.cache, servers.scheduler, servers.messaging
+	c, s, m, o := servers.cache, servers.scheduler, servers.messaging, servers.objectStorage
 	cacheCall := func(fn func(ctx context.Context) error) appServiceCall {
 		return appServiceCall{service: appservices.ServiceCache, call: fn}
 	}
@@ -282,6 +357,9 @@ func appServiceCalls(servers appServiceServers) map[string]appServiceCall {
 	}
 	messagingCall := func(fn func(ctx context.Context) error) appServiceCall {
 		return appServiceCall{service: appservices.ServiceMessaging, call: fn}
+	}
+	objectStorageCall := func(fn func(ctx context.Context) error) appServiceCall {
+		return appServiceCall{service: appservices.ServiceObjectStorage, call: fn}
 	}
 	size := int64(10)
 	return map[string]appServiceCall{
@@ -379,11 +457,43 @@ func appServiceCalls(servers appServiceServers) map[string]appServiceCall {
 			_, err := m.GetChannelStats(ctx, &platformv1.GetMessagingChannelStatsRequest{Channel: "events"})
 			return err
 		}),
+		"objectstorage.PutObject": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.PutObject(ctx, &platformv1.PutObjectRequest{Key: "docs:a.txt", Value: []byte("a"), TargetBackend: "local"})
+			return err
+		}),
+		"objectstorage.GetObject": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.GetObject(ctx, &platformv1.GetObjectRequest{Key: "docs:a.txt"})
+			return err
+		}),
+		"objectstorage.DeleteObject": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.DeleteObject(ctx, &platformv1.DeleteObjectRequest{Key: "docs:a.txt"})
+			return err
+		}),
+		"objectstorage.HeadObject": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.HeadObject(ctx, &platformv1.HeadObjectRequest{Key: "docs:a.txt"})
+			return err
+		}),
+		"objectstorage.ListObjects": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.ListObjects(ctx, &platformv1.ListObjectsRequest{Prefix: "docs:"})
+			return err
+		}),
+		"objectstorage.CopyObject": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.CopyObject(ctx, &platformv1.CopyObjectRequest{SourceKey: "docs:a.txt", DestinationKey: "docs:b.txt", TargetBackend: "local"})
+			return err
+		}),
+		"objectstorage.ListObjectsByTag": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.ListObjectsByTag(ctx, &platformv1.ListObjectsByTagRequest{TagName: "env"})
+			return err
+		}),
+		"objectstorage.ListTenantObjects": objectStorageCall(func(ctx context.Context) error {
+			_, err := o.ListTenantObjects(ctx, &platformv1.ListTenantObjectsRequest{TenantId: "acme"})
+			return err
+		}),
 	}
 }
 
 func TestAppServices_EveryCallReachesTheSDK(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{})
+	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{})
 	for name, c := range appServiceCalls(servers) {
 		assert.NoError(t, c.call(context.Background()), name)
 	}
@@ -400,7 +510,7 @@ func TestAppServices_NotConfiguredOnEveryCall(t *testing.T) {
 }
 
 func TestAppServices_SDKFailureIsInternal(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{err: errAppSDK{}}, &fakeAppScheduler{err: errAppSDK{}}, &fakeAppMessaging{err: errAppSDK{}})
+	servers := appServersWith(&fakeAppCache{err: errAppSDK{}}, &fakeAppScheduler{err: errAppSDK{}}, &fakeAppMessaging{err: errAppSDK{}}, &fakeAppObjectStorage{err: errAppSDK{}})
 	for name, c := range appServiceCalls(servers) {
 		st := status.Convert(c.call(context.Background()))
 		assert.Equal(t, codes.Internal, st.Code(), name)
@@ -435,7 +545,7 @@ func TestAppServiceStatus(t *testing.T) {
 // on the servers every transport shares.
 func TestAppServices_SDKErrorKeepsItsCode(t *testing.T) {
 	notFound := sdkerrors.NewNotFound("Get", "no such resource")
-	servers := appServersWith(&fakeAppCache{err: notFound}, &fakeAppScheduler{err: notFound}, &fakeAppMessaging{err: notFound})
+	servers := appServersWith(&fakeAppCache{err: notFound}, &fakeAppScheduler{err: notFound}, &fakeAppMessaging{err: notFound}, &fakeAppObjectStorage{err: notFound})
 	for name, c := range appServiceCalls(servers) {
 		st := status.Convert(c.call(context.Background()))
 		assert.Equal(t, codes.NotFound, st.Code(), name)
@@ -462,7 +572,7 @@ func TestAppInt32_Saturates(t *testing.T) {
 }
 
 func TestCacheGRPCService_ConvertsResponses(t *testing.T) {
-	svc := appServersWith(&fakeAppCache{}, nil, nil).cache
+	svc := appServersWith(&fakeAppCache{}, nil, nil, nil).cache
 	stats, err := svc.GetStats(context.Background(), &platformv1.GetCacheStatsRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, 0.5, stats.GetHitRate())
@@ -478,7 +588,7 @@ func TestCacheGRPCService_ConvertsResponses(t *testing.T) {
 
 func TestCacheGRPCService_UpdateConfigSendsOnlySetFields(t *testing.T) {
 	fake := &fakeAppCache{}
-	svc := appServersWith(fake, nil, nil).cache
+	svc := appServersWith(fake, nil, nil, nil).cache
 	ttl := int64(2500)
 	resp, err := svc.UpdateConfig(context.Background(), &platformv1.UpdateCacheConfigRequest{L1TtlMs: &ttl})
 	require.NoError(t, err)
@@ -492,7 +602,7 @@ func TestCacheGRPCService_UpdateConfigSendsOnlySetFields(t *testing.T) {
 
 func TestCacheGRPCService_RefusesInvalidRequests(t *testing.T) {
 	fake := &fakeAppCache{}
-	svc := appServersWith(fake, nil, nil).cache
+	svc := appServersWith(fake, nil, nil, nil).cache
 	_, err := svc.UpdateConfig(context.Background(), &platformv1.UpdateCacheConfigRequest{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "an update with no field set")
 	_, err = svc.Clear(context.Background(), &platformv1.ClearCacheRequest{EntityType: "users", All: true})
@@ -502,7 +612,7 @@ func TestCacheGRPCService_RefusesInvalidRequests(t *testing.T) {
 
 func TestSchedulerGRPCService_CreateJobConverts(t *testing.T) {
 	fake := &fakeAppScheduler{}
-	svc := appServersWith(nil, fake, nil).scheduler
+	svc := appServersWith(nil, fake, nil, nil).scheduler
 	resp, err := svc.CreateJob(context.Background(), &platformv1.CreateSchedulerJobRequest{
 		Name:      "later",
 		JobType:   platformv1.SchedulerJobType_SCHEDULER_JOB_TYPE_DELAYED,
@@ -519,9 +629,28 @@ func TestSchedulerGRPCService_CreateJobConverts(t *testing.T) {
 	assert.True(t, fake.created.ExecuteAt.IsZero())
 }
 
+func TestSchedulerGRPCService_UpdateJobConverts(t *testing.T) {
+	fake := &fakeAppScheduler{}
+	svc := appServersWith(nil, fake, nil, nil).scheduler
+	_, err := svc.UpdateJob(context.Background(), &platformv1.UpdateSchedulerJobRequest{
+		JobId:      "18446744073709551615",
+		Name:       "renamed",
+		DelayMs:    3000,
+		TimeoutMs:  500,
+		MaxRetries: 7,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fake.updated)
+	assert.Equal(t, uint64(18446744073709551615), fake.updated.JobID, "the decimal job ID parses to the full 64 bits")
+	assert.Equal(t, "renamed", fake.updated.Name)
+	assert.Equal(t, 3*time.Second, fake.updated.Delay)
+	assert.Equal(t, 500*time.Millisecond, fake.updated.Timeout)
+	assert.Equal(t, 7, fake.updated.MaxRetries)
+}
+
 func TestSchedulerGRPCService_CreateJobRefusesBadEnums(t *testing.T) {
 	fake := &fakeAppScheduler{}
-	svc := appServersWith(nil, fake, nil).scheduler
+	svc := appServersWith(nil, fake, nil, nil).scheduler
 	_, err := svc.CreateJob(context.Background(), &platformv1.CreateSchedulerJobRequest{Name: "j"})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "job_type is required")
 	_, err = svc.CreateJob(context.Background(), &platformv1.CreateSchedulerJobRequest{
@@ -533,7 +662,7 @@ func TestSchedulerGRPCService_CreateJobRefusesBadEnums(t *testing.T) {
 
 func TestSchedulerGRPCService_JobConversion(t *testing.T) {
 	fake := &fakeAppScheduler{}
-	svc := appServersWith(nil, fake, nil).scheduler
+	svc := appServersWith(nil, fake, nil, nil).scheduler
 	resp, err := svc.GetJob(context.Background(), &platformv1.GetSchedulerJobRequest{JobId: "77"})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(77), fake.jobID)
@@ -550,7 +679,7 @@ func TestSchedulerGRPCService_JobConversion(t *testing.T) {
 
 func TestSchedulerGRPCService_RefusesBadJobID(t *testing.T) {
 	fake := &fakeAppScheduler{}
-	svc := appServersWith(nil, fake, nil).scheduler
+	svc := appServersWith(nil, fake, nil, nil).scheduler
 	for _, id := range []string{"", "-1", "abc", "18446744073709551616"} {
 		_, err := svc.GetJob(context.Background(), &platformv1.GetSchedulerJobRequest{JobId: id})
 		assert.Equal(t, codes.InvalidArgument, status.Code(err), id)
@@ -562,7 +691,7 @@ func TestSchedulerGRPCService_RefusesBadJobID(t *testing.T) {
 
 func TestSchedulerGRPCService_ListJobsFilters(t *testing.T) {
 	fake := &fakeAppScheduler{}
-	svc := appServersWith(nil, fake, nil).scheduler
+	svc := appServersWith(nil, fake, nil, nil).scheduler
 	resp, err := svc.ListJobs(context.Background(), &platformv1.ListSchedulerJobsRequest{
 		Status: platformv1.SchedulerJobStatus_SCHEDULER_JOB_STATUS_FAILED,
 		Limit:  10,
@@ -578,7 +707,7 @@ func TestSchedulerGRPCService_ListJobsFilters(t *testing.T) {
 }
 
 func TestSchedulerGRPCService_ListJobsRefusesUnknownFilter(t *testing.T) {
-	svc := appServersWith(nil, &fakeAppScheduler{}, nil).scheduler
+	svc := appServersWith(nil, &fakeAppScheduler{}, nil, nil).scheduler
 	for name, req := range map[string]*platformv1.ListSchedulerJobsRequest{
 		"status":     {Status: 42},
 		"job_type":   {JobType: 42},
@@ -592,7 +721,7 @@ func TestSchedulerGRPCService_ListJobsRefusesUnknownFilter(t *testing.T) {
 
 func TestSchedulerGRPCService_JobHistory(t *testing.T) {
 	fake := &fakeAppScheduler{}
-	svc := appServersWith(nil, fake, nil).scheduler
+	svc := appServersWith(nil, fake, nil, nil).scheduler
 	resp, err := svc.GetJobHistory(context.Background(), &platformv1.GetSchedulerJobHistoryRequest{
 		JobId:           "4",
 		StartTimeUnixMs: appTestTime.UnixMilli(),
@@ -610,7 +739,7 @@ func TestSchedulerGRPCService_JobHistory(t *testing.T) {
 }
 
 func TestSchedulerGRPCService_JobHistoryRefusesBadRange(t *testing.T) {
-	svc := appServersWith(nil, &fakeAppScheduler{}, nil).scheduler
+	svc := appServersWith(nil, &fakeAppScheduler{}, nil, nil).scheduler
 	_, err := svc.GetJobHistory(context.Background(), &platformv1.GetSchedulerJobHistoryRequest{
 		JobId:           "4",
 		StartTimeUnixMs: appTestTime.UnixMilli(),
@@ -622,7 +751,7 @@ func TestSchedulerGRPCService_JobHistoryRefusesBadRange(t *testing.T) {
 }
 
 func TestSchedulerGRPCService_LifecycleResponses(t *testing.T) {
-	svc := appServersWith(nil, &fakeAppScheduler{}, nil).scheduler
+	svc := appServersWith(nil, &fakeAppScheduler{}, nil, nil).scheduler
 	ctx := context.Background()
 	trigger, err := svc.TriggerJob(ctx, &platformv1.TriggerSchedulerJobRequest{JobId: "6"})
 	require.NoError(t, err)
@@ -640,7 +769,7 @@ func TestSchedulerGRPCService_LifecycleResponses(t *testing.T) {
 
 func TestMessagingGRPCService_CreateChannelConverts(t *testing.T) {
 	fake := &fakeAppMessaging{}
-	svc := appServersWith(nil, nil, fake).messaging
+	svc := appServersWith(nil, nil, fake, nil).messaging
 	resp, err := svc.CreateChannel(context.Background(), &platformv1.CreateMessagingChannelRequest{
 		Name: "events", Codec: "json", MaxHistory: 50, MaxSubscribers: 3, TtlMs: 4000,
 	})
@@ -657,7 +786,7 @@ func TestMessagingGRPCService_CreateChannelConverts(t *testing.T) {
 
 func TestMessagingGRPCService_RefusesInvalidRequests(t *testing.T) {
 	fake := &fakeAppMessaging{}
-	svc := appServersWith(nil, nil, fake).messaging
+	svc := appServersWith(nil, nil, fake, nil).messaging
 	_, err := svc.CreateChannel(context.Background(), &platformv1.CreateMessagingChannelRequest{Name: "events", Codec: "xml"})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "an unknown codec")
 	_, err = svc.Publish(context.Background(), &platformv1.PublishMessageRequest{Payload: []byte("x")})
@@ -668,7 +797,7 @@ func TestMessagingGRPCService_RefusesInvalidRequests(t *testing.T) {
 
 func TestMessagingGRPCService_ConvertsResponses(t *testing.T) {
 	fake := &fakeAppMessaging{}
-	svc := appServersWith(nil, nil, fake).messaging
+	svc := appServersWith(nil, nil, fake, nil).messaging
 	ctx := context.Background()
 
 	list, err := svc.ListChannels(ctx, &platformv1.ListMessagingChannelsRequest{})

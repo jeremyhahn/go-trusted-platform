@@ -1,5 +1,9 @@
 # SDN MCP API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+
+> The SDN tools of the platform MCP server.
+
 Transport: MCP (stdio / HTTPS, port 9445).
 
 Tool definitions live in `pkg/api/mcp/tools.go`. Each tool's OAuth scope

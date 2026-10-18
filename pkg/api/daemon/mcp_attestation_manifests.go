@@ -32,6 +32,17 @@ var _ mcp.AttestationManifestProvider = (*MCPServiceProvider)(nil)
 
 var protoResultJSON = protojson.MarshalOptions{UseProtoNames: true}
 
+// AttestationServiceServer implements mcp.AttestationServiceProvider: the
+// attestation quote and collection tools call the gRPC AttestationService
+// servicer, so they answer and fail as gRPC does. It returns nil while no
+// attestation servicer is wired.
+func (p *MCPServiceProvider) AttestationServiceServer() platformv1.AttestationServiceServer {
+	if p.attestationServer == nil {
+		return nil
+	}
+	return p.attestationServer
+}
+
 // AttestationGetManifest serves attestation_get_manifest.
 func (p *MCPServiceProvider) AttestationGetManifest(ctx context.Context, id string) (any, error) {
 	if p.attestationServer == nil {

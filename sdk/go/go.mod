@@ -4,11 +4,11 @@ go 1.27.2
 
 require (
 	github.com/google/go-tpm v0.9.8
-	github.com/jeremyhahn/go-codec v1.4.0
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.14.0-alpha
-	github.com/quic-go/quic-go v0.63.0
+	github.com/jeremyhahn/go-codec v1.4.0 // held: v1.5.0-alpha is not in the module cache and cannot be fetched offline in #933; go-quicbaas, go-xkms and go-qrdb (every cached tag) still require v1.4.0
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.14.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
+	github.com/quic-go/quic-go v0.63.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/stretchr/testify v1.12.1
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.83.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	google.golang.org/protobuf v1.36.12
 )
 

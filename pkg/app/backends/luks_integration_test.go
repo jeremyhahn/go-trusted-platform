@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -39,10 +40,6 @@ import (
 // test-unlock cycle against a loopback LUKS2 volume. Must run as root in the
 // devcontainer.
 func TestLUKSBackend_LoopbackEnrollAndTest(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("loopback LUKS2 tests require root")
-	}
-
 	loop, cleanup := setupLoopbackLUKS(t)
 	defer cleanup()
 
@@ -87,10 +84,6 @@ func TestLUKSBackend_LoopbackEnrollAndTest(t *testing.T) {
 // The test confirms the derived key unlocks the volume and that the FIDO2
 // token (credential id + salt) is persisted.
 func TestLUKSBackend_EnrollFIDO2_WithStubHandler(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("loopback LUKS2 tests require root")
-	}
-
 	loop, cleanup := setupLoopbackLUKS(t)
 	defer cleanup()
 
@@ -161,10 +154,6 @@ func TestLUKSBackend_EnrollFIDO2_WithStubHandler(t *testing.T) {
 // an in-process stub that returns a fixed passphrase + token JSON. A real
 // TPM round-trip lives in the package-level sim tests (opt-in build tag).
 func TestLUKSBackend_EnrollTPM_StubHandler(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("loopback LUKS2 tests require root")
-	}
-
 	loop, cleanup := setupLoopbackLUKS(t)
 	defer cleanup()
 
@@ -189,8 +178,25 @@ func TestLUKSBackend_EnrollTPM_StubHandler(t *testing.T) {
 // Shared loopback helper
 // ---------------------------------------------------------------------------
 
+// luksPrerequisiteError is a typed error reported when the host cannot run
+// the loopback LUKS2 tests. Per the platform testing policy they never call
+// t.Skip: a missing prerequisite is a loud failure that names it.
+type luksPrerequisiteError struct {
+	// Missing names the prerequisite that is absent.
+	Missing string
+}
+
+func (e *luksPrerequisiteError) Error() string {
+	return fmt.Sprintf("loopback LUKS2 test prerequisite missing: %s; run it as root in the devcontainer", e.Missing)
+}
+
+// setupLoopbackLUKS formats a 64 MiB loop device as LUKS2 with the
+// passphrase "initialpass". Attaching a loop device needs root.
 func setupLoopbackLUKS(t *testing.T) (loop string, cleanup func()) {
 	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Fatalf("%v", &luksPrerequisiteError{Missing: "root, to attach and format a loop device"})
+	}
 	f, err := os.CreateTemp("", "luks2-backend-*.img")
 	if err != nil {
 		t.Fatalf("create temp: %v", err)

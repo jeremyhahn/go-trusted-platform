@@ -78,7 +78,6 @@ type fakeCredStore struct {
 	getErr   error
 	putErr   error
 	getCalls int
-	putCalls int
 }
 
 func newFakeCredStore() *fakeCredStore {
@@ -94,7 +93,6 @@ func (f *fakeCredStore) Get(ctx context.Context, name string) (*bmc.Credentials,
 }
 
 func (f *fakeCredStore) Put(ctx context.Context, name string, creds *bmc.Credentials) error {
-	f.putCalls++
 	if f.putErr != nil {
 		return f.putErr
 	}
@@ -203,14 +201,17 @@ func TestRunEnrollCore_StepFactoryCert_Success(t *testing.T) {
 	ctx := context.Background()
 	core := minimalCore(t)
 	factoryCert := testIssuedCertificate()
-	core.certFetcher = &fakeCertFetcher{cert: factoryCert}
+	fetcher := &fakeCertFetcher{cert: factoryCert}
+	core.certFetcher = fetcher
 
 	result, err := runDefault(ctx, core)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	step := findStep(t, result, "factory-cert", true, "captured")
-	_ = step
+	findStep(t, result, "factory-cert", true, "captured")
+	if !fetcher.closed {
+		t.Error("factory-cert fetcher was not closed after the capture")
+	}
 	// PinSPKISHA256 should be set from the factory cert.
 	if result.PinSPKISHA256 == "" {
 		t.Error("PinSPKISHA256 should be set after factory-cert capture")
@@ -275,6 +276,10 @@ func TestRunEnrollCore_StepCredentials_GetError(t *testing.T) {
 		t.Fatalf("expected success (Get error is not fatal), got: %v", err)
 	}
 	findStep(t, result, "credentials", true, "")
+	// The step must have reached the store, or the error path went untested.
+	if cs.getCalls != 1 {
+		t.Errorf("credStore.Get calls = %d, want 1", cs.getCalls)
+	}
 }
 
 func TestRunEnrollCore_StepReplaceCertificate_Skipped_Flag(t *testing.T) {

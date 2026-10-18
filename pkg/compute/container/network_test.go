@@ -174,12 +174,11 @@ func (m *MockOVSClient) DeleteFlowsByPort(ctx context.Context, bridgeName string
 
 // MockOpenFlowController implements OpenFlowController for testing.
 type MockOpenFlowController struct {
-	mu              sync.Mutex
-	flows           []*InternalOpenFlowRule
-	addFlowErr      error
-	deleteFlowErr   error
-	addFlowCalls    int
-	deleteFlowCalls int
+	mu            sync.Mutex
+	flows         []*InternalOpenFlowRule
+	addFlowErr    error
+	deleteFlowErr error
+	addFlowCalls  int
 }
 
 func NewMockOpenFlowController() *MockOpenFlowController {
@@ -202,7 +201,6 @@ func (m *MockOpenFlowController) AddFlow(ctx context.Context, flow *InternalOpen
 func (m *MockOpenFlowController) DeleteFlow(ctx context.Context, flow *InternalOpenFlowRule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.deleteFlowCalls++
 	if m.deleteFlowErr != nil {
 		return m.deleteFlowErr
 	}
@@ -212,7 +210,6 @@ func (m *MockOpenFlowController) DeleteFlow(ctx context.Context, flow *InternalO
 func (m *MockOpenFlowController) DeleteFlowsByPort(ctx context.Context, portName string, ofPort int32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.deleteFlowCalls++
 	if m.deleteFlowErr != nil {
 		return m.deleteFlowErr
 	}
@@ -669,6 +666,11 @@ func TestTeardownContainerNetwork(t *testing.T) {
 		if mockOVS.deletePortCalls != 1 {
 			t.Errorf("DeletePort called %d times, want 1", mockOVS.deletePortCalls)
 		}
+		// Flows keyed on the port's OpenFlow number must go with it, or a
+		// later port reusing that number inherits them.
+		if mockOVS.deleteFlowCalls != 1 {
+			t.Errorf("DeleteFlowsByPort called %d times, want 1", mockOVS.deleteFlowCalls)
+		}
 	})
 
 	t.Run("container not found", func(t *testing.T) {
@@ -741,6 +743,61 @@ func TestTeardownContainerNetwork(t *testing.T) {
 		err = nm.TeardownContainerNetwork(ctx, "container-123")
 		if !errors.Is(err, ErrOrchestratorClosed) {
 			t.Errorf("TeardownContainerNetwork() error = %v, want ErrOrchestratorClosed", err)
+		}
+	})
+}
+
+// TestTeardownContainerNetworkReportsFlowDeleteFailures pins that a failed
+// flow delete is reported, not swallowed: a flow left behind keeps matching
+// the port's OpenFlow number, which OVS hands to the next container. The
+// port itself must still be deleted so one failure does not leak it too.
+func TestTeardownContainerNetworkReportsFlowDeleteFailures(t *testing.T) {
+	ctx := context.Background()
+	cfg := &ContainerNetworkConfig{
+		Mode: NetworkModeSDN,
+		SDN:  &SDNConfig{Bridge: "br-test", VLANID: 100},
+	}
+
+	t.Run("OVS client", func(t *testing.T) {
+		mockOVS := NewMockOVSClient()
+		mockOVS.connected = true
+		nm, err := NewSDNNetworkManager(testNetworkManagerConfig(), mockOVS, nil, nil)
+		if err != nil {
+			t.Fatalf("Failed to create SDNNetworkManager: %v", err)
+		}
+		if err := nm.SetupContainerNetwork(ctx, "container-123", cfg); err != nil {
+			t.Fatalf("SetupContainerNetwork() error = %v", err)
+		}
+		mockOVS.deleteFlowErr = errors.New("ovs-ofctl del-flows failed")
+
+		err = nm.TeardownContainerNetwork(ctx, "container-123")
+		if !errors.Is(err, ErrNetworkTeardownFailed) {
+			t.Errorf("TeardownContainerNetwork() error = %v, want ErrNetworkTeardownFailed", err)
+		}
+		if mockOVS.deletePortCalls != 1 {
+			t.Errorf("DeletePort called %d times, want 1 despite the flow failure", mockOVS.deletePortCalls)
+		}
+	})
+
+	t.Run("OpenFlow controller", func(t *testing.T) {
+		mockOVS := NewMockOVSClient()
+		mockOVS.connected = true
+		mockOF := NewMockOpenFlowController()
+		nm, err := NewSDNNetworkManager(testNetworkManagerConfig(), mockOVS, mockOF, nil)
+		if err != nil {
+			t.Fatalf("Failed to create SDNNetworkManager: %v", err)
+		}
+		if err := nm.SetupContainerNetwork(ctx, "container-123", cfg); err != nil {
+			t.Fatalf("SetupContainerNetwork() error = %v", err)
+		}
+		mockOF.deleteFlowErr = errors.New("controller unreachable")
+
+		err = nm.TeardownContainerNetwork(ctx, "container-123")
+		if !errors.Is(err, ErrNetworkTeardownFailed) {
+			t.Errorf("TeardownContainerNetwork() error = %v, want ErrNetworkTeardownFailed", err)
+		}
+		if mockOVS.deletePortCalls != 1 {
+			t.Errorf("DeletePort called %d times, want 1 despite the flow failure", mockOVS.deletePortCalls)
 		}
 	})
 }
@@ -942,6 +999,48 @@ func TestRemoveSecurityGroup(t *testing.T) {
 			t.Errorf("RemoveSecurityGroup() for non-applied should not error: %v", err)
 		}
 	})
+}
+
+// TestRemoveSecurityGroupReportsFlowDeleteFailure pins that a rule whose flow
+// could not be deleted fails the removal and leaves the group applied, so
+// the caller can retry instead of believing the traffic is no longer allowed.
+func TestRemoveSecurityGroupReportsFlowDeleteFailure(t *testing.T) {
+	ctx := context.Background()
+	mockOVS := NewMockOVSClient()
+	mockOVS.connected = true
+	sgMgr := NewDefaultSecurityGroupManager()
+	sgMgr.RegisterSecurityGroup(&SecurityGroup{
+		Name:  "web-frontend",
+		Rules: []SecurityGroupRule{{Direction: DirectionIngress, Protocol: "tcp", Port: 443, Action: "allow"}},
+	})
+
+	nm, err := NewSDNNetworkManager(testNetworkManagerConfig(), mockOVS, nil, sgMgr)
+	if err != nil {
+		t.Fatalf("Failed to create SDNNetworkManager: %v", err)
+	}
+	cfg := &ContainerNetworkConfig{
+		Mode: NetworkModeSDN,
+		SDN:  &SDNConfig{Bridge: "br-test", VLANID: 100},
+	}
+	if err := nm.SetupContainerNetwork(ctx, "container-123", cfg); err != nil {
+		t.Fatalf("SetupContainerNetwork() error = %v", err)
+	}
+	if err := nm.ApplySecurityGroup(ctx, "container-123", "web-frontend"); err != nil {
+		t.Fatalf("ApplySecurityGroup() error = %v", err)
+	}
+	mockOVS.deleteFlowErr = errors.New("ovs-ofctl del-flows failed")
+
+	err = nm.RemoveSecurityGroup(ctx, "container-123", "web-frontend")
+	if !errors.Is(err, ErrNetworkTeardownFailed) {
+		t.Fatalf("RemoveSecurityGroup() error = %v, want ErrNetworkTeardownFailed", err)
+	}
+	info, err := nm.GetContainerNetworkInfo(ctx, "container-123")
+	if err != nil {
+		t.Fatalf("GetContainerNetworkInfo() error = %v", err)
+	}
+	if len(info.SecurityGroups) != 1 || info.SecurityGroups[0] != "web-frontend" {
+		t.Errorf("SecurityGroups = %v, want the group still applied", info.SecurityGroups)
+	}
 }
 
 // TestGetContainerNetworkInfo tests retrieving container network info.

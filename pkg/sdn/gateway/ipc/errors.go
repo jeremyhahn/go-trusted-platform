@@ -23,19 +23,19 @@ import (
 var ErrEmptySocketPath = errors.New("socket path is empty")
 
 // ErrPeerDenied reports a Unix socket caller whose kernel-verified uid is
-// not admitted to the service it called.
+// not admitted to the method it called.
 type ErrPeerDenied struct {
-	Service string
-	UID     uint32
-	PID     int32
+	Method string
+	UID    uint32
+	PID    int32
 }
 
 func (e *ErrPeerDenied) Error() string {
-	return fmt.Sprintf("gatewayd ipc: uid %d (pid %d) is not admitted to %s", e.UID, e.PID, e.Service)
+	return fmt.Sprintf("gatewayd ipc: uid %d (pid %d) is not admitted to %s", e.UID, e.PID, e.Method)
 }
 
-// ErrUnknownService reports an RPC whose service is not part of the
-// contract; the policy fails closed on it.
+// ErrUnknownService reports an RPC whose method has no entry in the
+// policy's authorization table; the policy fails closed on it.
 type ErrUnknownService struct {
 	Method string
 }

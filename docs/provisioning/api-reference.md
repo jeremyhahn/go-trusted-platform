@@ -1,5 +1,9 @@
 # Config Delivery Provisioning API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The config-delivery service across transports: operations, authentication
+> and error mapping. Each transport's page carries its wire detail.
+
 ## Overview
 
 The config delivery provisioning API (`platform.v1.ConfigDeliveryService`,
@@ -21,10 +25,10 @@ parity:
 
 | Transport | Documentation | Endpoint |
 |-----------|---------------|----------|
-| **REST** | [api-reference-rest.md](api-reference-rest.md) | `https://host:8443/api/v1/provisioning` |
+| **REST** | [api-reference-rest.md](api-reference-rest.md) | `/api/v1/provisioning` on the webservice router and on the daemon REST API (`host:8443`) |
 | **gRPC** | [api-reference-grpc.md](api-reference-grpc.md) | `host:10443` (TLS) |
 | **QUIC** | [api-reference-quic.md](api-reference-quic.md) | `host:9444` (UDP), opcode `0xCF` |
-| **MCP** | [api-reference-mcp.md](api-reference-mcp.md) | `https://host:9445`, `provision_*` tools |
+| **MCP** | [api-reference-mcp.md](api-reference-mcp.md) | `https://host:9445/mcp`, `provision_*` tools |
 | **Unix** | [api-reference-unix.md](api-reference-unix.md) | `/run/platformd.sock` (gRPC over UDS) |
 | **CLI** | [config-delivery.md](config-delivery.md#session-management-cli) | `platformctl provision ...` |
 | **SDK** | `sdk/go/services/provision` | Works over every SDK transport |
@@ -48,9 +52,14 @@ Authentication is enforced **inside the service**, not by the transport:
 Because the auth model is in-service, semantics are identical on every
 transport. The transports differ only in *who can reach them*:
 
-- **REST is the pre-identity, install-time path.** A booting device has no
-  client certificate yet, so the `/api/v1/provisioning` routes are excluded
-  from the mTLS middleware and are reachable with EAB + nonce alone.
+- **The webservice router is the pre-identity, install-time path.** A
+  booting device has no client certificate yet, so the router serves
+  `config/nonce`, `config`, `sign` and `sessions/{sessionID}/poll` without
+  transport authentication; EAB and the nonce authenticate the device. Its
+  session routes need the `provisioning:read` or `provisioning:write` scope.
+- **The daemon REST API (port 8443) registers the same seven routes behind
+  its listener's mTLS**, so a device without a client certificate cannot
+  reach them there ([api-reference-rest.md](api-reference-rest.md)).
 - **gRPC, QUIC, MCP, and Unix sit behind the daemon transport auth**
   (mTLS / IAM / socket permissions). They exist for operators, services, and
   the SDK — e.g. fulfilling sessions from `platformctl` — with the same
@@ -81,12 +90,15 @@ Typed service errors map consistently across transports:
 | `ErrEABValidationFailed` (FetchConfig) | 401 | `Unauthenticated` | `StatusUnauthorized` |
 | `ErrEABValidationFailed` (SignDigest), `ErrEABProfileMismatch`, `ErrEKCertRequired`, `ErrEKCertMismatch` | 403 | `PermissionDenied` | `StatusPermissionDenied` |
 | `ErrSessionNotFound`, `ErrProfileNotFound` | 404 | `NotFound` | `StatusNotFound` |
-| `ErrSessionExpired`, `ErrSessionAlreadyFulfilled` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
+| `ErrSessionExpired`, `ErrSessionAlreadyFulfilled`, `ErrProfileIDRequired` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | `ErrRemoteSignNotConfigured` | 409 | `FailedPrecondition` | `StatusInvalidRequest` |
-| `ErrSignerUnavailable`, `ErrMissingProfileService` | 503 | `Unavailable` | `StatusUnavailable` |
+| `ErrSignerUnavailable` | 503 | `Unavailable` | `StatusUnavailable` |
+| `ErrMissingProfileService` (SignDigest) | 500 | `Unavailable` | `StatusUnavailable` |
 | Anything else | 500 | `Internal` | `StatusInternalError` |
 
-MCP surfaces the typed error text verbatim in the JSON-RPC tool error.
+QUIC carries the gRPC servicer's status, mapped to a status byte.
+`ErrMissingProfileService` is the one error REST and gRPC classify
+differently. MCP surfaces the typed error text verbatim in the JSON-RPC tool error.
 
 ## Related Documentation
 

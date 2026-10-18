@@ -239,6 +239,7 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 		"idevid": true, "invitation": true, "luks": true, "pxe": true,
 		"registry": true, "switch": true, "tpm": true, "tenant": true,
 		"vpn": true, "cache": true, "scheduler": true, "messaging": true,
+		"objectstorage": true,
 	}
 	platformActions := map[string]bool{"read": true, "write": true, "delete": true}
 	// BMC, the daemon and the VPN posture policies carry the extra verbs; no

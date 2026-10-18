@@ -83,9 +83,16 @@ go.work.sum
 /cat
 /sudo
 
-# Coverage profile output.
+# Coverage profile output (`go test -coverprofile=<name>.out`; the Makefile's
+# coverage targets write to build/coverage/).
 *.out
-coverage.out
+
+# Playwright run state, written to test-results/ beside the config it ran
+# from (the configs under web/ and test/integration/web/ name their own dirs).
+/test-results/
+
+# Ad-hoc screen captures left in the repo root.
+/capture.jpg
 
 # Build/test log files left in the repo root.
 /test.log
@@ -136,3 +143,6 @@ __pycache__/
 /pkg/cli/commands/db/trusted-data/
 /pkg/webservice/v1/test/trusted-data/log/
 /pkg/webservice/v1/test/trusted-data/quicbaas/
+
+# Forge credentials for the devcontainer module download (MODULE_ENV_FILE)
+/.devcontainer/.env

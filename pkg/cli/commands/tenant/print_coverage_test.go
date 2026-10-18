@@ -191,57 +191,27 @@ func TestFormatQuotaLimit(t *testing.T) {
 }
 
 // =============================================================================
-// printComputeQuotaTable Tests
+// printUsageTable Tests
 // =============================================================================
 
-func TestPrintComputeQuotaTable(t *testing.T) {
+// TestPrintUsageTable: every resource gets a row with what is used and its
+// limit, and a 0 limit reads as unlimited.
+func TestPrintUsageTable(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	quota := &sdktenant.ComputeQuota{
-		MaxVMs:        50,
-		MaxContainers: 100,
-		MaxVCPUs:      200,
-		MaxMemoryMB:   4096,
+	summary := &UsageSummary{
+		Compute: ComputeUsageSummary{VMs: UsageItem{Used: 3, Max: 50}},
+		Storage: StorageUsageSummary{VolumesGB: UsageItem{Used: 80, Max: 0}},
 	}
 
-	printComputeQuotaTable(printer, quota)
-	// No error expected, just verify it doesn't panic
-	assert.NotEmpty(t, output.String())
-}
-
-// =============================================================================
-// printNetworkQuotaTable Tests
-// =============================================================================
-
-func TestPrintNetworkQuotaTable(t *testing.T) {
-	output := &bytes.Buffer{}
-	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-
-	quota := &sdktenant.NetworkQuota{
-		MaxBridges: 5,
-		MaxPorts:   50,
+	require.NoError(t, printUsageTable(printer, summary))
+	text := output.String()
+	for _, label := range []string{"VMs", "Containers", "vCPUs", "Memory (MB)", "Bridges", "Ports", "Bandwidth (Mbps)", "Volumes (GB)", "Snapshots"} {
+		assert.Contains(t, text, label)
 	}
-
-	printNetworkQuotaTable(printer, quota)
-	assert.NotEmpty(t, output.String())
-}
-
-// =============================================================================
-// printStorageQuotaTable Tests
-// =============================================================================
-
-func TestPrintStorageQuotaTable(t *testing.T) {
-	output := &bytes.Buffer{}
-	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
-
-	quota := &sdktenant.StorageQuota{
-		MaxVolumesGB: 500,
-		MaxSnapshots: 25,
-	}
-
-	printStorageQuotaTable(printer, quota)
-	assert.NotEmpty(t, output.String())
+	assert.Regexp(t, `VMs\s+3\s+50`, text)
+	assert.Regexp(t, `Volumes \(GB\)\s+80\s+unlimited`, text)
 }
 
 // =============================================================================

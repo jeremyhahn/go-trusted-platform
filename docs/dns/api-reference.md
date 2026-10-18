@@ -1,104 +1,52 @@
 # DNS API Reference
 
-Multi-protocol API documentation for the Trusted Platform DNS service.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Index of the DNS service's per-protocol references. The capability matrix,
+> authorization and error mapping are normative in [api.md](api.md).
 
 ## Supported Protocols
 
 | Protocol | Transport | Port | Documentation |
 |----------|-----------|------|---------------|
 | REST | HTTPS | 8443 | [api-reference-rest.md](api-reference-rest.md) |
-| gRPC | TCP | 9443 | [api-reference-grpc.md](api-reference-grpc.md) |
+| gRPC | TCP | 10443 | [api-reference-grpc.md](api-reference-grpc.md) |
 | QUIC | UDP | 9444 | [api-reference-quic.md](api-reference-quic.md) |
 | MCP | stdio/HTTPS | 9445 | [api-reference-mcp.md](api-reference-mcp.md) |
 | Unix Socket | Unix | /run/platformd.sock | [api-reference-unix.md](api-reference-unix.md) |
 
 ## Authentication
 
-All protocols require authentication via one of:
-
-**Bearer Token:**
-```
-Authorization: Bearer <access_token>
-```
-
-**mTLS Client Certificate:**
-```
-TLS client certificate issued by the platform CA
-```
+Callers authenticate with a bearer token (`Authorization: Bearer <access_token>`)
+or a TLS client certificate issued by the platform CA. REST additionally
+requires the `admin` role on every `/api/v1/dns/**` route; gRPC and MCP check
+`dns:read`, `dns:write` and `dns:delete` scopes ([api.md](api.md) §4).
 
 ## Operations
 
-### Zone Management
+The gRPC `DNSService` declares 13 RPCs: `CreateZone`, `GetZone`, `UpdateZone`,
+`DeleteZone`, `ListZones`, `AddRecord`, `DeleteRecord`, `UpdateRecord`,
+`ListRecords`, `SignZone`, `GetDNSSECStatus`, `Resolve` and `Register`.
 
-| Operation | Description |
-|-----------|-------------|
-| CreateZone | Create a new DNS zone |
-| GetZone | Retrieve zone by name |
-| UpdateZone | Update zone configuration |
-| DeleteZone | Delete zone and records |
-| ListZones | List all zones |
+The transports do not carry the same set. Get record exists on REST, QUIC and
+MCP but not gRPC; update record exists on gRPC, QUIC and MCP but not REST;
+signing and DNSSEC status exist only on REST, gRPC and embedded. The full
+per-transport matrix is [api.md](api.md) §2.
 
-### Record Management
+TLSA records are added through add record with type `TLSA`. The platform's
+own DANE publishing calls `dns.Service.AddTLSARecord` in-process
+([dane.md](dane.md)); no transport has a separate TLSA operation.
 
-| Operation | Description |
-|-----------|-------------|
-| AddRecord | Add record to zone |
-| GetRecord | Get specific record |
-| UpdateRecord | Update existing record |
-| DeleteRecord | Delete record |
-| ListRecords | List zone records |
+## Tenancy
 
-### TLSA/DANE
-
-| Operation | Description |
-|-----------|-------------|
-| AddTLSARecord | Add TLSA record for DANE |
-
-### Resolution
-
-| Operation | Description |
-|-----------|-------------|
-| Resolve | Resolve DNS query |
-
-## Authorization
-
-All zone operations require tenant authorization. The caller must own the zone (matching TenantID) to perform modifications.
-
-| Requirement | Description |
-|-------------|-------------|
-| Tenant Context | Service must have TenantID configured |
-| Zone Ownership | Zone TenantID must match caller's TenantID |
-| Auto-Assignment | New zones inherit TenantID from the service |
-
-**Protected Operations:**
-
-| Operation | Authorization |
-|-----------|---------------|
-| CreateZone | TenantID auto-assigned from caller |
-| UpdateZone | Must own zone |
-| DeleteZone | Must own zone |
-| AddRecord | Must own zone |
-| UpdateRecord | Must own zone |
-| DeleteRecord | Must own zone |
-| SignZone | Must own zone |
+The DNS service acts in the tenant the daemon configured it with. A zone of
+another tenant answers not found ([api.md](api.md) §4).
 
 ## Error Handling
 
-All protocols return consistent error codes:
-
-| Code | Description |
-|------|-------------|
-| `zone_not_found` | Zone does not exist |
-| `zone_already_exists` | Zone with name exists |
-| `record_not_found` | Record does not exist |
-| `record_already_exists` | Record exists |
-| `invalid_zone_name` | Invalid zone format |
-| `invalid_ip_address` | Invalid IP format |
-| `validation_error` | Request validation failed |
-| `unauthorized` | Authentication required |
-| `forbidden` | Permission denied |
-| `unauthorized_zone_access` | Caller tenant does not own the zone |
-| `missing_tenant_context` | Service TenantID not configured |
+There are no DNS-specific error strings. REST answers the platform response
+envelope (`code` is the HTTP status, `error` the message, `success: false`);
+gRPC, QUIC and MCP answer their native status codes. The mapping between them
+is [api.md](api.md) §5.
 
 ### One backend, and the answer without one
 

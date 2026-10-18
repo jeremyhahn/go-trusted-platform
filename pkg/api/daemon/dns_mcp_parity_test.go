@@ -126,6 +126,15 @@ func TestDNSMCPTools_MatchGRPC(t *testing.T) {
 		{"lookups", "resolve", "dns_lookup", dnsRPCOf((*DNSServiceServer).Resolve), map[string]interface{}{"fqdn": "www." + parityZone, "type": "RECORD_TYPE_A"}, codes.OK},
 		{"lookups", "resolve outside the managed zones", "dns_lookup", dnsRPCOf((*DNSServiceServer).Resolve), map[string]interface{}{"fqdn": "www.nowhere.example.", "type": "RECORD_TYPE_A"}, codes.OK},
 		{"lookups", "resolve without a name", "dns_lookup", dnsRPCOf((*DNSServiceServer).Resolve), map[string]interface{}{"type": "RECORD_TYPE_A"}, codes.InvalidArgument},
+
+		{"dnssec", "sign", "dns_zone_sign", dnsRPCOf((*DNSServiceServer).SignZone), map[string]interface{}{"zone_name": parityZone}, codes.OK},
+		{"dnssec", "sign unknown", "dns_zone_sign", dnsRPCOf((*DNSServiceServer).SignZone), map[string]interface{}{"zone_name": "missing.internal."}, codes.NotFound},
+		{"dnssec", "sign without a zone", "dns_zone_sign", dnsRPCOf((*DNSServiceServer).SignZone), map[string]interface{}{}, codes.InvalidArgument},
+		{"dnssec", "status", "dns_zone_dnssec_status", dnsRPCOf((*DNSServiceServer).GetDNSSECStatus), map[string]interface{}{"zone_name": parityZone}, codes.OK},
+		{"dnssec", "status unknown", "dns_zone_dnssec_status", dnsRPCOf((*DNSServiceServer).GetDNSSECStatus), map[string]interface{}{"zone_name": "missing.internal."}, codes.NotFound},
+
+		{"register", "register", "dns_register", dnsRPCOf((*DNSServiceServer).Register), map[string]interface{}{"fqdn": "host1." + parityZone, "ip": "10.0.0.7"}, codes.OK},
+		{"register", "register without an address", "dns_register", dnsRPCOf((*DNSServiceServer).Register), map[string]interface{}{"fqdn": "host1." + parityZone}, codes.InvalidArgument},
 	}
 	for _, tt := range tests {
 		t.Run(tt.group+"/"+tt.name, func(t *testing.T) {

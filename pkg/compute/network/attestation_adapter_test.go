@@ -27,17 +27,13 @@ import (
 
 // mockVMVerifier implements vm.VMVerifier for testing.
 type mockVMVerifier struct {
-	initializeError    error
-	initializeCalled   bool
-	verifyQuoteResult  *vm.VerificationResult
-	verifyQuoteError   error
-	verifyQuoteCalled  bool
-	verifyAttestError  error
-	verifyAttestCalled bool
-	verifyEKError      error
-	verifyEKCalled     bool
-	closeError         error
-	closeCalled        bool
+	initializeError   error
+	verifyQuoteResult *vm.VerificationResult
+	verifyQuoteError  error
+	verifyQuoteCalled bool
+	verifyAttestError error
+	verifyEKError     error
+	closeError        error
 }
 
 func newMockVMVerifier() *mockVMVerifier {
@@ -52,7 +48,6 @@ func newMockVMVerifier() *mockVMVerifier {
 }
 
 func (m *mockVMVerifier) Initialize(ctx context.Context, config *vm.VerifierConfig) error {
-	m.initializeCalled = true
 	return m.initializeError
 }
 
@@ -65,17 +60,14 @@ func (m *mockVMVerifier) VerifyQuote(ctx context.Context, request *vm.VerifyRequ
 }
 
 func (m *mockVMVerifier) VerifyAttestation(ctx context.Context, attestation *vm.VMAttestation, expectedPCRs map[int][]byte, expectedNonce []byte) (*vm.VerificationResult, error) {
-	m.verifyAttestCalled = true
 	return m.verifyQuoteResult, m.verifyAttestError
 }
 
 func (m *mockVMVerifier) VerifyEKCertificate(ctx context.Context, identity *vm.VMIdentity) error {
-	m.verifyEKCalled = true
 	return m.verifyEKError
 }
 
 func (m *mockVMVerifier) Close() error {
-	m.closeCalled = true
 	return m.closeError
 }
 

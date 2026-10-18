@@ -70,23 +70,29 @@ type harness struct {
 	openErr  error
 }
 
-// privateTempDir returns a temp directory whose whole chain below the system
-// temp root is 0700.
+// privateTempDir returns a fresh 0700 directory directly under the system temp
+// root (os.TempDir, sticky on any sane host), removed when the test ends.
 //
-// t.TempDir() honours the umask, so it typically yields group-writable (0775)
-// directories. A real pin store lives on a path no other principal can write —
-// that is precisely what checkStoreDir enforces — so a test that used the
-// default would be exercising a path the command is right to refuse, and every
-// rejection test would risk passing for the wrong reason.
+// A real pin store lives on a path no other principal can write — that is
+// precisely what checkStoreDir enforces, walking every ancestor up to / — so a
+// test directory on a path others can write would exercise a path the command
+// is right to refuse, and every rejection test would risk passing for the
+// wrong reason. t.TempDir() is not used: it honours the umask (0775 chains),
+// and it is created beneath GOTMPDIR when that is set — in the
+// toolchain container the build-cache volume /gocache, which is writable by
+// every uid and not sticky (#933). os.MkdirTemp creates the directory 0700
+// whatever the umask, and the temp root above it is the only other link.
 func privateTempDir(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
-	root := os.TempDir()
-	for p := base; p != root && p != "/" && p != filepath.Dir(p); p = filepath.Dir(p) {
-		if err := os.Chmod(p, 0o700); err != nil {
-			t.Fatalf("chmod %s: %v", p, err)
-		}
+	base, err := os.MkdirTemp("", "deployer-pin-test-")
+	if err != nil {
+		t.Fatalf("create private temp dir: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(base); err != nil {
+			t.Errorf("remove private temp dir %s: %v", base, err)
+		}
+	})
 	return base
 }
 
@@ -1282,7 +1288,7 @@ func TestOpenFileStoreRejectsSymlinkedRoot(t *testing.T) {
 	}
 	link := filepath.Join(base, "known_hosts.d")
 	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("symlink %s: %v", link, err)
 	}
 
 	_, err := openFileStore(link)
@@ -1630,7 +1636,7 @@ func TestCheckStoreDirAllowsSymlinkedAncestor(t *testing.T) {
 	}
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("symlink %s: %v", link, err)
 	}
 
 	// The store reached THROUGH the symlinked ancestor. The leaf itself is a
@@ -1672,7 +1678,7 @@ func TestCheckStoreDirRejectsWritableAncestorBehindSymlink(t *testing.T) {
 	}
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(shared, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("symlink %s: %v", link, err)
 	}
 
 	err := checkStoreDir(filepath.Join(link, "known_hosts.d"))

@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
-	"io"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -92,12 +91,19 @@ type fakeVerifier struct {
 	err     error
 	calls   int
 	pause   *pause
+	// clock, when set, is advanced by takes on every call: the
+	// verification's duration as the service's clock sees it.
+	clock *fakeClock
+	takes time.Duration
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, deviceID string, _ []byte, _ *manifest.HostAttestation) (*verdict.DeviceVerdict, error) {
 	f.pause.wait()
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.clock != nil {
+		f.clock.Advance(f.takes)
+	}
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
@@ -303,6 +309,46 @@ type harness struct {
 	plane    *fakePlane
 	store    *MemoryLeaseStore
 	audit    *fakeAudit
+	logs     *logRecorder
+}
+
+// logRecorder keeps every record the service logs. Attributes bound with
+// With are not kept: the tests read only a record's own attributes.
+type logRecorder struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (r *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
+
+func (r *logRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, rec.Clone())
+	return nil
+}
+
+func (r *logRecorder) WithAttrs([]slog.Attr) slog.Handler { return r }
+
+func (r *logRecorder) WithGroup(string) slog.Handler { return r }
+
+// events returns the attributes of every record logged with msg, in order.
+func (r *logRecorder) events(msg string) []map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []map[string]string
+	for _, rec := range r.records {
+		if rec.Message != msg {
+			continue
+		}
+		attrs := make(map[string]string)
+		rec.Attrs(func(a slog.Attr) bool {
+			attrs[a.Key] = a.Value.String()
+			return true
+		})
+		out = append(out, attrs)
+	}
+	return out
 }
 
 func testConfig() Config {
@@ -325,6 +371,7 @@ func newHarness(t testing.TB, cfg Config) *harness {
 		plane:    newFakePlane(DataPlaneMASQUE),
 		store:    NewMemoryLeaseStore(),
 		audit:    &fakeAudit{},
+		logs:     &logRecorder{},
 	}
 	deps := Deps{
 		Identity:   h.identity,
@@ -336,7 +383,7 @@ func newHarness(t testing.TB, cfg Config) *harness {
 		Leases:     h.store,
 		Audit:      h.audit,
 		Clock:      h.clock,
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:     slog.New(h.logs),
 	}
 	svc, err := New(deps, cfg)
 	require.NoError(t, err)

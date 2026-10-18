@@ -75,6 +75,8 @@ func (r *TPMRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/info", r.handlers.Info).Methods("GET")
 	sr.HandleFunc("/provision", r.handlers.Provision).Methods("POST")
 	sr.HandleFunc("/clear", r.handlers.Clear).Methods("POST")
+	sr.HandleFunc("/capabilities", r.handlers.Capabilities).Methods("GET")
+	sr.HandleFunc("/platform", r.handlers.PlatformAttributes).Methods("GET")
 	sr.HandleFunc("/ek", r.handlers.GetEK).Methods("GET")
 	sr.HandleFunc("/ek", r.handlers.CreateEK).Methods("POST")
 	sr.HandleFunc("/ek", r.handlers.DeleteEK).Methods("DELETE")
@@ -91,12 +93,15 @@ func (r *TPMRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/quote", r.handlers.Quote).Methods("POST")
 	sr.HandleFunc("/quote/verify", r.handlers.VerifyQuote).Methods("POST")
 	sr.HandleFunc("/certify", r.handlers.Certify).Methods("POST")
+	sr.HandleFunc("/make-credential", r.handlers.MakeCredential).Methods("POST")
+	sr.HandleFunc("/activate-credential", r.handlers.ActivateCredential).Methods("POST")
 	sr.HandleFunc("/eventlog", r.handlers.GetEventLog).Methods("GET")
 	sr.HandleFunc("/pcrs", r.handlers.GetPCRs).Methods("GET")
 	// SDK alias: the JS SDK posts to /pcrs with a request body
 	// containing PCR indices + bank selection. Both forms dispatch to
 	// the same handler so REST and SDK callers agree.
 	sr.HandleFunc("/pcrs", r.handlers.GetPCRs).Methods("POST")
+	sr.HandleFunc("/pcrs/extend", r.handlers.ExtendPCR).Methods("POST")
 	sr.HandleFunc("/nvram", r.handlers.DefineNVRAM).Methods("POST")
 	sr.HandleFunc("/nvram/{index}", r.handlers.ReadNVRAM).Methods("GET")
 	sr.HandleFunc("/nvram/{index}", r.handlers.WriteNVRAM).Methods("PUT")

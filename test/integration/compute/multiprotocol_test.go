@@ -316,7 +316,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		Firmware:   "uefi",
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM failed: %v", err)
 	}
 
@@ -340,7 +340,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 	// Get VM - verify stopped
 	getResult, err := adapter.GetVM(ctx, GetVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetVM after create failed: %v", err)
 	}
 
@@ -355,7 +355,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 	// Start VM
 	startResult, err := adapter.StartVM(ctx, StartVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("StartVM failed: %v", err)
 	}
 
@@ -379,7 +379,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		TimeoutSeconds: 30,
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("StopVM failed: %v", err)
 	}
 
@@ -403,7 +403,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		DeleteDisks: true,
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("DeleteVM failed: %v", err)
 	}
 
@@ -431,7 +431,7 @@ func testVMGet(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 		Firmware:   "uefi",
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM failed: %v", err)
 	}
 
@@ -448,7 +448,7 @@ func testVMGet(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 
 	getResult, err := adapter.GetVM(ctx, GetVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetVM failed: %v", err)
 	}
 
@@ -489,7 +489,7 @@ func testVMList(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 			DiskSizeGB: 1,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateVM[%d] failed: %v", i, err)
 		}
 		vmIDs = append(vmIDs, result.VMID)
@@ -511,7 +511,7 @@ func testVMList(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 	// List all VMs
 	listResult, err := adapter.ListVMs(ctx, ListVMsOptions{})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("ListVMs failed: %v", err)
 	}
 
@@ -552,7 +552,7 @@ func testVMListFiltered(t *testing.T, ctx context.Context, adapter ComputeComman
 		},
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM failed: %v", err)
 	}
 
@@ -574,7 +574,7 @@ func testVMListFiltered(t *testing.T, ctx context.Context, adapter ComputeComman
 		},
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("ListVMs with filter failed: %v", err)
 	}
 
@@ -615,7 +615,7 @@ func testVMCreateWithLabels(t *testing.T, ctx context.Context, adapter ComputeCo
 		Labels:     labels,
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM with labels failed: %v", err)
 	}
 
@@ -633,7 +633,7 @@ func testVMCreateWithLabels(t *testing.T, ctx context.Context, adapter ComputeCo
 	// Retrieve VM and verify labels
 	getResult, err := adapter.GetVM(ctx, GetVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetVM failed: %v", err)
 	}
 
@@ -662,7 +662,7 @@ func testVMDeleteNotFound(t *testing.T, ctx context.Context, adapter ComputeComm
 		return
 	}
 
-	surface.SkipIfNotImplemented(t, err)
+	surface.RequireImplemented(t, err)
 
 	// The operation should have returned an error; we just verify it did
 	t.Logf("Delete non-existent VM returned expected error: %v", err)

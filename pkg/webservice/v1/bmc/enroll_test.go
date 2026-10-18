@@ -205,10 +205,9 @@ func TestEnrollBMC_EnrollerErrorReturns(t *testing.T) {
 
 func TestEnrollBMC_HappyPathReturns200(t *testing.T) {
 	want := goodRESTEnrollResult()
-	h, rw, err := newEnrollTestHandler(
-		&fakeRESTEnroller{result: want},
-		&fakeProfileLookup{cfg: &bmcpkg.Config{Address: "10.0.0.1"}},
-	)
+	cfg := &bmcpkg.Config{Address: "10.0.0.1"}
+	enroller := &fakeRESTEnroller{result: want}
+	h, rw, err := newEnrollTestHandler(enroller, &fakeProfileLookup{cfg: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +229,9 @@ func TestEnrollBMC_HappyPathReturns200(t *testing.T) {
 	}
 	if resp.Endpoint != want.Endpoint {
 		t.Errorf("Endpoint: got %q, want %q", resp.Endpoint, want.Endpoint)
+	}
+	if enroller.lastCfg != cfg {
+		t.Errorf("enroller got BMC config %+v, want the profile's %+v", enroller.lastCfg, cfg)
 	}
 }
 

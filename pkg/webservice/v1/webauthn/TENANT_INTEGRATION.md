@@ -132,13 +132,12 @@ Add TenantUserService to the handler's dependencies:
 type ServiceParams struct {
     Config              *Config
     Debug               bool
-    JWTService          *jwt.Service
     Logger              *logging.Logger
     RegistrationService service.RegistrationServicer
     ResponseWriter      response.HttpWriter
     SessionService      service.WebAuthnSessionServicer
     UserService         service.UserServicer
-    TenantUserService   service.TenantUserServicer  // NEW
+    TenantUserService   service.TenantUserServicer  // required: sessions land in the user's workspace (#662)
 }
 ```
 

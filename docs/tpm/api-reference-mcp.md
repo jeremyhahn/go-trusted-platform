@@ -1,6 +1,10 @@
 # TPM MCP API Reference
 
-Port: `9445` (HTTPS) or stdio
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The TPM tools of the platform MCP server. The cross-transport contract is
+> [api.md](api.md).
+
+Port: `9445` (HTTPS, path `/mcp`)
 Protocol: Model Context Protocol (MCP) via JSON-RPC 2.0
 
 ## Overview
@@ -21,10 +25,10 @@ caller.
 
 Names are `platform_tpm_<tool>`. `unseal` is the one tool stricter than its
 gRPC twin: an unseal tool never takes a read scope on MCP. `nv_list` takes the
-scope of gRPC `Info`, and `pcr_extend`, which has no gRPC twin, takes the scope
-of QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` have no gRPC
-method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
-(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`. `ek_delete` and
+scope of gRPC `Info`, and `pcr_extend` the scope of gRPC `ExtendPCR` and
+QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` take the scope of
+gRPC `GetCapabilities` and `GetPlatformAttributes` and of their QUIC twins
+(`0x99` · `0x17`, `0x99` · `0x1E`). `ek_delete` and
 `srk_delete` flush a persistent handle, which deletes nothing, exactly as gRPC
 `DeleteEK` and `DeleteSRK` do. `iak_delete` takes the scope of its twins, gRPC
 `TPMService/DeleteAK` and QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`), and
@@ -40,7 +44,8 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 | `platform_tpm_info` | Get TPM device information |
 | `platform_tpm_provision` | Provision TPM with owner authorization |
 | `platform_tpm_clear` | Clear TPM and reset owner authorization |
-| `platform_tpm_capabilities` | Get TPM fixed properties |
+| `platform_tpm_capabilities` | List the algorithms, commands and ECC curves the TPM implements |
+| `platform_tpm_platform` | Describe the TPM device and its provisioned EK, SRK and IAK |
 
 ### Endorsement Key Tools
 
@@ -67,7 +72,6 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 | `platform_tpm_iak` | Get Initial Attestation Key |
 | `platform_tpm_iak_create` | Create Initial Attestation Key |
 | `platform_tpm_iak_delete` | Refused: the IAK is not deleted (`FailedPrecondition`) |
-| `platform_tpm_idevid` | Get Initial Device ID |
 
 ### Attestation Tools
 
@@ -78,6 +82,8 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 | `platform_tpm_certify` | IAK certifies a persistent key is resident in this TPM |
 | `platform_tpm_pcrs` | Read Platform Configuration Registers |
 | `platform_tpm_eventlog` | Retrieve TPM event log |
+| `platform_tpm_make_credential` | Create a TPM2_MakeCredential challenge |
+| `platform_tpm_activate_credential` | Activate a challenge and recover the wrapped secret |
 
 ### Cryptographic Tools
 
@@ -86,13 +92,6 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 | `platform_tpm_seal` | Seal data to TPM (PCR binding refused until go-quicbaas #1171) |
 | `platform_tpm_unseal` | Unseal TPM-sealed data |
 | `platform_tpm_random` | Generate random bytes from TPM RNG |
-
-### Device Identifier Tools
-
-| Tool | Description |
-|------|-------------|
-| `platform_tpm_idevid_csr` | Create Initial DevID Certificate Signing Request |
-| `platform_tpm_ldevid_csr` | Create Local DevID Certificate Signing Request |
 
 ### IDevID and IAK Tools
 
@@ -158,14 +157,22 @@ Get TPM device information and capabilities.
 **Example Response:**
 ```json
 {
-  "manufacturer": "Infineon",
+  "info": "...",
+  "manufacturer": "IFX",
   "model": "SLB9670",
   "firmware_version": "7.85",
-  "tpm_version": "2.0",
+  "family": "2.0",
+  "revision": 138,
+  "vendor_id": "...",
   "fips_mode": true,
+  "max_nvram_size": 2048,
   "is_simulator": false
 }
 ```
+
+`info` is the TPM's text summary. The fixed-property keys are absent when that
+read fails; `is_simulator` comes from the TPM configuration. Values shown are
+examples.
 
 ### platform_tpm_provision
 
@@ -269,13 +276,19 @@ Flush the Endorsement Key (EK) handle from the TPM.
 
 ### platform_tpm_srk
 
-Get the Storage Root Key (SRK) public key and handle.
+Get a Storage Root Key (SRK) public key and handle: the SSRK by default, or
+the PlatformSRK.
 
 **Input Schema:**
 ```json
 {
   "type": "object",
-  "properties": {}
+  "properties": {
+    "handle": {
+      "type": "integer",
+      "description": "0x81000001 (SSRK) or 0x81000002 (PlatformSRK); omitted or 0 means the SSRK"
+    }
+  }
 }
 ```
 
@@ -342,18 +355,6 @@ certificate with `iak_delete_cert`.
 }
 ```
 
-### platform_tpm_idevid
-
-Get the Initial Device ID certificate.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {}
-}
-```
-
 ### platform_tpm_quote
 
 Generate a TPM quote for remote attestation, signed by the attestation key.
@@ -376,6 +377,9 @@ Generate a TPM quote for remote attestation, signed by the attestation key.
   "required": ["nonce"]
 }
 ```
+
+The TPM quotes SHA-256(nonce || channel_binding), where `channel_binding` is
+the TLS exporter of the connection and is returned with the quote (#482).
 
 ### platform_tpm_verify_quote
 
@@ -474,8 +478,8 @@ Read Platform Configuration Register (PCR) values from the TPM.
 
 Extend a PCR with measurement data (hash is computed by the TPM).
 
-Scope `tpm:write`, the scope of QUIC's `SubOpTPM2ExtendPCR`; there is no gRPC
-twin. The tool calls `pkg/api/tpmpcr`, the code QUIC runs.
+Scope `tpm:write`, the scope of gRPC `ExtendPCR` and QUIC's
+`SubOpTPM2ExtendPCR`. The tool calls `pkg/api/tpmpcr`, the validator both run.
 
 **Input Schema:**
 ```json
@@ -513,9 +517,11 @@ Retrieve the TPM event log (TCG PC Client format).
 
 ### platform_tpm_capabilities
 
-Get the TPM's fixed properties: manufacturer, model, family, revision, vendor
-ID, firmware version, FIPS 140-2 mode, lockout counter, maximum auth failures
-and maximum NV buffer size. Needs `tpm:read`.
+List the algorithm, command and ECC-curve names TPM2_GetCapability reports
+(`algorithms`, `commands`, `ecc_curves`), the lists gRPC `GetCapabilities`
+returns. A list the TPM refuses fails the call. Needs `tpm:read`. The fixed
+properties (manufacturer, model, firmware, FIPS mode, ...) are in
+`platform_tpm_info`.
 
 **Input Schema:**
 ```json
@@ -607,30 +613,6 @@ Unseal TPM-sealed data.
 
 Runs gRPC `Unseal`: an unknown `cn` is not-found, an empty one invalid
 params. Requires `tpm:write`, where gRPC `Unseal` takes `tpm:read`.
-
-### platform_tpm_idevid_csr
-
-Create Initial DevID Certificate Signing Request.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {}
-}
-```
-
-### platform_tpm_ldevid_csr
-
-Create Local DevID Certificate Signing Request.
-
-**Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {}
-}
-```
 
 ### platform_tpm_nv_list
 
@@ -777,16 +759,16 @@ is refused by `pkg/api/tpmnv` before the TPM is touched.
   "jsonrpc": "2.0",
   "id": 2,
   "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "{\"manufacturer\":\"Infineon\",\"model\":\"SLB9670\",\"firmware_version\":\"7.85\",\"tpm_version\":\"2.0\"}"
-      }
-    ],
-    "isError": false
+    "info": "...",
+    "manufacturer": "IFX",
+    "model": "SLB9670",
+    "firmware_version": "7.85",
+    "is_simulator": false
   }
 }
 ```
+
+The tool's JSON object is the `result` itself (`pkg/api/mcp/server.go`).
 
 ### Tool Response (Error)
 
@@ -795,11 +777,15 @@ is refused by `pkg/api/tpmnv` before the TPM is touched.
   "jsonrpc": "2.0",
   "id": 2,
   "error": {
-    "code": -32602,
-    "message": "TPM service not available"
+    "code": -32004,
+    "message": "service not available: tpm",
+    "data": "platform_tpm_info"
   }
 }
 ```
+
+The code carries the error's class and `data` names the tool (see Error
+Responses).
 
 ### Quote Example
 
@@ -834,24 +820,15 @@ is refused by `pkg/api/tpmnv` before the TPM is touched.
 }
 ```
 
-## Connection Modes
+## Connection
 
-### stdio Mode
-
-```bash
-platformctl mcp --stdio
-```
-
-The MCP server reads JSON-RPC from stdin and writes responses to stdout.
-
-### HTTP Mode
-
-```bash
-platformctl mcp --http --port 9445
-```
-
-Connect via HTTP POST to `https://localhost:9445/mcp`. The listener serves TLS
-1.3 only, with the daemon certificate; plain `http://` is not served.
+`platformd` serves MCP over HTTPS: POST JSON-RPC to `https://<host>:9445/mcp`
+(default port `DefaultMCPPort`, `pkg/config/daemon.go`). The listener serves
+TLS 1.3 only, with the daemon certificate; plain `http://` is not served. The
+token goes in the `Authorization: Bearer` header. The MCP server package also
+has a stdio transport, but the daemon runs it over HTTP, and `platform_tpm_quote`
+is refused over stdio (no TLS connection to bind to). There is no
+`platformctl mcp` command.
 
 ## Go Client Example
 
@@ -902,23 +879,25 @@ Common error codes and messages:
 
 | Code | Message | Description |
 |------|---------|-------------|
-| `-32602` | Invalid params | Missing or invalid parameters |
+| `-32602` | Invalid params | Missing or invalid parameters (`InvalidArgument`) |
 | `-32700` | Parse error | JSON parse error |
 | `-32600` | Invalid request | Malformed JSON-RPC request |
-| `-32603` | Internal error | Server error |
+| `-32601` | Method not found | Unknown method (`Unimplemented`) |
+| `-32603` | Internal error | Server error, or any unlisted class |
+| `-32001` | Authentication required | No token (`Unauthenticated`) |
+| `-32002` | Invalid token | Token rejected |
+| `-32003` | Permission denied | Scope missing (`PermissionDenied`) |
+| `-32004` | Service unavailable | No TPM (`Unavailable`) |
+| `-32005` | Not found | `NotFound` |
+| `-32006` | Already exists | `AlreadyExists` |
+| `-32007` | Failed precondition | `FailedPrecondition` |
 
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TPM_MCP_ENDPOINT` | MCP server address | `localhost:9445` |
-| `TPM_MCP_STDIO` | Use stdio mode | false |
+A tool error's code is its class (`mcpwire.CodeForClass`,
+`sdk/go/wire/mcpwire/errorcodes.go`); the message is the error text.
 
 ## Notes
 
-- All timestamps are RFC 3339 format
 - Binary data must be base64-encoded in JSON
-- Nonce must be at least 8 bytes
 - PCR indices must be in range 0-23
 - Random byte count is limited to 1024 bytes per request
-- NV index numbers are TPM-specific (typically 0x01C00000 and above)
+- NV indexes are in `0x01000000`-`0x01FFFFFF`

@@ -162,6 +162,18 @@ func TestClassTable_OnlyTheKernelClassKeepsNetAdmin(t *testing.T) {
 	assert.Equal(t, 1, kernel, "exactly one process programs the kernel")
 }
 
+func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
+	for _, def := range Definitions() {
+		// A process with no families could not reach its own supervisor.
+		assert.Containsf(t, def.AddressFamilies, uint32(unix.AF_UNIX),
+			"process %q needs AF_UNIX for its IPC", def.Name)
+		for _, family := range []uint32{unix.AF_PACKET, unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY} {
+			assert.NotContainsf(t, def.AddressFamilies, family,
+				"process %q opens no family %d socket", def.Name, family)
+		}
+	}
+}
+
 func TestProcesses_OnlyTheNeededOnesWithOnlyTheEnabledServices(t *testing.T) {
 	defs, err := Processes([]string{gateway.ServiceNAT, gateway.ServiceProxy, gateway.ServiceFirewall})
 	require.NoError(t, err)
@@ -323,7 +335,6 @@ func (f *fakeNode) DesiredConfigState() gwstate.DesiredConfigState {
 type fakeChild struct {
 	pid    int
 	server *ipc.Server
-	node   *fakeNode
 
 	once sync.Once
 	done chan struct{}
@@ -492,7 +503,7 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	l.mu.Lock()
 	stubborn := l.stubborn
 	l.mu.Unlock()
-	child := &fakeChild{pid: pid, server: server, node: node, done: make(chan struct{}), stubborn: stubborn, launcher: l}
+	child := &fakeChild{pid: pid, server: server, done: make(chan struct{}), stubborn: stubborn, launcher: l}
 	go func() {
 		if err := server.Serve(); err != nil {
 			l.t.Errorf("child %s serve: %v", spec.Definition.Name, err)

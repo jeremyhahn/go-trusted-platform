@@ -16,6 +16,7 @@ package cluster
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -794,10 +795,11 @@ func TestSyncAllCreatesBridges(t *testing.T) {
 
 	// Add a bridge to QuicBaaS state
 	bridge := &BridgeState{
-		ID:       "bridge-1",
-		Name:     "br0",
-		NodeID:   1,
-		FailMode: "secure",
+		ID:            "bridge-1",
+		Name:          "br0",
+		NodeID:        1,
+		FailMode:      "secure",
+		FlowProtocols: []string{"OpenFlow13"},
 	}
 	stateManager.CreateBridge(context.Background(), bridge)
 
@@ -822,6 +824,14 @@ func TestSyncAllCreatesBridges(t *testing.T) {
 
 	if ovsClient.createBridgeCalls[0] != "br0" {
 		t.Errorf("Expected bridge name 'br0', got '%s'", ovsClient.createBridgeCalls[0])
+	}
+
+	// The new bridge gets the desired fail mode and flow protocols
+	if !slices.Equal(ovsClient.setFailModeCalls, []string{"br0:secure"}) {
+		t.Errorf("Expected SetBridgeFailMode(br0, secure), got %v", ovsClient.setFailModeCalls)
+	}
+	if !slices.Equal(ovsClient.setProtocolsCalls, []string{"br0"}) {
+		t.Errorf("Expected SetBridgeProtocols(br0), got %v", ovsClient.setProtocolsCalls)
 	}
 
 	// Verify sync status

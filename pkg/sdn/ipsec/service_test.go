@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/pem"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -42,12 +43,17 @@ type serviceHarness struct {
 
 func newTestService(t *testing.T, cfg *config.Config, attempts ...attempt) *serviceHarness {
 	t.Helper()
+	return newTestEVPNService(t, cfg, staticPeersOnly{}, attempts...)
+}
+
+func newTestEVPNService(t *testing.T, cfg *config.Config, admitter Admitter, attempts ...attempt) *serviceHarness {
+	t.Helper()
 	root := newTestPKI(t)
 	pki := root.intermediate(t, "tunnel intermediate")
 	filter, nft := newTestFilter(t, cfg)
 	block, x := testBlockPolicy(t, cfg)
 	identity := &fakeIdentity{id: pki.identity(nil)}
-	svc, err := newService(cfg, filter, block, identity, &fakeDialer{attempts: attempts}, nil)
+	svc, err := newService(cfg, admitter, filter, block, identity, &fakeDialer{attempts: attempts}, nil)
 	if err != nil {
 		t.Fatalf("newService: %v", err)
 	}
@@ -339,5 +345,50 @@ func TestStaticPeersOnlyAdmitsNoRoutedVTEP(t *testing.T) {
 	}
 	if got := h.svc.ctl.Peers(); slices.Contains(got, addr("10.20.0.30")) {
 		t.Fatalf("peers %v include a VTEP no admitter vouched for", got)
+	}
+}
+
+func TestNewEVPNServiceRejectsNoAdmitter(t *testing.T) {
+	svc, err := NewEVPNService(serviceConfig(t, "tunnel.crl"), nil, nil)
+	if svc != nil || !errors.Is(err, ErrMissingDependency) {
+		t.Fatalf("NewEVPNService = %v, %v; want %v", svc, err, ErrMissingDependency)
+	}
+}
+
+func TestEVPNServiceFollowsRoutesAndEvictions(t *testing.T) {
+	admitter := &fakeAdmitter{refuse: map[netip.Addr]error{addr("10.20.0.31"): errInjected}}
+	h := newTestEVPNService(t, serviceConfig(t, "tunnel.crl"), admitter)
+	ctx := context.Background()
+	vtep := addr("10.20.0.30")
+	holds := func() bool { return slices.Contains(h.svc.ctl.Peers(), vtep) }
+
+	if err := h.svc.HandleEVPNRoute(ctx, imet(100, "10.20.0.30", false)); err != nil || !holds() {
+		t.Fatalf("an admitted route: err %v, peer held %v", err, holds())
+	}
+	if err := h.svc.HandleEVPNRoute(ctx, imet(100, "10.20.0.31", false)); !errors.Is(err, errInjected) {
+		t.Fatalf("a refused route: err %v, want the admitter's refusal", err)
+	}
+	if err := h.svc.Evict(ctx, vtep); err != nil || holds() {
+		t.Fatalf("Evict: err %v, peer held %v", err, holds())
+	}
+	if _, dropped := h.svc.filter.evicted[vtep]; !dropped {
+		t.Fatal("Evict left the peer's traffic undropped")
+	}
+	if err := h.svc.Readmit(ctx, vtep); err != nil || !holds() {
+		t.Fatalf("Readmit: err %v, peer held %v", err, holds())
+	}
+	if err := h.svc.Readmit(ctx, vtep); err != nil {
+		t.Fatalf("Readmit of a peer never evicted: %v, want nil", err)
+	}
+	if err := h.svc.HandleEVPNRoute(ctx, imet(100, "10.20.0.30", true)); err != nil || holds() {
+		t.Fatalf("a withdrawal: err %v, peer held %v", err, holds())
+	}
+}
+
+func TestEVPNServiceEvictRejectsANonPeer(t *testing.T) {
+	h := newTestEVPNService(t, serviceConfig(t, "tunnel.crl"), &fakeAdmitter{})
+	err := h.svc.Evict(context.Background(), netip.Addr{})
+	if !errors.Is(err, config.ErrInvalidAddress) {
+		t.Fatalf("Evict of no address = %v, want %v", err, config.ErrInvalidAddress)
 	}
 }

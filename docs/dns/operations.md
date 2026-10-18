@@ -1,6 +1,7 @@
 # DNS Operations Guide
 
-Day-to-day operational procedures for the Trusted Platform DNS subsystem.
+> **Status: REFERENCE**
+> Day-to-day operational procedures for the Trusted Platform DNS subsystem.
 
 ## Overview
 

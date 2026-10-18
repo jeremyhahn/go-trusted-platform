@@ -1,6 +1,6 @@
 # Go SDK — API
 
-> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -19,7 +19,7 @@ when their adapter maps it:
 |---|---|
 | REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go`, `app_services.go`, `iam.go` (single IAM resources onto the reply's resource field) |
 | QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_bmc.go`, `aab_cluster.go`, `aab_invitation.go`, `aab_ntp.go`, `aab_pxe.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
-| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `cluster.go`, `eab.go`, `invitation.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `pxe.go`, `switch.go`, `tpm_quote.go` |
+| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `cluster.go`, `eab.go`, `invitation.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `pxe.go`, `registry.go`, `switch.go`, `tpm_quote.go` |
 | Embedded | `transport/embedded/adapter.go` (`ServiceRegistry`), `dispatch.go` (`register<Service>Handlers`) |
 
 The server side of each transport, with ports, opcodes and authorization, is
@@ -49,7 +49,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `GatewayService` | `Gateway()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProxyService` | `Proxy()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `OverlayService` | `Overlay()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `RegistryService` | `Registry()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| `RegistryService` | `Registry()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | ✅ | ✅ |
 | `ClusterService` | `Cluster()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ConfigDeliveryService` | `ConfigDelivery()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `PlatformIAMService` | `IAM()` | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -60,6 +60,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `CacheService` (§3.5) | `Cache()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SchedulerService` (§3.5) | `Scheduler()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `MessagingService` (§3.5) | `Messaging()` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `ObjectStorageService` (§3.5) | `ObjectStorage()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SwitchService` | `Switch()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProvisioningGateway` | `MISSING — docs/13 G7` | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | `CeremonyService` | `Ceremony()` | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -80,6 +81,7 @@ platform code and SDK consumers program against.
 | go-quicbaas group | Accessor | `services/quicbaas.Client` |
 |---|---|---|
 | `CoreData()` | `KV()`, `Batch()`, `Transaction()`, `Query()` | ✅ each |
+| `CoreData()` | request / response types of `client/kv` (with its `service` request types), `client/batch`, `client/transaction`, `client/query` | ✅ `sdk/go/services/{kv,batch,transaction,query}` (§3.4) |
 | `ClusterMgmt()` | `Cluster()`, `Health()`, `Operations()`, `Cache()` | ✅ each |
 | `Security()` | `Auth()`, `Seal()`, `KMS()`, `Secrets()`, `Crypto()`, `Certificate()`, `DEK()`, `DynamicSecrets()`, `RBAC()` | ✅ each |
 | `Security()` | `CertificateExt()`, `ACME()`, `Trust()`, `Attestation()`, `SSH()` | ✅ each |
@@ -105,8 +107,8 @@ platform code and SDK consumers program against.
 
 A re-exported accessor rides the side-client's transport (`QuicBaaSTransport`:
 unix, grpc, rest, quic or mcp) to quicbaasd, so its transport coverage is
-go-quicbaas's own. platformd itself serves only `Cache()`, `Scheduler()` and
-`Messaging()` of these groups (§3.5).
+go-quicbaas's own. platformd itself serves only `Cache()`, `Scheduler()`,
+`Messaging()` and `ObjectStorage()` of these groups (§3.5).
 
 ### 3.1 Container-trust types
 
@@ -183,6 +185,10 @@ constant bound to the upstream value.
 
 | Accessor | Package | Replaces | Constants |
 |---|---|---|---|
+| `KV()` | `sdk/go/services/kv` | `go-quicbaas/sdk/go/client/kv`, `go-quicbaas/sdk/go/service` | `ConsistencyLevel*`, `WriteMode*`, `Event*` |
+| `Batch()` | `sdk/go/services/batch` | `go-quicbaas/sdk/go/client/batch` | `Op*` |
+| `Transaction()` | `sdk/go/services/transaction` | `go-quicbaas/sdk/go/client/transaction` | `Compare*`, `TxnOp*` |
+| `Query()` | `sdk/go/services/query` | `go-quicbaas/sdk/go/client/query` | `Op*` |
 | `Cache()` | `sdk/go/services/cache` | `go-quicbaas/sdk/go/client/cache` | none |
 | `Vector()` | `sdk/go/services/vector` | `go-quicbaas/sdk/go/client/vector` | `FilterOperator*`, `IndexType*` |
 | `TimeSeries()` | `sdk/go/services/timeseries` | `go-quicbaas/sdk/go/client/timeseries` | `Aggregate*` |
@@ -198,23 +204,35 @@ constant bound to the upstream value.
 | `Ollama()` | `sdk/go/services/ollama` | `go-quicbaas/sdk/go/client/ollama` | none |
 | `RAG()` | `sdk/go/services/rag` | `go-quicbaas/sdk/go/client/rag` | none |
 
-#704 added the eight packages from `backup` to `rag`, so their consumers no
-longer import go-quicbaas. None of their upstream packages exports a
-sentinel error.
+#704 added the four CoreData packages and the eight from `backup` to `rag`,
+so their consumers no longer import go-quicbaas. None of their upstream
+packages exports a sentinel error. The key-value request types (`PutRequest`,
+`GetRequest`, `DeleteRequest`, `ListRequest` and their responses) live in
+`kv`; `batch`'s `Put`, `Get` and `Delete` take slices of them.
 
 `messaging` also forwards `NewDeltaBuilder()` and `NewDeltaApplier[E]()`,
 because the upstream `DeltaBuilder` and `DeltaApplier[E]` keep their state
-unexported and cannot be built any other way. The packages leave out the
+unexported and cannot be built any other way. `kv` forwards the watch options
+(`WithStartRevision`, `WithPrevKV`, `WithProgressNotify`, `WithFilterPut`,
+`WithFilterDelete`) for the same reason. The packages leave out the
 `NewClient` constructors, which take a raw go-quicbaas transport.
 
 An accessor returns nil when the SDK does not serve the service, and
 `NewClientFromSDK(nil)` fails with `ErrNilSDKClient`.
 
-platformd serves Cache, Scheduler and Messaging itself (§3.5). Every other
-accessor in the table is reached only through the side-client (§3), and
-`platformctl` has no command group for it.
+platformd serves Cache, Scheduler, Messaging and ObjectStorage itself (§3.5).
+Every other accessor in the table is reached only through the side-client
+(§3), and `platformctl` has no command group for it.
 
-### 3.5 Cache, Scheduler and Messaging on platformd
+### 3.5 Application services on platformd
+
+ObjectStorage (objects group: put, get, delete, head, list, copy, list by tag,
+list by tenant) follows the same service-layer, REST, QUIC (`0x60`), MCP and
+scope rules as the three below; its routes, sub-opcodes, tools and
+pin-specific limits are in [../objectstorage/api-reference.md](../objectstorage/api-reference.md).
+Unlike the three, the embedded transport serves it. A put or copy must name
+`target_backend`, because the pinned SDK's object store has no primary
+backend to choose.
 
 platformd serves `platform.v1.CacheService`, `SchedulerService` and
 `MessagingService` (`pkg/api/grpc/proto/{cache,scheduler,messaging}.proto`)
@@ -317,7 +335,7 @@ Errors:
 
 | Cause | Status |
 |---|---|
-| The node's DAO factory has no SDK, or the SDK does not serve the service (the embedded transport answers `UnknownMethodError`) | `UNAVAILABLE`, `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`, metadata `service` = `cache`, `scheduler` or `messaging` |
+| The node's DAO factory has no SDK, or the SDK does not serve the service (the embedded transport answers `UnknownMethodError`) | `UNAVAILABLE`, `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`, metadata `service` = `cache`, `scheduler`, `messaging` or `objectstorage` |
 | The request fails validation | `INVALID_ARGUMENT`, naming the field |
 | The SDK answers with a typed error (`QBError`) | its code's gRPC twin, as `barrier.SDKCode` maps it: `NotFound` `NOT_FOUND`, `AlreadyExists` and `Conflict` `ALREADY_EXISTS`, `InvalidInput` `INVALID_ARGUMENT`, `Unavailable` `UNAVAILABLE`, and so on |
 | The SDK answers with a gRPC status | that status code |

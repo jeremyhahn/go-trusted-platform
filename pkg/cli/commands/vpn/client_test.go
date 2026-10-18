@@ -54,6 +54,15 @@ func (d *clientDevice) Quote(context.Context, []byte) (*manifest.HostAttestation
 
 type clientPosture struct{ err error }
 
+// clientSigner signs a person factor the way an authenticator would, keeping
+// the nonces it signed.
+type clientSigner struct{ nonces [][]byte }
+
+func (s *clientSigner) Sign(_ context.Context, kind gwvpn.PersonFactorKind, nonce []byte) (*gwvpn.PersonFactor, error) {
+	s.nonces = append(s.nonces, nonce)
+	return &gwvpn.PersonFactor{Kind: kind, CredentialID: "Y3JlZC0x", Assertion: append([]byte("assertion:"), nonce...)}, nil
+}
+
 func (p *clientPosture) Collect(context.Context) (*gwvpn.PostureReport, error) {
 	if p.err != nil {
 		return nil, p.err
@@ -182,6 +191,10 @@ type clientHarness struct {
 	offered [][]gwvpn.DataPlaneKind
 	// after is the agent's renewal timer; nil is time.After.
 	after func(time.Duration) <-chan time.Time
+	// factors are the person factor signers each verb built its agent
+	// with; the agent signs with signer instead.
+	factors []agent.FactorSigner
+	signer  *clientSigner
 
 	// device is what openHostDevice opens, with the options it was given,
 	// unless openErr is set.
@@ -192,7 +205,7 @@ type clientHarness struct {
 
 func newClientHarness(t *testing.T) *clientHarness {
 	t.Helper()
-	h := &clientHarness{listener: &admissionListener{}, plane: &clientPlane{}, posture: &clientPosture{}}
+	h := &clientHarness{listener: &admissionListener{}, plane: &clientPlane{}, posture: &clientPosture{}, signer: &clientSigner{}}
 	srv := httptest.NewUnstartedServer(h.listener)
 	srv.TLS = &tls.Config{ClientAuth: tls.RequireAnyClientCert, MinVersion: tls.VersionTLS13}
 	srv.StartTLS()
@@ -215,11 +228,17 @@ func newClientHarness(t *testing.T) *clientHarness {
 		h.device.id = opts.ID
 		return h.device, nil
 	}
-	newClientAgent = func(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane) (*agent.Agent, error) {
+	newClientAgent = func(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane, factors agent.FactorSigner) (*agent.Agent, error) {
 		h.offered = append(h.offered, planeKinds(planes))
+		h.factors = append(h.factors, factors)
+		if factors != nil {
+			// The test host has no authenticator; the signer stands in.
+			factors = h.signer
+		}
 		return agent.New(agent.Deps{
 			Device:     device,
 			Posture:    h.posture,
+			Factors:    factors,
 			DataPlanes: []agent.DataPlane{h.plane},
 			State:      agent.NewFileStateStore(h.statePath),
 			Dial:       agent.DialHTTPGateway(roots),
@@ -286,6 +305,62 @@ func TestConnect_AdmitsAndRecordsTheLease(t *testing.T) {
 	require.True(t, ok, "table output by default")
 	assert.Equal(t, []string{"lease-1", h.gateway, "10.64.0.2", "management", "masque", "vpn0",
 		formatUnix(1760303600), formatUnix(1760303000)}, table.Rows[0])
+}
+
+func TestConnect_FIDO2FactorIsSignedOverTheNonce(t *testing.T) {
+	h := newClientHarness(t)
+
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile,
+		"--factor", "fido2", "--fido2-rp-id", "auth.example.com", "--fido2-credential-id", "Y3JlZC0x")
+
+	require.NoError(t, err)
+	require.Len(t, h.factors, 1)
+	assert.IsType(t, &agent.FIDO2Signer{}, h.factors[0], "the flags build the SDK-backed FIDO2 signer")
+	assert.Equal(t, [][]byte{[]byte("nonce-1")}, h.signer.nonces)
+	require.NotNil(t, h.listener.admitted.PersonFactor)
+	assert.Equal(t, gwvpn.PersonFactorFIDO2, h.listener.admitted.PersonFactor.Kind)
+	assert.Equal(t, []byte("assertion:nonce-1"), h.listener.admitted.PersonFactor.Assertion)
+	st, err := agent.NewFileStateStore(h.statePath).Load()
+	require.NoError(t, err)
+	assert.Equal(t, gwvpn.PersonFactorFIDO2, st.Factor, "renewals present the factor again")
+}
+
+func TestConnect_FactorFlagErrorsExitOneBeforeTheGateway(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want any
+	}{
+		{"fido2 without its rp id", []string{"--factor", "fido2"}, new(*agent.ErrInvalidOptions)},
+		{"credential id not base64url", []string{"--factor", "fido2", "--fido2-rp-id", "auth.example.com", "--fido2-credential-id", "Y3JlZA=="}, new(*agent.ErrInvalidOptions)},
+		{"credential id without its rp id", []string{"--factor", "fido2", "--fido2-credential-id", "Y3JlZC0x"}, new(*agent.ErrInvalidOptions)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newClientHarness(t)
+			args := append([]string{"connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile}, tt.args...)
+
+			err := execute(t, args...)
+
+			assert.Equal(t, 1, cli.ExitCode(err))
+			assert.ErrorAs(t, err, tt.want)
+			assert.Nil(t, h.listener.admitted)
+			assert.Empty(t, h.signer.nonces)
+		})
+	}
+}
+
+func TestConnect_PIVFactorHasNoSigner(t *testing.T) {
+	h := newClientHarness(t)
+
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile,
+		"--factor", "piv")
+
+	assert.Equal(t, 1, cli.ExitCode(err))
+	var invalid *agent.ErrInvalidOptions
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "factor", invalid.Field)
+	assert.Nil(t, h.listener.admitted)
 }
 
 func TestConnect_RefusalsMapToTheirExitCodes(t *testing.T) {
@@ -557,6 +632,35 @@ func TestRenew_RenewsAndRecordsTheLease(t *testing.T) {
 	assert.Equal(t, formatUnix(1760307200), table.Rows[0][6], "the new expiry is printed")
 }
 
+func TestRenew_PresentsTheFIDO2FactorAgain(t *testing.T) {
+	h := newClientHarness(t)
+	st := &agent.State{Gateway: h.gateway, Lease: testLease(), Session: agent.Session{Interface: "vpn0"}, Factor: gwvpn.PersonFactorFIDO2}
+	require.NoError(t, agent.NewFileStateStore(h.statePath).Save(st))
+
+	err := execute(t, "renew", "--ca-file", h.caFile, "--idevid-cert", "/etc/idevid.pem", "--fido2-rp-id", "auth.example.com")
+
+	require.NoError(t, err)
+	require.Len(t, h.factors, 1)
+	assert.IsType(t, &agent.FIDO2Signer{}, h.factors[0])
+	require.Len(t, h.listener.renewals, 1)
+	require.NotNil(t, h.listener.renewals[0].PersonFactor)
+	assert.Equal(t, []byte("assertion:nonce-1"), h.listener.renewals[0].PersonFactor.Assertion, "signed over the renewal's nonce")
+}
+
+func TestRenew_BadFIDO2FlagsExitOneBeforeTheGateway(t *testing.T) {
+	h := newClientHarness(t)
+	h.connected(t)
+
+	err := execute(t, "renew", "--ca-file", h.caFile, "--idevid-cert", "/etc/idevid.pem", "--fido2-credential-id", "Y3JlZC0x")
+
+	assert.Equal(t, 1, cli.ExitCode(err))
+	var invalid *agent.ErrInvalidOptions
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "fido2 rp id", invalid.Field)
+	assert.Empty(t, h.listener.renewals)
+	assert.Empty(t, h.opened, "the host device is never opened")
+}
+
 func TestRenew_RefusalsMapToTheirExitCodes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -685,7 +789,7 @@ func TestPosture_CollectionFailureExitsOne(t *testing.T) {
 }
 
 func TestNewClientAgent_DefaultBuildsWithoutDeviceOrDataPlane(t *testing.T) {
-	a, err := newClientAgent(nil, nil, nil)
+	a, err := newClientAgent(nil, nil, nil, nil)
 	require.NoError(t, err, "the default agent builds without a device or data plane")
 	require.NotNil(t, a)
 
@@ -697,11 +801,11 @@ func TestNewClientAgent_DefaultBuildsWithoutDeviceOrDataPlane(t *testing.T) {
 func TestClientAgent_FactoryFailureIsWrapped(t *testing.T) {
 	orig := newClientAgent
 	t.Cleanup(func() { newClientAgent = orig })
-	newClientAgent = func(*x509.CertPool, agent.Device, []agent.DataPlane) (*agent.Agent, error) {
+	newClientAgent = func(*x509.CertPool, agent.Device, []agent.DataPlane, agent.FactorSigner) (*agent.Agent, error) {
 		return agent.New(agent.Deps{})
 	}
 
-	_, err := clientAgent(nil, nil, nil)
+	_, err := clientAgent(nil, nil, nil, nil)
 
 	var wrapped *WrappedError
 	require.ErrorAs(t, err, &wrapped)

@@ -29,16 +29,16 @@ type errPlain struct{ msg string }
 
 func (e errPlain) Error() string { return e.msg }
 
-// recordingSkipper captures Skipf calls instead of stopping the test.
-type recordingSkipper struct {
-	skipped bool
+// recordingFataler captures Fatalf calls instead of stopping the test.
+type recordingFataler struct {
+	failed  bool
 	message string
 }
 
-func (r *recordingSkipper) Helper() {}
+func (r *recordingFataler) Helper() {}
 
-func (r *recordingSkipper) Skipf(format string, args ...any) {
-	r.skipped = true
+func (r *recordingFataler) Fatalf(format string, args ...any) {
+	r.failed = true
 	r.message = fmt.Sprintf(format, args...)
 }
 
@@ -160,22 +160,22 @@ func TestIsDeclaredRefusal_NoSentinels(t *testing.T) {
 	}
 }
 
-func TestSkipIfNotImplemented_SkipsDeclaration(t *testing.T) {
-	skipper := &recordingSkipper{}
+func TestRequireImplemented_FailsOnDeclaration(t *testing.T) {
+	fataler := &recordingFataler{}
 	err := fmt.Errorf("adapter: %w", ErrNoSurface{Transport: "Unix", Operation: "ListTemplates"})
 
-	SkipIfNotImplemented(skipper, err)
+	RequireImplemented(fataler, err)
 
-	if !skipper.skipped {
-		t.Fatal("expected a skip for a typed declaration")
+	if !fataler.failed {
+		t.Fatal("expected a failure for a typed declaration")
 	}
-	want := "Declared gap: adapter: Unix has no surface for ListTemplates"
-	if skipper.message != want {
-		t.Fatalf("skip message = %q, want %q", skipper.message, want)
+	want := "declared surface gap: adapter: Unix has no surface for ListTemplates"
+	if fataler.message != want {
+		t.Fatalf("failure message = %q, want %q", fataler.message, want)
 	}
 }
 
-func TestSkipIfNotImplemented_LeavesOtherErrorsToCaller(t *testing.T) {
+func TestRequireImplemented_LeavesOtherErrorsToCaller(t *testing.T) {
 	cases := map[string]error{
 		"nil":            nil,
 		"text only":      errPlain{msg: "not implemented"},
@@ -183,10 +183,10 @@ func TestSkipIfNotImplemented_LeavesOtherErrorsToCaller(t *testing.T) {
 	}
 	for name, err := range cases {
 		t.Run(name, func(t *testing.T) {
-			skipper := &recordingSkipper{}
-			SkipIfNotImplemented(skipper, err)
-			if skipper.skipped {
-				t.Fatalf("SkipIfNotImplemented(%v) skipped; only a typed declaration may", err)
+			fataler := &recordingFataler{}
+			RequireImplemented(fataler, err)
+			if fataler.failed {
+				t.Fatalf("RequireImplemented(%v) failed the test; only a typed declaration may", err)
 			}
 		})
 	}

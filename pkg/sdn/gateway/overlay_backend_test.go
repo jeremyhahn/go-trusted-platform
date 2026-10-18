@@ -84,16 +84,42 @@ type backendSwitch struct {
 	mu      sync.Mutex
 	batches int
 	refuse  int
+	mods    []*openflow.FlowMod
 }
 
-func (s *backendSwitch) SendFlowMods(context.Context, []*openflow.FlowMod) error {
+func (s *backendSwitch) SendFlowMods(_ context.Context, mods []*openflow.FlowMod) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.batches++
 	if s.batches == s.refuse {
 		return errSwitchRefused
 	}
+	s.mods = append(s.mods, mods...)
 	return nil
+}
+
+// QueryFlowStats reports no flows: the switch holds no older generation.
+func (s *backendSwitch) QueryFlowStats(context.Context, openflow.FlowStatsFilter) ([]openflow.FlowStats, error) {
+	return nil, nil
+}
+
+// routedFlows counts the flows added that hand frames to the symmetric IRB
+// routing table: the table-30 entries for the anycast and router MACs.
+func (s *backendSwitch) routedFlows() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	routed := 0
+	for _, mod := range s.mods {
+		if mod.Command != openflow.OFPFCAdd {
+			continue
+		}
+		for _, instruction := range mod.Instructions {
+			if gotoTable, ok := instruction.(*openflow.InstructionGotoTable); ok && gotoTable.TableID == modes.TableL3Routing {
+				routed++
+			}
+		}
+	}
+	return routed
 }
 
 // The backend tests drive VNI joins, not the neighbor discovery datapath:
@@ -163,6 +189,156 @@ func TestOverlayBackend_StartJoinsConfiguredVNIs(t *testing.T) {
 	require.Equal(t, len(cfg.VNIs), status.VNICount)
 	require.True(t, backend.Active())
 	require.True(t, backend.Healthy())
+}
+
+// The gateway.overlay IRB settings reach the handler. VNI subnets with the
+// anycast MAC hand frames for the anycast gateway to table 50; an L3VNI adds
+// the router MAC's hand-off, and the start succeeding proves the derived
+// router MAC reached EVPN (the handler refuses an L3VNI without one). With
+// none of them the overlay bridges only.
+func TestOverlayBackend_IRBConfigTurnsOnRouting(t *testing.T) {
+	tests := []struct {
+		name    string
+		edit    func(*OverlayServiceConfig)
+		routed  int
+		anycast bool
+		l3vni   uint32
+	}{
+		// One gateway-MAC ingress per routed VNI, and the router MAC on the L3VNI.
+		{name: "symmetric IRB", edit: withOverlayIRB, routed: 3, anycast: true, l3vni: 50000},
+		{name: "a bridge-only VNI beside a routed one", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.VNIs[1].Subnet = netip.Prefix{} },
+			routed: 2, anycast: true, l3vni: 50000},
+		{name: "routing between local hosts only", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.L3VNI = 0 }, routed: 2, anycast: true},
+		{name: "bridging only", edit: func(*OverlayServiceConfig) {}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validOverlayServiceConfig()
+			tt.edit(cfg)
+			require.NoError(t, cfg.Validate())
+			of := &backendSwitch{}
+			backend, _ := newTestOverlayBackend(t, cfg, of)
+			backend.server = &fakeBGPServer{}
+			ctx := context.Background()
+
+			require.NoError(t, backend.Start(ctx))
+			t.Cleanup(func() { require.NoError(t, backend.Stop(ctx)) })
+
+			require.Equal(t, tt.routed, of.routedFlows(), "flows handing frames to table %d", modes.TableL3Routing)
+			status := backend.Status()
+			require.NotNil(t, status)
+			require.Equal(t, tt.anycast, status.AnycastGatewayConfigured)
+			require.Equal(t, tt.l3vni, status.L3VNI)
+		})
+	}
+}
+
+func TestOverlayBackend_OriginatesRoutedSubnetsWithAnL3VNI(t *testing.T) {
+	ctx := context.Background()
+	routed := []string{"10.40.1.0/24 50000", "10.40.2.0/24 50000"}
+
+	t.Run("every routed subnet is advertised in the IP-VRF and withdrawn at stop", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		backend, _ := newTestOverlayBackend(t, cfg, &backendSwitch{})
+		server := &fakeBGPServer{}
+		backend.server = server
+
+		require.NoError(t, backend.Start(ctx))
+		require.ElementsMatch(t, routed, server.advertisedPrefixes())
+
+		require.NoError(t, backend.Stop(ctx))
+		require.ElementsMatch(t, routed, server.withdrawnPrefixes())
+	})
+
+	t.Run("a default-policy RR peer carries the Type-5 routes both ways", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		backend, _ := newTestOverlayBackend(t, cfg, &backendSwitch{})
+		server := &fakeBGPServer{}
+		backend.server = server
+		l3, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, cfg.L3VNI)
+		require.NoError(t, err)
+
+		require.NoError(t, backend.Start(ctx))
+		t.Cleanup(func() { require.NoError(t, backend.Stop(ctx)) })
+
+		require.Equal(t, [][]string{{l3.String()}, {l3.String()}}, server.advertisedPrefixTargets(),
+			"each Type-5 route carries the IP-VRF route target")
+		sets := server.routeTargetSets()
+		require.Len(t, sets, 2, "one import and one export route-target set")
+		for name, patterns := range sets {
+			require.Contains(t, patterns, "rt:^"+l3.String()+"$", "%s must accept the IP-VRF route target", name)
+		}
+	})
+
+	t.Run("a bridged VNI's subnet is not advertised", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		cfg.VNIs[1].Subnet = netip.Prefix{}
+		backend, _ := newTestOverlayBackend(t, cfg, &backendSwitch{})
+		server := &fakeBGPServer{}
+		backend.server = server
+
+		require.NoError(t, backend.Start(ctx))
+		t.Cleanup(func() { require.NoError(t, backend.Stop(ctx)) })
+
+		require.Equal(t, routed[:1], server.advertisedPrefixes())
+	})
+
+	t.Run("without an L3VNI nothing is advertised", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		cfg.L3VNI = 0
+		backend, _ := newTestOverlayBackend(t, cfg, &backendSwitch{})
+		server := &fakeBGPServer{}
+		backend.server = server
+
+		require.NoError(t, backend.Start(ctx))
+		t.Cleanup(func() { require.NoError(t, backend.Stop(ctx)) })
+
+		require.Empty(t, server.advertisedPrefixes())
+	})
+
+	t.Run("a refused origination fails the start and leaves nothing running", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		backend, ovsClient := newTestOverlayBackend(t, cfg, &backendSwitch{})
+		server := &fakeBGPServer{refusePrefixes: errSwitchRefused}
+		backend.server = server
+
+		err := backend.Start(ctx)
+
+		var refused *modes.ErrVNIOperationFailed
+		require.ErrorAs(t, err, &refused)
+		require.Equal(t, "originate", refused.Operation)
+		require.Equal(t, cfg.VNIs[0].VNI, refused.VNI)
+		require.ErrorIs(t, err, errSwitchRefused)
+		require.False(t, backend.Active())
+		require.Nil(t, backend.Status())
+		require.Zero(t, ovsClient.vxlanPorts(), "a refused start must not leave the VXLAN port behind")
+		server.mu.Lock()
+		server.refusePrefixes = nil
+		server.mu.Unlock()
+		require.NoError(t, backend.Start(ctx), "a refused start must leave the service startable")
+		require.NoError(t, backend.Stop(ctx))
+	})
+}
+
+// Start re-derives the anycast gateways from the config, so a subnet that
+// never passed validation fails the start before anything runs.
+func TestOverlayBackend_StartRefusesAnInvalidVNISubnet(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	withOverlayIRB(cfg)
+	cfg.VNIs[0].Subnet = netip.MustParsePrefix("fd00::/64")
+	of := &backendSwitch{}
+	backend, _ := newTestOverlayBackend(t, cfg, of)
+
+	var invalid *ErrOverlayConfigInvalid
+	require.ErrorAs(t, backend.Start(context.Background()), &invalid)
+	require.Equal(t, "vnis", invalid.Field)
+	require.False(t, backend.Active())
+	require.Zero(t, of.sent(), "no flow may be sent for a refused config")
 }
 
 // Health tracks the joined VNIs: a VNI the overlay no longer carries makes it
@@ -257,6 +433,24 @@ func TestOverlayBackend_RRPeersDefaultToTheOverlayRouteTargets(t *testing.T) {
 			}
 		}
 		require.Equal(t, 2, rtSets, "one import and one export route-target set")
+	})
+
+	t.Run("with an L3VNI both default allowlists add the IP-VRF route target", func(t *testing.T) {
+		irb := validOverlayServiceConfig()
+		withOverlayIRB(irb)
+		irb.RRPeers = append(irb.RRPeers, bgp.NeighborConfig{Name: "rr-explicit", Address: netip.MustParseAddr("10.4.100.11"),
+			ASN: irb.OverlayASN, Policy: bgp.PeerPolicyConfig{ExportRouteTargets: []string{"65000:7"}}})
+		l3, err := bgp.AutoRouteTarget(uint16(irb.OverlayASN), 0, irb.L3VNI)
+		require.NoError(t, err)
+		withL3 := append(append([]string(nil), want...), l3.String())
+
+		peers, err := overlayRRPeers(irb)
+
+		require.NoError(t, err)
+		require.Equal(t, withL3, peers[0].Policy.ImportRouteTargets)
+		require.Equal(t, withL3, peers[0].Policy.ExportRouteTargets)
+		require.Equal(t, withL3, peers[1].Policy.ImportRouteTargets)
+		require.Equal(t, []string{"65000:7"}, peers[1].Policy.ExportRouteTargets, "an explicit export allowlist is kept as written")
 	})
 
 	t.Run("a VNI outside the route-target range is refused", func(t *testing.T) {

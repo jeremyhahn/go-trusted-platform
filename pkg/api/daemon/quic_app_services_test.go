@@ -62,6 +62,14 @@ func appQUICOperations() []appQUICOperation {
 		{"messaging.GetStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetStats, &platformv1.GetMessagingStatsRequest{}},
 		{"messaging.GetDedupStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetDedupStats, &platformv1.GetMessagingDedupStatsRequest{}},
 		{"messaging.GetChannelStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetChannelStats, &platformv1.GetMessagingChannelStatsRequest{Channel: "events"}},
+		{"objectstorage.PutObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubPutObject, &platformv1.PutObjectRequest{Key: "docs:a.txt", Value: []byte("a"), TargetBackend: "local"}},
+		{"objectstorage.GetObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubGetObject, &platformv1.GetObjectRequest{Key: "docs:a.txt"}},
+		{"objectstorage.DeleteObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubDeleteObject, &platformv1.DeleteObjectRequest{Key: "docs:a.txt"}},
+		{"objectstorage.HeadObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubHeadObject, &platformv1.HeadObjectRequest{Key: "docs:a.txt"}},
+		{"objectstorage.ListObjects", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubListObjects, &platformv1.ListObjectsRequest{Prefix: "docs:"}},
+		{"objectstorage.CopyObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubCopyObject, &platformv1.CopyObjectRequest{SourceKey: "docs:a.txt", DestinationKey: "docs:b.txt", TargetBackend: "local"}},
+		{"objectstorage.ListObjectsByTag", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubListObjectsByTag, &platformv1.ListObjectsByTagRequest{TagName: "env"}},
+		{"objectstorage.ListTenantObjects", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubListTenantObjects, &platformv1.ListTenantObjectsRequest{TenantId: "acme"}},
 		{"switch.ListPorts", quicwire.OpSwitchCategory, quicwire.SwitchSubListPorts, &platformv1.ListSwitchPortsRequest{SwitchName: "core-1"}},
 		{"switch.GetPortStatus", quicwire.OpSwitchCategory, quicwire.SwitchSubGetPortStatus, &platformv1.GetSwitchPortStatusRequest{SwitchName: "core-1", PortName: "eth1"}},
 		{"switch.SetPortVLAN", quicwire.OpSwitchCategory, quicwire.SwitchSubSetPortVLAN, &platformv1.SetSwitchPortVLANRequest{SwitchName: "core-1", PortName: "eth1", VlanId: 20}},
@@ -103,7 +111,7 @@ func TestQUICAppServices_EverySubOperationIsListed(t *testing.T) {
 }
 
 func TestQUICAppServices_ServeEverySubOperation(t *testing.T) {
-	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	for _, op := range appQUICOperations() {
 		resp := handler.HandleRequest(context.Background(), appQUICRequest(t, op.opcode, op.sub, op.request))
 		assert.Equal(t, quicwire.StatusOK, resp.Status, "%s: payload %q", op.name, resp.Payload)
@@ -111,7 +119,7 @@ func TestQUICAppServices_ServeEverySubOperation(t *testing.T) {
 }
 
 func TestQUICAppServices_DecodeReplies(t *testing.T) {
-	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	ctx := context.Background()
 
 	var stats platformv1.GetCacheStatsResponse
@@ -157,8 +165,8 @@ func TestQUICAppServices_UnwiredCategoryIsUnavailable(t *testing.T) {
 
 func TestQUICAppServices_MapsServiceErrors(t *testing.T) {
 	failing := newAppQUICHandler(appServersWith(
-		&fakeAppCache{err: errAppSDK{}}, &fakeAppScheduler{err: errAppSDK{}}, &fakeAppMessaging{err: errAppSDK{}}))
-	working := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+		&fakeAppCache{err: errAppSDK{}}, &fakeAppScheduler{err: errAppSDK{}}, &fakeAppMessaging{err: errAppSDK{}}, &fakeAppObjectStorage{err: errAppSDK{}}))
+	working := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	ctx := context.Background()
 
 	cases := []struct {
@@ -186,6 +194,12 @@ func TestQUICAppServices_MapsServiceErrors(t *testing.T) {
 			want:    quicwire.StatusInvalidArgument,
 		},
 		{
+			name:    "missing object key",
+			handler: working,
+			req:     appQUICRequest(t, quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubGetObject, &platformv1.GetObjectRequest{}),
+			want:    quicwire.StatusInvalidArgument,
+		},
+		{
 			name:    "undecodable request body",
 			handler: working,
 			req:     &quicwire.Request{Opcode: quicwire.OpCacheCategory, Payload: []byte{quicwire.CacheSubGetStats, 0xC1}},
@@ -201,7 +215,7 @@ func TestQUICAppServices_MapsServiceErrors(t *testing.T) {
 }
 
 func TestQUICAppServices_RefusesMalformedCategoryRequests(t *testing.T) {
-	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	ctx := context.Background()
 
 	// The authorization guard refuses these before dispatch; the dispatcher
@@ -218,10 +232,11 @@ func TestQUICAppServices_RefusesMalformedCategoryRequests(t *testing.T) {
 }
 
 func TestQUICServiceHandler_SetAppServices(t *testing.T) {
-	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+	handler := newAppQUICHandler(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	assert.NotNil(t, handler.cacheService)
 	assert.NotNil(t, handler.schedulerService)
 	assert.NotNil(t, handler.messagingService)
+	assert.NotNil(t, handler.objectStorageService)
 
 	// Missing servers leave nil interfaces, never typed nils, so the
 	// category answers unavailable instead of panicking.
@@ -229,4 +244,5 @@ func TestQUICServiceHandler_SetAppServices(t *testing.T) {
 	assert.Nil(t, handler.cacheService)
 	assert.Nil(t, handler.schedulerService)
 	assert.Nil(t, handler.messagingService)
+	assert.Nil(t, handler.objectStorageService)
 }

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,7 +132,7 @@ func (f *fakeATEN) cfg() *bmc.Config {
 func (f *fakeATEN) recordRequest(r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
+	f.requests = append(f.requests, r.URL.Path)
 	c, err := r.Cookie(cookieSID)
 	if err == nil && c.Value != "" {
 		f.requestsWithCreds = append(f.requestsWithCreds, r.URL.Path)
@@ -389,6 +390,11 @@ func TestReplace_HappyPath_CookieAuth(t *testing.T) {
 		if !found {
 			t.Errorf("%s did not carry SID cookie", p)
 		}
+	}
+	// The BMC must only be reset after the new cert is uploaded and validated.
+	wantOrder := []string{cgiLogin, cgiUploadSSL, cgiOp, cgiBMCReset}
+	if len(f.requests) < len(wantOrder) || !slices.Equal(f.requests[:len(wantOrder)], wantOrder) {
+		t.Errorf("request order = %v; want it to start with %v", f.requests, wantOrder)
 	}
 }
 

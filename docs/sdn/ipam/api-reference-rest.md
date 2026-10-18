@@ -1,10 +1,14 @@
 # IPAM REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The IPAM REST routes of the webservice and of platformd.
+
 IPAM endpoints are served by two stacks with the same paths and object
 shapes: the webservice (`pkg/webservice/v1/rest/gateway/ipam.go`, always
 mounted when the gateway service exists — this is the surface the WebUI
 uses) and the daemon's standalone REST server
-(`pkg/api/rest/gateway_handlers.go`, only when `EnableREST` is set). The
+(`pkg/api/rest/gateway_handlers.go:536`, when `EnableREST` is set — the
+default). The
 webservice wraps each response body shown below in the standard platform
 envelope (`{code, error, success, payload}`); the daemon stack returns it
 bare.
@@ -12,7 +16,12 @@ bare.
 On the webservice the whole surface is admin-gated: pool create, update
 and delete are operator controls over the address plan, so every endpoint
 below requires an authenticated caller holding `admin` and answers 401 or
-403 otherwise.
+403 otherwise (`pkg/webservice/v1/router.go:749`).
+
+The webservice also keeps an older, smaller IPAM surface under
+`/api/v1/gateway/ipam/` (`pkg/webservice/v1/rest/gateway/router.go:70`): list
+pools, list, allocate and release allocations, with release as
+`DELETE /api/v1/gateway/ipam/allocations`. It carries the same admin gate.
 
 ## Pool Endpoints
 
@@ -79,11 +88,13 @@ Content-Type: application/json
 }
 ```
 
-`hostname` is optional. List supports a pool filter query parameter.
+`hostname` is optional. No REST route takes a requested address: allocation
+is always dynamic. `GET .../allocations?pool_id=<id>` filters by pool;
+`GET .../pools?zone=<zone>` filters pools by zone.
 
 ## Error Codes
 
-HTTP status codes: 400 (invalid CIDR/parameters, a reserved address, a
+Webservice HTTP status codes: 400 (invalid CIDR/parameters, a reserved address, a
 reserved prefix or range that does not fit the pool, **and deleting a pool
 that still has allocations**), 404 (pool or allocation not found), 409
 (pool already exists, pool name taken, CIDR overlaps, IP already
@@ -97,6 +108,10 @@ groups `FailedPrecondition` with `InvalidArgument` onto 400
 above all come from `AlreadyExists`. Changing this to 409 would mean
 changing that shared mapping for every REST surface in the platform, not
 just IPAM — see issue #665.
+
+The daemon stack maps errors itself (`writeGatewayError`,
+`pkg/api/rest/gateway_handlers.go:1103`) and differs in two places: a pool that
+still has allocations is **409**, and an exhausted pool is **503**.
 
 ## See Also
 

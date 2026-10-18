@@ -302,6 +302,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.TPMService/Quote":       "platform_tpm_quote",
 	"/platform.v1.TPMService/VerifyQuote": "platform_tpm_verify_quote",
 	"/platform.v1.TPMService/Certify":     "platform_tpm_certify",
+	// Capabilities, platform attributes and PCR extend (#704); the argument
+	// and result mapping is in tpm_attrs.go.
+	"/platform.v1.TPMService/GetCapabilities":       "platform_tpm_capabilities",
+	"/platform.v1.TPMService/GetPlatformAttributes": "platform_tpm_platform",
+	"/platform.v1.TPMService/ExtendPCR":             "platform_tpm_pcr_extend",
 
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",
@@ -387,14 +392,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 
 	// SDN — proto: pkg/api/grpc/proto/sdn.proto; registered in sdn.go
 
-	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto
-	"/platform.v1.DNSService/AddRecord":    "dns_add_record",
-	"/platform.v1.DNSService/DeleteRecord": "dns_delete_record",
-	"/platform.v1.DNSService/ListRecords":  "dns_list_records",
-	"/platform.v1.DNSService/Resolve":      "dns_resolve",
-	"/platform.v1.DNSService/CreateZone":   "dns_create_zone",
-	"/platform.v1.DNSService/DeleteZone":   "dns_delete_zone",
-	"/platform.v1.DNSService/ListZones":    "dns_list_zones",
+	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto; registered in dns.go
 
 	// Tenant — proto: pkg/api/grpc/proto/tenant.proto; registered in tenant.go.
 

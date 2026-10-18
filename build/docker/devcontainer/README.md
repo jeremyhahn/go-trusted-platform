@@ -7,7 +7,6 @@ This development container provides a complete environment for integration testi
 - **Go Development**: Go 1.25.5 with all standard tooling
 - **TPM Support**: swtpm (software TPM) for TPM 2.0 simulation
 - **QEMU/KVM**: Full virtualization support with KVM acceleration
-- **QEMU-CanoKey**: Custom QEMU build with FIDO2/CanoKey emulation
 - **Open vSwitch**: Complete SDN/networking stack for integration tests
 - **Secure Boot**: UEFI, OVMF, and secure boot tooling
 - **ISO Building**: Tools for creating custom bootable ISO images
@@ -391,13 +390,12 @@ docker volume prune
 
 ## Advanced Usage
 
-### Custom QEMU Builds
+### QEMU
 
-The container includes two QEMU versions:
-1. `/usr/bin/qemu-system-x86_64`: Standard Debian package
-2. `/usr/local/bin/qemu-system-x86_64-canokey`: Custom build with CanoKey (FIDO2 emulation)
-
-Use the CanoKey version for FIDO2/WebAuthn integration tests.
+The container carries Debian's `qemu-system-x86_64` and `qemu-system-aarch64`
+(with OVMF and AAVMF) for the compute suite's `local-qemu` provider. The custom
+CanoKey QEMU build is gone: no suite used it, and its build dependencies (GTK,
+SDL, SPICE headers) were most of the image's trivy findings (#933).
 
 ### OVS OpenFlow Testing
 
@@ -423,7 +421,7 @@ For issues specific to:
 
 - Base Image: Debian Bookworm
 - Go: 1.25.5
-- Node.js: 21.1.0
-- QEMU: 8.2.0 (+ custom CanoKey build)
+- Node.js: the `NODE_VERSION` in `scripts/tool-pins.sh` (official release archive, digest-checked; npm bundled, no yarn)
+- QEMU: Debian Bookworm package
 - OVS: Latest from Debian Bookworm repository
 - swtpm: Latest from Debian Bookworm repository

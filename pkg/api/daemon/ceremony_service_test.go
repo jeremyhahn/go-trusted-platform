@@ -206,6 +206,10 @@ func TestCeremonyService_Validation(t *testing.T) {
 			}
 		})
 	}
+	if backend.completeCalled != 0 || backend.claimShareCalls != 0 || backend.signCSRCalled != 0 {
+		t.Errorf("an invalid request reached the backend: complete=%d claimShare=%d signCSR=%d",
+			backend.completeCalled, backend.claimShareCalls, backend.signCSRCalled)
+	}
 }
 
 func TestCeremonyService_BackendSuccess(t *testing.T) {
@@ -237,8 +241,14 @@ func TestCeremonyService_BackendSuccess(t *testing.T) {
 	if _, err := svc.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{Username: "alice", Nonce: "n", Signature: []byte("s")}); err != nil {
 		t.Fatalf("ClaimShareComplete: %v", err)
 	}
+	if backend.claimShareCalls != 2 {
+		t.Errorf("ClaimShareBegin/Complete reached the backend %d times, want 2", backend.claimShareCalls)
+	}
 	if _, err := svc.SignCSR(ctx, &CeremonySignCSRRequest{Username: "alice", CSRPEM: "pem"}); err != nil {
 		t.Fatalf("SignCSR: %v", err)
+	}
+	if backend.signCSRCalled != 1 {
+		t.Errorf("SignCSR called %d times, want 1", backend.signCSRCalled)
 	}
 }
 

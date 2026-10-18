@@ -12,5 +12,11 @@ work/
 *.log
 coverage/
 
-# Node modules (web UI has its own Dockerfile)
-web/node_modules/
+# Node modules, wherever a local npm install left them: the integration stage
+# copies the whole context, and the trivy image gate would scan them (#933).
+**/node_modules/
+
+# Forge credentials for the devcontainer module download (MODULE_ENV_FILE in
+# the Makefile). They reach the build only as a BuildKit secret; the
+# integration stage copies the whole context, so this file must never be in it.
+.devcontainer/.env

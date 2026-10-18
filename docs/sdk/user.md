@@ -250,12 +250,12 @@ resp, err := baas.Vector().SearchSimilar(ctx, &vector.SearchSimilarRequest{
 ```
 
 An accessor returns nil when quicbaasd does not serve that service. Every
-accessor other than Cache, Scheduler and Messaging is reached only through
-the side-client.
-platformd serves Cache, Scheduler and Messaging itself: `platform.Client`'s
-`Cache()`, `Scheduler()` and `Messaging()` reach them on the platform
-transport, and `platformctl cache`, `scheduler` and `messaging` drive them
-([cli.md](cli.md)).
+accessor other than Cache, Scheduler, Messaging and ObjectStorage is reached
+only through the side-client.
+platformd serves those four itself: `platform.Client`'s `Cache()`,
+`Scheduler()`, `Messaging()` and `ObjectStorage()` reach them on the platform
+transport, and `platformctl cache`, `scheduler`, `messaging` and
+`objectstorage` drive them ([cli.md](cli.md)).
 
 ## 6. In-process (embedded)
 

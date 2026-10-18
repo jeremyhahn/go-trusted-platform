@@ -25,6 +25,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -45,6 +46,12 @@ var ErrLUKSFIDO2InvalidToken = errors.New("luks fido2 handler: invalid token pay
 // ErrLUKSFIDO2DeriveFailed indicates the HMAC-SECRET derivation against the
 // authenticator failed (device missing, user cancelled, etc.).
 var ErrLUKSFIDO2DeriveFailed = errors.New("luks fido2 handler: hmac-secret derivation failed")
+
+// ErrLUKSFIDO2PINUnsupported refuses a PIN-required enrolment before any
+// derivation, keyslot or token write: the SDK fido2 re-export has no
+// PIN-capable handler (SDK seam #584). It is the API's sentinel, so every
+// transport maps the backend's refusal the same way.
+var ErrLUKSFIDO2PINUnsupported = daemon.ErrLUKSFIDO2PINUnsupported
 
 // LUKSFIDO2TokenType is the LUKS2 token type stored for trusted-platform
 // FIDO2 slots. Mirrors the token type already routed by luksKeySlotTypeMap.
@@ -122,7 +129,12 @@ func (h *luksFIDO2Handler) EnrollCredential(ctx context.Context, credentialID st
 
 // DeriveEnroll is the richer API used by the LUKS backend when it wants both
 // the derived key *and* the token payload to persist to the LUKS2 header.
+// requirePIN is refused with ErrLUKSFIDO2PINUnsupported before any
+// derivation, and the token records only the verification it enforced.
 func (h *luksFIDO2Handler) DeriveEnroll(ctx context.Context, credentialID string, requirePIN, requireUV bool) (*LUKSFIDO2EnrollResult, error) {
+	if requirePIN {
+		return nil, ErrLUKSFIDO2PINUnsupported
+	}
 	if h.xkms == nil {
 		return nil, ErrLUKSFIDO2NoXKMSHandler
 	}
@@ -146,7 +158,7 @@ func (h *luksFIDO2Handler) DeriveEnroll(ctx context.Context, credentialID string
 		CredentialID: credentialID,
 		Salt:         base64.StdEncoding.EncodeToString(salt),
 		RPID:         h.rpID,
-		UPRequired:   requirePIN || requireUV,
+		UPRequired:   requireUV,
 	}
 	tokenJSON, err := json.Marshal(token)
 	if err != nil {

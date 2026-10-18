@@ -1,5 +1,8 @@
 # Stateful Firewall
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The OVS-native stateful firewall and NAT of the SDN gateway.
+
 OVS-native stateful firewall and NAT for the trusted-platform SDN gateway.
 All enforcement happens in the OVS kernel datapath using connection
 tracking (`ct()` / `ct_state`) flows — there is no userspace packet path.
@@ -11,16 +14,18 @@ manages their lifecycle, nothing more.
 
 The [zone matrix](../../architecture/reference-network.md) is the single
 source of truth for inter-zone policy. The firewall service compiles it
-into conntrack flows in two dedicated tables of the overlay OpenFlow
-pipeline:
+into conntrack flows in two dedicated tables of the gateway's base OpenFlow
+pipeline (`pkg/sdn/gateway/pipeline.go`). The firewall, NAT and load
+balancer are refused beside an enabled overlay
+(`ErrOverlayServiceConflict`, `pkg/sdn/gateway/types.go:1421`).
 
 | Table | Role |
 |-------|------|
-| 10 | Overlay VXLAN decap (existing). The firewall installs a priority-2 diversion flow here; the base pipeline is untouched |
+| 10 | Base pipeline ingress; its default continues to table 30. The firewall installs a priority-2 diversion flow here; the base pipeline is untouched |
 | 20 | Conntrack gate — per-zone `ip` flows send traffic through `ct(zone=Z)` |
 | 21 | Conntrack verdict — `+est`/`+rel` fast-path, `+inv` drop, `+new` consults the zone matrix |
 | 25 | NAT — `ct(commit, nat(...))` SNAT/DNAT commits (NAT service) |
-| 30 | Overlay MAC learning (existing) — traffic re-enters the base pipeline here |
+| 30 | MAC learning — traffic re-enters the base pipeline here |
 
 - **New connections** (`ct_state=+new+trk`) are checked against the
   compiled matrix: allowed zone pairs get `ct(commit)` and continue;
@@ -51,7 +56,7 @@ gateway:
 ```
 
 When `firewall.enabled` is false, nothing changes: the firewall installs
-zero flows and the overlay pipeline is byte-identical to a build without
+zero flows and the base pipeline is byte-identical to a build without
 the feature.
 
 ## Behavior Guarantees
@@ -60,8 +65,8 @@ the feature.
   leave the kernel (or the NIC, with hardware offload).
 - **Additive activation.** The service diverts table 10 into the ct
   pipeline with a single flow it owns; stopping the service removes the
-  diversion first, then sweeps its flows by cookie. The base overlay
-  pipeline is never edited.
+  diversion first, then sweeps its flows by cookie. The base pipeline is
+  never edited.
 - **Deterministic teardown.** Every firewall flow carries cookie
   `0xF1BE0001…`, every NAT flow `0xF1BE0002…`; teardown is one
   cookie-masked `OFPFC_DELETE`.

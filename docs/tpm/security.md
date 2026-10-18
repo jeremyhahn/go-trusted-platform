@@ -1,5 +1,8 @@
 # TPM Security Considerations
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> TPM CVEs, mitigations and deployment practice.
+
 This document provides security guidance for TPM 2.0 implementations, including known vulnerabilities (CVEs), mitigation strategies, and security best practices.
 
 ## Common Vulnerabilities and Exposures (CVEs)
@@ -117,8 +120,7 @@ An out-of-bounds read vulnerability exists in TPM 2.0's Module Library allowing 
 1. **Enable Encrypted Sessions**
    ```yaml
    tpm:
-     sessions:
-       encrypt_sessions: true
+     encrypt-sessions: true
    ```
    - Protects against CPU-TPM bus snooping attacks
    - Encrypts command parameters and responses
@@ -208,12 +210,15 @@ When operating in FIPS mode:
 ### TPM Lockout Recovery
 
 ```bash
-# Clear lockout with lockout authorization
-platformctl tpm clear --lockout-pin
+# Clear the TPM with the owner/lockout hierarchy password
+platformctl tpm clear --owner-password <password> --confirm
 
-# Factory reset (requires physical presence or UEFI)
-platformctl tpm clear --force
+# Clear via the UEFI Physical Presence Interface (bypasses DA lockout, reboots)
+platformctl tpm clear --force --confirm
 ```
+
+Without `--confirm`, `tpm clear` prints a warning and does nothing
+(`pkg/cli/commands/tpm/clear.go`).
 
 ### Suspected Compromise
 

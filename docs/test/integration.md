@@ -272,6 +272,7 @@ The following test packages have multi-protocol adapters implemented:
 | `pxe` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tenant` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `device` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `objectstorage` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Directory Structure
 
@@ -390,8 +391,8 @@ deliberate exception. They run on the host against services the caller has
 already started, they say so in their help text, and they are not what CI or a
 lane runs.
 
-No workflow runs these suites; they need the devcontainer. `.github/workflows/batch.yml`
-(#860) is the closest thing: a `workflow_dispatch`-only workflow, dispatched on
+CI runs `make integration-test` in its full tier (see CI below). The other
+workflow that touches tests is `.github/workflows/batch.yml` (#860): a `workflow_dispatch`-only workflow, dispatched on
 `main` and never part of a merge gate, that runs on the self-hosted `batch`
 runners. It fuzzes every `Fuzz*` target, runs the `make test-race` package set
 with `-count=3`, soaks by looping `make test-race` (not these suites), and
@@ -491,14 +492,104 @@ exactly that until #492.
 not follow this: they test packages under `pkg/`, not a suite under
 `test/integration`, so the runner has no key for them.
 
-No target hand-writes its own `docker run` of the runner either, including
-`make integration-test`, which calls the define with the runner's `all`
-keyword. A hand-written block drifts: `integration-test`, `-sdn` and
-`-barrier-gate` lost the define's module-cache mount and `GOWORK=off`, so the
-container resolved every module over the network and the SDN suite never got
-past building `platformd` (#539). `pkg/arch/integrationsuite_test.go` fails
-`make test` on any recipe that invokes the runner outside the define, and on a
-define that drops either flag.
+No target hand-writes its own `docker run` of the runner either. A
+hand-written block drifts: `integration-test`, `-sdn` and `-barrier-gate` lost
+the define's module-cache mount and `GOWORK=off`, so the container resolved
+every module over the network and the SDN suite never got past building
+`platformd` (#539). `pkg/arch/integrationsuite_test.go` fails `make test` on
+any recipe that names the runner outside the define, and on a define that
+drops either flag.
+
+`make integration-test` is the one target that does not use the define. It is
+the CI standard's integration stage, so it builds the `integration` stage of
+`build/docker/devcontainer/Dockerfile` as `IT_IMAGE` and runs
+`build/docker/devcontainer/compose.yaml`'s `integration` service under the
+compose project `IT_PROJECT`. The service's entrypoint is the runner, so the
+Makefile passes it only `all` and the tags; the service carries the define's
+flags (privileged, `/dev/net/tun`, an exec `/tmp`, `GOWORK=off`). The image
+bakes the source and the module cache with `GOPROXY=off`, so nothing is
+bind-mounted and nothing is fetched. The target tears the stack down on every
+exit and exits with the suites' status.
+
+### CI
+
+`.github/workflows/ci.yml` is the canonical CI (handbook `ci-standard.md`,
+ci-template). Its five stages are Makefile targets, `make build`, `make test`,
+`make integration-test`, `make security` and `make deps-check`, and run in the
+devcontainer image so a developer and CI run the same thing:
+
+| Job | Tier | What it runs |
+|-----|------|--------------|
+| `image` | PR | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
+| `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
+| `lint`, `sdkjs`, `security`, `build`, `test` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls`; the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
+| `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
+| `fips` | main only | `make test-fips`; outside the gate |
+
+The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
+labelled `ci:full`. `CI Gate` passes when every PR-tier job passed and every
+full-tier job passed or was not selected.
+
+The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
+the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
+--ignore-unfixed`, handbook `devops.md` §8). It skips `/gomodcache`, the baked
+third-party module cache, whose test-fixture keys are not credentials; module
+vulnerabilities stay gated by govulncheck and `trivy fs` in `make security`.
+Its suppressions are `build/docker/devcontainer/trivyignore-image.yaml`, not
+the root `.trivyignore`: each entry is scoped by path to one package copy and
+carries its reason and an `expired_at` date, after which the finding fails the
+gate again. Today it holds only advisories in the dependencies npm itself
+bundles, which no Node or npm release fixes yet.
+
+The images come from one Dockerfile, `build/docker/devcontainer/Dockerfile`,
+built from the repository root. `scripts/tool-pins.sh` holds the base image and
+the pins for govulncheck, trivy and Node.js (the integration image's official
+Node release archive, digest-checked per architecture in place of nvm), and the
+Makefile includes it;
+golangci-lint, actionlint, gosec and swag stay pinned in their
+`build/tools-src` modules, so each links the dependency versions its module
+names rather than the tool's own (#933). The integration stage installs only
+the packages a suite, the runner or a Makefile target run there calls; the
+CanoKey QEMU build, autotools, tpm2-abrmd, yubikey-manager, the Secure Boot
+signing tools, the X server and the legacy network tools were dropped because
+nothing called them, and the `trivy image` step scans every package left. The toolchain image is tagged with a hash of its inputs
+(`make -s toolchain-image`). Forge credentials reach the build only as the
+`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. Every job that starts
+containers first runs `scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-`,
+which removes the stacks a runner that died mid-job left behind.
+
+The toolchain container writes in four places: the checkout at `/src`, the
+build cache at `/gocache` (a named volume under compose, the container's own
+disk-backed layer under `scripts/in-toolchain-image.sh`), `/var/tmp` (likewise
+a named volume or the container's layer), which is `TMPDIR`, and a 3 GB tmpfs
+at `/tmp`, which is `HOME`. The image sets `GOTMPDIR=/gocache`, so the go
+command's work directory, every compiled package and linked test binary of a
+run, sits on disk beside the cache. `make test` over the whole tree needs more
+than `/tmp` holds: on a cold cache at `-p 8` its work directory peaked at
+4.2 GB and the build cache ended at 3.5 GB, and the peak grows with the
+runner's CPU count.
+
+The linker does not follow `GOTMPDIR`. An external (cgo) link writes its
+objects under `os.MkdirTemp("", "go-link-")` (`hostlinksetup` in
+`cmd/link/internal/ld/lib.go`), which follows `TMPDIR`, and `make test` links
+one test binary per CPU at once; with `TMPDIR=/tmp` those links failed with
+`no space left on device`. `/var/tmp` is on disk, and like `/tmp` it is sticky
+under root-owned ancestors, so a 0700 directory made under `os.TempDir()`
+still passes `cmd/deployer-pin`'s ancestor check, and its path is short
+enough for the Unix sockets the tests bind there. `t.TempDir()` follows
+`GOTMPDIR` and lands in `/gocache`.
+
+The stages that get a network (`make security`, `make deps-check` and CI's
+`trivy image`, with `IN_IMAGE_NETWORK=bridge`) keep their downloads off `/tmp`
+as well. `scripts/in-toolchain-image.sh` points their writable module cache at
+`/gocache/mod`: it starts empty, so the stage downloads its whole module graph
+(about 2.3 GB unpacked for the root module). The image sets
+`TRIVY_CACHE_DIR=/gocache/trivy`, so trivy's vulnerability DB (1.6 GB
+unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
+`make security` failed writing `trivy.db` with `no space left on device`.
+
+To run a stage locally as CI does: `make docker-build`, then
+`make docker-run CMD='make test'`.
 
 ## Protocol Parity Assertions
 
@@ -640,11 +731,12 @@ Two helpers in `test/integration/helpers` carry this:
   cleanup if **no** transport ran, so a suite cannot degrade to zero adapters
   and still report success.
 
-Environment guards that fire *before* the adapter loop remain skips: they state
-that the suite is not applicable here, rather than hiding a transport that was
-supposed to work. `SkipIfNoTPM`, `SkipIfNoOVS` and their siblings are
-unaffected. The runner starts OVS and swtpm for every target, so in a `make` run these guards fire only when that
-bring-up failed, and the runner has already printed a warning saying so. For
+Environment guards fail as well. A suite whose prerequisite (a TPM, OVS,
+swtpm, a configured daemon section) is missing fails; where a suite checks the
+prerequisite itself, the failure is a typed error naming it and how to provide
+it. Nothing in `test/integration` skips (#260). The runner starts OVS and swtpm for every target, so in a `make`
+run such a failure means that bring-up failed, and the runner has already
+printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
@@ -653,8 +745,9 @@ suite runs rather than handing the suites endpoints nothing is listening on.
 
 ## A Missing Surface Is Declared by Type, Never by Error Text
 
-A subtest may skip because an operation has no endpoint on a transport, but
-only when that gap is *declared*. Suites used to skip whenever the error text
+A subtest whose operation has no endpoint on a transport fails with the
+declared gap's own text, naming the transport and operation; it is never
+skipped (#260). The gap must be *declared*. Suites used to skip whenever the error text
 contained one of a dozen phrases ("not implemented", "unavailable", "501",
 "404", "unknown flag", ...), so a 404, a mistyped CLI flag, a timeout or a
 failed handshake read as "not built yet" (issue #487). Error text is never
@@ -667,16 +760,16 @@ matched now.
   names where the gap is recorded.
 - `surface.IsNotImplemented(err)` is true only for an `ErrNoSurface` anywhere in
   the chain (`errors.As`) or a gRPC status with `codes.Unimplemented`.
-- `surface.SkipIfNotImplemented(t, err)` skips on exactly that and leaves every
-  other error to the caller, which fails with its text or asserts it as an
+- `surface.RequireImplemented(t, err)` fails the test on exactly that, with the
+  gap's text, and leaves every other error to the caller, which fails with its text or asserts it as an
   expected refusal.
 - `surface.IsDeclaredRefusal(err, sentinels...)` recognises a deployment gap
   the daemon declares with a sentinel (for example
   `daemon.ErrFIDO2NotConfigured`), either in the chain or carried across the
   wire as that sentinel's exact text. The match comes from the sentinel value,
   so renaming or retiring a sentinel breaks the build rather than widening the
-  skip. The fido2, piv, luks and ceremony suites skip on their backend
-  sentinels this way.
+  match. The fido2, piv and luks suites assert their backend sentinels as the
+  expected refusal this way.
 
 Do not add a phrase list to a suite. If a transport lacks an operation, make
 its adapter return `ErrNoSurface`. If the server refuses for a deployment
@@ -691,7 +784,7 @@ reason, match its sentinel with `IsDeclaredRefusal`.
 5. **Never Skip an Unreachable Transport** - A transport whose `Setup` fails has
    not been tested. Fail with `helpers.RequireAdapterSetup` or
    `AdapterGate.RequireSetup`, never `t.Skip` (see the section above)
-6. **Skip Only on a Typed Declaration** - `surface.SkipIfNotImplemented` or a
-   server sentinel through `surface.IsDeclaredRefusal`, never a match on error
-   text (see the section above)
+6. **Recognise a Gap Only by Its Typed Declaration** - `surface.RequireImplemented`
+   or a server sentinel through `surface.IsDeclaredRefusal`, never a match on
+   error text (see the section above)
 7. **Assert Behavior, Not Implementation** - Test outcomes, not internals

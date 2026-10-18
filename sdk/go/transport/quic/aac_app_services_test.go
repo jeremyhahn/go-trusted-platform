@@ -35,6 +35,7 @@ func TestAppServiceMethodsRouteToTheirCategory(t *testing.T) {
 		{platformv1.CacheService_ServiceDesc, quicwire.OpCacheCategory},
 		{platformv1.SchedulerService_ServiceDesc, quicwire.OpSchedulerCategory},
 		{platformv1.MessagingService_ServiceDesc, quicwire.OpMessagingCategory},
+		{platformv1.ObjectStorageService_ServiceDesc, quicwire.OpObjectStorageCategory},
 	}
 	for _, service := range services {
 		if _, isCategory := categoryOpcodes[service.category]; !isCategory {
@@ -71,6 +72,7 @@ func TestAppServiceSubOpcodesCoverOnlyServedMethods(t *testing.T) {
 		platformv1.CacheService_ServiceDesc,
 		platformv1.SchedulerService_ServiceDesc,
 		platformv1.MessagingService_ServiceDesc,
+		platformv1.ObjectStorageService_ServiceDesc,
 	} {
 		for _, m := range desc.Methods {
 			declared["/"+desc.ServiceName+"/"+m.MethodName] = true

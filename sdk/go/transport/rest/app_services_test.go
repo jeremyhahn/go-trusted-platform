@@ -165,12 +165,56 @@ func TestAppServiceRoutesMatchTheDaemonHandlers(t *testing.T) {
 			args:   &platformv1.GetMessagingDedupStatsRequest{},
 			verb:   http.MethodGet, path: "/api/v1/messaging/dedup-stats",
 		},
+		{
+			method: platformv1.ObjectStorageService_PutObject_FullMethodName,
+			args:   &platformv1.PutObjectRequest{Key: "docs:a/b c.txt", Value: []byte("hi"), Tags: map[string]string{"env": "prod"}},
+			verb:   http.MethodPost, path: "/api/v1/object-storage/objects",
+			wantBody: &platformv1.PutObjectRequest{Key: "docs:a/b c.txt", Value: []byte("hi"), Tags: map[string]string{"env": "prod"}},
+		},
+		{
+			// The key carries ":", "/" and a space, so it travels in the query.
+			method: platformv1.ObjectStorageService_GetObject_FullMethodName,
+			args:   &platformv1.GetObjectRequest{Key: "docs:a/b c.txt", IncludeMetadata: true},
+			verb:   http.MethodGet, path: "/api/v1/object-storage/object?include_metadata=true&key=docs%3Aa%2Fb+c.txt",
+		},
+		{
+			method: platformv1.ObjectStorageService_DeleteObject_FullMethodName,
+			args:   &platformv1.DeleteObjectRequest{Key: "docs:a.txt", TenantId: "acme"},
+			verb:   http.MethodDelete, path: "/api/v1/object-storage/object?key=docs%3Aa.txt&tenant_id=acme",
+		},
+		{
+			method: platformv1.ObjectStorageService_HeadObject_FullMethodName,
+			args:   &platformv1.HeadObjectRequest{Key: "docs:a.txt"},
+			verb:   http.MethodGet, path: "/api/v1/object-storage/object/metadata?key=docs%3Aa.txt",
+		},
+		{
+			method: platformv1.ObjectStorageService_ListObjects_FullMethodName,
+			args:   &platformv1.ListObjectsRequest{Prefix: "docs:", Limit: 10, IncludeTags: true},
+			verb:   http.MethodGet, path: "/api/v1/object-storage/objects?include_tags=true&limit=10&prefix=docs%3A",
+		},
+		{
+			method: platformv1.ObjectStorageService_CopyObject_FullMethodName,
+			args:   &platformv1.CopyObjectRequest{SourceKey: "docs:a.txt", DestinationKey: "docs:b.txt"},
+			verb:   http.MethodPost, path: "/api/v1/object-storage/objects/copy",
+			wantBody: &platformv1.CopyObjectRequest{SourceKey: "docs:a.txt", DestinationKey: "docs:b.txt"},
+		},
+		{
+			method: platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName,
+			args:   &platformv1.ListObjectsByTagRequest{TagName: "env", TagValue: "prod"},
+			verb:   http.MethodGet, path: "/api/v1/object-storage/objects/by-tag?tag_name=env&tag_value=prod",
+		},
+		{
+			method: platformv1.ObjectStorageService_ListTenantObjects_FullMethodName,
+			args:   &platformv1.ListTenantObjectsRequest{TenantId: "acme", Limit: 5},
+			verb:   http.MethodGet, path: "/api/v1/object-storage/tenants/acme/objects?limit=5",
+		},
 	}
 	declared := 0
 	for _, desc := range []grpc.ServiceDesc{
 		platformv1.CacheService_ServiceDesc,
 		platformv1.SchedulerService_ServiceDesc,
 		platformv1.MessagingService_ServiceDesc,
+		platformv1.ObjectStorageService_ServiceDesc,
 	} {
 		declared += len(desc.Methods)
 	}

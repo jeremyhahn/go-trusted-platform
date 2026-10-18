@@ -72,6 +72,12 @@ func isBackendUnavailable(err error) bool {
 	)
 }
 
+// isPINRefusal reports whether err is the daemon's refusal of a PIN-required
+// FIDO2 enrolment (#934).
+func isPINRefusal(err error) bool {
+	return surface.IsDeclaredRefusal(err, daemonpkg.ErrLUKSFIDO2PINUnsupported)
+}
+
 // IsRoot returns true when the test is running as uid 0.
 func IsRoot() bool { return os.Geteuid() == 0 }
 

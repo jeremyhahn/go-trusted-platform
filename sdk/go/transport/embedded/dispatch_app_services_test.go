@@ -39,19 +39,21 @@ func (statsCacheServer) Clear(context.Context, *platformv1.ClearCacheRequest) (*
 	return nil, status.Error(codes.InvalidArgument, "entity_type or all is required")
 }
 
-// appServices returns a registry holding the three application services,
+// appServices returns a registry holding the four application services,
 // their service descriptors and the servers in descriptor order.
 func appServices() (*ServiceRegistry, []grpc.ServiceDesc, []any) {
 	cache := statsCacheServer{}
 	scheduler := platformv1.UnimplementedSchedulerServiceServer{}
 	messaging := platformv1.UnimplementedMessagingServiceServer{}
-	reg := &ServiceRegistry{Cache: cache, Scheduler: scheduler, Messaging: messaging}
+	objectStorage := platformv1.UnimplementedObjectStorageServiceServer{}
+	reg := &ServiceRegistry{Cache: cache, Scheduler: scheduler, Messaging: messaging, ObjectStorage: objectStorage}
 	descs := []grpc.ServiceDesc{
 		platformv1.CacheService_ServiceDesc,
 		platformv1.SchedulerService_ServiceDesc,
 		platformv1.MessagingService_ServiceDesc,
+		platformv1.ObjectStorageService_ServiceDesc,
 	}
-	return reg, descs, []any{cache, scheduler, messaging}
+	return reg, descs, []any{cache, scheduler, messaging, objectStorage}
 }
 
 // TestBuildHandlerMap_AppServicesEveryMethodReachesItsServer drives every

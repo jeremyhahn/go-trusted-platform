@@ -168,6 +168,18 @@ carries — the same base64url encoding the registration write-through enrolled
 the factor under. No username is collected and no directory is searched, which
 is why an account on a public email domain is not a special case.
 
+**Registration therefore requires a resident key.** A credential the
+authenticator cannot discover would enrol and then never sign in, so the
+platform sets the embedded server's `iam.webauthn.resident_key_requirement` to
+`required` (`pkg/storage/quicbaas/config.go`, `ToQuicBaaSConfig`) instead of
+taking the upstream `preferred` default. The registration options then carry
+`authenticatorSelection.residentKey: "required"`, and an authenticator that
+cannot store a discoverable credential refuses the ceremony in the browser. The
+setting is the embedded server's; a platform on a remote quicbaas transport gets
+whatever that server's own `iam.webauthn` section says. A credential enrolled
+before this rule under `preferred` keeps working only if the authenticator made
+it discoverable anyway; one that did not must be registered again.
+
 `begin` answers with the `PublicKeyCredentialRequestOptions` the browser passes
 to `navigator.credentials.get()`, plus the `session_id` the client echoes back on
 `finish` in the `X-Session-Id` header — the platform persists no ceremony state.
@@ -315,8 +327,17 @@ the principal's own to land. An operator whose only tenant is the operating one
 signs in to that tenant through the admin claim, not the browser login.
 
 Without a tenant user service (no tenant manager wired) the registry does not
-offer the `fido2` factor at all, since the only tenant left for its sessions
-would be the operating one.
+offer the `fido2` factor at all, and declines the WebAuthn routes, registration
+included, since the only tenant left for their sessions would be the operating
+one.
+
+Registration follows the same rule. The session minted at registration finish
+is for the workspace the registration created or the invitation joined, minted
+by `TenantUserService.IssueToken`; there is no unscoped JWT fallback. An
+invitation into the operating tenant is refused `403` at registration begin,
+before a ceremony opens or an account exists, and a registered user who still
+resolves to no tenant or to the operating tenant is refused `403` at finish
+instead of being issued a session.
 
 **Ownership.** `is_tenant_owner` in a login session is always `false`. Ownership
 has to come from the identity the backbone resolves, and the pinned SDK does not
@@ -1132,14 +1153,13 @@ its handler by design.
 
 | Routes | Why they are open | Blocker / mechanism |
 |---|---|---|
-| `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
+| `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); presents `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
 | `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body; registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false) | #238 — what a booting node presents is an architecture decision |
 | `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
 
 `GET /devices/config` is not in this table because no general listener mounts
 it. It is the unauthenticated boot-time config fetch. Only a webservice with
-`surface: provisioning`, bound inside the provisioning zone, serves it (#177,
-ruled 2026-10-14). That listener serves nothing else. An EK-bound challenge is
+`surface: provisioning`, bound inside the provisioning zone, serves it (#177). That listener serves nothing else. An EK-bound challenge is
 the planned follow-up ([`docs/device/architecture.md`](../device/architecture.md)
 §4.2).
 

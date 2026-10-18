@@ -38,9 +38,8 @@ type mockFlowController struct {
 }
 
 type mockFlow struct {
-	priority int
-	match    string
-	actions  string
+	match   string
+	actions string
 }
 
 func newMockFlowController() *mockFlowController {
@@ -58,9 +57,8 @@ func (m *mockFlowController) InstallFlow(bridgeName string, priority int, match 
 	}
 
 	m.flows[bridgeName] = append(m.flows[bridgeName], mockFlow{
-		priority: priority,
-		match:    match,
-		actions:  actions,
+		match:   match,
+		actions: actions,
 	})
 
 	return nil

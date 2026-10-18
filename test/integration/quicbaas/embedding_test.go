@@ -73,8 +73,8 @@ func TestEmbeddingService_Generate(t *testing.T) {
 	})
 }
 
-// TestEmbeddingService_Ollama tests Ollama embedding operations.
-// Note: These tests require Ollama to be running locally with embedding models available.
+// TestEmbeddingService_Ollama tests Ollama embedding operations. It needs an
+// Ollama reachable from the embedded QuicBaaS, with an embedding model.
 func TestEmbeddingService_Ollama(t *testing.T) {
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
@@ -90,12 +90,9 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 	})
 
 	t.Run("Health", func(t *testing.T) {
-		// Check Ollama health - this will fail if Ollama is not running
 		resp, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
 		if err != nil {
-			t.Logf("Ollama health check failed (expected if Ollama not running): %v", err)
-			t.Skip("Ollama is not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Health", Err: err})
 		}
 		assert.NotNil(t, resp)
 		t.Logf("Ollama status: available=%v", resp.Available)
@@ -104,9 +101,7 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 	t.Run("ListModels", func(t *testing.T) {
 		resp, err := ollama.ListModels(ctx, &quicbaassdk.OllamaListModelsRequest{})
 		if err != nil {
-			t.Logf("ListModels failed (expected if Ollama not running): %v", err)
-			t.Skip("Ollama is not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "ListModels", Err: err})
 		}
 		assert.NotNil(t, resp)
 		t.Logf("Available Ollama models: %d", len(resp.Models))
@@ -116,14 +111,11 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 	})
 
 	t.Run("EmbedWithDefaultModel", func(t *testing.T) {
-		// This requires an embedding model to be available in Ollama
 		resp, err := ollama.Embed(ctx, &quicbaassdk.OllamaEmbedRequest{
 			Text: "Hello, this is a test embedding request.",
 		})
 		if err != nil {
-			t.Logf("Embed failed (expected if Ollama not running or no model): %v", err)
-			t.Skip("Ollama embedding not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Embed", Err: err})
 		}
 		assert.NotNil(t, resp)
 		assert.NotEmpty(t, resp.Embedding)
@@ -172,12 +164,7 @@ func TestEmbeddingService_OllamaBatch(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// First check if Ollama is available
-	_, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
-	if err != nil {
-		t.Skip("Ollama is not available")
-		return
-	}
+	requireOllama(ctx, t, ollama)
 
 	t.Run("BatchEmbed", func(t *testing.T) {
 		inputs := []string{
@@ -190,9 +177,7 @@ func TestEmbeddingService_OllamaBatch(t *testing.T) {
 			Texts: inputs,
 		})
 		if err != nil {
-			t.Logf("EmbedBatch failed (may need embedding model): %v", err)
-			t.Skip("Ollama batch embedding not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "EmbedBatch", Err: err})
 		}
 		assert.NotNil(t, resp)
 		assert.Equal(t, len(inputs), len(resp.Embeddings))
@@ -244,12 +229,7 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// Check if Ollama is available for embedding generation
-	_, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
-	if err != nil {
-		t.Skip("Ollama is not available - skipping embedding+vector integration test")
-		return
-	}
+	requireOllama(ctx, t, ollama)
 
 	t.Run("EmbedAndStore", func(t *testing.T) {
 		// Generate embedding using Ollama
@@ -257,9 +237,7 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 			Text: "This is a test document for vector similarity search.",
 		})
 		if err != nil {
-			t.Logf("Ollama embed failed: %v", err)
-			t.Skip("Ollama embedding not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Embed", Err: err})
 		}
 
 		// Store the embedding in vector storage

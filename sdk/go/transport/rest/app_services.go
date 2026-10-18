@@ -22,15 +22,18 @@ import (
 // Daemon REST roots of the application services
 // (pkg/api/rest/app_service_handlers.go).
 const (
-	cacheBasePath     = "/api/v1/cache"
-	schedulerBasePath = "/api/v1/scheduler"
-	messagingBasePath = "/api/v1/messaging"
+	cacheBasePath         = "/api/v1/cache"
+	schedulerBasePath     = "/api/v1/scheduler"
+	messagingBasePath     = "/api/v1/messaging"
+	objectStorageBasePath = "/api/v1/object-storage"
 )
 
-// appServiceRoutes maps every CacheService, SchedulerService and
-// MessagingService method to its daemon route. Item routes carry the job or
-// channel in the path; GET and DELETE routes carry their filters in the
-// query, named after the proto field; the rest of the request is the body.
+// appServiceRoutes maps every CacheService, SchedulerService,
+// MessagingService and ObjectStorageService method to its daemon route.
+// Item routes carry the job, channel or tenant in the path; GET and DELETE
+// routes carry their filters in the query, named after the proto field; the
+// rest of the request is the body. Object keys hold "/" and ":", so they
+// travel in the query, never in the path.
 var appServiceRoutes = map[string]templatedRoute{
 	platformv1.CacheService_GetStats_FullMethodName:     appQueryRoute(cacheBasePath+"/stats", http.MethodGet, "entity_type"),
 	platformv1.CacheService_GetConfig_FullMethodName:    appQueryRoute(cacheBasePath+"/config", http.MethodGet),
@@ -59,6 +62,19 @@ var appServiceRoutes = map[string]templatedRoute{
 	platformv1.MessagingService_GetChannelStats_FullMethodName: appItemRoute(messagingBasePath+"/channels/{channel}/stats", http.MethodGet, "channel"),
 	platformv1.MessagingService_GetStats_FullMethodName:        appQueryRoute(messagingBasePath+"/stats", http.MethodGet),
 	platformv1.MessagingService_GetDedupStats_FullMethodName:   appQueryRoute(messagingBasePath+"/dedup-stats", http.MethodGet),
+
+	platformv1.ObjectStorageService_PutObject_FullMethodName: appQueryRoute(objectStorageBasePath+"/objects", http.MethodPost),
+	platformv1.ObjectStorageService_ListObjects_FullMethodName: appQueryRoute(objectStorageBasePath+"/objects", http.MethodGet,
+		"prefix", "tenant_id", "limit", "cursor", "include_tags"),
+	platformv1.ObjectStorageService_CopyObject_FullMethodName: appQueryRoute(objectStorageBasePath+"/objects/copy", http.MethodPost),
+	platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName: appQueryRoute(objectStorageBasePath+"/objects/by-tag", http.MethodGet,
+		"tag_name", "tag_value", "tenant_id", "limit", "cursor"),
+	platformv1.ObjectStorageService_GetObject_FullMethodName: appQueryRoute(objectStorageBasePath+"/object", http.MethodGet,
+		"key", "tenant_id", "include_metadata"),
+	platformv1.ObjectStorageService_DeleteObject_FullMethodName: appQueryRoute(objectStorageBasePath+"/object", http.MethodDelete, "key", "tenant_id"),
+	platformv1.ObjectStorageService_HeadObject_FullMethodName:   appQueryRoute(objectStorageBasePath+"/object/metadata", http.MethodGet, "key", "tenant_id"),
+	platformv1.ObjectStorageService_ListTenantObjects_FullMethodName: appItemRoute(objectStorageBasePath+"/tenants/{tenant_id}/objects", http.MethodGet,
+		"tenant_id", "limit", "cursor", "include_tags"),
 }
 
 // appQueryRoute is a route with no path parameter; each query field is sent

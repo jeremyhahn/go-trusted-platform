@@ -1,6 +1,7 @@
 # DANE/TLSA Records
 
-DNS-based Authentication of Named Entities (DANE) enables certificate pinning via DNS.
+> **Status: REFERENCE**
+> DNS-based Authentication of Named Entities (DANE) enables certificate pinning via DNS.
 
 ## Overview
 

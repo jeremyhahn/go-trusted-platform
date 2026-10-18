@@ -1,5 +1,8 @@
 # Fabric API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The Go API of `pkg/sdn/fabric`.
+
 Package `github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric`. A Go library: there is no network
 API for the fabric manager (see [README](README.md#status)).
 
@@ -22,7 +25,8 @@ func NewManagerWithDrivers(config *FabricConfig, plan *netplan.Plan, logger *slo
 ```
 
 `NewManager` validates the configuration, refuses a nil plan (`ErrNilPlan`) and creates a driver per
-switch from the registered vendor factories. `NewManagerWithDrivers` takes caller-supplied drivers
+switch from the registered vendor factories; a vendor with no factory fails as `ErrDriverConnect`
+wrapping `ErrDriverNotFound`. The errors are struct types: match them with `errors.As`. `NewManagerWithDrivers` takes caller-supplied drivers
 keyed by switch ID.
 
 | Method | Does |

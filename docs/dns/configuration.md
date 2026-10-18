@@ -1,6 +1,7 @@
 # DNS Configuration Reference
 
-Complete configuration reference for the Trusted Platform DNS subsystem.
+> **Status: REFERENCE**
+> Complete configuration reference for the Trusted Platform DNS subsystem.
 
 ## Overview
 
@@ -98,7 +99,7 @@ dns:
   default-ttl: 3600
 
   # Private/internal IP addresses for macro expansion
-  private-ipv4: "192.168.1.100"
+  private-ipv4: "192.0.2.100"
   private-ipv6: "fd00::1"
 
   # Public IP addresses for macro expansion
@@ -309,8 +310,8 @@ internal:
 
   # Upstream forwarders (typically internal DNS infrastructure)
   forwarders:
-    - "192.168.1.1"
-    - "192.168.1.2"
+    - "198.51.100.1"
+    - "198.51.100.2"
 
   # Zone configuration
   zone:
@@ -1024,7 +1025,7 @@ Macros provide dynamic value expansion in zone configurations:
 ```yaml
 dns:
   public-ipv4: "203.0.113.50"
-  private-ipv4: "192.168.1.100"
+  private-ipv4: "192.0.2.100"
 
   public:
     zone:
@@ -1039,7 +1040,7 @@ dns:
     zone:
       records:
         a:
-          # Expands to: name: "<hostname>", value: "192.168.1.100"
+          # Expands to: name: "<hostname>", value: "192.0.2.100"
           - name: "${HOSTNAME}"
             value: "${PRIVATE_IPv4}"
             ttl: 3600
@@ -1057,7 +1058,7 @@ dns:
   default-ttl: 3600
 
   # IP addresses for macro expansion
-  private-ipv4: "192.168.1.100"
+  private-ipv4: "192.0.2.100"
   private-ipv6: "fd00::100"
   public-ipv4: "203.0.113.50"
   public-ipv6: "2001:db8::50"
@@ -1131,7 +1132,7 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
+      - "198.51.100.1"
     zone:
       name: "example.internal."
       ttl: 3600

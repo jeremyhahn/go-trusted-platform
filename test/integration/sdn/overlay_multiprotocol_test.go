@@ -375,18 +375,29 @@ func testTunnelListFilterByVNI(t *testing.T, ctx context.Context, adapter Overla
 		t.Fatalf("TunnelList failed: %v", err)
 	}
 
-	if len(allResult.Tunnels) == 0 {
-		t.Skip("No tunnels available for filter testing")
+	// Filter by the first tunnel's VNI. A single-node daemon has no remote
+	// VTEP and so no tunnel; a fresh VNI then stands in, and the filter must
+	// return nothing, because nothing carries it.
+	vni := generateUniqueVNI()
+	if len(allResult.Tunnels) > 0 {
+		vni = allResult.Tunnels[0].VNI
+	}
+	want := 0
+	for _, tunnel := range allResult.Tunnels {
+		if tunnel.VNI == vni {
+			want++
+		}
 	}
 
-	// Filter by the first tunnel's VNI
-	vni := allResult.Tunnels[0].VNI
 	filteredResult, err := adapter.TunnelList(ctx, TunnelListOptions{VNI: vni})
 	if err != nil {
 		t.Fatalf("TunnelList with filter failed: %v", err)
 	}
 
-	// All returned tunnels should have the specified VNI
+	// The filter returns exactly the unfiltered tunnels with that VNI.
+	if len(filteredResult.Tunnels) != want {
+		t.Errorf("TunnelList VNI %d returned %d tunnels, want %d", vni, len(filteredResult.Tunnels), want)
+	}
 	for _, tunnel := range filteredResult.Tunnels {
 		if tunnel.VNI != vni {
 			t.Errorf("Expected VNI %d, got %d", vni, tunnel.VNI)
@@ -440,18 +451,28 @@ func testMACListFilterByVNI(t *testing.T, ctx context.Context, adapter OverlayCo
 		t.Fatalf("MACList failed: %v", err)
 	}
 
-	if len(allResult.MACs) == 0 {
-		t.Skip("No MACs available for filter testing")
+	// Filter by the first MAC's VNI. With no remote VTEP nothing is learned;
+	// a fresh VNI then stands in, and the filter must return nothing.
+	vni := generateUniqueVNI()
+	if len(allResult.MACs) > 0 {
+		vni = allResult.MACs[0].VNI
+	}
+	want := 0
+	for _, mac := range allResult.MACs {
+		if mac.VNI == vni {
+			want++
+		}
 	}
 
-	// Filter by the first MAC's VNI
-	vni := allResult.MACs[0].VNI
 	filteredResult, err := adapter.MACList(ctx, MACListOptions{VNI: vni})
 	if err != nil {
 		t.Fatalf("MACList with filter failed: %v", err)
 	}
 
-	// All returned MACs should have the specified VNI
+	// The filter returns exactly the unfiltered MACs with that VNI.
+	if len(filteredResult.MACs) != want {
+		t.Errorf("MACList VNI %d returned %d MACs, want %d", vni, len(filteredResult.MACs), want)
+	}
 	for _, mac := range filteredResult.MACs {
 		if mac.VNI != vni {
 			t.Errorf("Expected VNI %d, got %d", vni, mac.VNI)
@@ -488,7 +509,7 @@ func testGatewayOperations(t *testing.T, ctx context.Context, adapter OverlayCom
 func testGatewayStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.GatewayStatus(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("GatewayStatus failed: %v", err)
 	}
 
@@ -509,7 +530,7 @@ func testGatewaySetMode(t *testing.T, ctx context.Context, adapter OverlayComman
 	// Get current status to restore later
 	status, err := adapter.GatewayStatus(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("GatewayStatus failed: %v", err)
 	}
 
@@ -519,7 +540,7 @@ func testGatewaySetMode(t *testing.T, ctx context.Context, adapter OverlayComman
 	newModes := []string{"overlay"}
 	result, err := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: newModes})
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("GatewaySetMode failed: %v", err)
 	}
 
@@ -581,7 +602,7 @@ func testBGPOperations(t *testing.T, ctx context.Context, adapter OverlayCommand
 func testBGPStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPStatus(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("BGPStatus failed: %v", err)
 	}
 
@@ -598,7 +619,7 @@ func testBGPStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 func testBGPPeers(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPPeers(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("BGPPeers failed: %v", err)
 	}
 
@@ -620,7 +641,7 @@ func testBGPPeers(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 func testBGPPrefixes(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPPrefixes(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("BGPPrefixes failed: %v", err)
 	}
 
@@ -640,13 +661,11 @@ func testBGPAnnounceWithdraw(t *testing.T, ctx context.Context, adapter OverlayC
 	// Check if BGP is enabled first
 	status, err := adapter.BGPStatus(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("BGPStatus failed: %v", err)
 	}
 
-	if !status.Enabled {
-		t.Skip("BGP not enabled, skipping announce/withdraw test")
-	}
+	requireBGPEnabled(t, status)
 
 	// Use a test prefix that won't conflict with real routing
 	testPrefix := "192.0.2.0/24" // TEST-NET-1 (RFC 5737)
@@ -658,7 +677,7 @@ func testBGPAnnounceWithdraw(t *testing.T, ctx context.Context, adapter OverlayC
 		NextHop: testNextHop,
 	})
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("BGPAnnounce failed: %v", err)
 	}
 
@@ -698,13 +717,11 @@ func testBGPAnnounceInvalidPrefix(t *testing.T, ctx context.Context, adapter Ove
 	// Check if BGP is enabled first
 	status, err := adapter.BGPStatus(ctx)
 	if err != nil {
-		skipIfGatewayNotHostedHere(t, err)
+		requireGatewayHostedHere(t, err)
 		t.Fatalf("BGPStatus failed: %v", err)
 	}
 
-	if !status.Enabled {
-		t.Skip("BGP not enabled")
-	}
+	requireBGPEnabled(t, status)
 
 	// Try to announce an invalid prefix
 	_, err = adapter.BGPAnnounce(ctx, BGPAnnounceOptions{
@@ -1186,19 +1203,23 @@ func TestOverlayStressOperations(t *testing.T) {
 // Helper Functions
 // =============================================================================
 
-// skipIfGatewayNotHostedHere skips a gateway or BGP subtest when, and only
-// when, platformd refused it because this node hosts no gateway runtime or
-// BGP speaker. platformd's GatewayService has no production caller that sets
-// either (the gateway runs in gatewayd), so these verbs answer "not
-// configured" on every node: that is #65, an open product gap, and this skip
-// names it rather than hiding it.
+// gatewayRemedy says what a gateway or BGP subtest needs from platformd.
+const gatewayRemedy = "platformd's GatewayService needs a gateway runtime and BGP speaker; " +
+	"the gateway runs in gatewayd and no production caller hands either to platformd (#65)"
+
+// requireGatewayHostedHere fails a gateway or BGP subtest with a
+// PrerequisiteError when, and only when, platformd refused it because this
+// node hosts no gateway runtime or BGP speaker. platformd's GatewayService
+// has no production caller that sets either (the gateway runs in gatewayd),
+// so these verbs answer "not configured" on every node: that is #65, an open
+// product gap, and the failure names it.
 //
 // It replaces a catch-all that skipped on any error containing "not
 // implemented", "not available", "unknown flag", a 404, a cancelled context
 // and more. That helper is how an adapter passing a flag the CLI does not
 // have (`--dns`) reported as skipped instead of failing (#730). Every other
-// error now fails the subtest.
-func skipIfGatewayNotHostedHere(t *testing.T, err error) {
+// error fails the subtest at its call site.
+func requireGatewayHostedHere(t *testing.T, err error) {
 	t.Helper()
 	msg := err.Error()
 	for _, refusal := range []string{
@@ -1207,8 +1228,17 @@ func skipIfGatewayNotHostedHere(t *testing.T, err error) {
 		"gateway feature not configured",          // QUIC, REST
 	} {
 		if strings.Contains(msg, refusal) {
-			t.Skipf("platformd hosts no gateway runtime or BGP speaker (#65): %v", err)
+			t.Fatal(&PrerequisiteError{Prerequisite: "a gateway runtime and BGP speaker in platformd", Remedy: gatewayRemedy, Err: err})
 		}
+	}
+}
+
+// requireBGPEnabled fails a BGP subtest that announces prefixes when the
+// speaker platformd reports is not enabled.
+func requireBGPEnabled(t *testing.T, status *BGPStatusResult) {
+	t.Helper()
+	if !status.Enabled {
+		t.Fatal(&PrerequisiteError{Prerequisite: "an enabled BGP speaker", Remedy: gatewayRemedy})
 	}
 }
 

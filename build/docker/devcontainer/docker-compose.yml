@@ -11,14 +11,9 @@ services:
     container_name: trusted-platform-devcontainer
     hostname: trusted-platform-devcontainer
 
-    # Build configuration
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - NVM_VERSION=v0.39.5
-        - NODE_VERSION=21.1.0
-        - QEMU_VERSION=8.2.0
+    # Built by `make build-devcontainer` (the Dockerfile's integration stage,
+    # repository-root context, GO_IMAGE from scripts/tool-pins.sh), never here.
+    pull_policy: never
 
     # Privileged mode required for OVS and QEMU
     privileged: true

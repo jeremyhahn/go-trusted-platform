@@ -326,8 +326,14 @@ func (b *LUKSBackend) EnrollPassphrase(ctx context.Context, req *daemon.LUKSEnro
 // SetFIDO2Handler before calling. When the handler implements the richer
 // LUKSFIDO2EnrollingHandler interface the HMAC-SECRET salt is captured and
 // persisted in the LUKS2 token so the slot can be unlocked later without
-// any server-side state.
+// any server-side state. A request with RequirePIN is refused with
+// ErrLUKSFIDO2PINUnsupported before anything is derived or written.
 func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFIDO2Request) (*daemon.LUKSEnrollFIDO2Result, error) {
+	// Refused before any derivation or keyslot write (see
+	// ErrLUKSFIDO2PINUnsupported).
+	if req.RequirePIN {
+		return nil, ErrLUKSFIDO2PINUnsupported
+	}
 	if b.fido2 == nil {
 		return nil, ErrLUKSFIDO2NotWired
 	}
@@ -378,7 +384,7 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	fallback := &luks2.Token{
 		Type:            "fido2-manual",
 		FIDO2Credential: req.CredentialID,
-		FIDO2UPRequired: req.RequirePIN || req.RequireUV,
+		FIDO2UPRequired: req.RequireUV,
 	}
 	tokenID, err := writeEnrollToken(req.Device, newSlot, tokenJSON, fallback)
 	if err != nil {

@@ -1,5 +1,8 @@
 # IPAM QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> IPAM on the gateway QUIC opcodes.
+
 IPAM operations ride the gateway QUIC surface: category opcode `0x2F`
 (Gateway) with the IPAM sub-opcodes, served on UDP port 9444 (mTLS).
 Payloads are msgpack-encoded (`pkg/api/quic/gateway_handlers.go`).
@@ -22,8 +25,9 @@ List responses are paginated (default 100, max 1000 entries).
 Pool payloads (`IPAMPoolInfo`) and the create request carry the allocation
 window as `reserved`, `range_start` and `range_end`. The update request
 replaces the window only when `update_window` is true, with exactly the
-values given. A reserved address or a window that does not fit the CIDR
-answers `StatusInvalidArgument` (`ErrGatewayIPAMWindow`).
+values given. A reserved requested address or a window that does not fit
+the CIDR answers `StatusInvalidArgument` (`ErrGatewayIPAMWindow`). QUIC is
+the only transport whose allocate takes a requested address.
 
 Pools carry no DNS servers on any transport. Before #730, the QUIC (and MCP)
 create request accepted a `dns` field and dropped it; that field no longer
@@ -69,8 +73,8 @@ three transports (gRPC `IPAllocation.status`, REST `status`, QUIC
 
 ```bash
 platformctl --transport quic sdn ipam pool list
-platformctl --transport quic sdn ipam allocate --pool-id pool1 --device-id vm-123
-platformctl --transport quic sdn ipam allocations --pool-id pool1
+platformctl --transport quic sdn ipam allocate --pool-id lab --device-id vm-123
+platformctl --transport quic sdn ipam allocations --pool-id lab
 ```
 
 ## See Also

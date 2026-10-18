@@ -1,5 +1,8 @@
 # Firewall Configuration
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The firewall and NAT gateway service configuration.
+
 The firewall and NAT services are config-driven gateway services: each
 loads when its section is present with `enabled: true`. Policy itself is
 not configured here — it is derived from the
@@ -48,12 +51,23 @@ gateway:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Load the NAT service |
-| `external-ip` | string | — (required) | Public IPv4 address SNAT translates to and DNAT accepts on |
-| `port-range-start` / `port-range-end` | uint16 | — (required) | L4 port range SNAT may allocate from |
-| `max-sessions` | int | — (required) | Session ceiling (validation only; the kernel conntrack table enforces capacity) |
+| `external-ip` | string | — (required unless `uplinks` is set) | Public IPv4 address SNAT translates to and DNAT accepts on |
+| `port-range-start` / `port-range-end` | uint16 | — (required, start < end) | L4 port range SNAT may allocate from |
+| `max-sessions` | int | — (required, > 0) | Session ceiling (validation only; the kernel conntrack table enforces capacity) |
 | `internal-cidr` | string | empty | IPv4 prefix whose egress is source-NATed at start; empty defers SNAT to `EnableSNAT` |
-| `uplink-port` | string | first uplink | OVS port name DNAT ingress matches on |
+| `uplink-port` | string | first gateway uplink | OVS port name DNAT ingress matches on (`pkg/sdn/gateway/handlers.go:346`) |
 | `bridge` | string | runtime bridge | OVS bridge carrying the NAT tables |
+| `uplinks` | list | empty | One SNAT pool per uplink in place of `external-ip`; see below |
+| `static` | list | empty | 1:1 translations, both directions, with hairpin; requires `uplinks` |
+
+Each `uplinks` entry (`NATUplinkConfig`, `pkg/sdn/gateway/types.go:830`):
+`name` (a gateway uplink), `port` (OVS port; defaults to `name`), `addresses`
+(IPv4 addresses or inclusive ranges such as `192.0.2.4-192.0.2.5`),
+optional `port-range-start` / `port-range-end` overriding the NAT-wide range,
+`destinations` (IPv4 prefixes that leave through this uplink) and `default`
+(the uplink for every other destination; the first uplink when none is
+marked). Each `static` entry (`NATStaticConfig`) has `internal`, `external`
+and an optional `uplink` (the default uplink when empty).
 
 ### SNAT / DNAT at runtime
 

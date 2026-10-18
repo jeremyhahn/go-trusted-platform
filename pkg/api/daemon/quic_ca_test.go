@@ -113,7 +113,6 @@ type mockCAForDaemon struct {
 	defaultSigAlg x509.SignatureAlgorithm
 	validity      int
 	certStore     *mockCertStoreForDaemon
-	issuedCerts   []*x509.Certificate
 	revokedCerts  []*x509.Certificate
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
@@ -133,7 +132,6 @@ func newMockCAForDaemon() *mockCAForDaemon {
 		defaultSigAlg: x509.ECDSAWithSHA256,
 		validity:      365,
 		certStore:     newMockCertStoreForDaemon(),
-		issuedCerts:   make([]*x509.Certificate, 0),
 		revokedCerts:  make([]*x509.Certificate, 0),
 		generateCRL:   true,
 		privateKey:    privateKey,
@@ -158,7 +156,6 @@ func (m *mockCAForDaemon) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x50
 }
 func (m *mockCAForDaemon) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificateForDaemon(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
@@ -391,6 +388,8 @@ func TestQUICServiceHandler_CARouting_Revoke(t *testing.T) {
 
 	assert.Equal(t, "REVOKED", revokeResp.Status)
 	assert.Equal(t, int32(1), revokeResp.Reason)
+	require.Len(t, mockCA.revokedCerts, 1, "a REVOKED reply must mean the CA revoked the certificate")
+	assert.Equal(t, cert.SerialNumber, mockCA.revokedCerts[0].SerialNumber)
 }
 
 func TestQUICServiceHandler_CARouting_Renew(t *testing.T) {
@@ -644,6 +643,8 @@ func TestQUICServiceHandler_CertOpcodeMapping_Revoke(t *testing.T) {
 	resp := handler.HandleRequest(ctx, req)
 
 	require.Equal(t, quicwire.StatusOK, resp.Status)
+	require.Len(t, mockCA.revokedCerts, 1, "OpCertRevoke must reach the CA's revoke")
+	assert.Equal(t, cert.SerialNumber, mockCA.revokedCerts[0].SerialNumber)
 }
 
 func TestQUICServiceHandler_CertOpcodeMapping_Get(t *testing.T) {

@@ -15,7 +15,11 @@
 
 package tunnel
 
-import "context"
+import (
+	"context"
+
+	vnl "github.com/vishvananda/netlink"
+)
 
 // wireGuardAvailable is false in FIPS builds: WireGuard's primitives
 // (Curve25519, ChaCha20-Poly1305, BLAKE2s) are not FIPS-approved, so the
@@ -35,4 +39,10 @@ func (m *Manager) createWireGuard(_ context.Context, config TunnelConfig) error 
 
 func (m *Manager) rekeyWireGuard(_ context.Context, config TunnelConfig) error {
 	return &ErrTransportUnavailable{Name: config.Name, Transport: TransportWireGuard, Reason: wireGuardUnavailableReason}
+}
+
+// adoptWireGuard adopts nothing in a FIPS build: the transport is refused
+// before any link is looked at.
+func (m *Manager) adoptWireGuard(_ context.Context, _ vnl.Link, _ TunnelConfig) (bool, error) {
+	return false, nil
 }

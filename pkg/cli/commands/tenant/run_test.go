@@ -142,6 +142,74 @@ func (s *inProcTenantServer) UpdateQuotas(_ context.Context, r *platformv1.Updat
 	return &platformv1.UpdateQuotasResponse{}, nil
 }
 
+func (s *inProcTenantServer) UpdateTenant(_ context.Context, r *platformv1.UpdateTenantRequest) (*platformv1.UpdateTenantResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	t, ok := s.tenants[r.GetTenantId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	if r.GetDisplayName() != "" {
+		t.DisplayName = r.GetDisplayName()
+	}
+	if len(r.GetLabels()) > 0 {
+		t.Labels = r.GetLabels()
+	}
+	if len(r.GetAnnotations()) > 0 {
+		t.Annotations = r.GetAnnotations()
+	}
+	return &platformv1.UpdateTenantResponse{Tenant: t}, nil
+}
+
+// CheckQuota answers for "vms" only: allowed while amount fits MaxVms.
+func (s *inProcTenantServer) CheckQuota(_ context.Context, r *platformv1.CheckQuotaRequest) (*platformv1.CheckQuotaResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	t, ok := s.tenants[r.GetTenantId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	if r.GetResource() != "vms" {
+		return nil, status.Error(codes.InvalidArgument, "invalid resource type: "+r.GetResource())
+	}
+	resp := &platformv1.CheckQuotaResponse{TenantId: t.GetId(), Resource: r.GetResource(), Amount: r.GetAmount(), Available: true}
+	if r.GetAmount() > t.GetComputeQuota().GetMaxVms() {
+		resp.Available, resp.Message = false, "vms quota exceeded"
+	}
+	return resp, nil
+}
+
+func (s *inProcTenantServer) Sync(context.Context, *platformv1.SyncTenantsRequest) (*platformv1.SyncTenantsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	return &platformv1.SyncTenantsResponse{Status: &platformv1.Status{Success: true}}, nil
+}
+
+// GetUsage reports every known tenant as using the same fixed amounts.
+
+func (s *inProcTenantServer) GetUsage(_ context.Context, r *platformv1.GetUsageRequest) (*platformv1.GetUsageResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	if _, ok := s.tenants[r.GetTenantId()]; !ok {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	return &platformv1.GetUsageResponse{Usage: &platformv1.TenantUsage{
+		TenantId: r.GetTenantId(), Vms: 2, Vcpus: 4, MemoryMb: 2048, Bridges: 1, DiskGb: 6, Snapshots: 1,
+	}}, nil
+}
+
 func (s *inProcTenantServer) barrierErr() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

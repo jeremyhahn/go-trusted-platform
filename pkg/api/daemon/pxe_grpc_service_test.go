@@ -32,7 +32,6 @@ import (
 type mockPXEService struct {
 	devices        map[string]*pxe.DeviceInfo
 	running        bool
-	initialized    bool
 	startErr       error
 	stopErr        error
 	registerErr    error
@@ -49,14 +48,12 @@ type mockPXEService struct {
 
 func newMockPXEService() *mockPXEService {
 	return &mockPXEService{
-		devices:     make(map[string]*pxe.DeviceInfo),
-		initialized: true,
-		running:     false,
+		devices: make(map[string]*pxe.DeviceInfo),
+		running: false,
 	}
 }
 
 func (m *mockPXEService) Initialize(ctx context.Context, config *pxe.ServiceConfig) error {
-	m.initialized = true
 	return nil
 }
 
@@ -82,7 +79,6 @@ func (m *mockPXEService) IsRunning() bool {
 
 func (m *mockPXEService) Close() error {
 	m.running = false
-	m.initialized = false
 	return nil
 }
 

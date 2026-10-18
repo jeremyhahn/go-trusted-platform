@@ -103,7 +103,7 @@ func (r *RESTAdapter) RemoveFactor(ctx context.Context, username, factorID strin
 }
 
 // notWired declares that an adapter method has no transport surface yet.
-// Tests skip on the typed declaration, never on its text (#487).
+// Tests fail on the typed declaration, never match its text (#487, #260).
 func notWired(protocol, method string) error {
 	return surface.ErrNoSurface{Transport: protocol, Operation: method, Reason: "blocked by #143-b/c follow-ups"}
 }

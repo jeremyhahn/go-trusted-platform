@@ -78,6 +78,8 @@ type CreateInvitationOptions struct {
 	TenantID string `json:"tenant_id"`
 	Email    string `json:"email"`
 	Role     string `json:"role"`
+	// ExpiresIn overrides the server's default expiry when non-zero
+	ExpiresIn time.Duration `json:"-"`
 	// AsOwner indicates whether the caller is the tenant owner
 	AsOwner bool `json:"-"`
 	// UserID is the ID of the user making the request

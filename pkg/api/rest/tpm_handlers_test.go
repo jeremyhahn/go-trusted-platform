@@ -80,6 +80,18 @@ func (f *fakeTPMService) Clear(ctx context.Context, req *platformv1.TPMClearRequ
 	return tpmAnswer(f, ctx, req, &platformv1.TPMClearResponse{})
 }
 
+func (f *fakeTPMService) GetCapabilities(ctx context.Context, req *platformv1.TPMCapabilitiesRequest) (*platformv1.TPMCapabilitiesResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMCapabilitiesResponse{})
+}
+
+func (f *fakeTPMService) GetPlatformAttributes(ctx context.Context, req *platformv1.TPMPlatformAttributesRequest) (*platformv1.TPMPlatformAttributesResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMPlatformAttributesResponse{})
+}
+
+func (f *fakeTPMService) ExtendPCR(ctx context.Context, req *platformv1.ExtendPCRRequest) (*platformv1.ExtendPCRResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.ExtendPCRResponse{})
+}
+
 func (f *fakeTPMService) CreateEK(ctx context.Context, req *platformv1.CreateEKRequest) (*platformv1.CreateEKResponse, error) {
 	return tpmAnswer(f, ctx, req, &platformv1.CreateEKResponse{})
 }
@@ -281,6 +293,16 @@ func tpmRouteCases() []tpmRouteCase {
 			resp: &platformv1.TPMClearResponse{}, key: "status",
 		},
 		{
+			route: "GET /api/v1/tpm/capabilities", method: http.MethodGet, target: "/api/v1/tpm/capabilities",
+			want: &platformv1.TPMCapabilitiesRequest{},
+			resp: &platformv1.TPMCapabilitiesResponse{Algorithms: []string{"RSA"}, EccCurves: []string{"NIST_P256"}}, key: "eccCurves",
+		},
+		{
+			route: "GET /api/v1/tpm/platform", method: http.MethodGet, target: "/api/v1/tpm/platform",
+			want: &platformv1.TPMPlatformAttributesRequest{},
+			resp: &platformv1.TPMPlatformAttributesResponse{Device: "/dev/tpmrm0", Ek: &platformv1.TPMKeyRef{Handle: ekHandle, Algorithm: "RSA"}}, key: "ek",
+		},
+		{
 			route: "GET /api/v1/tpm/ek", method: http.MethodGet, target: "/api/v1/tpm/ek?algorithm=KEY_ALGORITHM_RSA_2048&handle=0x81010001",
 			want: &platformv1.GetEKRequest{Algorithm: rsa, Handle: ekHandle},
 			resp: &platformv1.GetEKResponse{PublicKey: []byte("ek")}, key: "publicKey",
@@ -397,6 +419,12 @@ func tpmRouteCases() []tpmRouteCase {
 			body: `{"indices":[0,7],"bank":"PCR_BANK_SHA384"}`,
 			want: &platformv1.GetPCRsRequest{Indices: []uint32{0, 7}, Bank: sha384},
 			resp: &platformv1.GetPCRsResponse{}, key: "pcrValues",
+		},
+		{
+			route: "POST /api/v1/tpm/pcrs/extend", method: http.MethodPost, target: "/api/v1/tpm/pcrs/extend",
+			body: `{"index":16,"hashAlg":"sha256","data":"bWVhc3VyZW1lbnQ="}`,
+			want: &platformv1.ExtendPCRRequest{Index: 16, HashAlg: "sha256", Data: []byte("measurement")},
+			resp: &platformv1.ExtendPCRResponse{}, key: "status",
 		},
 		{
 			route: "GET /api/v1/tpm/eventlog", method: http.MethodGet, target: "/api/v1/tpm/eventlog?format=json",
@@ -567,9 +595,6 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 // for are no longer mounted.
 func TestTPMLegacyRoutesAreGone(t *testing.T) {
 	legacy := []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/tpm/capabilities"},
-		{http.MethodGet, "/api/v1/tpm/platform"},
-		{http.MethodPost, "/api/v1/tpm/pcrs/extend"},
 		{http.MethodPost, "/api/v1/tpm/csr/idevid"},
 		{http.MethodPost, "/api/v1/tpm/iak"},
 	}

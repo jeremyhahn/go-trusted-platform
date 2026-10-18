@@ -107,7 +107,7 @@ func verifyHardened(def Definition, uid, gid uint32, marker string, ops childOps
 	if err != nil {
 		return &ErrHardening{Step: "read the hardened-stage marker", Cause: err}
 	}
-	if err := confineSyscalls(def.Class, ops); err != nil {
+	if err := confineSyscalls(def, ops); err != nil {
 		return err
 	}
 	statuses, err := ops.taskStatuses()
@@ -130,16 +130,16 @@ func verifyHardened(def Definition, uid, gid uint32, marker string, ops childOps
 	return rearmParentDeath(parent, ops.harden)
 }
 
-// confineSyscalls installs the class's seccomp filter on every thread. It
+// confineSyscalls installs the process's seccomp filter on every thread. It
 // proves nothing by itself: the credential check that follows reads each
 // thread's Seccomp field, so a thread the kernel left unfiltered fails the
 // child.
-func confineSyscalls(class Class, ops childOps) error {
+func confineSyscalls(def Definition, ops childOps) error {
 	table, err := ops.syscalls()
 	if err != nil {
 		return &ErrHardening{Step: "build the seccomp filter", Cause: err}
 	}
-	filter, err := seccompFilter(table, class)
+	filter, err := seccompFilter(table, def)
 	if err != nil {
 		return &ErrHardening{Step: "build the seccomp filter", Cause: err}
 	}

@@ -130,13 +130,11 @@ func (b *singleShotBinder) Tenant(_ context.Context, identity *quicbaas.Identity
 // resolved for the principal the BACKBONE authenticated.
 type fakeWorkspaces struct {
 	subject   string
-	calls     int
 	workspace string
 	err       error
 }
 
 func (f *fakeWorkspaces) Workspace(_ context.Context, subject string) (string, error) {
-	f.calls++
 	f.subject = subject
 	return f.workspace, f.err
 }
@@ -859,13 +857,11 @@ func TestNoWorkspaceErrorNamesThePrincipalAndUnwrapsItsCause(t *testing.T) {
 type fakeRoles struct {
 	tenantID string
 	subject  string
-	calls    int
 	roles    []string
 	err      error
 }
 
 func (f *fakeRoles) Roles(_ context.Context, tenantID, subject string) ([]string, error) {
-	f.calls++
 	f.tenantID = tenantID
 	f.subject = subject
 	return f.roles, f.err

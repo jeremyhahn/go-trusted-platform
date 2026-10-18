@@ -75,6 +75,20 @@ var (
 	// a login that never reaches the backbone.
 	ErrLoginDriverRequired = errors.New("webauthn: unified login driver is required")
 
+	// ErrTenantUserServiceRequired is returned when the WebAuthn handler is
+	// constructed without the tenant user service. Registration creates the
+	// user's workspace through it and mints the session in that workspace,
+	// so without it the only tenant left for the session would be the
+	// operating one (#662).
+	ErrTenantUserServiceRequired = errors.New("webauthn: tenant user service is required")
+
+	// ErrOperatingTenant is returned when a browser registration would
+	// land in the operating tenant or in no tenant at all: an invitation
+	// into the operating tenant, or a registered user without a workspace.
+	// A browser session lands in the user's own workspace, never the
+	// operating tenant (#662).
+	ErrOperatingTenant = errors.New("webauthn: a browser registration lands in the user's own workspace, never the operating tenant")
+
 	// ErrInvalidConfig is returned when the relying-party Config is
 	// missing the RPID or RPOrigins fields.
 	ErrInvalidConfig = errors.New("webauthn: invalid relying-party configuration")

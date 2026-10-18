@@ -26,9 +26,9 @@
 //  3. platformctl init --barrier-strategy software succeeds.
 //  4. Daemon transitions to operational; remote transports accept.
 //  5. Create user.
-//  6. Add factors (mTLS works; FIDO2/PIV stubs skipped pending #143-b/c).
+//  6. Add factors (mTLS works; FIDO2/PIV fail pending #143-b/c).
 //  7. List factors.
-//  8. Login via each method (mTLS works; FIDO2/PIV skipped).
+//  8. Login via each method (mTLS works; FIDO2/PIV fail pending #143-b/c).
 //  9. Multi-protocol verification of available paths.
 //  10. Lifecycle: rotate mTLS, ErrLastFactor enforcement.
 //  11. Restart + unseal + cert persistence.

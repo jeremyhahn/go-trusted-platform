@@ -313,17 +313,14 @@ func TestNTSKEDialAddress_NoNTPSection(t *testing.T) {
 
 // fakeNTPApplier records deployment requests from certificate renewal.
 type fakeNTPApplier struct {
-	applies             int
 	rotations           int
 	rotatedKey          []byte
 	rotatedCert         []byte
 	rotatedEnclaveAlive bool
 	err                 error
-	serveNameCalls      int
-	serveNameResult     []ntp.ServeNameFinding
 }
 
-func (f *fakeNTPApplier) Apply(context.Context) error { f.applies++; return f.err }
+func (f *fakeNTPApplier) Apply(context.Context) error { return f.err }
 
 // RotateNTSMaterial records what renewal handed the service. The key is
 // read through the enclave's scoped borrow, exactly as the real service
@@ -342,11 +339,10 @@ func (f *fakeNTPApplier) RotateNTSMaterial(_ context.Context, key *memguard.Memo
 
 func (f *fakeNTPApplier) WaitForSync(context.Context) error { return nil }
 
-// CheckServeNames records the allow-list reconciliation the renewal path
-// runs after a successful deploy.
+// CheckServeNames reports no findings; recordingNTPApplier covers the
+// reconciliation the renewal path runs after a successful deploy.
 func (f *fakeNTPApplier) CheckServeNames(context.Context, ntp.NameResolver) []ntp.ServeNameFinding {
-	f.serveNameCalls++
-	return f.serveNameResult
+	return nil
 }
 
 // TestDeployNTSMaterial asserts renewal deployment hands the new pair to

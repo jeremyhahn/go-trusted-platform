@@ -119,6 +119,14 @@ At this point the TPM has NOT been touched. No sealing has happened.
 5. Unlocks the LUKS root partition using the LUKS key
 6. Copies installer state to the root filesystem
 7. Applies `recovery-key-strategy` (see next section)
+
+The empty hierarchy auths of step 3 are superseded by the owner ruling of
+2026-10-17: firstboot sets the owner hierarchy auth to the SO PIN with
+`TPM2_HierarchyChangeAuth` and hands the PIN to `platformd` over the firstboot
+tmpfs handoff, and recovery means a seal that existed and broke
+([architecture.md](architecture.md), "First provision, the EK and recovery").
+The implementation is tracked by #951; until it lands, step 3 is what the code
+does.
 8. `closeInstaller()` securely wipes `installer.luks` via `luks2.Wipe`
    (random overwrite + TRIM + unlink)
 

@@ -126,7 +126,9 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 		return fmt.Errorf("read response: %w", err)
 	}
 	if resp.Status != quicwire.StatusOK {
-		return fmt.Errorf("QUIC luks sub 0x%02X failed: status 0x%02X", sub, resp.Status)
+		// A refusal carries its message as the payload; keep it so the
+		// caller can tell which sentinel the daemon answered with.
+		return fmt.Errorf("QUIC luks sub 0x%02X failed: status 0x%02X: %s", sub, resp.Status, resp.Payload)
 	}
 	if out != nil && len(resp.Payload) > 0 {
 		return quicwire.DecodePayload(resp.Payload, out)

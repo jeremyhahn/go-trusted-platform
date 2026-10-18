@@ -1,9 +1,40 @@
 # SDN REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `/api/v1/sdn` routes of platformd's two REST stacks.
+
 Base URL: `https://localhost:8443/api/v1/sdn`
 
-All endpoints require mTLS / platform JWT authentication. Handlers:
-`pkg/api/rest/sdn_handlers.go`.
+Two REST stacks serve `/api/v1/sdn`, and which one runs depends on how
+platformd starts (the overlay has the same split, see
+[overlay/api-reference-rest.md](overlay/api-reference-rest.md)):
+
+| Property | Webservice | Daemon-only REST (`serve --enable-rest`) |
+|----------|------------|------------------------------------------|
+| Handlers | `pkg/webservice/v1/rest/sdn/`, backed by the gRPC `SDNService` | `pkg/api/rest/sdn_handlers.go` |
+| Authentication | platform session, `admin` role on every route (`pkg/webservice/v1/router.go`) | mTLS |
+| Response body | the platform envelope (`{code, error, success, payload}`) | bare JSON |
+
+The routes below are the daemon-only stack's unless marked. The webservice
+differs in these ways:
+
+- Bridges are addressed by name (`/bridges/{name}`). Create takes `name`,
+  `type` (`ovs`, `linux`, `vxlan`), `datapath_id`, `stp_enabled`, `mtu`,
+  `options` and `labels`, and answers `200`.
+- Flows: `POST /flows` and `DELETE /flows` carry `bridge_id` (and the
+  delete's `flow_id`) in the body; `GET /flows?bridge_id=` lists.
+  `POST` and `GET` `/bridges/{name}/flows` take the bridge from the path.
+  There is no `DELETE /flows/{id}` or bridge-scoped flow delete. The flow
+  body is the gRPC shape: `table`, `priority`, a `match` object (`in_port`,
+  `vlan_id`, `eth_src`, `eth_dst`, `eth_type`, `ip_src`, `ip_dst`,
+  `ip_proto`, `tcp_src`, `tcp_dst`, `udp_src`, `udp_dst`), an `actions`
+  list (`type`, `port`, `vlan_id`, `field`, `value`, `table_id`),
+  `idle_timeout`, `hard_timeout` and `metadata`.
+- VLANs: `POST` and `GET` on `/vlans` and `/bridges/{bridge_id}/vlans`;
+  there is no VLAN delete.
+- Policies: apply, list and get; there is no policy delete.
+- No `/topology`.
+- Only the webservice serves the port-authentication routes.
 
 ## Bridge Endpoints
 
@@ -14,10 +45,9 @@ GET    /api/v1/sdn/bridges/{id}     # Get bridge
 DELETE /api/v1/sdn/bridges/{id}     # Delete bridge
 ```
 
-Create request body carries the bridge config (`id`, `name`, `type`
-[`ovs`|`linux`|`vxlan`], optional `datapath_id`, `fail_mode`, `stp`,
-`rstp`, `mtu`). List supports `type`, `status`, `limit`, and `cursor`
-query parameters.
+Create body: `name` (required), optional `datapath_type`, `fail_mode`,
+`protocols`, `stp`, `options` and `labels`. List takes no query parameters
+and answers `{bridges, count, timestamp}`.
 
 ## Port Endpoints
 
@@ -95,8 +125,11 @@ GET    /api/v1/sdn/bridges/{id}/flows                 # List bridge flows
 DELETE /api/v1/sdn/bridges/{id}/flows/{flow_id}       # Delete bridge flow
 ```
 
-Flow bodies carry `id`, `table`, `priority`, match fields (`in_port`,
-`dl_src`, `dl_dst`, `dl_type`, `nw_src`, `nw_dst`), and `actions`.
+The `/flows` routes take the bridge as the `bridge_id` query parameter. The
+add body is `table`, `priority`, `match` and `actions` as Open vSwitch
+strings (`"in_port=1,dl_type=0x0800"`, `"output:2"`), optional `cookie`,
+`idle_timeout` and `hard_timeout`; `metadata` is accepted and not stored. A flow's ID is its cookie,
+so a delete removes exactly that flow; add answers `201` with the ID.
 
 ## VLAN Endpoints
 
@@ -191,6 +224,11 @@ service.
 ```http
 GET /api/v1/sdn/topology            # Bridges, ports, and flows summary
 ```
+
+Daemon-only. Answers the bridges, `links` (always empty) and
+`statistics` (`total_bridges`, `total_ports`, `total_flows`;
+`total_bytes` and `total_packets` are never filled).
+
 
 ## Error Codes
 

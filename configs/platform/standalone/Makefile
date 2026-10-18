@@ -53,7 +53,7 @@ help:
 build-devcontainer:
 	@echo "$(GREEN)Building devcontainer image...$(NC)"
 	@if ! docker images | grep -q "go-trusted-platform-dev"; then \
-		docker build -t go-trusted-platform-dev:latest $(REPO_ROOT)/build/docker/devcontainer/; \
+		$(MAKE) -C $(REPO_ROOT) build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest; \
 	else \
 		echo "$(CYAN)Devcontainer image already exists. Use 'make rebuild-devcontainer' to force rebuild.$(NC)"; \
 	fi
@@ -61,7 +61,7 @@ build-devcontainer:
 .PHONY: rebuild-devcontainer
 rebuild-devcontainer:
 	@echo "$(GREEN)Rebuilding devcontainer image...$(NC)"
-	docker build -t go-trusted-platform-dev:latest $(REPO_ROOT)/build/docker/devcontainer/
+	$(MAKE) -C $(REPO_ROOT) build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest
 
 .PHONY: pull
 pull:

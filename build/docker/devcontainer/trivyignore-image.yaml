@@ -1,0 +1,48 @@
+# Suppressions for the CI `trivy image` gate on the integration image only
+# (.github/workflows/ci.yml passes this file with --ignorefile; the repository's
+# `trivy fs` keeps the root .trivyignore). Each entry is scoped by `paths` to
+# the one package copy it covers, carries the reason in `statement` and lapses
+# on `expired_at`, after which the finding fails the gate again until someone
+# re-checks it (handbook devops.md §8: a written reason and a date).
+#
+# Added 2026-10-16 (#933). All three are in the dependencies npm itself bundles
+# under /usr/local/lib/node_modules/npm, installed with the pinned Node.js
+# release (scripts/tool-pins.sh). npm 11.19.1 (Node v24.22.0) and the newest
+# npm, 12.2.0, both still bundle the affected versions, so no Node or npm
+# release fixes them yet. npm runs in this image only on the repository's own
+# web/ lockfile (`make build-public-html`, the web Playwright suite): no
+# untrusted brace pattern reaches its brace-expansion, and its undici talks
+# only to the npm registry, which never offers a WebSocket. Remove these
+# entries when a Node release bundles brace-expansion >= 5.0.11 and
+# undici >= 6.28.1.
+vulnerabilities:
+  - id: CVE-2026-102276
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: "GHSA-6j4f-fj2g-mc7p, brace-expansion 5.0.9 bundled by npm: stack exhaustion on hostile brace patterns; npm expands only its own and the repo's patterns; no npm release bundles 5.0.10+"
+    expired_at: 2027-01-16
+  - id: GHSA-6j4f-fj2g-mc7p
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: "Alias of CVE-2026-102276; see that entry"
+    expired_at: 2027-01-16
+  - id: CVE-2026-102278
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: "GHSA-qhr7-859c-m2p7, brace-expansion 5.0.9 bundled by npm: stack exhaustion on nested brace groups; npm expands only its own and the repo's patterns; no npm release bundles 5.0.11+"
+    expired_at: 2027-01-16
+  - id: GHSA-qhr7-859c-m2p7
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: "Alias of CVE-2026-102278; see that entry"
+    expired_at: 2027-01-16
+  - id: CVE-2026-19534
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: "GHSA-rfgv-xxqx-mfg5, undici 6.28.0 bundled by npm: DoS via an unrequested WebSocket subprotocol; npm opens no WebSocket and talks only to the npm registry; no npm release bundles 6.28.1+"
+    expired_at: 2027-01-16
+  - id: GHSA-rfgv-xxqx-mfg5
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: "Alias of CVE-2026-19534; see that entry"
+    expired_at: 2027-01-16

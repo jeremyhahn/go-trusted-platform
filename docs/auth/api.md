@@ -61,8 +61,7 @@ finish step returns a platform-local JWT, and that configuration makes the
 broker platform-token validator the inbound seam, which accepts only
 broker-issued bearers — so a completed claim would return a bearer every
 protected route rejects. Converging the two token types is
-#202
-(owner ruling 2026-09-02); until it lands, the flow is offered only where its
+#202; until it lands, the flow is offered only where its
 session works.
 
 Every route is pre-auth. What protects them is the certificate proof, the
@@ -240,6 +239,12 @@ platform persists none of it:
   registration session is stored and no user or tenant is created (#643).
   Invitations apply the same rule (`service.ValidateEmail`). The SDK does
   not export IAM's validator, so the platform holds the one copy.
+- **Registration lands in the user's workspace, never the operating
+  tenant (#662).** An invitation into the operating tenant is answered 403
+  at `registration/begin`, and `registration/finish` answers 403 instead of
+  issuing a session when the registered user resolves to no tenant or to
+  the operating tenant (docs/auth/architecture.md, "Which tenant a login
+  lands in").
 - **Begin** (`registration/begin`, `login/begin`) returns the parsed
   WebAuthn options object: `publicKey` at the top level, plus
   `session_id` — the ceremony session the client must echo back.
@@ -483,7 +488,7 @@ catalog entry is refused, not allowed.
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC `pkg/api/grpc/method_permissions.go` | Every registered RPC; a contract test keeps it that way | Refused with `PermissionDenied` (`ErrMethodNotClassified`) before the token is read, unless the method is on the documented pre-auth list |
-| MCP `pkg/api/mcp/authz.go` | All 479 registered tools (467 scoped, 12 open); a contract test keeps it that way | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
+| MCP `pkg/api/mcp/authz.go` | All 487 registered tools (475 scoped, 12 open); a contract test keeps it that way | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
 | QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
 Detail, the pre-auth list and the open MCP tools are in

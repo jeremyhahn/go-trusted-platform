@@ -39,6 +39,9 @@ const (
 	seccompKill  uint32 = unix.SECCOMP_RET_KILL_PROCESS
 	seccompDeny  uint32 = unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)
 	seccompNoSys uint32 = unix.SECCOMP_RET_ERRNO | uint32(unix.ENOSYS)
+	// seccompNoFamily answers a socket in an address family the process
+	// does not use, as a kernel built without that family would.
+	seccompNoFamily uint32 = unix.SECCOMP_RET_ERRNO | uint32(unix.EAFNOSUPPORT)
 )
 
 // namespaceCloneFlags are the clone flags that create a namespace. A gateway
@@ -64,18 +67,25 @@ type seccompTable struct {
 	// clone and clone3 are checked separately: clone's flags are an
 	// argument the filter can read, clone3's are behind a pointer.
 	clone, clone3 uint32
+	// socket and socketpair are checked against the process's address
+	// families; both take the family as their first argument.
+	socket, socketpair uint32
 }
 
-// seccompProgram is the class's filter over table. In order: a foreign
+// seccompProgram is the process's filter over table. In order: a foreign
 // architecture is killed, the second ABI is denied, every denied number
-// fails with EPERM, clone3 fails with ENOSYS so the runtime and libc fall
+// fails with EPERM, a socket outside the process's address families fails
+// with EAFNOSUPPORT, clone3 fails with ENOSYS so the runtime and libc fall
 // back to clone, and clone is denied only when it asks for a namespace.
 // Everything else is allowed: the filter removes the kernel interfaces a
 // gateway service never uses rather than listing the ones it does, so a
 // library update cannot break a service by making a new, harmless call.
-func seccompProgram(table seccompTable, class Class) []bpf.Instruction {
+// Address families are the exception, an allow list per process, because
+// the families are few and each one a process does not open is kernel
+// surface (AF_PACKET, AF_VSOCK, the protocol families) it never reaches.
+func seccompProgram(table seccompTable, def Definition) []bpf.Instruction {
 	denied := table.denied
-	if class != ClassKernel {
+	if def.Class != ClassKernel {
 		denied = append(slices.Clip(denied), table.exec...)
 	}
 	program := []bpf.Instruction{
@@ -96,6 +106,7 @@ func seccompProgram(table seccompTable, class Class) []bpf.Instruction {
 			bpf.RetConstant{Val: seccompDeny},
 		)
 	}
+	program = append(program, familyCheck(table, def.AddressFamilies)...)
 	return append(program,
 		bpf.JumpIf{Cond: bpf.JumpEqual, Val: table.clone3, SkipFalse: 1},
 		bpf.RetConstant{Val: seccompNoSys},
@@ -107,10 +118,34 @@ func seccompProgram(table seccompTable, class Class) []bpf.Instruction {
 	)
 }
 
-// seccompFilter assembles the class's filter over table into the form
+// familyCheck is the address-family allow list. It runs with the syscall
+// number in the accumulator and leaves it there for every other call; for
+// socket and socketpair it loads the family argument and returns, allowing
+// a listed family and failing any other with EAFNOSUPPORT. An empty list
+// therefore refuses every socket.
+func familyCheck(table seccompTable, families []uint32) []bpf.Instruction {
+	count := len(families)
+	check := []bpf.Instruction{
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: table.socket, SkipTrue: 1},
+		// Not socketpair either: skip the load, the comparisons and both
+		// returns.
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: table.socketpair, SkipFalse: uint8(count + 3)},
+		bpf.LoadAbsolute{Off: seccompDataArg0, Size: 4},
+	}
+	for i, family := range families {
+		// A match skips the remaining comparisons and the refusal.
+		check = append(check, bpf.JumpIf{Cond: bpf.JumpEqual, Val: family, SkipTrue: uint8(count - i)})
+	}
+	return append(check,
+		bpf.RetConstant{Val: seccompNoFamily},
+		bpf.RetConstant{Val: seccompAllow},
+	)
+}
+
+// seccompFilter assembles the process's filter over table into the form
 // seccomp(2) loads.
-func seccompFilter(table seccompTable, class Class) ([]unix.SockFilter, error) {
-	return assembleSeccomp(seccompProgram(table, class))
+func seccompFilter(table seccompTable, def Definition) ([]unix.SockFilter, error) {
+	return assembleSeccomp(seccompProgram(table, def))
 }
 
 // assembleSeccomp converts a classic BPF program to the kernel's

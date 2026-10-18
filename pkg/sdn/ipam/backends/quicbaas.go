@@ -567,16 +567,16 @@ func (d *QuicBaaSBackend) Allocate(ctx context.Context, req *ipam.AllocationRequ
 		return nil, &ipam.ErrSerialization{EntityType: "allocation", Operation: "marshal", Cause: err}
 	}
 
+	// The pool write goes first so that a failed one leaves no allocation
+	// holding the address.
+	if err := d.UpdatePool(ctx, pool); err != nil {
+		return nil, &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "allocate", Cause: err}
+	}
+
 	allocID := stringToID(allocatedIP.String())
 	if err := d.client.Put(ctx, entityTypeAllocation, allocID, allocData); err != nil {
 		return nil, &ipam.ErrStorageOperation{Operation: "put", Key: allocatedIP.String(), Cause: err}
 	}
-
-	// Update pool stats
-	pool.AllocatedIPs++
-	pool.AvailableIPs--
-	pool.UpdatedAt = now
-	d.UpdatePool(ctx, pool)
 
 	d.logger.Info("IP allocated",
 		slog.String("ip", allocatedIP.String()),
@@ -650,16 +650,16 @@ func (d *QuicBaaSBackend) AllocateSpecific(ctx context.Context, req *ipam.Alloca
 		return nil, &ipam.ErrSerialization{EntityType: "allocation", Operation: "marshal", Cause: err}
 	}
 
+	// The pool write goes first so that a failed one leaves no allocation
+	// holding the address.
+	if err := d.UpdatePool(ctx, pool); err != nil {
+		return nil, &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "allocate", Cause: err}
+	}
+
 	allocID := stringToID(req.RequestedIP.String())
 	if err := d.client.Put(ctx, entityTypeAllocation, allocID, allocData); err != nil {
 		return nil, &ipam.ErrStorageOperation{Operation: "put", Key: req.RequestedIP.String(), Cause: err}
 	}
-
-	// Update pool stats
-	pool.AllocatedIPs++
-	pool.AvailableIPs--
-	pool.UpdatedAt = now
-	d.UpdatePool(ctx, pool)
 
 	d.logger.Info("specific IP allocated",
 		slog.String("ip", req.RequestedIP.String()),
@@ -704,16 +704,16 @@ func (d *QuicBaaSBackend) Release(ctx context.Context, ip netip.Addr) error {
 		return &ipam.ErrSerialization{EntityType: "allocation", Operation: "marshal", Cause: err}
 	}
 
+	// The pool write goes first so that a failed one leaves the
+	// allocation active.
+	if err := d.UpdatePool(ctx, pool); err != nil {
+		return &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "release", Cause: err}
+	}
+
 	allocID := stringToID(ip.String())
 	if err := d.client.Put(ctx, entityTypeAllocation, allocID, allocData); err != nil {
 		return &ipam.ErrStorageOperation{Operation: "put", Key: ip.String(), Cause: err}
 	}
-
-	// Update pool stats
-	pool.AllocatedIPs--
-	pool.AvailableIPs++
-	pool.UpdatedAt = time.Now()
-	d.UpdatePool(ctx, pool)
 
 	d.logger.Info("IP released",
 		slog.String("ip", ip.String()),
