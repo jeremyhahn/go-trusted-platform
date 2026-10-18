@@ -136,6 +136,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		punts, _ := ovlNDPunts(ctx, t, ovsClient)
 		return punts == 1
 	})
+	ovlNDSettle(t)
 
 	t.Run("KnownTargetAnsweredOnTheSegmentVLANNotFlooded", func(t *testing.T) {
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
@@ -211,6 +212,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 0 && handler.GetStatus().NDSuppression.Fallbacks > fallbacks
 		})
+		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
 		waitFor(ctx, t, "the solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
@@ -226,6 +228,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 1
 		})
+		ovlNDSettle(t)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
 		_, answered = readProxyAdvert(t, conn, ovlNDTargetIP, 10*time.Second)
 		assert.True(t, answered, "the returned controller answers again")
@@ -250,6 +253,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		assert.Greater(t, after.MeterDropped+after.QueueDropped, before.MeterDropped+before.QueueDropped,
 			"the fallback follows a drop")
 
+		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, solicitation)
 		waitFor(ctx, t, "the known target's solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
@@ -336,6 +340,17 @@ func ovlNDPunts(ctx context.Context, t *testing.T, client *ovs.Client) (int, int
 		packets += flow.PacketCount
 	}
 	return len(flows), packets
+}
+
+// ovlNDSettle waits for the datapath to follow a punt change the OpenFlow
+// tables already show. OVS revalidates its kernel megaflows asynchronously,
+// so a solicitation sent right after a punt is removed can still ride the
+// old megaflow to the controller, which answers a known target instead of
+// letting it flood; one sent right after a punt is installed can still
+// flood. Every send that follows a punt change waits here first.
+func ovlNDSettle(t *testing.T) {
+	t.Helper()
+	runCmd(t, "ovs-appctl", "revalidator/wait")
 }
 
 // openNDSocket opens a raw IPv6 packet socket on the endpoint's VLAN
