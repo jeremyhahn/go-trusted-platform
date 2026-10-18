@@ -139,8 +139,8 @@ Generate a key.
 (`api.md` §2). `--name` is a display name, not the ID: it travels as the
 generate request's `display_name`, beside `--description`, and the command
 prints the name the KMS recorded. A caller bound to a tenant other than the
-platform system tenant is refused with FailedPrecondition before any key is
-generated when it passes `--name` or `--description` (`api.md` §2, SDK gap).
+platform system tenant is refused with PermissionDenied before any key is
+generated, whatever flags it passes (`api.md` §6, SDK gap).
 Over REST, MCP and QUIC, `--name` is refused before any key is generated,
 because none of those generate routes carries a display name (`api.md` §2):
 generate the key, then set the name with `key metadata update`.
@@ -215,6 +215,24 @@ Mark a key compromised and unusable for every operation.
 
 ```bash
 platformctl kms key revoke tenant-a-kek --reason "key material exposed in incident review"
+```
+
+### `key status <key-id>`
+
+Enable or disable a key, or one version of it. A disabled key refuses every
+cryptographic operation until it is enabled again. The command prints the
+status the KMS reports back: `key_id`, `version` (omitted for 0) and `status`
+(`ENABLED` or `DISABLED`).
+
+| Flag | Short | Type | Default | Required |
+|---|---|---|---|---|
+| `--enable` | | bool | `false` | exactly one of `--enable`, `--disable` — checked before connecting; exit 1 otherwise |
+| `--disable` | | bool | `false` | |
+| `--version` | | int | `0` (all versions) | no — a negative value exits 1 before connecting |
+
+```bash
+platformctl kms key status tenant-a-kek --disable
+platformctl kms key status tenant-a-kek --enable --version 2 -o json
 ```
 
 ### `key csr <key-id>`
@@ -600,8 +618,6 @@ platformctl kms secrets policy set api-token --interval 720h --retain-versions 5
 
 ---
 
-## 8.---
-
 ## 8. The not-implemented list, regenerated
 
 A verb is not implemented when its `RunE` returns one of the package's
@@ -619,11 +635,10 @@ On 2026-10-17 that names exactly these leaves:
 | `ErrKeyExportNotImplemented` | `kms key export` |
 | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
 | `ErrKeyVersionsNotImplemented` | `kms key versions` |
-| `ErrKeyStatusNotImplemented` | `kms key status enable`, `kms key status disable` |
 | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
 Counting the string `(not yet implemented)` instead overcounts: it also appears
-in the `Short` text of the `key status` group and in test files.
+in test files.
 
 ---
 
@@ -640,7 +655,7 @@ therefore long-form only:
 | `kms key get` | `--version` |
 | `kms key export` | `--version`, `--output-file` |
 | `kms key policy set` | `--operation` |
-| `kms key status enable`, `kms key status disable` | `--version` |
+| `kms key status` | `--version` |
 
 `TestCommandTreeHasNoFlagClashes` (`pkg/cli/commands/flag_tree_test.go`) walks
 the whole `platformctl` tree and fails on any such collision.

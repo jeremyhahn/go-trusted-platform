@@ -544,27 +544,32 @@ func (h *DNSHandlers) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete record based on type
+	var removed bool
 	switch strings.ToUpper(recordType) {
 	case "A":
-		zone.RemoveARecord(recordName)
+		removed = zone.RemoveARecord(recordName)
 	case "AAAA":
-		zone.RemoveAAAARecord(recordName)
+		removed = zone.RemoveAAAARecord(recordName)
 	case "CNAME":
-		zone.RemoveCNAMERecord(recordName)
+		removed = zone.RemoveCNAMERecord(recordName)
 	case "MX":
-		zone.RemoveMXRecord(recordName)
+		removed = zone.RemoveMXRecord(recordName)
 	case "NS":
-		zone.RemoveNSRecord(recordName)
+		removed = zone.RemoveNSRecord(recordName)
 	case "TXT":
-		zone.RemoveTXTRecord(recordName)
+		removed = zone.RemoveTXTRecord(recordName)
 	case "SRV":
-		zone.RemoveSRVRecord(recordName)
+		removed = zone.RemoveSRVRecord(recordName)
 	case "CAA":
-		zone.RemoveCAARecord(recordName)
+		removed = zone.RemoveCAARecord(recordName)
 	case "TLSA":
-		zone.RemoveTLSARecord(recordName)
+		removed = zone.RemoveTLSARecord(recordName)
 	default:
 		h.respWriter.Error400(w, r, ErrInvalidRecordType{Type: recordType})
+		return
+	}
+	if !removed {
+		h.respWriter.Error404(w, r, ErrRecordNotFound{Type: recordType, Name: recordName})
 		return
 	}
 

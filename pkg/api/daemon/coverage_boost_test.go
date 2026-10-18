@@ -792,7 +792,7 @@ func TestBoost_CryptoServerAdapter_Sign_NotPreHashedByDefault(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchEncrypt_NilClient(t *testing.T) {
 	adapter := NewCryptoServerAdapter(nil, boostSlogLogger())
 
-	_, err := adapter.BatchEncrypt(context.Background(), &pb.EncryptBatchRequest{})
+	_, err := adapter.EncryptBatch(context.Background(), &pb.EncryptBatchRequest{})
 	if err == nil {
 		t.Fatal("expected error for nil client")
 	}
@@ -804,7 +804,7 @@ func TestBoost_CryptoServerAdapter_BatchEncrypt_NilClient(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchEncrypt_EmptyKeyID(t *testing.T) {
 	adapter := NewCryptoServerAdapter(&boostMockCryptoClient{}, boostSlogLogger())
 
-	_, err := adapter.BatchEncrypt(context.Background(), &pb.EncryptBatchRequest{KeyId: ""})
+	_, err := adapter.EncryptBatch(context.Background(), &pb.EncryptBatchRequest{KeyId: ""})
 	if err == nil {
 		t.Fatal("expected error for empty key_id")
 	}
@@ -816,7 +816,7 @@ func TestBoost_CryptoServerAdapter_BatchEncrypt_EmptyKeyID(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchEncrypt_EmptyItems(t *testing.T) {
 	adapter := NewCryptoServerAdapter(&boostMockCryptoClient{}, boostSlogLogger())
 
-	_, err := adapter.BatchEncrypt(context.Background(), &pb.EncryptBatchRequest{
+	_, err := adapter.EncryptBatch(context.Background(), &pb.EncryptBatchRequest{
 		KeyId: "key-1",
 		Items: []*pb.BatchEncryptItem{},
 	})
@@ -836,7 +836,7 @@ func TestBoost_CryptoServerAdapter_BatchEncrypt_ExceedsMaxBatch(t *testing.T) {
 		items[i] = &pb.BatchEncryptItem{Plaintext: []byte("data")}
 	}
 
-	_, err := adapter.BatchEncrypt(context.Background(), &pb.EncryptBatchRequest{
+	_, err := adapter.EncryptBatch(context.Background(), &pb.EncryptBatchRequest{
 		KeyId: "key-1",
 		Items: items,
 	})
@@ -851,7 +851,7 @@ func TestBoost_CryptoServerAdapter_BatchEncrypt_ExceedsMaxBatch(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchEncrypt_Success(t *testing.T) {
 	adapter := NewCryptoServerAdapter(&boostMockCryptoClient{}, boostSlogLogger())
 
-	resp, err := adapter.BatchEncrypt(context.Background(), &pb.EncryptBatchRequest{
+	resp, err := adapter.EncryptBatch(context.Background(), &pb.EncryptBatchRequest{
 		KeyId: "key-1",
 		Items: []*pb.BatchEncryptItem{
 			{Plaintext: []byte("hello")},
@@ -881,7 +881,7 @@ func TestBoost_CryptoServerAdapter_BatchEncrypt_PartialFailure(t *testing.T) {
 		},
 	}, boostSlogLogger())
 
-	resp, err := adapter.BatchEncrypt(context.Background(), &pb.EncryptBatchRequest{
+	resp, err := adapter.EncryptBatch(context.Background(), &pb.EncryptBatchRequest{
 		KeyId: "key-1",
 		Items: []*pb.BatchEncryptItem{
 			{Plaintext: []byte("ok")},
@@ -903,7 +903,7 @@ func TestBoost_CryptoServerAdapter_BatchEncrypt_PartialFailure(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchDecrypt_NilClient(t *testing.T) {
 	adapter := NewCryptoServerAdapter(nil, boostSlogLogger())
 
-	_, err := adapter.BatchDecrypt(context.Background(), &pb.DecryptBatchRequest{})
+	_, err := adapter.DecryptBatch(context.Background(), &pb.DecryptBatchRequest{})
 	if err == nil {
 		t.Fatal("expected error for nil client")
 	}
@@ -915,7 +915,7 @@ func TestBoost_CryptoServerAdapter_BatchDecrypt_NilClient(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchDecrypt_EmptyKeyID(t *testing.T) {
 	adapter := NewCryptoServerAdapter(&boostMockCryptoClient{}, boostSlogLogger())
 
-	_, err := adapter.BatchDecrypt(context.Background(), &pb.DecryptBatchRequest{KeyId: ""})
+	_, err := adapter.DecryptBatch(context.Background(), &pb.DecryptBatchRequest{KeyId: ""})
 	if err == nil {
 		t.Fatal("expected error for empty key_id")
 	}
@@ -927,7 +927,7 @@ func TestBoost_CryptoServerAdapter_BatchDecrypt_EmptyKeyID(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchDecrypt_EmptyItems(t *testing.T) {
 	adapter := NewCryptoServerAdapter(&boostMockCryptoClient{}, boostSlogLogger())
 
-	_, err := adapter.BatchDecrypt(context.Background(), &pb.DecryptBatchRequest{
+	_, err := adapter.DecryptBatch(context.Background(), &pb.DecryptBatchRequest{
 		KeyId: "key-1",
 		Items: []*pb.BatchDecryptItem{},
 	})
@@ -944,7 +944,7 @@ func TestBoost_CryptoServerAdapter_BatchDecrypt_ExceedsMaxBatch(t *testing.T) {
 		items[i] = &pb.BatchDecryptItem{Ciphertext: []byte("data")}
 	}
 
-	_, err := adapter.BatchDecrypt(context.Background(), &pb.DecryptBatchRequest{
+	_, err := adapter.DecryptBatch(context.Background(), &pb.DecryptBatchRequest{
 		KeyId: "key-1",
 		Items: items,
 	})
@@ -956,7 +956,7 @@ func TestBoost_CryptoServerAdapter_BatchDecrypt_ExceedsMaxBatch(t *testing.T) {
 func TestBoost_CryptoServerAdapter_BatchDecrypt_Success(t *testing.T) {
 	adapter := NewCryptoServerAdapter(&boostMockCryptoClient{}, boostSlogLogger())
 
-	resp, err := adapter.BatchDecrypt(context.Background(), &pb.DecryptBatchRequest{
+	resp, err := adapter.DecryptBatch(context.Background(), &pb.DecryptBatchRequest{
 		KeyId: "key-1",
 		Items: []*pb.BatchDecryptItem{
 			{Ciphertext: []byte("ct1")},
@@ -983,7 +983,7 @@ func TestBoost_CryptoServerAdapter_BatchDecrypt_PartialFailure(t *testing.T) {
 		},
 	}, boostSlogLogger())
 
-	resp, err := adapter.BatchDecrypt(context.Background(), &pb.DecryptBatchRequest{
+	resp, err := adapter.DecryptBatch(context.Background(), &pb.DecryptBatchRequest{
 		KeyId: "key-1",
 		Items: []*pb.BatchDecryptItem{
 			{Ciphertext: []byte("fail")},

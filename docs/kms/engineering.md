@@ -97,7 +97,7 @@ There is no KMS type exported from this repository. The surface is:
   IAM.
 - **QUIC** — key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK
   `0xF0`–`0xF5`, plus a **KMS extended category opcode `0xCD`**.
-- **MCP** — 20 `kms_*` tools and 6 `secret_*` tools.
+- **MCP** — 21 `kms_*` tools and 6 `secret_*` tools.
 - **SDK** — `sdk/go/services/kms`.
 
 ## 4. Invariants

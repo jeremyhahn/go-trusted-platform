@@ -91,9 +91,10 @@ func TestDNSServiceServer_DeleteRecord_NonExistentRecord(t *testing.T) {
 
 	resp, err := server.DeleteRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
-	assert.Len(t, resp.Zone.Records.ARecords, 1)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1)
 }
 
 func TestDNSServiceServer_DeleteRecord_UnspecifiedType(t *testing.T) {
@@ -117,9 +118,10 @@ func TestDNSServiceServer_DeleteRecord_UnspecifiedType(t *testing.T) {
 
 	resp, err := server.DeleteRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
-	assert.Len(t, resp.Zone.Records.ARecords, 1)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1)
 }
 
 // UpdateRecord Coverage Tests

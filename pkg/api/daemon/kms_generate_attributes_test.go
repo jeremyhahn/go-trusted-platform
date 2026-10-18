@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -401,9 +402,10 @@ var generateKeySurfaces = map[string]func(ctx context.Context, client *platformM
 	},
 }
 
-// TestGenerateKeyTenantScope proves the metadata follow-up of GenerateKey is
-// made only in the system scope: go-quicbaas looks key metadata up outside
-// the tenant scope a tenant's key is stored in (tenantScopedKeyGeneration).
+// TestGenerateKeyTenantScope proves GenerateKey records its metadata for a
+// system-scope caller and refuses a tenant-bound one before generating: the
+// SDK cannot scope a tenant, so the key would land in the system namespace
+// (tenant.RequireSystemScope).
 func TestGenerateKeyTenantScope(t *testing.T) {
 	t.Parallel()
 	for surface, generate := range generateKeySurfaces {
@@ -430,28 +432,12 @@ func TestGenerateKeyTenantScope(t *testing.T) {
 				}
 			})
 
-			t.Run("tenant scope makes no metadata call", func(t *testing.T) {
-				t.Parallel()
-				var updates, calls int
-				client := countMetadataCalls(newRecordingKMSClient(&updates), &calls)
-
-				got, err := generate(tokenCallerContext("tenant-b"), client, keyAttributes{})
-				if err != nil {
-					t.Fatalf("GenerateKey: %v", err)
-				}
-				if calls != 0 {
-					t.Errorf("metadata calls = %d, want none in a tenant scope", calls)
-				}
-				if got.keyID != "scoped-key" || !got.exportable {
-					t.Errorf("metadata = %+v, want the generate response's key ID and exportable", got)
-				}
-			})
-
-			t.Run("tenant scope refuses a description or tags before generating", func(t *testing.T) {
+			t.Run("tenant-bound caller is refused before generating", func(t *testing.T) {
 				t.Parallel()
 				requests := map[string]keyAttributes{
-					"description": {description: "tenant B key"},
-					"tags":        {tags: map[string]string{"team": "crypto"}},
+					"no attributes": {},
+					"description":   {description: "tenant B key"},
+					"tags":          {tags: map[string]string{"team": "crypto"}},
 				}
 				for name, attrs := range requests {
 					t.Run(name, func(t *testing.T) {
@@ -465,15 +451,15 @@ func TestGenerateKeyTenantScope(t *testing.T) {
 						}
 
 						_, err := generate(tokenCallerContext("tenant-b"), client, attrs)
-						var unsupported ErrKMSTenantKeyMetadataUnsupported
-						if !errors.As(err, &unsupported) || status.Code(err) != codes.FailedPrecondition {
-							t.Fatalf("err = %v (code %v), want ErrKMSTenantKeyMetadataUnsupported, FailedPrecondition", err, status.Code(err))
+						var refused tenant.ErrSystemScopeOnly
+						if !errors.As(err, &refused) || status.Code(err) != codes.PermissionDenied {
+							t.Fatalf("err = %v (code %v), want tenant.ErrSystemScopeOnly, PermissionDenied", err, status.Code(err))
 						}
-						if unsupported.TenantID != "tenant-b" || unsupported.KeyID != "scoped-key" {
-							t.Errorf("error names tenant %q key %q, want tenant-b scoped-key", unsupported.TenantID, unsupported.KeyID)
+						if refused.TenantID != "tenant-b" {
+							t.Errorf("error names tenant %q, want tenant-b", refused.TenantID)
 						}
 						if generated != 0 || calls != 0 {
-							t.Errorf("generate calls=%d metadata calls=%d, want none", generated, calls)
+							t.Errorf("generate calls=%d metadata calls=%d, want none: the key would land in the system namespace", generated, calls)
 						}
 					})
 				}
@@ -519,7 +505,7 @@ func TestPlatformKMSBackendGenerateKeyDisplayName(t *testing.T) {
 		}
 	})
 
-	t.Run("tenant scope refuses a display name before generating", func(t *testing.T) {
+	t.Run("tenant-bound caller is refused a display name before generating", func(t *testing.T) {
 		t.Parallel()
 		var updates, calls, generated int
 		client := countMetadataCalls(newRecordingKMSClient(&updates), &calls)
@@ -530,9 +516,8 @@ func TestPlatformKMSBackendGenerateKeyDisplayName(t *testing.T) {
 		}
 
 		_, err := generate(tokenCallerContext("tenant-b"), client, keyAttributes{displayName: "Tenant B KEK"})
-		var unsupported ErrKMSTenantKeyMetadataUnsupported
-		if !errors.As(err, &unsupported) || status.Code(err) != codes.FailedPrecondition {
-			t.Fatalf("err = %v (code %v), want ErrKMSTenantKeyMetadataUnsupported, FailedPrecondition", err, status.Code(err))
+		if !errors.As(err, new(tenant.ErrSystemScopeOnly)) || status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("err = %v (code %v), want tenant.ErrSystemScopeOnly, PermissionDenied", err, status.Code(err))
 		}
 		if generated != 0 || calls != 0 {
 			t.Errorf("generate calls=%d metadata calls=%d, want none: no key may be left half-made", generated, calls)

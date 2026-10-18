@@ -105,8 +105,8 @@ func kmsLookupError(operation string, notFound, err error) error {
 
 // KMSRevokeKey revokes a key, marking it unusable.
 func (p *MCPServiceProvider) KMSRevokeKey(ctx context.Context, keyID string, reason string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if keyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -127,8 +127,8 @@ func (p *MCPServiceProvider) KMSRevokeKey(ctx context.Context, keyID string, rea
 // KMSExportPublicKey exports the public portion of an asymmetric key in PEM
 // (default) or DER format. A version of 0 exports the latest key version.
 func (p *MCPServiceProvider) KMSExportPublicKey(ctx context.Context, req *mcp.KMSExportPublicKeyRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -171,8 +171,8 @@ func (p *MCPServiceProvider) KMSExportPublicKey(ctx context.Context, req *mcp.KM
 
 // KMSGetKeyMetadata retrieves key metadata without exposing key material.
 func (p *MCPServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if keyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -188,8 +188,8 @@ func (p *MCPServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string
 
 // KMSUpdateKeyMetadata updates mutable key metadata fields.
 func (p *MCPServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *mcp.KMSUpdateKeyMetadataRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -216,10 +216,46 @@ func (p *MCPServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *mcp.
 	return resp.Metadata, nil
 }
 
+// mcpSettableKeyStatuses maps the statuses kms_update_key_status accepts to
+// the SDK key status.
+var mcpSettableKeyStatuses = map[string]baasservice.KeyStatus{
+	"enabled":  baasservice.KeyStatusEnabled,
+	"disabled": baasservice.KeyStatusDisabled,
+}
+
+// KMSUpdateKeyStatus enables or disables a key, or one version of it, through
+// the SDK KMS service: the same UpdateKeyStatus the REST, gRPC, QUIC and Unix
+// transports reach.
+func (p *MCPServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *mcp.KMSUpdateKeyStatusRequest) (interface{}, error) {
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil || req.KeyID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
+	}
+	status, ok := mcpSettableKeyStatuses[req.Status]
+	if !ok {
+		return nil, ErrKMSInvalidParameter{Parameter: "status", Reason: "status must be enabled or disabled"}
+	}
+
+	resp, err := p.kmsService.UpdateKeyStatus(ctx, &baasservice.UpdateKeyStatusRequest{
+		KeyID:   req.KeyID,
+		Version: req.Version,
+		Status:  status,
+		Reason:  req.Reason,
+	})
+	if err != nil {
+		return nil, ErrKMSOperationFailed{Operation: "UpdateKeyStatus", Cause: err}
+	}
+
+	p.logger.Info("KMS key status updated", "key_id", req.KeyID, "version", req.Version, "status", req.Status)
+	return resp, nil
+}
+
 // KMSSetKeyPolicy sets the access control policy for a key.
 func (p *MCPServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *mcp.KMSSetKeyPolicyRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -265,8 +301,8 @@ func (p *MCPServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *mcp.KMSSe
 
 // KMSGetKeyPolicy retrieves the access control policy for a key.
 func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if keyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -282,8 +318,8 @@ func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) 
 
 // KMSGetSupportedAlgorithms lists algorithms supported by the KMS backend.
 func (p *MCPServiceProvider) KMSGetSupportedAlgorithms(ctx context.Context) ([]string, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	algorithms, err := p.kmsService.GetSupportedAlgorithms(ctx)
@@ -296,8 +332,8 @@ func (p *MCPServiceProvider) KMSGetSupportedAlgorithms(ctx context.Context) ([]s
 
 // KMSBackendStatus returns health and capability information about the KMS backend.
 func (p *MCPServiceProvider) KMSBackendStatus(ctx context.Context) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := p.kmsService.BackendStatus(ctx)
@@ -308,10 +344,40 @@ func (p *MCPServiceProvider) KMSBackendStatus(ctx context.Context) (interface{},
 	return resp, nil
 }
 
+// admitKMS refuses a kms_* key tool call the provider cannot serve: one with
+// no KMS service, or one from a tenant-bound caller (requireSystemScopeContext),
+// refused as gRPC, Unix, QUIC and REST refuse it.
+func (p *MCPServiceProvider) admitKMS(ctx context.Context) error {
+	if p.kmsService == nil {
+		return ErrServiceNotAvailable{Service: "kms"}
+	}
+	return requireSystemScopeContext(ctx, p.systemTenantID)
+}
+
+// admitCrypto refuses a kms_* crypto tool call (encrypt, decrypt, sign,
+// verify, random, data keys) the provider cannot serve: one with no crypto
+// service, or one from a tenant-bound caller (requireSystemScopeContext).
+func (p *MCPServiceProvider) admitCrypto(ctx context.Context) error {
+	if p.cryptoService == nil {
+		return ErrServiceNotAvailable{Service: "kms"}
+	}
+	return requireSystemScopeContext(ctx, p.systemTenantID)
+}
+
+// admitSecrets refuses a secret_* tool call the provider cannot serve: one
+// with no secrets service, or one from a tenant-bound caller
+// (requireSystemScopeContext), refused as gRPC, Unix, QUIC and REST refuse it.
+func (p *MCPServiceProvider) admitSecrets(ctx context.Context) error {
+	if p.secretsService == nil {
+		return ErrServiceNotAvailable{Service: "secrets"}
+	}
+	return requireSystemScopeContext(ctx, p.systemTenantID)
+}
+
 // SecretStore stores a secret via the quicbaas secrets service.
 func (p *MCPServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretStoreRequest) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.SecretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -336,8 +402,8 @@ func (p *MCPServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretSto
 
 // SecretGet retrieves a secret, optionally at a specific version.
 func (p *MCPServiceProvider) SecretGet(ctx context.Context, secretID string, version uint64) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if secretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -356,8 +422,8 @@ func (p *MCPServiceProvider) SecretGet(ctx context.Context, secretID string, ver
 
 // SecretList lists secrets without exposing secret data.
 func (p *MCPServiceProvider) SecretList(ctx context.Context, limit int, cursor string) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 
 	if limit < 0 {
@@ -399,8 +465,8 @@ func (p *MCPServiceProvider) SecretList(ctx context.Context, limit int, cursor s
 
 // SecretDelete deletes a secret.
 func (p *MCPServiceProvider) SecretDelete(ctx context.Context, secretID string) error {
-	if p.secretsService == nil {
-		return ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return err
 	}
 	if secretID == "" {
 		return ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -417,8 +483,8 @@ func (p *MCPServiceProvider) SecretDelete(ctx context.Context, secretID string) 
 // SecretSetRotationPolicy sets the automatic rotation policy for a secret,
 // including the number of old versions to retain after rotation.
 func (p *MCPServiceProvider) SecretSetRotationPolicy(ctx context.Context, req *mcp.SecretSetRotationPolicyRequest) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.SecretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -442,8 +508,8 @@ func (p *MCPServiceProvider) SecretSetRotationPolicy(ctx context.Context, req *m
 
 // SecretGetRotationPolicy retrieves the automatic rotation policy for a secret.
 func (p *MCPServiceProvider) SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if secretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}

@@ -96,7 +96,7 @@ the plural `/devices/`; no path is served under both (#266,
 | GET | `/device/profiles/serial/{serial}` | `device:read` | Find by serial |
 | GET | `/device/profiles/find-config` | `device:read` | Find the config for a device (EK serial / MAC) |
 | POST | `/device/activate-json` | `device:write` | Activate a device (JSON body) |
-| POST | `/device/profiles/{id}/assign` | `device:write` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
+| POST | `/device/profiles/{id}/assign` | `device:write` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate; an optional body `profile_id` (JSON string or number) echoes the path id, which wins |
 | POST | `/device/profiles/{id}/unassign` | `device:write` | Clear a profile's device binding |
 
 ## Template Endpoints

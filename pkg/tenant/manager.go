@@ -493,10 +493,11 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 			return nil, 0, err
 		}
 
-		// A cached entity is the one this daemon last stored, and it wins
-		// over the IAM copy a concurrent write may not have reached yet.
-		cached, _ := m.cache.LoadOrStore(entity.ID, entity)
-		entities = append(entities, cached.(*TenantEntity).Clone())
+		// The IAM record is authoritative: every write saves to IAM before
+		// it touches the cache, so a cached entity can only be older than
+		// the record, never newer. Reconcile the cache from the record.
+		m.cache.Store(entity.ID, entity)
+		entities = append(entities, entity.Clone())
 	}
 
 	return entities, total, nil
@@ -1302,10 +1303,13 @@ func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
 		return err
 	}
 
+	// The display name travels in the platform record, never as IAM's
+	// DisplayName: the pinned go-quicbaas embedded handleIAMTenantUpdate
+	// (sdk/go/transport/embedded/handlers_iam.go:204-208) writes that field
+	// into the tenant's canonical name, so sending it renames the tenant.
 	req := &iam.UpdateTenantRequest{
-		DisplayName: entity.DisplayName,
-		Metadata:    metadata,
-		Status:      entity.iamStatus(),
+		Metadata: metadata,
+		Status:   entity.iamStatus(),
 	}
 
 	_, err = m.iamTenantClient.Update(ctx, entity.ID, req)

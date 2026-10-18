@@ -169,8 +169,11 @@ func (m *mockIAMClient) Update(ctx context.Context, tenantID string, req *iam.Up
 		return nil, errors.New("tenant not found")
 	}
 
+	// The pinned go-quicbaas embedded handleIAMTenantUpdate
+	// (sdk/go/transport/embedded/handlers_iam.go:204-208) writes
+	// DisplayName into the tenant's canonical name, so the double does too.
 	if req.DisplayName != "" {
-		tenant.DisplayName = req.DisplayName
+		tenant.Name = req.DisplayName
 	}
 	if req.Metadata != nil {
 		if tenant.Metadata == nil {

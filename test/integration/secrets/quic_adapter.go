@@ -264,6 +264,17 @@ func (q *QUICAdapter) secrets(ctx context.Context, operation string, sub byte, r
 	}
 	defer stream.Close()
 
+	// The stream reads and writes ignore ctx, so a daemon that never answers
+	// would hold the suite until go test's own timeout. The stream deadline
+	// is the caller's deadline, else the adapter's per-operation timeout.
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(q.timeout)
+	}
+	if err := stream.SetDeadline(deadline); err != nil {
+		return ErrQUICStreamFailed{Operation: "SetDeadline", Err: err}
+	}
+
 	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Payload: payload}); err != nil {
 		return ErrQUICStreamFailed{Operation: "WriteRequest", Err: err}
 	}

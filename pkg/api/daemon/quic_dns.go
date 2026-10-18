@@ -100,6 +100,21 @@ type DNSZone struct {
 	Description string `codec:"description"`
 	Internal    bool   `codec:"internal"`
 	RecordCount int    `codec:"record_count"`
+	// SOA is the zone's start of authority; nil when the zone has none.
+	SOA *DNSSOARecord `codec:"soa"`
+}
+
+// DNSSOARecord represents a zone's SOA record in QUIC responses
+type DNSSOARecord struct {
+	Name       string `codec:"name"`
+	MName      string `codec:"mname"`
+	RName      string `codec:"rname"`
+	Serial     uint32 `codec:"serial"`
+	Refresh    uint32 `codec:"refresh"`
+	Retry      uint32 `codec:"retry"`
+	Expire     uint32 `codec:"expire"`
+	MinimumTTL uint32 `codec:"minimum_ttl"`
+	TTL        uint32 `codec:"ttl"`
 }
 
 // DNSGetZoneResponse represents the response containing a DNS zone
@@ -359,6 +374,7 @@ func (h *QUICServiceHandler) handleDNSGetZone(ctx context.Context, req *quicwire
 			Description: zone.Description,
 			Internal:    zone.Internal,
 			RecordCount: recordCount,
+			SOA:         quicSOARecord(zone.RecordSet.SOARecord),
 		},
 		Timestamp: time.Now().Unix(),
 	}
@@ -531,6 +547,25 @@ func convertInterfaceToQUICRecord(record interface{}) *DNSRecord {
 }
 
 // countZoneRecords counts the total number of records in a zone
+// quicSOARecord converts a zone's SOA record for a QUIC response. A zone
+// without an SOA (empty name, as countZoneRecords treats it) yields nil.
+func quicSOARecord(soa entities.SOARecord) *DNSSOARecord {
+	if soa.Name == "" {
+		return nil
+	}
+	return &DNSSOARecord{
+		Name:       soa.Name,
+		MName:      soa.MName,
+		RName:      soa.RName,
+		Serial:     soa.Serial,
+		Refresh:    soa.Refresh,
+		Retry:      soa.Retry,
+		Expire:     soa.Expire,
+		MinimumTTL: soa.MinimumTTL,
+		TTL:        soa.TTL,
+	}
+}
+
 func countZoneRecords(zone *entities.Zone) int {
 	if zone == nil {
 		return 0

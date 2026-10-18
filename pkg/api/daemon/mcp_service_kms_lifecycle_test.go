@@ -234,6 +234,65 @@ func TestMCPServiceProviderKMSRevokeKey(t *testing.T) {
 	})
 }
 
+func TestMCPServiceProviderKMSUpdateKeyStatus(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success", func(t *testing.T) {
+		mock := &lifecycleKMSServiceMock{}
+		mock.updateKeyStatusFunc = func(ctx context.Context, req *service.UpdateKeyStatusRequest) (*service.UpdateKeyStatusResponse, error) {
+			assert.Equal(t, "key-1", req.KeyID)
+			assert.Equal(t, uint64(3), req.Version)
+			assert.Equal(t, service.KeyStatusDisabled, req.Status)
+			assert.Equal(t, "maintenance", req.Reason)
+			return &service.UpdateKeyStatusResponse{KeyID: req.KeyID, Version: req.Version, Status: req.Status}, nil
+		}
+		provider := newLifecycleProvider(mock, nil)
+
+		result, err := provider.KMSUpdateKeyStatus(ctx, &mcp.KMSUpdateKeyStatusRequest{
+			KeyID: "key-1", Version: 3, Status: "disabled", Reason: "maintenance",
+		})
+		require.NoError(t, err)
+		resp, ok := result.(*service.UpdateKeyStatusResponse)
+		require.True(t, ok, "result must be the SDK UpdateKeyStatus response")
+		assert.Equal(t, service.KeyStatusDisabled, resp.Status)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
+		_, err := provider.KMSUpdateKeyStatus(ctx, &mcp.KMSUpdateKeyStatusRequest{Status: "enabled"})
+		var invalidErr ErrKMSInvalidParameter
+		require.ErrorAs(t, err, &invalidErr)
+		assert.Equal(t, "key_id", invalidErr.Parameter)
+	})
+
+	t.Run("UnsettableStatus", func(t *testing.T) {
+		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
+		_, err := provider.KMSUpdateKeyStatus(ctx, &mcp.KMSUpdateKeyStatusRequest{KeyID: "key-1", Status: "destroyed"})
+		var invalidErr ErrKMSInvalidParameter
+		require.ErrorAs(t, err, &invalidErr)
+		assert.Equal(t, "status", invalidErr.Parameter)
+	})
+
+	t.Run("ServiceUnavailable", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, nil)
+		_, err := provider.KMSUpdateKeyStatus(ctx, &mcp.KMSUpdateKeyStatusRequest{KeyID: "key-1", Status: "enabled"})
+		var unavailableErr ErrServiceNotAvailable
+		assert.ErrorAs(t, err, &unavailableErr)
+	})
+
+	t.Run("BackendError", func(t *testing.T) {
+		mock := &lifecycleKMSServiceMock{}
+		mock.updateKeyStatusFunc = func(context.Context, *service.UpdateKeyStatusRequest) (*service.UpdateKeyStatusResponse, error) {
+			return nil, assert.AnError
+		}
+		provider := newLifecycleProvider(mock, nil)
+		_, err := provider.KMSUpdateKeyStatus(ctx, &mcp.KMSUpdateKeyStatusRequest{KeyID: "key-1", Status: "enabled"})
+		var opErr ErrKMSOperationFailed
+		require.ErrorAs(t, err, &opErr)
+		assert.ErrorIs(t, err, assert.AnError)
+	})
+}
+
 func TestMCPServiceProviderKMSKeyMetadata(t *testing.T) {
 	ctx := context.Background()
 

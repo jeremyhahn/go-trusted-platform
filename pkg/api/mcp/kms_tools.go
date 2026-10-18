@@ -108,6 +108,19 @@ var ErrKMSNumBytesRequired = &KMSError{
 	Message: "num_bytes must be a positive integer",
 }
 
+// ErrKMSKeyStatusInvalid indicates the requested key status is not one
+// kms_update_key_status can set.
+var ErrKMSKeyStatusInvalid = &KMSError{
+	Code:    "KMS_KEY_STATUS_INVALID",
+	Message: "status must be enabled or disabled",
+}
+
+// ErrKMSKeyVersionInvalid indicates a negative key version.
+var ErrKMSKeyVersionInvalid = &KMSError{
+	Code:    "KMS_KEY_VERSION_INVALID",
+	Message: "version must be zero (every version) or a positive key version",
+}
+
 // =============================================================================
 // KMS Tool Registration (called from tools.go registerKMSTools)
 // =============================================================================
@@ -495,6 +508,34 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 				},
 			},
 			"required": []string{"key_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_update_key_status",
+		Description: "Enable or disable a key, or one version of it",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID to enable or disable",
+				},
+				"status": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"enabled", "disabled"},
+					"description": "New key status",
+				},
+				"version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Key version to change; 0 or omitted changes the key itself",
+				},
+				"reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Reason for the status change (audit trail)",
+				},
+			},
+			"required": []string{"key_id", "status"},
 		},
 	})
 

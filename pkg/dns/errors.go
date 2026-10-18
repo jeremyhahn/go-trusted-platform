@@ -13,6 +13,12 @@
 
 package dns
 
+import (
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+)
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -74,4 +80,22 @@ func (e *DetailError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *DetailError) Unwrap() error {
 	return e.Err
+}
+
+// ErrRecordNotFound is returned when the zone enclosing Name holds no record
+// of type Type with that name.
+type ErrRecordNotFound struct {
+	Name string
+	Type string
+}
+
+// Error implements the error interface.
+func (e ErrRecordNotFound) Error() string {
+	return fmt.Sprintf("record not found: %s %s", e.Name, e.Type)
+}
+
+// Is reports the error as datastore.ErrRecordNotFound, so every transport
+// classifies it as a not-found.
+func (e ErrRecordNotFound) Is(target error) bool {
+	return target == datastore.ErrRecordNotFound
 }

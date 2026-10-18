@@ -156,11 +156,23 @@ Tenant entities are stored through the stack; `ErrStorageFailed` wraps
 persistence failures. The IAM tenant record (reached through the SDK
 `TenantClient`) is the store of record:
 
-- **Identity** — ID, name, display name and timestamps are IAM tenant fields.
-- **Platform record** — lifecycle state, the compute/network/storage quotas
-  (limits and usage counters), labels and annotations have no IAM field. The
-  manager stores them as one JSON value under the IAM tenant metadata key
-  `platform.tenant` (`PlatformRecordKey`), replaced whole on every write.
+- **Identity** — ID, name and timestamps are IAM tenant fields. The name is
+  canonical: no write after create changes it.
+- **Platform record** — display name, lifecycle state, the
+  compute/network/storage quotas (limits and usage counters), labels and
+  annotations. The manager stores them as one JSON value under the IAM tenant
+  metadata key `platform.tenant` (`PlatformRecordKey`), replaced whole on
+  every write. The display name is never sent as IAM's `DisplayName`: the
+  pinned go-quicbaas embedded `handleIAMTenantUpdate`
+  (`sdk/go/transport/embedded/handlers_iam.go:204-208`) writes that field into
+  the tenant's name, so `acme` would become `Acme Corporation` and vanish from
+  `GetTenantByName("acme")`. A tenant whose record holds no display name shows
+  its name.
+- **Upstream gap** — the same embedded handler passes only the name to
+  `UpdateTenant` and drops `Metadata` and `Status`, and `tenantToSDK`
+  returns no metadata, so over the embedded transport the platform record
+  does not reach IAM yet. The manager is written against the SDK contract;
+  the fix belongs in go-quicbaas.
 - **IAM status** mirrors the state where IAM has one: `active` and
   `suspended`. `created` and `deleting` leave the IAM status unchanged.
 
@@ -170,7 +182,10 @@ cache never holds a state IAM refused, and a failed save returns
 `ErrStorageFailed` with the cache unchanged. A failed save during create rolls
 the IAM tenant and DEK back. Reads that miss the cache (`GetTenant`,
 `GetTenantByName`, `ListTenants`) rebuild the entity from the record, so a
-restarted daemon serves the state, quotas and labels it last stored. A record
+restarted daemon serves the state, quotas and labels it last stored.
+`ListTenants` always reads IAM and replaces each listed tenant's cache entry
+with the entity it rebuilt: the record is authoritative, so a tenant another
+daemon changed lists in its new state and later cached reads see it too. A record
 that does not parse, or names an unknown state, is `ErrStorageFailed`. A
 tenant created outside the manager has no record: it reads as `created`
 (`suspended` when IAM says so) with zero quotas and no labels.

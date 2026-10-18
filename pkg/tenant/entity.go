@@ -30,6 +30,7 @@ const PlatformRecordKey = "platform.tenant"
 // platformRecord is the platform-owned part of a tenant, stored as one JSON
 // value under PlatformRecordKey so an update always replaces it whole.
 type platformRecord struct {
+	DisplayName  string            `json:"display_name,omitempty"`
 	State        State             `json:"state"`
 	ComputeQuota ComputeQuota      `json:"compute_quota"`
 	NetworkQuota NetworkQuota      `json:"network_quota"`
@@ -113,6 +114,7 @@ func (e *TenantEntity) ToIAM() *iam.Tenant {
 // metadata that persists it.
 func (e *TenantEntity) platformMetadata() (map[string]string, error) {
 	data, err := json.Marshal(platformRecord{
+		DisplayName:  e.DisplayName,
 		State:        e.State,
 		ComputeQuota: e.ComputeQuota,
 		NetworkQuota: e.NetworkQuota,
@@ -146,6 +148,9 @@ func (e *TenantEntity) restorePlatformRecord(t *iam.Tenant) error {
 		return ErrInvalidState{Current: record.State}
 	}
 
+	if record.DisplayName != "" {
+		e.DisplayName = record.DisplayName
+	}
 	e.State = record.State
 	e.ComputeQuota = record.ComputeQuota
 	e.NetworkQuota = record.NetworkQuota

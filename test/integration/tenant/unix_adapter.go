@@ -19,9 +19,8 @@ package tenant
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
-	"strings"
 	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -105,19 +104,20 @@ func NewUnixAdapter() *UnixAdapter {
 
 // Setup initializes the gRPC connection over Unix socket.
 func (a *UnixAdapter) Setup(ctx context.Context) error {
+	conn, err := grpc.NewClient("unix://"+a.socketPath, helpers.GRPCUnixCredentials())
+	if err != nil {
+		return ErrUnixConnectionFailed{
+			Path: a.socketPath,
+			Err:  err,
+		}
+	}
+
 	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeout)
 	defer cancel()
-
-	conn, err := grpc.DialContext(dialCtx, "unix://"+a.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-		grpc.WithBlock(),
-	)
-	if err != nil {
+	if err := helpers.WaitGRPCReady(dialCtx, conn); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
 		return ErrUnixConnectionFailed{
 			Path: a.socketPath,
 			Err:  err,

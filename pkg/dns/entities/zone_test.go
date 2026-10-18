@@ -50,7 +50,7 @@ func TestZone_ARecords(t *testing.T) {
 	assert.Equal(t, "api", zone.RecordSet.ARecords[2].Name)
 
 	// Test RemoveARecord
-	zone.RemoveARecord("www")
+	assert.True(t, zone.RemoveARecord("www"))
 	assert.Len(t, zone.RecordSet.ARecords, 2)
 	assert.Equal(t, "mail", zone.RecordSet.ARecords[0].Name)
 }
@@ -68,7 +68,7 @@ func TestZone_AAAARecords(t *testing.T) {
 	zone.AddAAAARecord(newRecord)
 	assert.Len(t, zone.RecordSet.AAAARecords, 2)
 
-	zone.RemoveAAAARecord("www")
+	assert.True(t, zone.RemoveAAAARecord("www"))
 	assert.Len(t, zone.RecordSet.AAAARecords, 1)
 	assert.Equal(t, "mail", zone.RecordSet.AAAARecords[0].Name)
 }
@@ -86,7 +86,7 @@ func TestZone_CNAMERecords(t *testing.T) {
 	zone.AddCNAMERecord(newRecord)
 	assert.Len(t, zone.RecordSet.CNAMERecords, 2)
 
-	zone.RemoveCNAMERecord("www")
+	assert.True(t, zone.RemoveCNAMERecord("www"))
 	assert.Len(t, zone.RecordSet.CNAMERecords, 1)
 	assert.Equal(t, "blog", zone.RecordSet.CNAMERecords[0].Name)
 }
@@ -104,7 +104,7 @@ func TestZone_DNSKEYRecords(t *testing.T) {
 	zone.AddDNSKEYRecord(newRecord)
 	assert.Len(t, zone.RecordSet.DNSKEYRecords, 2)
 
-	zone.RemoveDNSKEYRecord("example.com.")
+	assert.True(t, zone.RemoveDNSKEYRecord("example.com."))
 	assert.Len(t, zone.RecordSet.DNSKEYRecords, 1)
 	assert.Equal(t, "test.com.", zone.RecordSet.DNSKEYRecords[0].Name)
 }
@@ -122,7 +122,7 @@ func TestZone_DSRecords(t *testing.T) {
 	zone.AddDSRecord(newRecord)
 	assert.Len(t, zone.RecordSet.DSRecords, 2)
 
-	zone.RemoveDSRecord("example.com.")
+	assert.True(t, zone.RemoveDSRecord("example.com."))
 	assert.Len(t, zone.RecordSet.DSRecords, 1)
 	assert.Equal(t, "test.com.", zone.RecordSet.DSRecords[0].Name)
 }
@@ -140,7 +140,7 @@ func TestZone_MXRecords(t *testing.T) {
 	zone.AddMXRecord(newRecord)
 	assert.Len(t, zone.RecordSet.MXRecords, 2)
 
-	zone.RemoveMXRecord("example.com.")
+	assert.True(t, zone.RemoveMXRecord("example.com."))
 	assert.Len(t, zone.RecordSet.MXRecords, 1)
 	assert.Equal(t, "test.com.", zone.RecordSet.MXRecords[0].Name)
 }
@@ -158,7 +158,7 @@ func TestZone_NSRecords(t *testing.T) {
 	zone.AddNSRecord(newRecord)
 	assert.Len(t, zone.RecordSet.NSRecords, 2)
 
-	zone.RemoveNSRecord("example.com.")
+	assert.True(t, zone.RemoveNSRecord("example.com."))
 	assert.Len(t, zone.RecordSet.NSRecords, 1)
 	assert.Equal(t, "test.com.", zone.RecordSet.NSRecords[0].Name)
 }
@@ -176,7 +176,7 @@ func TestZone_RRSIGRecords(t *testing.T) {
 	zone.AddRRSIGRecord(newRecord)
 	assert.Len(t, zone.RecordSet.RRSIGRecords, 2)
 
-	zone.RemoveRRSIGRecord("example.com.")
+	assert.True(t, zone.RemoveRRSIGRecord("example.com."))
 	assert.Len(t, zone.RecordSet.RRSIGRecords, 1)
 	assert.Equal(t, "test.com.", zone.RecordSet.RRSIGRecords[0].SignerName)
 }
@@ -213,7 +213,7 @@ func TestZone_SRVRecords(t *testing.T) {
 	zone.AddSRVRecord(newRecord)
 	assert.Len(t, zone.RecordSet.SRVRecords, 2)
 
-	zone.RemoveSRVRecord("_http._tcp.example.com.")
+	assert.True(t, zone.RemoveSRVRecord("_http._tcp.example.com."))
 	assert.Len(t, zone.RecordSet.SRVRecords, 1)
 	assert.Equal(t, "_https._tcp.example.com.", zone.RecordSet.SRVRecords[0].Name)
 }
@@ -231,7 +231,7 @@ func TestZone_TXTRecords(t *testing.T) {
 	zone.AddTXTRecord(newRecord)
 	assert.Len(t, zone.RecordSet.TXTRecords, 2)
 
-	zone.RemoveTXTRecord("example.com.")
+	assert.True(t, zone.RemoveTXTRecord("example.com."))
 	assert.Len(t, zone.RecordSet.TXTRecords, 1)
 	assert.Equal(t, "_dmarc.example.com.", zone.RecordSet.TXTRecords[0].Name)
 }
@@ -250,31 +250,31 @@ func TestZone_RemoveNonExistentRecords(t *testing.T) {
 
 	// Try to remove non-existent records - should not panic and should not affect existing records
 	initialACount := len(zone.RecordSet.ARecords)
-	zone.RemoveARecord("nonexistent")
+	assert.False(t, zone.RemoveARecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.ARecords, initialACount)
 
 	initialAAAACount := len(zone.RecordSet.AAAARecords)
-	zone.RemoveAAAARecord("nonexistent")
+	assert.False(t, zone.RemoveAAAARecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.AAAARecords, initialAAAACount)
 
 	initialCNAMECount := len(zone.RecordSet.CNAMERecords)
-	zone.RemoveCNAMERecord("nonexistent")
+	assert.False(t, zone.RemoveCNAMERecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.CNAMERecords, initialCNAMECount)
 
 	initialMXCount := len(zone.RecordSet.MXRecords)
-	zone.RemoveMXRecord("nonexistent")
+	assert.False(t, zone.RemoveMXRecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.MXRecords, initialMXCount)
 
 	initialNSCount := len(zone.RecordSet.NSRecords)
-	zone.RemoveNSRecord("nonexistent")
+	assert.False(t, zone.RemoveNSRecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.NSRecords, initialNSCount)
 
 	initialSRVCount := len(zone.RecordSet.SRVRecords)
-	zone.RemoveSRVRecord("nonexistent")
+	assert.False(t, zone.RemoveSRVRecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.SRVRecords, initialSRVCount)
 
 	initialTXTCount := len(zone.RecordSet.TXTRecords)
-	zone.RemoveTXTRecord("nonexistent")
+	assert.False(t, zone.RemoveTXTRecord("nonexistent"))
 	assert.Len(t, zone.RecordSet.TXTRecords, initialTXTCount)
 }
 
@@ -315,7 +315,7 @@ func TestZone_RemoveCAARecord(t *testing.T) {
 		},
 	}
 
-	zone.RemoveCAARecord("example.com.")
+	assert.True(t, zone.RemoveCAARecord("example.com."))
 
 	assert.Len(t, zone.RecordSet.CAARecords, 1)
 	assert.Equal(t, "sub.example.com.", zone.RecordSet.CAARecords[0].Name)
@@ -331,7 +331,7 @@ func TestZone_RemoveCAARecord_NotFound(t *testing.T) {
 		},
 	}
 
-	zone.RemoveCAARecord("nonexistent.example.com.")
+	assert.False(t, zone.RemoveCAARecord("nonexistent.example.com."))
 
 	// Should not modify the list
 	assert.Len(t, zone.RecordSet.CAARecords, 1)
@@ -372,7 +372,7 @@ func TestZone_RemoveTLSARecord(t *testing.T) {
 		},
 	}
 
-	zone.RemoveTLSARecord("_443._tcp.www.example.com.")
+	assert.True(t, zone.RemoveTLSARecord("_443._tcp.www.example.com."))
 
 	assert.Len(t, zone.RecordSet.TLSARecords, 1)
 	assert.Equal(t, "_25._tcp.mail.example.com.", zone.RecordSet.TLSARecords[0].Name)
@@ -388,7 +388,7 @@ func TestZone_RemoveTLSARecord_NotFound(t *testing.T) {
 		},
 	}
 
-	zone.RemoveTLSARecord("_25._tcp.mail.example.com.")
+	assert.False(t, zone.RemoveTLSARecord("_25._tcp.mail.example.com."))
 
 	// Should not modify the list
 	assert.Len(t, zone.RecordSet.TLSARecords, 1)
@@ -415,7 +415,7 @@ func TestZone_NSECRecords(t *testing.T) {
 	assert.Equal(t, "mail.example.com.", zone.RecordSet.NSECRecords[2].Name)
 
 	// Test RemoveNSECRecord
-	zone.RemoveNSECRecord("example.com.")
+	assert.True(t, zone.RemoveNSECRecord("example.com."))
 	assert.Len(t, zone.RecordSet.NSECRecords, 2)
 	assert.Equal(t, "www.example.com.", zone.RecordSet.NSECRecords[0].Name)
 }
@@ -431,7 +431,7 @@ func TestZone_NSECRecords_RemoveNonExistent(t *testing.T) {
 		},
 	}
 
-	zone.RemoveNSECRecord("nonexistent.example.com.")
+	assert.False(t, zone.RemoveNSECRecord("nonexistent.example.com."))
 	assert.Len(t, zone.RecordSet.NSECRecords, 1)
 }
 
@@ -483,7 +483,7 @@ func TestZone_NSEC3Records(t *testing.T) {
 	assert.Equal(t, "ghi789.example.com.", zone.RecordSet.NSEC3Records[2].Name)
 
 	// Test RemoveNSEC3Record
-	zone.RemoveNSEC3Record("abc123.example.com.")
+	assert.True(t, zone.RemoveNSEC3Record("abc123.example.com."))
 	assert.Len(t, zone.RecordSet.NSEC3Records, 2)
 	assert.Equal(t, "def456.example.com.", zone.RecordSet.NSEC3Records[0].Name)
 }
@@ -499,7 +499,7 @@ func TestZone_NSEC3Records_RemoveNonExistent(t *testing.T) {
 		},
 	}
 
-	zone.RemoveNSEC3Record("nonexistent.example.com.")
+	assert.False(t, zone.RemoveNSEC3Record("nonexistent.example.com."))
 	assert.Len(t, zone.RecordSet.NSEC3Records, 1)
 }
 
@@ -536,7 +536,7 @@ func TestZone_NSEC3PARAMRecords(t *testing.T) {
 	assert.Len(t, zone.RecordSet.NSEC3PARAMRecords, 2)
 
 	// Test RemoveNSEC3PARAMRecord
-	zone.RemoveNSEC3PARAMRecord("example.com.")
+	assert.True(t, zone.RemoveNSEC3PARAMRecord("example.com."))
 	assert.Len(t, zone.RecordSet.NSEC3PARAMRecords, 1)
 	assert.Equal(t, uint8(1), zone.RecordSet.NSEC3PARAMRecords[0].Flags)
 }
@@ -552,7 +552,7 @@ func TestZone_NSEC3PARAMRecords_RemoveNonExistent(t *testing.T) {
 		},
 	}
 
-	zone.RemoveNSEC3PARAMRecord("nonexistent.example.com.")
+	assert.False(t, zone.RemoveNSEC3PARAMRecord("nonexistent.example.com."))
 	assert.Len(t, zone.RecordSet.NSEC3PARAMRecords, 1)
 }
 
@@ -561,7 +561,7 @@ func TestZone_NSECRecords_EmptyZone(t *testing.T) {
 	zone := &Zone{Name: "example.com."}
 
 	// Operations on empty zone should not panic
-	zone.RemoveNSECRecord("example.com.")
+	assert.False(t, zone.RemoveNSECRecord("example.com."))
 	assert.Nil(t, zone.RecordSet.NSECRecords)
 
 	// Adding to empty zone should work
@@ -574,7 +574,7 @@ func TestZone_NSEC3Records_EmptyZone(t *testing.T) {
 	zone := &Zone{Name: "example.com."}
 
 	// Operations on empty zone should not panic
-	zone.RemoveNSEC3Record("abc123.example.com.")
+	assert.False(t, zone.RemoveNSEC3Record("abc123.example.com."))
 	assert.Nil(t, zone.RecordSet.NSEC3Records)
 
 	// Adding to empty zone should work
@@ -587,7 +587,7 @@ func TestZone_NSEC3PARAMRecords_EmptyZone(t *testing.T) {
 	zone := &Zone{Name: "example.com."}
 
 	// Operations on empty zone should not panic
-	zone.RemoveNSEC3PARAMRecord("example.com.")
+	assert.False(t, zone.RemoveNSEC3PARAMRecord("example.com."))
 	assert.Nil(t, zone.RecordSet.NSEC3PARAMRecords)
 
 	// Adding to empty zone should work
@@ -606,7 +606,7 @@ func TestZone_RemoveDNSKEYRecord_NotFound(t *testing.T) {
 		},
 	}
 
-	zone.RemoveDNSKEYRecord("nonexistent.com.")
+	assert.False(t, zone.RemoveDNSKEYRecord("nonexistent.com."))
 	assert.Len(t, zone.RecordSet.DNSKEYRecords, 1)
 }
 
@@ -621,7 +621,7 @@ func TestZone_RemoveDSRecord_NotFound(t *testing.T) {
 		},
 	}
 
-	zone.RemoveDSRecord("nonexistent.com.")
+	assert.False(t, zone.RemoveDSRecord("nonexistent.com."))
 	assert.Len(t, zone.RecordSet.DSRecords, 1)
 }
 
@@ -636,7 +636,7 @@ func TestZone_RemoveRRSIGRecord_NotFound(t *testing.T) {
 		},
 	}
 
-	zone.RemoveRRSIGRecord("nonexistent.com.")
+	assert.False(t, zone.RemoveRRSIGRecord("nonexistent.com."))
 	assert.Len(t, zone.RecordSet.RRSIGRecords, 1)
 }
 

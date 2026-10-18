@@ -47,8 +47,14 @@ import (
 // TestSecretsMultiProtocol runs the complete Secrets test suite against all protocol adapters.
 // Each adapter implements the SecretsCommands interface, enabling unified testing across
 // CLI, REST, and future protocols (gRPC, QUIC, MCP, Socket).
+// secretsSuiteTimeout bounds the whole suite inside the runner's 10m go test
+// timeout for this target (run-integration-tests.sh TARGET_TIMEOUTS default),
+// so a transport that stops answering ends in per-operation deadline errors
+// that name it, not in go test's "test timed out" panic that names nothing.
+const secretsSuiteTimeout = 8 * time.Minute
+
 func TestSecretsMultiProtocol(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), secretsSuiteTimeout)
 	defer cancel()
 
 	// Get all protocol adapters that implement SecretsCommands

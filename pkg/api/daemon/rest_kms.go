@@ -14,6 +14,8 @@
 package daemon
 
 import (
+	"net/http"
+
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -24,6 +26,7 @@ import (
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 )
 
 // kmsRESTPrefix is where the daemon mounts the KMS routes.
@@ -37,6 +40,9 @@ type KMSRESTClients struct {
 	Crypto  cryptoclient.Client
 	DEK     dekclient.Client
 	Secrets secretsclient.Client
+	// SystemTenantID is the platform's system tenant, the only tenant a
+	// caller of these routes may be bound to (requireSystemScopeCaller).
+	SystemTenantID string
 }
 
 // SetKMSHandlers mounts the KMS routes (docs/kms/api.md) on the daemon's
@@ -46,12 +52,20 @@ type KMSRESTClients struct {
 // checked by the daemon's REST guard (docs/kms/api.md §6).
 func (s *RESTServer) SetKMSHandlers(clients KMSRESTClients, guard *restapi.ScopeGuard) {
 	logger := logging.NewFromSlog(s.logger)
-	router := restkms.NewKMSRouter(logger, clients.KMS, clients.Crypto, clients.DEK, clients.Secrets,
-		response.NewResponseWriter(logger, nil))
+	respWriter := response.NewResponseWriter(logger, nil)
+	router := restkms.NewKMSRouter(logger, clients.KMS, clients.Crypto, clients.DEK, clients.Secrets, respWriter)
 	sub := s.router.PathPrefix(kmsRESTPrefix).Subrouter()
 	for _, route := range router.Routes() {
 		scope := grpcapi.ScopeForMethod(route.RPC)
-		sub.HandleFunc(route.Path, guard.Require(scope, route.Handler)).Methods(route.Method)
+		handler := route.Handler
+		sub.HandleFunc(route.Path, guard.RequireCaller(scope,
+			func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+				if err := requireSystemScopeCaller(clients.SystemTenantID, caller); err != nil {
+					respWriter.Error403(w, r, err, nil)
+					return
+				}
+				handler(w, r)
+			})).Methods(route.Method)
 	}
 	s.logger.Info("KMS REST routes registered")
 }

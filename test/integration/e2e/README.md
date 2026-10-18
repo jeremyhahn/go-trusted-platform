@@ -284,12 +284,17 @@ ovs-vsctl list port tap-client
 
 ### Inspect TPM State
 
-```bash
-# Server TPM
-swtpm_ioctl --unix test-integration-e2e/server/tpm/swtpm.sock -s
+The work dirs are relative, so swtpm serves each TPM from a `/tmp/swtpm-*`
+directory and copies the state back to `test-integration-e2e/{server,client}/tpm`
+when it stops. The `Server TPM started` and `Client TPM started` log lines name
+the live socket:
 
-# Client TPM
-swtpm_ioctl --unix test-integration-e2e/client/tpm/swtpm.sock -s
+```bash
+# Server TPM (socket from the "Server TPM started" log line)
+swtpm_ioctl --unix /tmp/swtpm-<server>/swtpm.sock -s
+
+# Client TPM (socket from the "Client TPM started" log line)
+swtpm_ioctl --unix /tmp/swtpm-<client>/swtpm.sock -s
 ```
 
 ### Manual Cleanup (inside container)

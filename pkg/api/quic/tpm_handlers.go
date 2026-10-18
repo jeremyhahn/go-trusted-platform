@@ -174,6 +174,7 @@ type TPM2InfoResponse struct {
 	IsSimulator  bool              `codec:"is_simulator"`
 	FIPSMode     bool              `codec:"fips_mode"`
 	MaxNVRAMSize uint32            `codec:"max_nvram_size"`
+	PCRBanks     []string          `codec:"pcr_banks"`
 	Properties   map[string]string `codec:"properties"`
 	Timestamp    int64             `codec:"timestamp"`
 }
@@ -402,7 +403,8 @@ func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *quicwire.
 
 	resp := &TPM2InfoResponse{
 		Info:       info,
-		Version:    "2.0",
+		Version:    tpmattrs.Version,
+		PCRBanks:   tpmattrs.ActivePCRBanks(h.tpm),
 		Properties: tpmsrk.InfoProperties(h.tpm),
 		Timestamp:  time.Now().Unix(),
 	}

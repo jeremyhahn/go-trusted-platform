@@ -62,9 +62,9 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrRevocationReasonRequired", ErrRevocationReasonRequired{}, "reason"},
 
 		// key_status.go
-		{"ErrKeyStatusNotImplemented", ErrKeyStatusNotImplemented{}, "not yet implemented"},
+		{"ErrKeyStatusFlagRequired", ErrKeyStatusFlagRequired{}, "--enable"},
 		{"ErrUpdateKeyStatusFailed", ErrUpdateKeyStatusFailed{KeyID: "k9", Err: errors.New("fail")}, "k9"},
-		{"ErrInvalidKeyStatus", ErrInvalidKeyStatus{Status: "bad"}, "bad"},
+		{"ErrInvalidKeyStatusVersion", ErrInvalidKeyStatusVersion{Version: -3}, "-3"},
 
 		// key_test_backend.go
 		{"ErrBackendTestNotImplemented", ErrBackendTestNotImplemented{}, "not yet implemented"},

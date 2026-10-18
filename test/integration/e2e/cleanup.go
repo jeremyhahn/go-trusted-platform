@@ -21,7 +21,6 @@ package e2e_test
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -66,6 +65,8 @@ func Cleanup(t *testing.T, infra *TestInfrastructure) {
 		// Client might also be on production bridge
 		cleanupPortFromBridge(t, logger, ctx, infra.OVSClient, infra.Config.ProductionNetwork.Bridge, infra.ClientTapName)
 	}
+	cleanupTAP(t, logger, infra.ServerTapName)
+	cleanupTAP(t, logger, infra.ClientTapName)
 
 	// Remove OVS bridges
 	if infra.OVSClient != nil {
@@ -173,23 +174,20 @@ func cleanupBridge(t *testing.T, logger *logging.Logger, ctx context.Context, ov
 	}
 }
 
-// cleanupWorkDir removes the work directory and all its contents
-func cleanupWorkDir(t *testing.T, logger *logging.Logger, workDir string) {
+// cleanupTAP deletes a TAP device SetupServerVM or SetupClientVM created.
+// Removing its OVS port does not remove the persistent kernel device.
+func cleanupTAP(t *testing.T, logger *logging.Logger, tapName string) {
 	t.Helper()
 
-	if workDir == "" {
+	if tapName == "" {
 		return
 	}
 
-	logger.Info("Cleaning up work directory", "path", workDir)
-
-	if err := os.RemoveAll(workDir); err != nil {
-		logger.Warn("Failed to remove work directory",
-			"path", workDir,
-			"error", err)
-	} else {
-		logger.Info("Work directory removed", "path", workDir)
+	if err := runIP("link", "delete", "dev", tapName); err != nil {
+		logger.Warn("Failed to delete TAP device", "name", tapName, "error", err)
+		return
 	}
+	logger.Info("TAP device removed", "name", tapName)
 }
 
 // CleanupOnFailure performs cleanup when a test fails
@@ -245,4 +243,6 @@ func CleanupOnFailure(t *testing.T, infra *TestInfrastructure) {
 		cleanupBridge(t, logger, ctx, infra.OVSClient, infra.Config.ProvisioningNetwork.Bridge)
 		cleanupBridge(t, logger, ctx, infra.OVSClient, infra.Config.ProductionNetwork.Bridge)
 	}
+	cleanupTAP(t, logger, infra.ServerTapName)
+	cleanupTAP(t, logger, infra.ClientTapName)
 }

@@ -115,6 +115,92 @@ func TestManager_RestartKeepsStateQuotasAndLabels(t *testing.T) {
 	}
 }
 
+// TestManager_DisplayNameNeverRenamesTheTenant proves a display name is kept
+// in the platform record, not sent as IAM's DisplayName: the pinned embedded
+// IAM writes that field into the canonical name, which would rename "acme" to
+// "Acme Corporation" and lose the tenant to every by-name lookup after a
+// restart.
+func TestManager_DisplayNameNeverRenamesTheTenant(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:        "acme",
+		DisplayName: "Acme Corporation",
+	})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+	newDisplayName := "Acme Holdings"
+	if _, err := manager.UpdateTenant(ctx, created.ID, &UpdateTenantRequest{DisplayName: &newDisplayName}); err != nil {
+		t.Fatalf("UpdateTenant: %v", err)
+	}
+
+	if name := iamClient.tenants[created.ID].Name; name != "acme" {
+		t.Fatalf("IAM tenant name = %q, want %q", name, "acme")
+	}
+
+	restarted := restartedManager(t, iamClient)
+	got, err := restarted.GetTenantByName(ctx, "acme")
+	if err != nil {
+		t.Fatalf("GetTenantByName(acme) after restart: %v", err)
+	}
+	if got.Name != "acme" {
+		t.Errorf("name = %q, want %q", got.Name, "acme")
+	}
+	if got.DisplayName != newDisplayName {
+		t.Errorf("display name = %q, want %q", got.DisplayName, newDisplayName)
+	}
+}
+
+// TestManager_ListTenantsServesTheIAMRecordOverAStaleCache proves the IAM
+// record is authoritative for a list: a tenant changed behind this manager's
+// cache, here by a second manager on the same IAM, lists in its new state and
+// the cache is reconciled to it.
+func TestManager_ListTenantsServesTheIAMRecordOverAStaleCache(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:        "stale",
+		DisplayName: "Stale Tenant",
+	})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	peer := restartedManager(t, iamClient)
+	if err := peer.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("peer SuspendTenant: %v", err)
+	}
+	newDisplayName := "Renamed Display"
+	if _, err := peer.UpdateTenant(ctx, created.ID, &UpdateTenantRequest{DisplayName: &newDisplayName}); err != nil {
+		t.Fatalf("peer UpdateTenant: %v", err)
+	}
+
+	tenants, _, err := manager.ListTenants(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("ListTenants: %v", err)
+	}
+	if len(tenants) != 1 {
+		t.Fatalf("ListTenants returned %d tenants, want 1", len(tenants))
+	}
+	if tenants[0].State != StateSuspended {
+		t.Errorf("listed state = %s, want %s", tenants[0].State, StateSuspended)
+	}
+	if tenants[0].DisplayName != newDisplayName {
+		t.Errorf("listed display name = %q, want %q", tenants[0].DisplayName, newDisplayName)
+	}
+
+	cached, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetTenant after list: %v", err)
+	}
+	if cached.State != StateSuspended {
+		t.Errorf("cached state after list = %s, want %s", cached.State, StateSuspended)
+	}
+}
+
 func TestManager_ResumeIsPersisted(t *testing.T) {
 	manager, iamClient := newTestManager(t)
 	ctx := context.Background()

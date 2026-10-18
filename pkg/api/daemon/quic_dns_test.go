@@ -345,6 +345,46 @@ func TestDNSGetZone_DaemonNative(t *testing.T) {
 		assert.Equal(t, "example.com.", result.Zone.Name)
 	})
 
+	t.Run("carries the zone's SOA", func(t *testing.T) {
+		mock := NewMockDNSService()
+		mock.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			return &entities.Zone{Name: zoneName, RecordSet: entities.RecordSet{SOARecord: entities.SOARecord{
+				Name: zoneName, MName: "ns1.test.", RName: "admin.test.",
+				Serial: 7, Refresh: 3600, Retry: 600, Expire: 604800, MinimumTTL: 300, TTL: 3600,
+			}}}, nil
+		}
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{Zone: "test."})
+		resp := handler.HandleRequest(ctx, req)
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+
+		var result DNSGetZoneResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
+		require.NotNil(t, result.Zone)
+		require.NotNil(t, result.Zone.SOA, "GetZone must carry the zone's SOA")
+		assert.Equal(t, DNSSOARecord{
+			Name: "test.", MName: "ns1.test.", RName: "admin.test.",
+			Serial: 7, Refresh: 3600, Retry: 600, Expire: 604800, MinimumTTL: 300, TTL: 3600,
+		}, *result.Zone.SOA)
+		assert.Equal(t, 1, result.Zone.RecordCount)
+	})
+
+	t.Run("zone without an SOA carries none", func(t *testing.T) {
+		mock := NewMockDNSService()
+		mock.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			return &entities.Zone{Name: zoneName}, nil
+		}
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{Zone: "bare."})
+		resp := handler.HandleRequest(ctx, req)
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+
+		var result DNSGetZoneResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
+		require.NotNil(t, result.Zone)
+		assert.Nil(t, result.Zone.SOA)
+	})
+
 	t.Run("missing zone", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
 		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{})

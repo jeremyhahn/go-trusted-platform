@@ -88,6 +88,35 @@ func TestIntegrationConfig_TPMIsHarnessSwtpm(t *testing.T) {
 	}
 }
 
+// harnessEKCertIndex is the NV index of the RSA 2048 EK certificate (TCG EK
+// Credential Profile §2.2.1.4), where swtpm_setup --create-ek-cert writes it.
+const harnessEKCertIndex = 0x01C00002
+
+// swtpmProvisioner is the script that gives the harness swtpm its EK and EK
+// certificate before platformd first opens it.
+const swtpmProvisioner = "../../build/docker/devcontainer/swtpm-provision.sh"
+
+// TestIntegrationConfig_EKCertificateFromHarnessNV holds both integration
+// daemons to the NV index the harness EK certificate is written to. With no
+// tpm.ek.cert-handle the TPM reads the EK certificate only from the platform
+// certificate store, which nothing fills on an adopted TPM, so
+// `platformctl tpm ek certificate` answered NotFound on every transport (#949).
+func TestIntegrationConfig_EKCertificateFromHarnessNV(t *testing.T) {
+	script, err := os.ReadFile(swtpmProvisioner)
+	require.NoError(t, err)
+	require.Contains(t, string(script), "--create-ek-cert",
+		"the harness swtpm is provisioned with an EK certificate")
+	require.NotContains(t, string(script), "--ecc",
+		"the harness EK is RSA, so its certificate sits at the RSA 2048 index")
+
+	for _, path := range []string{integrationConfig, barrierGateConfig} {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.TPMConfig.EK, "%s: tpm.ek", path)
+		assert.Equal(t, uint32(harnessEKCertIndex), a.TPMConfig.EK.CertHandle,
+			"%s: tpm.ek.cert-handle is the NV index swtpm_setup writes the EK certificate to", path)
+	}
+}
+
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can
 // fail: a runner that serves swtpm over TCP gives the daemon no socket path.
 func TestIntegrationConfig_TCPSwtpmNotASocket(t *testing.T) {

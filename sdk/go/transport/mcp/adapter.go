@@ -400,6 +400,9 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// DeviceLifecycleResponse with proto field names.
 	"/platform.v1.DeviceService/DisableDevice": "device_disable",
 	"/platform.v1.DeviceService/EnableDevice":  "device_enable",
+	// AttestDevice (device_attest) is registered in device_attest.go; the
+	// profile match and FindConfigForDevice (profile_find_config) tools in
+	// device_profile.go. Each carries its own builder and decoder.
 
 	// SDN — proto: pkg/api/grpc/proto/sdn.proto; registered in sdn.go
 

@@ -20,10 +20,9 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
-	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -75,23 +74,19 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 		s.socketPath = helpers.GetSocketPath()
 	}
 
-	// WithBlock retries until its context ends, so bound the dial: on the
+	conn, err := grpc.NewClient("unix://"+s.socketPath, helpers.GRPCUnixCredentials())
+	if err != nil {
+		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
+	}
+
+	// The readiness wait retries until its context ends, so bound it: on the
 	// suite's 10-minute context a missing socket outlived go test's timeout.
 	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeoutSeconds)
 	defer cancel()
-
-	// Create gRPC connection using Unix socket dialer
-	conn, err := grpc.DialContext(dialCtx, "unix://"+s.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			// Strip the unix:// prefix if present
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-		grpc.WithBlock(),
-	)
-	if err != nil {
+	if err := helpers.WaitGRPCReady(dialCtx, conn); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			return ErrUnixConnectionFailed{Path: s.socketPath, Err: errors.Join(err, closeErr)}
+		}
 		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
 	}
 

@@ -256,6 +256,16 @@ type KMSUpdateKeyMetadataRequest struct {
 	RemoveTags  []string          `json:"remove_tags,omitempty"`
 }
 
+// KMSUpdateKeyStatusRequest represents a key enable or disable request for
+// MCP. Version 0 changes the key itself; a positive Version changes that
+// version only. Status is "enabled" or "disabled".
+type KMSUpdateKeyStatusRequest struct {
+	KeyID   string `json:"key_id"`
+	Version uint64 `json:"version,omitempty"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // KMSSetKeyPolicyRequest represents a key policy update request for MCP.
 type KMSSetKeyPolicyRequest struct {
 	KeyID             string   `json:"key_id"`
@@ -761,6 +771,7 @@ type ServiceProvider interface {
 	KMSRevokeKey(ctx context.Context, keyID string, reason string) (interface{}, error)
 	KMSGetKeyMetadata(ctx context.Context, keyID string) (interface{}, error)
 	KMSUpdateKeyMetadata(ctx context.Context, req *KMSUpdateKeyMetadataRequest) (interface{}, error)
+	KMSUpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error)
 	KMSSetKeyPolicy(ctx context.Context, req *KMSSetKeyPolicyRequest) (interface{}, error)
 	KMSGetKeyPolicy(ctx context.Context, keyID string) (interface{}, error)
 	KMSGetSupportedAlgorithms(ctx context.Context) ([]string, error)

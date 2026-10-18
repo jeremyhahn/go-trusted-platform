@@ -63,9 +63,9 @@ var ErrDeviceProfileIdentityRequired = errors.New("device_profile: device_id, ek
 // carried no MAC address, serial or model to match on.
 var ErrDeviceProfileMatchCriteriaRequired = errors.New("device_profile: mac_address, serial or model is required")
 
-// ErrDeviceConfigIdentityRequired indicates a config lookup carried neither
-// an EK serial nor a MAC address.
-var ErrDeviceConfigIdentityRequired = errors.New("device_profile: ek_serial or mac_address is required")
+// ErrDeviceProfileConfigIdentityRequired indicates a config lookup request
+// carried neither an EK serial nor a MAC address.
+var ErrDeviceProfileConfigIdentityRequired = errors.New("device_profile: ek_serial or mac_address is required")
 
 // ErrDeviceProfileInvalidArgs indicates the tool arguments did not decode
 // into the device profile request shape.
@@ -141,8 +141,9 @@ type DeviceProfileProvider interface {
 	// fits the device's serial number.
 	DeviceProfileFindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error)
 
-	// DeviceProfileFindConfig returns the profile a booting device receives,
-	// looked up by its EK serial first and its MAC address second.
+	// DeviceProfileFindConfig resolves the configuration profile a booting
+	// machine receives from its EK serial or MAC address, as gRPC
+	// FindConfigForDevice does.
 	DeviceProfileFindConfig(ctx context.Context, ekSerial, macAddr string) (*entities.DeviceProfile, error)
 
 	// DeviceProfileAssign binds a profile to a device identity — a
@@ -428,8 +429,9 @@ func (r *ToolRegistry) executeDeviceProfileFindBySerial(ctx context.Context, arg
 	return lookupDeviceProfile(ctx, args, "serial", p.DeviceProfileFindBySerial)
 }
 
-// executeDeviceProfileFindConfig returns the profile a booting device
-// receives for the ek_serial or mac_address given; at least one is required.
+// executeDeviceProfileFindConfig returns the configuration profile for a
+// booting machine identified by its EK serial or MAC address; at least one is
+// required.
 func (r *ToolRegistry) executeDeviceProfileFindConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	p := r.deviceProfileProvider()
 	if p == nil {
@@ -438,7 +440,7 @@ func (r *ToolRegistry) executeDeviceProfileFindConfig(ctx context.Context, args 
 	ekSerial := getString(args, "ek_serial")
 	macAddr := getString(args, "mac_address")
 	if ekSerial == "" && macAddr == "" {
-		return nil, ErrDeviceConfigIdentityRequired
+		return nil, ErrDeviceProfileConfigIdentityRequired
 	}
 	profile, err := p.DeviceProfileFindConfig(ctx, ekSerial, macAddr)
 	if err != nil {

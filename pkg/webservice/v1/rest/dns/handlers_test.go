@@ -1418,6 +1418,32 @@ func TestDeleteRecord_ZoneNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
 }
 
+// Deleting a record the zone does not hold is a 404 naming the record, and the
+// zone is not saved: a name held only under another type is not that record.
+func TestDeleteRecord_RecordNotFound(t *testing.T) {
+	for _, tc := range []struct{ recordType, name string }{
+		{"A", "ftp"},
+		{"AAAA", "www"},
+	} {
+		service := newMockDNSService()
+		zone := createTestZone("example.com.")
+		zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
+		service.zones["example.com."] = zone
+		handlers, writer := newTestHandlers(service)
+
+		req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/"+tc.recordType+"/"+tc.name, nil, map[string]string{
+			"zone": "example.com.",
+			"type": tc.recordType,
+			"name": tc.name,
+		})
+		handlers.DeleteRecord(httptest.NewRecorder(), req)
+
+		assert.Equal(t, http.StatusNotFound, writer.lastStatus, "%s %s", tc.recordType, tc.name)
+		assert.Equal(t, ErrRecordNotFound{Type: tc.recordType, Name: tc.name}, writer.lastError)
+		assert.Len(t, zone.RecordSet.ARecords, 1)
+	}
+}
+
 func TestDeleteRecord_SaveError(t *testing.T) {
 	service := newMockDNSService()
 	zone := createTestZone("example.com.")

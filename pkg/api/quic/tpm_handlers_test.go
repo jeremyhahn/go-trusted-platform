@@ -356,7 +356,9 @@ func TestTPM2Handler_HandleMessage_UnknownSubOpcode(t *testing.T) {
 
 func TestTPM2Handler_HandleInfo_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
+	mock := newMockTPM()
+	mock.readPCRsResult = []xkmssdk.PCRBank{{Algorithm: "SHA1"}, {Algorithm: "SHA256"}}
+	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
 	require.NotNil(t, resp)
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
@@ -365,6 +367,8 @@ func TestTPM2Handler_HandleInfo_Success(t *testing.T) {
 	assert.Equal(t, "mock-tpm-info", infoResp.Info)
 	assert.Equal(t, "TEST-MFR", infoResp.Manufacturer)
 	assert.True(t, infoResp.IsSimulator)
+	assert.Equal(t, "2.0", infoResp.Version)
+	assert.Equal(t, []string{"sha1", "sha256"}, infoResp.PCRBanks)
 }
 
 func TestTPM2Handler_HandleInfo_Error(t *testing.T) {
@@ -380,9 +384,14 @@ func TestTPM2Handler_HandleInfo_NoProperties(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
 	mock.fixedPropsErr = errors.New("n/a")
+	mock.readPCRsResult = []xkmssdk.PCRBank{{Algorithm: "SHA256"}}
+	mock.readPCRsErr = errors.New("n/a")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Empty(t, infoResp.PCRBanks, "a refused PCR read leaves the banks empty and fails nothing")
 }
 
 func TestTPM2Handler_HandleInfo_NilConfig(t *testing.T) {

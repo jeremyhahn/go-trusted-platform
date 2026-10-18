@@ -70,6 +70,13 @@ neither field set the whole list comes back; with either set, `limit` records
 `offset` plus the page length is below it. Unix, QUIC and MCP carry the same
 fields.
 
+`ListZones` pages through the common `pagination` message, ordered by zone
+name (`sort_by` `name`, the default; any other value is `InvalidArgument`).
+`page` counts from 1 (0 means 1) and `page_size` 0 returns every zone as one
+page. The reply's `pagination` reports `page`, `page_size`, `total_pages` and
+`total_items`, so a caller has more to read while `page` is below
+`total_pages`. Unix, QUIC and MCP carry the same message.
+
 ## Records
 
 A `Record` is a `RecordType` plus a `oneof` body:
