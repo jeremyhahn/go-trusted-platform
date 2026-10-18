@@ -445,22 +445,7 @@ func (s *UnixAdapter) PortGetStats(ctx context.Context, bridgeID, portID string)
 
 // FlowAdd adds a flow to a bridge via Unix socket.
 func (s *UnixAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAddResult, error) {
-	protoActions := make([]*platformv1.FlowAction, 0, len(opts.Actions))
-	for _, a := range opts.Actions {
-		protoActions = append(protoActions, flowActionToProto(a))
-	}
-
-	req := &platformv1.AddFlowRequest{
-		Config: &platformv1.FlowConfig{
-			BridgeId:    opts.BridgeID,
-			Table:       platformv1.FlowTable(opts.Table),
-			Priority:    uint32(opts.Priority),
-			Match:       flowMatchToProto(opts.Match),
-			Actions:     protoActions,
-			IdleTimeout: uint32(opts.IdleTimeout),
-			HardTimeout: uint32(opts.HardTimeout),
-		},
-	}
+	req := &platformv1.AddFlowRequest{Config: flowConfigToProto(opts)}
 
 	resp, err := s.sdn.AddFlow(ctx, req)
 	if err != nil {

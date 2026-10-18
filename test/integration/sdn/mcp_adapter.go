@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // =============================================================================
@@ -219,6 +220,19 @@ type mcpSDNContent struct {
 type mcpSDNSuccessResponse struct {
 	Success bool `json:"success"`
 }
+
+// mcpSDNFlowAddResponse is the result of sdn_add_flow: the installed
+// protobuf Flow, serialized as JSON.
+type mcpSDNFlowAddResponse struct {
+	Success bool `json:"success"`
+	Flow    struct {
+		ID string `json:"id"`
+	} `json:"flow"`
+}
+
+// mcpSDNFlowConfigJSON encodes sdn_add_flow's arguments in the protojson
+// form the tool documents: proto field names, enums by name.
+var mcpSDNFlowConfigJSON = protojson.MarshalOptions{UseProtoNames: true}
 
 // mcpSDNBridgeListResponse represents the response from sdn_list_bridges.
 // The server returns protobuf Bridge objects serialized as JSON.
@@ -1041,107 +1055,46 @@ func (m *MCPAdapter) PortGetStats(ctx context.Context, bridgeID, portID string) 
 
 // FlowAdd adds a flow to a bridge via MCP.
 func (m *MCPAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAddResult, error) {
-	// Build the flow map that the MCP tool expects.
-	flowMap := map[string]interface{}{
-		"priority": opts.Priority,
+	args, err := mcpSDNFlowAddArgs(opts)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build match criteria.
-	matchMap := map[string]interface{}{}
-	if opts.Match.InPort != 0 {
-		matchMap["in_port"] = opts.Match.InPort
-	}
-	if opts.Match.DlSrc != "" {
-		matchMap["dl_src"] = opts.Match.DlSrc
-	}
-	if opts.Match.DlDst != "" {
-		matchMap["dl_dst"] = opts.Match.DlDst
-	}
-	if opts.Match.DlType != 0 {
-		matchMap["dl_type"] = opts.Match.DlType
-	}
-	if opts.Match.DlVLAN != 0 {
-		matchMap["dl_vlan"] = opts.Match.DlVLAN
-	}
-	if opts.Match.NwSrc != "" {
-		matchMap["nw_src"] = opts.Match.NwSrc
-	}
-	if opts.Match.NwDst != "" {
-		matchMap["nw_dst"] = opts.Match.NwDst
-	}
-	if opts.Match.NwProto != 0 {
-		matchMap["nw_proto"] = opts.Match.NwProto
-	}
-	if opts.Match.TpSrc != 0 {
-		matchMap["tp_src"] = opts.Match.TpSrc
-	}
-	if opts.Match.TpDst != 0 {
-		matchMap["tp_dst"] = opts.Match.TpDst
-	}
-	if len(matchMap) > 0 {
-		flowMap["match"] = matchMap
-	}
-
-	// Build actions as string slice for MCP tool compatibility.
-	actionStrs := make([]string, 0, len(opts.Actions))
-	for _, a := range opts.Actions {
-		switch a.Type {
-		case "output":
-			actionStrs = append(actionStrs, fmt.Sprintf("output:%d", a.Port))
-		case "drop":
-			actionStrs = append(actionStrs, "drop")
-		case "normal":
-			actionStrs = append(actionStrs, "normal")
-		case "flood":
-			actionStrs = append(actionStrs, "flood")
-		case "controller":
-			actionStrs = append(actionStrs, "controller")
-		case "goto_table":
-			actionStrs = append(actionStrs, fmt.Sprintf("goto_table:%d", a.TableID))
-		case "set_field":
-			actionStrs = append(actionStrs, fmt.Sprintf("set_field:%s=%s", a.Field, a.Value))
-		case "push_vlan":
-			actionStrs = append(actionStrs, fmt.Sprintf("push_vlan:%d", a.VLANID))
-		case "pop_vlan":
-			actionStrs = append(actionStrs, "pop_vlan")
-		case "group":
-			actionStrs = append(actionStrs, fmt.Sprintf("group:%d", a.GroupID))
-		default:
-			actionStrs = append(actionStrs, a.Type)
-		}
-	}
-	if len(actionStrs) > 0 {
-		flowMap["actions"] = actionStrs
-	}
-
-	args := map[string]interface{}{
-		"bridge_name": opts.BridgeID,
-		"flow":        flowMap,
-	}
-
-	if opts.Priority != 0 {
-		args["priority"] = opts.Priority
-	}
-	if len(matchMap) > 0 {
-		args["match"] = matchMap
-	}
-	if len(actionStrs) > 0 {
-		args["actions"] = actionStrs
-	}
-
-	var resp mcpSDNSuccessResponse
+	var resp mcpSDNFlowAddResponse
 	if err := m.callTool(ctx, "sdn_add_flow", args, &resp); err != nil {
 		return nil, err
 	}
 
+	// The server assigns the flow ID ("flow-<cookie>"); opts.FlowID is only
+	// the caller's label.
 	return &FlowAddResult{
 		BridgeID:  opts.BridgeID,
-		FlowID:    opts.FlowID,
+		FlowID:    resp.Flow.ID,
 		Table:     opts.Table,
 		Priority:  opts.Priority,
 		Cookie:    opts.Cookie,
 		CreatedAt: time.Now(),
 	}, nil
+}
+
+// mcpSDNFlowAddArgs builds sdn_add_flow's arguments: the gRPC FlowConfig in
+// protojson form, flat beside bridge_name (FlowMatch field names, FlowAction
+// objects with FLOW_ACTION_* enum names). The server decodes them strictly,
+// so this is the same FlowConfig the other adapters send. The bridge goes in
+// bridge_name, which the server copies into bridge_id.
+func mcpSDNFlowAddArgs(opts FlowAddOptions) (map[string]interface{}, error) {
+	config := flowConfigToProto(opts)
+	config.BridgeId = ""
+	body, err := mcpSDNFlowConfigJSON.Marshal(config)
+	if err != nil {
+		return nil, ErrMCPSDNRequestFailed{Err: err}
+	}
+	args := map[string]interface{}{}
+	if err := json.Unmarshal(body, &args); err != nil {
+		return nil, ErrMCPSDNRequestFailed{Err: err}
+	}
+	args["bridge_name"] = opts.BridgeID
+	return args, nil
 }
 
 // FlowDelete deletes a flow from a bridge via MCP.
