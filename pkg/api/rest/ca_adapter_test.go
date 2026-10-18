@@ -95,7 +95,7 @@ func (f *fakeProdCA) CABundleFiltered(storeType xkmssdk.StoreType, keyAlg x509.P
 func (f *fakeProdCA) ParseBundle(data []byte) ([]*x509.Certificate, error) {
 	return f.parseBundle, f.parseBundleErr
 }
-func (f *fakeProdCA) CertStore() xkmssdk.CertStore { return f.certStore }
+func (f *fakeProdCA) CertStore() xkmssdk.CertStore  { return f.certStore }
 func (f *fakeProdCA) KeyStore() xkmsbackend.Backend { return f.keyStore }
 
 // renewalKeyStore holds one key for every CN. Generating a key is not
