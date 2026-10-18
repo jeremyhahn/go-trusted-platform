@@ -156,26 +156,6 @@ func (e ErrKMSGeneratedKeyMetadata) GRPCStatus() *status.Status {
 	return status.New(errclass.Code(e.Err), e.Error())
 }
 
-// ErrKMSTenantKeyMetadataUnsupported is returned, before any key is
-// generated, when a generate request in a non-system tenant's key scope
-// carries a display name, a description or tags. The SDK cannot record them
-// there; see
-// tenantScopedKeyGeneration for the gap.
-type ErrKMSTenantKeyMetadataUnsupported struct {
-	TenantID string
-	KeyID    string
-}
-
-func (e ErrKMSTenantKeyMetadataUnsupported) Error() string {
-	return "KMS key " + e.KeyID + " not generated: tenant " + e.TenantID +
-		" cannot set a display name, description or tags on a generated key, because the go-quicbaas SDK looks key metadata up outside the tenant scope"
-}
-
-// GRPCStatus classifies the error as FailedPrecondition on every transport.
-func (e ErrKMSTenantKeyMetadataUnsupported) GRPCStatus() *status.Status {
-	return status.New(codes.FailedPrecondition, e.Error())
-}
-
 // =============================================================================
 // Platform KMS Backend
 // =============================================================================
@@ -192,8 +172,8 @@ type PlatformKMSBackend struct {
 	systemTenantID string
 }
 
-// SetSystemTenant sets the platform's system tenant, which decides whether a
-// generate request runs in the system or a tenant key scope.
+// SetSystemTenant sets the platform's system tenant: a caller bound to any
+// other tenant is refused before the SDK is called.
 func (b *PlatformKMSBackend) SetSystemTenant(tenantID string) {
 	b.systemTenantID = tenantID
 }
@@ -225,17 +205,23 @@ func (s *KMSService) PlatformKMSBackend() (*PlatformKMSBackend, error) {
 }
 
 // kmsOrErr returns the SDK KMS client or a typed unavailable error.
-func (b *PlatformKMSBackend) kmsOrErr() (quicbaas.KMSClient, error) {
+func (b *PlatformKMSBackend) kmsOrErr(ctx context.Context) (quicbaas.KMSClient, error) {
 	if b == nil || b.kmsClient == nil {
 		return nil, ErrKMSClientUnavailable{Client: "kms"}
+	}
+	if err := requireSystemScopeContext(ctx, b.systemTenantID); err != nil {
+		return nil, err
 	}
 	return b.kmsClient, nil
 }
 
 // cryptoOrErr returns the SDK Crypto client or a typed unavailable error.
-func (b *PlatformKMSBackend) cryptoOrErr() (quicbaas.CryptoClient, error) {
+func (b *PlatformKMSBackend) cryptoOrErr(ctx context.Context) (quicbaas.CryptoClient, error) {
 	if b == nil || b.cryptoClient == nil {
 		return nil, ErrKMSClientUnavailable{Client: "crypto"}
+	}
+	if err := requireSystemScopeContext(ctx, b.systemTenantID); err != nil {
+		return nil, err
 	}
 	return b.cryptoClient, nil
 }
@@ -249,7 +235,7 @@ func (b *PlatformKMSBackend) GenerateKey(
 	ctx context.Context,
 	req *grpcapi.KMSGenerateKeyRequest,
 ) (*grpcapi.KMSGenerateKeyResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -269,11 +255,6 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	tenantScoped, err := tenantScopedKeyGeneration(ctx, b.systemTenantID, req.Name, req.DisplayName, req.Description, req.Tags)
-	if err != nil {
-		return nil, err
-	}
-
 	resp, err := client.GenerateKey(ctx, &kms.GenerateKeyRequest{
 		Name:               req.Name,
 		Algorithm:          algorithm,
@@ -285,7 +266,7 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	meta, err := recordGeneratedKeyMetadata(ctx, client, tenantScoped, resp, req.DisplayName, req.Description, req.Tags)
+	meta, err := recordGeneratedKeyMetadata(ctx, client, resp, req.DisplayName, req.Description, req.Tags)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +284,7 @@ func (b *PlatformKMSBackend) ImportKey(
 	ctx context.Context,
 	req *grpcapi.KMSImportKeyRequest,
 ) (*grpcapi.KMSImportKeyResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +348,7 @@ func (b *PlatformKMSBackend) GetKey(
 	ctx context.Context,
 	req *grpcapi.KMSGetKeyRequest,
 ) (*grpcapi.KMSGetKeyResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +406,7 @@ func (b *PlatformKMSBackend) ListKeys(
 	ctx context.Context,
 	req *grpcapi.KMSListKeysRequest,
 ) (*grpcapi.KMSListKeysResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +459,7 @@ func (b *PlatformKMSBackend) DeleteKey(
 	ctx context.Context,
 	req *grpcapi.KMSDeleteKeyRequest,
 ) (*grpcapi.KMSDeleteKeyResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +485,7 @@ func (b *PlatformKMSBackend) RotateKey(
 	ctx context.Context,
 	req *grpcapi.KMSRotateKeyRequest,
 ) (*grpcapi.KMSRotateKeyResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +516,7 @@ func (b *PlatformKMSBackend) UpdateKeyStatus(
 	ctx context.Context,
 	req *grpcapi.KMSUpdateKeyStatusRequest,
 ) (*grpcapi.KMSUpdateKeyStatusResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +551,7 @@ func (b *PlatformKMSBackend) ExportKey(
 	ctx context.Context,
 	req *grpcapi.KMSExportKeyRequest,
 ) (*grpcapi.KMSExportKeyResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -615,7 +596,7 @@ func (b *PlatformKMSBackend) GetKeyVersions(
 	ctx context.Context,
 	req *grpcapi.KMSGetKeyVersionsRequest,
 ) (*grpcapi.KMSGetKeyVersionsResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +643,7 @@ func (b *PlatformKMSBackend) Encrypt(
 	ctx context.Context,
 	req *grpcapi.KMSEncryptRequest,
 ) (*grpcapi.KMSEncryptResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -692,7 +673,7 @@ func (b *PlatformKMSBackend) Decrypt(
 	ctx context.Context,
 	req *grpcapi.KMSDecryptRequest,
 ) (*grpcapi.KMSDecryptResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -722,7 +703,7 @@ func (b *PlatformKMSBackend) BatchEncrypt(
 	ctx context.Context,
 	req *grpcapi.KMSBatchEncryptRequest,
 ) (*grpcapi.KMSBatchEncryptResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -781,7 +762,7 @@ func (b *PlatformKMSBackend) BatchDecrypt(
 	ctx context.Context,
 	req *grpcapi.KMSBatchDecryptRequest,
 ) (*grpcapi.KMSBatchDecryptResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +822,7 @@ func (b *PlatformKMSBackend) Rewrap(
 	ctx context.Context,
 	req *grpcapi.KMSRewrapRequest,
 ) (*grpcapi.KMSRewrapResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -876,7 +857,7 @@ func (b *PlatformKMSBackend) Sign(
 	ctx context.Context,
 	req *grpcapi.KMSSignRequest,
 ) (*grpcapi.KMSSignResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -913,7 +894,7 @@ func (b *PlatformKMSBackend) Verify(
 	ctx context.Context,
 	req *grpcapi.KMSVerifyRequest,
 ) (*grpcapi.KMSVerifyResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +930,7 @@ func (b *PlatformKMSBackend) Hash(
 	ctx context.Context,
 	req *grpcapi.KMSHashRequest,
 ) (*grpcapi.KMSHashResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -982,7 +963,7 @@ func (b *PlatformKMSBackend) HMAC(
 	ctx context.Context,
 	req *grpcapi.KMSHMACRequest,
 ) (*grpcapi.KMSHMACResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1018,7 +999,7 @@ func (b *PlatformKMSBackend) VerifyHMAC(
 	ctx context.Context,
 	req *grpcapi.KMSVerifyHMACRequest,
 ) (*grpcapi.KMSVerifyHMACResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,7 +1037,7 @@ func (b *PlatformKMSBackend) GenerateRandom(
 	ctx context.Context,
 	req *grpcapi.KMSGenerateRandomRequest,
 ) (*grpcapi.KMSGenerateRandomResponse, error) {
-	client, err := b.cryptoOrErr()
+	client, err := b.cryptoOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1082,7 +1063,7 @@ func (b *PlatformKMSBackend) GenerateRandom(
 func (b *PlatformKMSBackend) BackendStatus(
 	ctx context.Context,
 ) (*grpcapi.KMSBackendStatusResponse, error) {
-	client, err := b.kmsOrErr()
+	client, err := b.kmsOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}

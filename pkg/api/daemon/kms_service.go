@@ -30,7 +30,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 )
 
 // maxBatchSize is the maximum number of items allowed in a batch operation.
@@ -58,8 +57,8 @@ type KMSService struct {
 	initialized    atomic.Bool
 }
 
-// SetSystemTenant sets the platform's system tenant on the KMS adapters, so
-// a generate request from any other tenant runs in that tenant's key scope.
+// SetSystemTenant sets the platform's system tenant on the KMS, crypto, DEK
+// and secrets adapters, so a caller bound to any other tenant is refused.
 // Call it before the service is registered on any transport.
 func (s *KMSService) SetSystemTenant(tenantID string) {
 	s.systemTenantID = tenantID
@@ -68,6 +67,12 @@ func (s *KMSService) SetSystemTenant(tenantID string) {
 	}
 	if s.secretsServer != nil {
 		s.secretsServer.SetSystemTenant(tenantID)
+	}
+	if s.cryptoServer != nil {
+		s.cryptoServer.SetSystemTenant(tenantID)
+	}
+	if s.dekServer != nil {
+		s.dekServer.SetSystemTenant(tenantID)
 	}
 }
 
@@ -115,7 +120,9 @@ func (s *KMSService) initializeServers() error {
 	s.secretsServer = NewSecretsServerAdapter(sdkClient.Security().Secrets(), s.logger)
 	s.secretsServer.SetSystemTenant(s.systemTenantID)
 	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Security().Crypto(), s.logger)
+	s.cryptoServer.SetSystemTenant(s.systemTenantID)
 	s.dekServer = NewDEKServerAdapter(sdkClient.Security().DEK(), s.logger)
+	s.dekServer.SetSystemTenant(s.systemTenantID)
 
 	s.initialized.Store(true)
 	return nil
@@ -224,10 +231,20 @@ type KMSServerAdapter struct {
 	systemTenantID string
 }
 
-// SetSystemTenant sets the platform's system tenant, which decides whether a
-// generate request runs in the system or a tenant key scope.
+// SetSystemTenant sets the platform's system tenant: a caller bound to any
+// other tenant is refused before the SDK is called.
 func (a *KMSServerAdapter) SetSystemTenant(tenantID string) {
 	a.systemTenantID = tenantID
+}
+
+// admit refuses a request the KMS service cannot serve: one with no SDK
+// client, or one from a tenant-bound caller (requireSystemScopeContext), which
+// gRPC, Unix and QUIC all reach through this adapter.
+func (a *KMSServerAdapter) admit(ctx context.Context) error {
+	if a.client == nil {
+		return status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	return requireSystemScopeContext(ctx, a.systemTenantID)
 }
 
 // NewKMSServerAdapter creates a new KMS server adapter wrapping the SDK client.
@@ -240,17 +257,13 @@ func NewKMSServerAdapter(client quicbaas.KMSClient, logger *slog.Logger) *KMSSer
 
 // GenerateKey implements pb.KeyManagementServer.GenerateKey.
 func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyRequest) (*pb.GenerateKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	// The go-quicbaas GenerateKeyRequest carries no display name (go-quicbaas
 	// v0.12.0-alpha api/proto/kms.proto:569), so this surface records none.
 	const displayName = ""
-	tenantScoped, err := tenantScopedKeyGeneration(ctx, a.systemTenantID, req.GetName(), displayName, req.GetDescription(), req.GetTags())
-	if err != nil {
-		return nil, err
-	}
 
 	// The generate request's name is the key ID (docs/kms/api.md §2).
 	spec := req.GetKeySpec()
@@ -267,7 +280,7 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
 	}
 
-	meta, err := recordGeneratedKeyMetadata(ctx, a.client, tenantScoped, resp, displayName, req.GetDescription(), req.GetTags())
+	meta, err := recordGeneratedKeyMetadata(ctx, a.client, resp, displayName, req.GetDescription(), req.GetTags())
 	if err != nil {
 		return nil, err
 	}
@@ -283,54 +296,15 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 	}, nil
 }
 
-// tenantScopedKeyGeneration reports whether a generate request runs in a
-// non-system tenant's key scope, and refuses one that carries a display name,
-// a description or tags there. It runs before the key is generated, so a refused request
-// leaves no key behind. The scope is the tenant the platform resolves for
-// the caller (callerTenant): an unbound caller or the system tenant is the
-// system scope.
-//
-// SDK gap (go-quicbaas v0.12.0-alpha): GenerateKey stores a tenant's key as
-// tenant/<tenant>/<name> (pkg/service/kms.go:446), but GetKeyMetadata
-// (pkg/service/kms.go:1266) and UpdateKeyMetadata (pkg/service/kms.go:1302)
-// look the name up unscoped, so in a tenant scope they miss the key or reach
-// a same-named system key. The tenant setter those lookups would need,
-// go-quicbaas iam.ContextWithTenant, is not re-exported under quicbaas/sdk/go
-// (sdk/go/transport.ContextWithTenant sets a different key). A tenant-scope
-// generate therefore makes no metadata call at all.
-func tenantScopedKeyGeneration(ctx context.Context, systemTenantID, name, displayName, description string, tags map[string]string) (bool, error) {
-	caller, bound := callerTenant(ctx)
-	if !bound || tenant.IsSystemTenant(systemTenantID, caller) {
-		return false, nil
-	}
-	if displayName != "" || description != "" || len(tags) > 0 {
-		return true, ErrKMSTenantKeyMetadataUnsupported{TenantID: caller, KeyID: name}
-	}
-	return true, nil
-}
-
 // recordGeneratedKeyMetadata returns the metadata of the key just generated.
-// In a tenant scope it is the metadata the generate response itself carries
-// (see tenantScopedKeyGeneration for why no metadata call is made there).
-// Otherwise the request's display name, description and tags are applied to
+// The request's display name, description and tags are applied to
 // the key and the metadata the KMS recorded is returned: the SDK
 // GenerateKeyRequest has no field for them (its name is the key ID), so they
 // travel as a metadata update; with none of them,
 // the metadata is read back as it stands. The SDK has no field for a key
 // owner at all: the owner returned is the one the KMS recorded, never the
 // requested one.
-func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, tenantScoped bool, generated *kms.GenerateKeyResponse, displayName, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
-	if tenantScoped {
-		return &kms.KeyMetadataResponse{
-			KeyID:              generated.KeyID,
-			Name:               generated.KeyID,
-			Algorithm:          generated.Algorithm,
-			Version:            generated.Version,
-			Exportable:         generated.Exportable,
-			DeletionProtection: generated.DeletionProtection,
-		}, nil
-	}
-
+func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, generated *kms.GenerateKeyResponse, displayName, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
 	keyID := generated.KeyID
 	var meta *kms.KeyMetadataResponse
 	var err error
@@ -355,8 +329,8 @@ func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, 
 
 // GetKey implements pb.KeyManagementServer.GetKey.
 func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*pb.GetKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -384,8 +358,8 @@ func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*
 
 // ListKeys implements pb.KeyManagementServer.ListKeys.
 func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest) (*pb.ListKeysResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.ListKeys(ctx)
@@ -409,8 +383,8 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 
 // RotateKey implements pb.KeyManagementServer.RotateKey.
 func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyRequest) (*pb.RotateKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -429,8 +403,8 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 
 // DeleteKey implements pb.KeyManagementServer.DeleteKey.
 func (a *KMSServerAdapter) DeleteKey(ctx context.Context, req *pb.DeleteKeyRequest) (*pb.DeleteKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -450,8 +424,8 @@ func (a *KMSServerAdapter) DeleteKey(ctx context.Context, req *pb.DeleteKeyReque
 // ImportKey implements pb.KeyManagementServer.ImportKey by delegating to
 // the SDK KMS client.
 func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyRequest) (*pb.ImportKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if len(req.GetKeyMaterial()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "key_material is required")
@@ -491,8 +465,8 @@ func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyReque
 // delegating to the SDK KMS client. A version of zero targets all versions
 // of the key, mirroring the quicbaas server-side semantics.
 func (a *KMSServerAdapter) UpdateKeyStatus(ctx context.Context, req *pb.UpdateKeyStatusRequest) (*pb.UpdateKeyStatusResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -522,8 +496,8 @@ func (a *KMSServerAdapter) UpdateKeyStatus(ctx context.Context, req *pb.UpdateKe
 // the SDK KMS client. The exported material is wrapped with the requested
 // wrapping key and never leaves the KMS in plaintext.
 func (a *KMSServerAdapter) ExportKey(ctx context.Context, req *pb.ExportKeyRequest) (*pb.ExportKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -557,8 +531,8 @@ func (a *KMSServerAdapter) ExportKey(ctx context.Context, req *pb.ExportKeyReque
 // ListKeyVersions implements pb.KeyManagementServer.ListKeyVersions by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) ListKeyVersions(ctx context.Context, req *pb.ListKeyVersionsRequest) (*pb.ListKeyVersionsResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -740,6 +714,25 @@ type CryptoServerAdapter struct {
 	pb.UnimplementedCryptoServer
 	client quicbaas.CryptoClient
 	logger *slog.Logger
+	// systemTenantID is the only tenant a caller may be bound to
+	// (tenant.RequireSystemScope).
+	systemTenantID string
+}
+
+// SetSystemTenant records the platform's system tenant, the only tenant a
+// caller of the crypto service may be bound to.
+func (a *CryptoServerAdapter) SetSystemTenant(tenantID string) {
+	a.systemTenantID = tenantID
+}
+
+// admit refuses a request the crypto service cannot serve: one with no SDK
+// client, or one from a tenant-bound caller (requireSystemScopeContext), which
+// gRPC, Unix and QUIC all reach through this adapter.
+func (a *CryptoServerAdapter) admit(ctx context.Context) error {
+	if a.client == nil {
+		return status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	return requireSystemScopeContext(ctx, a.systemTenantID)
 }
 
 // NewCryptoServerAdapter creates a new crypto server adapter wrapping the SDK client.
@@ -752,8 +745,8 @@ func NewCryptoServerAdapter(client quicbaas.CryptoClient, logger *slog.Logger) *
 
 // Encrypt implements pb.CryptoServer.Encrypt.
 func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncryptRequest) (*pb.CryptoEncryptResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -781,8 +774,8 @@ func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncrypt
 
 // Decrypt implements pb.CryptoServer.Decrypt.
 func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecryptRequest) (*pb.CryptoDecryptResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -807,11 +800,11 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 	}, nil
 }
 
-// BatchEncrypt implements pb.CryptoServer.BatchEncrypt.
+// EncryptBatch implements pb.CryptoServer.EncryptBatch.
 // It encrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+func (a *CryptoServerAdapter) EncryptBatch(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.GetKeyId() == "" {
@@ -859,11 +852,11 @@ func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptB
 	}, nil
 }
 
-// BatchDecrypt implements pb.CryptoServer.BatchDecrypt.
+// DecryptBatch implements pb.CryptoServer.DecryptBatch.
 // It decrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+func (a *CryptoServerAdapter) DecryptBatch(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.GetKeyId() == "" {
@@ -912,8 +905,8 @@ func (a *CryptoServerAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptB
 // It re-encrypts ciphertext with the latest key version without exposing plaintext externally.
 // The plaintext is decrypted internally and immediately re-encrypted with the latest key version.
 func (a *CryptoServerAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest) (*pb.RewrapResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.GetKeyId() == "" {
@@ -960,8 +953,8 @@ func (a *CryptoServerAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest)
 
 // Sign implements pb.CryptoServer.Sign.
 func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*pb.SignResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -990,8 +983,8 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 
 // Verify implements pb.CryptoServer.Verify.
 func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -1025,8 +1018,8 @@ func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest)
 // (SHA-256, SHA-384, SHA-512) are accepted; an unspecified algorithm
 // defaults to SHA-256.
 func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*pb.HashResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if len(req.GetData()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "data is required")
@@ -1062,8 +1055,8 @@ func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*p
 // client (SHA-256, SHA-384, SHA-512) are accepted; an unspecified algorithm
 // defaults to SHA-256.
 func (a *CryptoServerAdapter) GenerateHMAC(ctx context.Context, req *pb.HMACRequest) (*pb.HMACResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -1105,8 +1098,8 @@ func (a *CryptoServerAdapter) GenerateHMAC(ctx context.Context, req *pb.HMACRequ
 // (SHA-256, SHA-384, SHA-512) are accepted; an unspecified algorithm
 // defaults to SHA-256.
 func (a *CryptoServerAdapter) VerifyHMAC(ctx context.Context, req *pb.VerifyHMACRequest) (*pb.VerifyHMACResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -1153,6 +1146,25 @@ type DEKServerAdapter struct {
 	pb.UnimplementedDEKManagementServer
 	client dekclient.Client
 	logger *slog.Logger
+	// systemTenantID is the only tenant a caller may be bound to
+	// (tenant.RequireSystemScope).
+	systemTenantID string
+}
+
+// SetSystemTenant records the platform's system tenant, the only tenant a
+// caller of the DEK service may be bound to.
+func (a *DEKServerAdapter) SetSystemTenant(tenantID string) {
+	a.systemTenantID = tenantID
+}
+
+// admit refuses a request the DEK service cannot serve: one with no SDK
+// client, or one from a tenant-bound caller (requireSystemScopeContext), which
+// gRPC, Unix and QUIC all reach through this adapter.
+func (a *DEKServerAdapter) admit(ctx context.Context) error {
+	if a.client == nil {
+		return status.Error(codes.Unavailable, "DEK service unavailable")
+	}
+	return requireSystemScopeContext(ctx, a.systemTenantID)
 }
 
 // NewDEKServerAdapter creates a new DEK server adapter wrapping the SDK client.
@@ -1165,8 +1177,8 @@ func NewDEKServerAdapter(client dekclient.Client, logger *slog.Logger) *DEKServe
 
 // CreateDEK creates a new Data Encryption Key.
 func (a *DEKServerAdapter) CreateDEK(ctx context.Context, req *pb.CreateDEKRequest) (*pb.CreateDEKResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetPath() == "" {
 		return nil, status.Error(codes.InvalidArgument, "path is required")
@@ -1192,8 +1204,8 @@ func (a *DEKServerAdapter) CreateDEK(ctx context.Context, req *pb.CreateDEKReque
 
 // GetDEK retrieves DEK metadata by path.
 func (a *DEKServerAdapter) GetDEK(ctx context.Context, req *pb.GetDEKRequest) (*pb.GetDEKResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetPath() == "" {
 		return nil, status.Error(codes.InvalidArgument, "path is required")
@@ -1212,8 +1224,8 @@ func (a *DEKServerAdapter) GetDEK(ctx context.Context, req *pb.GetDEKRequest) (*
 
 // RotateDEK creates a new version of an existing DEK.
 func (a *DEKServerAdapter) RotateDEK(ctx context.Context, req *pb.RotateDEKRequest) (*pb.RotateDEKResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetPath() == "" {
 		return nil, status.Error(codes.InvalidArgument, "path is required")
@@ -1237,8 +1249,8 @@ func (a *DEKServerAdapter) RotateDEK(ctx context.Context, req *pb.RotateDEKReque
 
 // DeleteDEK removes a DEK.
 func (a *DEKServerAdapter) DeleteDEK(ctx context.Context, req *pb.DeleteDEKRequest) (*pb.DeleteDEKResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetPath() == "" {
 		return nil, status.Error(codes.InvalidArgument, "path is required")

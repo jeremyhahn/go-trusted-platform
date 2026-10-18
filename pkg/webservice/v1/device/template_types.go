@@ -86,7 +86,9 @@ type FindConfigForDeviceRequest struct {
 // source-agnostic (swtpm-backed vTPM or physical hardware TPM). An empty
 // EKCert leaves any previously prestaged certificate untouched.
 type AssignProfileToDeviceRequest struct {
-	ProfileID  uint64 `json:"profile_id"`
+	// ProfileID echoes the path id, a JSON string or number (§3.4); the
+	// path is authoritative.
+	ProfileID  ID     `json:"profile_id,omitempty"`
 	EKSerial   string `json:"ek_serial,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`

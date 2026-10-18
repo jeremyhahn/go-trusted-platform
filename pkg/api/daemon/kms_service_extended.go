@@ -38,8 +38,8 @@ import (
 // the SDK KMS client. Revoked keys are reported as disabled, mirroring the
 // quicbaas server-side semantics.
 func (a *KMSServerAdapter) RevokeKey(ctx context.Context, req *pb.RevokeKeyRequest) (*pb.RevokeKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -59,8 +59,8 @@ func (a *KMSServerAdapter) RevokeKey(ctx context.Context, req *pb.RevokeKeyReque
 // GetKeyMetadata implements pb.KeyManagementServer.GetKeyMetadata by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMetadataRequest) (*pb.GetKeyMetadataResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -80,8 +80,8 @@ func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMet
 // UpdateKeyMetadata implements pb.KeyManagementServer.UpdateKeyMetadata by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.UpdateKeyMetadataRequest) (*pb.UpdateKeyMetadataResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -107,8 +107,8 @@ func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.Update
 // SetKeyPolicy implements pb.KeyManagementServer.SetKeyPolicy by delegating
 // to the SDK KMS client.
 func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolicyRequest) (*pb.SetKeyPolicyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -137,8 +137,8 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 // GetKeyPolicy implements pb.KeyManagementServer.GetKeyPolicy by delegating
 // to the SDK KMS client.
 func (a *KMSServerAdapter) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolicyRequest) (*pb.GetKeyPolicyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -158,8 +158,8 @@ func (a *KMSServerAdapter) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolic
 // GetSupportedAlgorithms implements pb.KeyManagementServer.GetSupportedAlgorithms
 // by delegating to the SDK KMS client.
 func (a *KMSServerAdapter) GetSupportedAlgorithms(ctx context.Context, req *pb.GetSupportedAlgorithmsRequest) (*pb.GetSupportedAlgorithmsResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.GetSupportedAlgorithms(ctx)
@@ -175,8 +175,8 @@ func (a *KMSServerAdapter) GetSupportedAlgorithms(ctx context.Context, req *pb.G
 // BackendStatus implements pb.KeyManagementServer.BackendStatus by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) BackendStatus(ctx context.Context, req *pb.BackendStatusRequest) (*pb.BackendStatusResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.BackendStatus(ctx)
@@ -200,6 +200,286 @@ func (a *KMSServerAdapter) BackendStatus(ctx context.Context, req *pb.BackendSta
 		Capabilities: resp.Capabilities,
 		Timestamp:    time.Now().Unix(),
 	}, nil
+}
+
+// kmsClientUpstream names the SDK interface a KMS declared gap is missing
+// from.
+const kmsClientUpstream = "go-quicbaas sdk/go/client/kms.Client (sdk/go/client/kms/client.go:30)"
+
+// GetPublicKey returns a key's public half through the SDK. The SDK call
+// takes no version and answers for the current one, so a request naming a
+// version is a declared gap rather than a silently wrong answer.
+func (a *KMSServerAdapter) GetPublicKey(ctx context.Context, req *pb.GetPublicKeyRequest) (*pb.GetPublicKeyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if req.GetVersion() != 0 {
+		return nil, ErrKMSSDKGap{Method: "GetPublicKey at a version", Upstream: kmsClientUpstream}
+	}
+
+	resp, err := a.client.GetPublicKey(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "get public key failed: %v", err)
+	}
+
+	return &pb.GetPublicKeyResponse{
+		KeyId:     resp.KeyID,
+		PublicKey: resp.PublicKey,
+		Algorithm: sdkAlgorithmToPb(resp.Algorithm),
+		Version:   uint64(resp.Version),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// SetKeyRotationPolicy sets a key's automatic rotation policy through the
+// SDK.
+func (a *KMSServerAdapter) SetKeyRotationPolicy(ctx context.Context, req *pb.SetKeyRotationPolicyRequest) (*pb.SetKeyRotationPolicyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if req.GetPolicy() == nil {
+		return nil, status.Error(codes.InvalidArgument, "policy is required")
+	}
+
+	policy, err := a.client.SetKeyRotationPolicy(ctx, &kms.SetKeyRotationPolicyRequest{
+		KeyID:           req.GetKeyId(),
+		AutoRotate:      req.GetPolicy().GetAutoRotate(),
+		IntervalSeconds: req.GetPolicy().GetIntervalSeconds(),
+		RetainVersions:  int(req.GetPolicy().GetRetainVersions()),
+		Enabled:         req.GetPolicy().GetEnabled(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "set key rotation policy failed: %v", err)
+	}
+
+	return &pb.SetKeyRotationPolicyResponse{
+		KeyId:     req.GetKeyId(),
+		Policy:    sdkKeyRotationPolicyToPb(policy),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// GetKeyRotationPolicy returns a key's automatic rotation policy through the
+// SDK.
+func (a *KMSServerAdapter) GetKeyRotationPolicy(ctx context.Context, req *pb.GetKeyRotationPolicyRequest) (*pb.GetKeyRotationPolicyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	policy, err := a.client.GetKeyRotationPolicy(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "get key rotation policy failed: %v", err)
+	}
+
+	return &pb.GetKeyRotationPolicyResponse{
+		KeyId:     req.GetKeyId(),
+		Policy:    sdkKeyRotationPolicyToPb(policy),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// DeleteKeyRotationPolicy removes a key's automatic rotation policy through
+// the SDK.
+func (a *KMSServerAdapter) DeleteKeyRotationPolicy(ctx context.Context, req *pb.DeleteKeyRotationPolicyRequest) (*pb.DeleteKeyRotationPolicyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	if err := a.client.DeleteKeyRotationPolicy(ctx, req.GetKeyId()); err != nil {
+		return nil, status.Errorf(errclass.Code(err), "delete key rotation policy failed: %v", err)
+	}
+
+	return &pb.DeleteKeyRotationPolicyResponse{KeyId: req.GetKeyId(), Timestamp: time.Now().Unix()}, nil
+}
+
+// UnwrapKey imports wrapped key material under a new key through the SDK.
+func (a *KMSServerAdapter) UnwrapKey(ctx context.Context, req *pb.UnwrapKeyRequest) (*pb.UnwrapKeyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetWrappingKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "wrapping_key_id is required")
+	}
+	if len(req.GetWrappedMaterial()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "wrapped_material is required")
+	}
+
+	resp, err := a.client.UnwrapKey(ctx, &kms.UnwrapKeyRequest{
+		KeyID:             req.GetKeyId(),
+		WrappingKeyID:     req.GetWrappingKeyId(),
+		WrappingAlgorithm: pbWrappingAlgorithmToSDK(req.GetWrappingAlgorithm()),
+		WrappedMaterial:   req.GetWrappedMaterial(),
+		Algorithm:         pbAlgorithmToSDK(req.GetAlgorithm()),
+		Name:              req.GetName(),
+		Description:       req.GetDescription(),
+		SourceKeyID:       req.GetSourceKeyId(),
+		SourceVersion:     int(req.GetSourceVersion()),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "unwrap key failed: %v", err)
+	}
+
+	return &pb.UnwrapKeyResponse{
+		Key: &pb.KeyHandle{
+			KeyId:     resp.KeyID,
+			Version:   uint64(resp.Version),
+			Algorithm: sdkAlgorithmToPb(resp.Algorithm),
+		},
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// DeleteKeyPolicy is a declared SDK gap: kms.Client has SetKeyPolicy and
+// GetKeyPolicy but no call that removes a policy.
+func (a *KMSServerAdapter) DeleteKeyPolicy(ctx context.Context, _ *pb.DeleteKeyPolicyRequest) (*pb.DeleteKeyPolicyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, ErrKMSSDKGap{Method: "DeleteKeyPolicy", Upstream: kmsClientUpstream}
+}
+
+// BackendTest is a declared SDK gap: kms.Client reports BackendStatus but
+// has no call that exercises a backend.
+func (a *KMSServerAdapter) BackendTest(ctx context.Context, _ *pb.BackendTestRequest) (*pb.BackendTestResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, ErrKMSSDKGap{Method: "BackendTest", Upstream: kmsClientUpstream}
+}
+
+// SetKeySafety is a declared SDK gap: kms.Client has no key safety-limit
+// calls (the DEK client has SetDEKSafety).
+func (a *KMSServerAdapter) SetKeySafety(ctx context.Context, _ *pb.SetKeySafetyRequest) (*pb.SetKeySafetyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, ErrKMSSDKGap{Method: "SetKeySafety", Upstream: kmsClientUpstream}
+}
+
+// ClearKeySafety is a declared SDK gap: kms.Client has no key safety-limit
+// calls (the DEK client has ClearDEKSafety).
+func (a *KMSServerAdapter) ClearKeySafety(ctx context.Context, _ *pb.ClearKeySafetyRequest) (*pb.ClearKeySafetyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, ErrKMSSDKGap{Method: "ClearKeySafety", Upstream: kmsClientUpstream}
+}
+
+// SafetyCheck is a declared SDK gap: kms.Client has no key safety-limit
+// calls.
+func (a *KMSServerAdapter) SafetyCheck(ctx context.Context, _ *pb.SafetyCheckRequest) (*pb.SafetyCheckResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, ErrKMSSDKGap{Method: "SafetyCheck", Upstream: kmsClientUpstream}
+}
+
+// SafetyReport is a declared SDK gap: kms.Client has no key safety-limit
+// calls.
+func (a *KMSServerAdapter) SafetyReport(ctx context.Context, _ *pb.SafetyReportRequest) (*pb.SafetyReportResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	return nil, ErrKMSSDKGap{Method: "SafetyReport", Upstream: kmsClientUpstream}
+}
+
+// sdkKeyRotationPolicyToPb converts an SDK key rotation policy to its proto
+// form; nil stays nil.
+func sdkKeyRotationPolicyToPb(policy *kms.KeyRotationPolicy) *pb.RotationPolicy {
+	if policy == nil {
+		return nil
+	}
+	return &pb.RotationPolicy{
+		Enabled:         policy.Enabled,
+		IntervalSeconds: policy.IntervalSeconds,
+		NextRotation:    unixOrZero(policy.NextRotationAt),
+		RetainVersions:  int32(policy.RetainVersions),
+		AutoRotate:      policy.AutoRotate,
+	}
+}
+
+// GenerateDataKey generates a data key under a KMS key through the SDK and
+// returns it both in plaintext and wrapped. KeySpec.KeySize is in bits; zero
+// lets the KMS choose.
+func (a *CryptoServerAdapter) GenerateDataKey(ctx context.Context, req *pb.GenerateDataKeyRequest) (*pb.GenerateDataKeyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	resp, err := a.client.GenerateDataKey(ctx, &quicbaas.GenerateDataKeyRequest{
+		KeyID:   req.GetKeyId(),
+		KeySize: int(req.GetKeySpec().GetKeySize()),
+		Context: req.GetContext(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "generate data key failed: %v", err)
+	}
+
+	return &pb.GenerateDataKeyResponse{
+		KeyId:          resp.KeyID,
+		Plaintext:      resp.Plaintext,
+		CiphertextBlob: resp.CiphertextBlob,
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// GenerateWrappedDataKey generates a data key under a KMS key through the
+// SDK and returns only its wrapped form.
+func (a *CryptoServerAdapter) GenerateWrappedDataKey(ctx context.Context, req *pb.GenerateWrappedDataKeyRequest) (*pb.GenerateWrappedDataKeyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	resp, err := a.client.GenerateWrappedDataKey(ctx, &quicbaas.GenerateWrappedDataKeyRequest{
+		KeyID:   req.GetKeyId(),
+		KeySize: int(req.GetKeySpec().GetKeySize()),
+		Context: req.GetContext(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "generate wrapped data key failed: %v", err)
+	}
+
+	return &pb.GenerateWrappedDataKeyResponse{
+		KeyId:          resp.KeyID,
+		CiphertextBlob: resp.CiphertextBlob,
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// GenerateRandom returns random bytes from the KMS through the SDK; the SDK
+// enforces its own size limit.
+func (a *CryptoServerAdapter) GenerateRandom(ctx context.Context, req *pb.GenerateRandomRequest) (*pb.GenerateRandomResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetNumBytes() <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "num_bytes must be positive")
+	}
+
+	resp, err := a.client.GenerateRandom(ctx, &quicbaas.GenerateRandomRequest{NumBytes: int(req.GetNumBytes())})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "generate random failed: %v", err)
+	}
+
+	return &pb.GenerateRandomResponse{RandomBytes: resp.RandomBytes, Timestamp: time.Now().Unix()}, nil
 }
 
 // SetRotationPolicy implements pb.SecretsManagementServer.SetRotationPolicy

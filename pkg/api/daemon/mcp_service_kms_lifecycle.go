@@ -104,8 +104,8 @@ func kmsLookupError(operation string, notFound, err error) error {
 
 // KMSRevokeKey revokes a key, marking it unusable.
 func (p *MCPServiceProvider) KMSRevokeKey(ctx context.Context, keyID string, reason string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if keyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -126,8 +126,8 @@ func (p *MCPServiceProvider) KMSRevokeKey(ctx context.Context, keyID string, rea
 // KMSExportPublicKey exports the public portion of an asymmetric key in PEM
 // (default) or DER format. A version of 0 exports the latest key version.
 func (p *MCPServiceProvider) KMSExportPublicKey(ctx context.Context, req *mcp.KMSExportPublicKeyRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -170,8 +170,8 @@ func (p *MCPServiceProvider) KMSExportPublicKey(ctx context.Context, req *mcp.KM
 
 // KMSGetKeyMetadata retrieves key metadata without exposing key material.
 func (p *MCPServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if keyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -187,8 +187,8 @@ func (p *MCPServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string
 
 // KMSUpdateKeyMetadata updates mutable key metadata fields.
 func (p *MCPServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *mcp.KMSUpdateKeyMetadataRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -226,8 +226,8 @@ var mcpSettableKeyStatuses = map[string]baasservice.KeyStatus{
 // the SDK KMS service: the same UpdateKeyStatus the REST, gRPC, QUIC and Unix
 // transports reach.
 func (p *MCPServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *mcp.KMSUpdateKeyStatusRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -253,8 +253,8 @@ func (p *MCPServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *mcp.KM
 
 // KMSSetKeyPolicy sets the access control policy for a key.
 func (p *MCPServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *mcp.KMSSetKeyPolicyRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.KeyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -300,8 +300,8 @@ func (p *MCPServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *mcp.KMSSe
 
 // KMSGetKeyPolicy retrieves the access control policy for a key.
 func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 	if keyID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
@@ -317,8 +317,8 @@ func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) 
 
 // KMSGetSupportedAlgorithms lists algorithms supported by the KMS backend.
 func (p *MCPServiceProvider) KMSGetSupportedAlgorithms(ctx context.Context) ([]string, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	algorithms, err := p.kmsService.GetSupportedAlgorithms(ctx)
@@ -331,8 +331,8 @@ func (p *MCPServiceProvider) KMSGetSupportedAlgorithms(ctx context.Context) ([]s
 
 // KMSBackendStatus returns health and capability information about the KMS backend.
 func (p *MCPServiceProvider) KMSBackendStatus(ctx context.Context) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := p.kmsService.BackendStatus(ctx)
@@ -343,7 +343,26 @@ func (p *MCPServiceProvider) KMSBackendStatus(ctx context.Context) (interface{},
 	return resp, nil
 }
 
-// SecretStore stores a secret via the quicbaas secrets service.
+// admitKMS refuses a kms_* key tool call the provider cannot serve: one with
+// no KMS service, or one from a tenant-bound caller (requireSystemScopeContext),
+// refused as gRPC, Unix, QUIC and REST refuse it.
+func (p *MCPServiceProvider) admitKMS(ctx context.Context) error {
+	if p.kmsService == nil {
+		return ErrServiceNotAvailable{Service: "kms"}
+	}
+	return requireSystemScopeContext(ctx, p.systemTenantID)
+}
+
+// admitCrypto refuses a kms_* crypto tool call (encrypt, decrypt, sign,
+// verify, random, data keys) the provider cannot serve: one with no crypto
+// service, or one from a tenant-bound caller (requireSystemScopeContext).
+func (p *MCPServiceProvider) admitCrypto(ctx context.Context) error {
+	if p.cryptoService == nil {
+		return ErrServiceNotAvailable{Service: "kms"}
+	}
+	return requireSystemScopeContext(ctx, p.systemTenantID)
+}
+
 // admitSecrets refuses a secret_* tool call the provider cannot serve: one
 // with no secrets service, or one from a tenant-bound caller
 // (requireSystemScopeContext), refused as gRPC, Unix, QUIC and REST refuse it.
@@ -354,6 +373,7 @@ func (p *MCPServiceProvider) admitSecrets(ctx context.Context) error {
 	return requireSystemScopeContext(ctx, p.systemTenantID)
 }
 
+// SecretStore stores a secret via the quicbaas secrets service.
 func (p *MCPServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretStoreRequest) (interface{}, error) {
 	if err := p.admitSecrets(ctx); err != nil {
 		return nil, err

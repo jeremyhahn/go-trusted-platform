@@ -56,6 +56,21 @@ Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.
 
+`quicbaas.kms.v1.KeyManagement` serves every RPC it declares, through the SDK
+KMS client. None answers the generated `method X not implemented`. The SDK
+client has no call for six of them, so they are declared gaps. Each answers
+Unimplemented with the typed `ErrKMSSDKGap`, which names the missing call and
+go-quicbaas `sdk/go@v0.12.0-alpha` `client/kms/client.go:30`:
+
+| `KeyManagement` RPC | Served by |
+|---|---|
+| `GetPublicKey` | SDK `GetPublicKey`. That call takes no version, so a non-zero `version` is a declared gap |
+| `SetKeyRotationPolicy` / `GetKeyRotationPolicy` / `DeleteKeyRotationPolicy` | SDK calls of the same names; `next_rotation` is the KMS's, in Unix seconds |
+| `UnwrapKey` | SDK `UnwrapKey`; `wrapping_key_id` and `wrapped_material` are required |
+| `DeleteKeyPolicy` | declared gap: the SDK sets and gets a key policy but cannot delete one |
+| `BackendTest` | declared gap: the SDK reports `BackendStatus` but cannot run a backend test |
+| `SetKeySafety` / `ClearKeySafety` / `SafetyCheck` / `SafetyReport` | declared gap: the SDK KMS client has no key safety-limit call (§5) |
+
 `GenerateKey` on every transport: the request's `name` is the key ID.
 `key_spec.exportable` and `key_spec.deletion_protection` are set at generation;
 a delete of a deletion-protected key is refused with FailedPrecondition.
@@ -68,18 +83,15 @@ of the request. `owner` cannot be set: the SDK `GenerateKeyRequest` and
 carries the owner the KMS recorded. A key whose metadata cannot be recorded
 fails the request with the metadata error's class; the key itself exists.
 
-That holds in the system scope: a caller of the platform system tenant, or an
-unbound caller. A caller of any other tenant generates in that tenant's key
-scope, where the reply's `metadata` is only what the generate response carries
-(key ID, algorithm, version, `exportable`, `deletion_protection`) and no
-metadata call is made. A tenant-scope request carrying `display_name`,
-`description` or `tags` is refused with `FailedPrecondition` on every transport before any key is
-generated. SDK gap (go-quicbaas `v0.12.0-alpha`): `GenerateKey` stores a
-tenant key as `tenant/<tenant>/<name>` (`pkg/service/kms.go:446`), but
-`GetKeyMetadata` (`:1266`) and `UpdateKeyMetadata` (`:1302`) look the name up
-unscoped, so they miss the key or reach a same-named system key; and the
-tenant setter they read, `iam.ContextWithTenant`, is not re-exported under
-`quicbaas/sdk/go` (`sdk/go/transport.ContextWithTenant` sets a different key).
+Only a system-scope caller generates: a caller of the platform system tenant,
+or an unbound caller. A caller bound to any other tenant is refused with
+`PermissionDenied` (`tenant.ErrSystemScopeOnly`) on every transport before any
+key is generated, with or without `display_name`, `description` or `tags`
+(§6). SDK gap: the embedded SDK picks the key namespace from the go-quicbaas
+IAM tenant (go-quicbaas `pkg/iam/tenant_context.go:43`), which is not
+re-exported under `quicbaas/sdk/go` and which the embedded transport's
+`Request` (`sdk/go/transport/embedded/transport.go:414`) does not carry, so a
+tenant caller's key would otherwise land in the system namespace.
 
 `POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
 (`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
@@ -110,8 +122,8 @@ Set the name there with a key metadata update.
 |---|---|---|---|---|---|
 | Encrypt | `POST /api/v1/kms/encrypt/{name}` | `Encrypt` | `0xD0`–`0xDA` | `kms_encrypt` (`kms:write`) | ✅ |
 | Decrypt | `POST /api/v1/kms/decrypt/{name}` | `Decrypt` | as above | `kms_decrypt` (`kms:read`) | ✅ |
-| Batch encrypt | `MISSING — docs/13 G7` | `BatchEncrypt` | as above | `MISSING — docs/13 G7` | ✅ |
-| Batch decrypt | `MISSING — docs/13 G7` | `BatchDecrypt` | as above | `MISSING — docs/13 G7` | ✅ |
+| Batch encrypt | `MISSING — docs/13 G7` | `Crypto.EncryptBatch` | as above | `MISSING — docs/13 G7` | ✅ |
+| Batch decrypt | `MISSING — docs/13 G7` | `Crypto.DecryptBatch` | as above | `MISSING — docs/13 G7` | ✅ |
 | Rewrap | `MISSING — docs/13 G7` | `Rewrap` | as above | `MISSING — docs/13 G7` | ✅ |
 | Sign | `POST /api/v1/kms/sign/{name}` | `Sign` | as above | `kms_sign` (`kms:write`) | ✅ |
 | Verify | `POST /api/v1/kms/verify/{name}` | `Verify` | as above | `kms_verify` (`kms:read`) | ✅ |
@@ -147,6 +159,10 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 | DEK status | `GET /api/v1/kms/deks/{path}/status` | `DEKManagement.GetDEKStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Rotate DEK | `POST /api/v1/kms/deks/{path}/rotate` | `DEKManagement.RotateDEK` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Delete DEK | `DELETE /api/v1/kms/deks/{path}` | `DEKManagement.DeleteDEK` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Set default DEK | — | `DEKManagement.SetDefaultDEK` | — | — | — |
+| Set / clear DEK safety limits | — | `DEKManagement.SetDEKSafety` / `ClearDEKSafety` | — | — | — |
+| Start re-encryption | — | `DEKManagement.StartReencryption` | — | — | — |
+| Re-encryption progress | — | `DEKManagement.GetReencryptionProgress` | — | — | — |
 
 | Secrets capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
@@ -164,7 +180,14 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 
 **gRPC DEK and REST DEK are one store.** `DEKManagement` calls the same SDK DEK
 client (`Security().DEK()`) as the `/deks` routes, so a DEK created on one
-transport is read, rotated and deleted on the other.
+transport is read, rotated and deleted on the other. The default, safety-limit
+and re-encryption RPCs are gRPC and Unix only; each requires `path`.
+
+**Data keys and random bytes on `quicbaas.kms.v1.Crypto`.** `GenerateDataKey`,
+`GenerateWrappedDataKey` and `GenerateRandom` call the SDK crypto client.
+`key_spec.key_size` is passed on in bits, and an absent `key_spec` sends 0. The
+QUIC data-key opcodes `0xD9` and `0xDA` reach the KMS through this adapter.
+Before #949 the daemon never wired it, and they answered Unavailable.
 
 **Secret versions, rotate, rollback and status are not served on gRPC or MCP.**
 Seam: go-quicbaas embedded Secrets `GetVersion`, `ListVersions`, `Rotate`,
@@ -241,8 +264,10 @@ Note the ordering: `/deks/{path}/status` and `/deks/{path}/rotate` are registere
 
 ## 5. AEAD safety limits have no surface at all
 
-AEAD safety limits have **no gRPC RPC, no REST route, no QUIC opcode and no MCP
-tool** (grepped 2026-08-18). The CLI's `kms key safety` group is compiled only
+AEAD safety limits on a KMS key have **no served gRPC RPC, no REST route, no
+QUIC opcode and no MCP tool** (grepped 2026-08-18). The `KeyManagement` safety
+RPCs are declared SDK gaps (§2). Only a DEK's limits can be set or cleared
+(`DEKManagement.SetDEKSafety` / `ClearDEKSafety`, §4). The CLI's `kms key safety` group is compiled only
 under a build tag the shipped binary does not use, and does not compile under it
 ([cli.md](cli.md) §10).
 
@@ -292,10 +317,10 @@ caller without it is refused 403. A daemon with no authorization configured
 refuses every route. The routes call the SDK clients the KMS gRPC services
 call, so a key made over any transport is the one REST sees.
 
-The secrets surface, and both REST mounts of the whole KMS router, serve the
-system scope only. A caller bound to a tenant other than the system tenant is
-refused even when it holds the role or scope: the embedded SDK picks the key
-and secret namespace from the go-quicbaas IAM tenant in the request context,
+The whole KMS surface — keys, crypto operations, DEKs and secrets — serves the
+system scope only, on every transport. A caller bound to a tenant other than
+the system tenant is refused even when it holds the role or scope: the embedded
+SDK picks the key and secret namespace from the go-quicbaas IAM tenant in the request context,
 the SDK re-exports no setter for it, and an absent tenant selects the system
 namespace, so the request would otherwise read and write system keys and
 secrets. A caller bound to no tenant (the Unix-socket operator), or to the
@@ -309,9 +334,12 @@ the same typed error, `tenant.ErrSystemScopeOnly`, before the SDK is called:
 |-----------|-------|---------|
 | Webservice REST | `SessionGuard.RequireSystemScope` on the KMS router mount | 403 |
 | Daemon REST | `pkg/api/daemon/rest_kms.go` | 403 |
-| gRPC, Unix | `SecretsServerAdapter` | `PermissionDenied` |
-| QUIC | the secrets category handlers | `StatusPermissionDenied` |
-| MCP | the `secret_*` tools | `PermissionDenied` |
+| gRPC, Unix | `quicbaas.kms.v1`: the `KMSServerAdapter`, `CryptoServerAdapter`, `DEKServerAdapter` and `SecretsServerAdapter` methods; `KeyManagementService`: every `PlatformKMSBackend` method | `PermissionDenied` |
+| QUIC | the KMS and crypto handlers (through the gRPC adapters; `GenerateRandom`, served locally, checks too) and the secrets category handlers | `StatusPermissionDenied` |
+| MCP | the `kms_*` and `secret_*` tools | `PermissionDenied` |
+
+DEKs have no QUIC or MCP surface; they are reached on gRPC, the Unix socket
+and REST only.
 
 SDK gap: go-quicbaas `pkg/iam/tenant_context.go:43` (`ContextWithTenant`) is
 not under `quicbaas/sdk/go`, and the embedded transport's `Request`

@@ -1217,6 +1217,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 						kmsService.KMSServer(),
 						kmsService.CryptoServer(),
 					))
+					quicHandler.SetCryptoService(kmsService.CryptoServer())
 					logger.Debug("KMS service set for QUIC handler")
 				}
 				if kmsService.SecretsServer() != nil {

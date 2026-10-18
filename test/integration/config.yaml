@@ -151,6 +151,9 @@ tpm:
   ek:
     debug: true
     handle: 0x81010001
+    # The RSA 2048 EK certificate index (TCG EK Credential Profile), where
+    # swtpm-provision.sh's swtpm_setup --create-ek-cert writes it.
+    cert-handle: 0x01C00002
     hash: SHA-256
     rsa:
       size: 2048
