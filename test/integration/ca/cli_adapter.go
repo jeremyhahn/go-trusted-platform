@@ -834,6 +834,10 @@ func (c *CLIAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 		})
 	}
 
+	if err := result.setIssuerFromData("CLI"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 

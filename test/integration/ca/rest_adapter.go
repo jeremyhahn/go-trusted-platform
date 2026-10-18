@@ -640,6 +640,10 @@ func (r *RESTAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 		})
 	}
 
+	if err := result.setIssuerFromData("REST"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 
