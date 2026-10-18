@@ -774,9 +774,6 @@ func assertGRPCStatusCode(t *testing.T, err error, expected codes.Code) {
 
 func isErrType(err error, target interface{}) bool {
 	switch target.(type) {
-	case *ErrKMSOperationNotImplemented:
-		var e ErrKMSOperationNotImplemented
-		return errors.As(err, &e)
 	case *ErrInvalidConfig:
 		var e ErrInvalidConfig
 		return errors.As(err, &e)

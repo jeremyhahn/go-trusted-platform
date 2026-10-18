@@ -96,9 +96,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrMCPServerStopFailed", ErrMCPServerStopFailed{Cause: errors.New("shutdown timeout")}, "MCP server failed to stop: shutdown timeout"},
 		{"ErrMCPServerNotConfigured", ErrMCPServerNotConfigured{}, "MCP server not configured"},
 
-		// vTPM errors
-		{"ErrVTPMOperationNotImplemented", ErrVTPMOperationNotImplemented{Operation: "seal"}, "vTPM operation not implemented: seal"},
-
 		// Device errors
 		{"ErrInvalidDeviceID", ErrInvalidDeviceID{ID: "bad-id"}, "invalid device ID: bad-id"},
 		{"ErrAttestationFailed", ErrAttestationFailed{Reason: "quote verification failed"}, "attestation failed: quote verification failed"},
@@ -312,7 +309,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrMCPServerStartFailed{}
 	var _ error = ErrMCPServerStopFailed{}
 	var _ error = ErrMCPServerNotConfigured{}
-	var _ error = ErrVTPMOperationNotImplemented{}
 	var _ error = ErrInvalidDeviceID{}
 	var _ error = ErrAttestationFailed{}
 	var _ error = ErrDeviceNotFound{}
