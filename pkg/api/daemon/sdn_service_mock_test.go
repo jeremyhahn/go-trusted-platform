@@ -256,6 +256,10 @@ func (m *ConfigurableMockOVSClient) AddPort(ctx context.Context, bridgeName, por
 	}, nil
 }
 
+func (m *ConfigurableMockOVSClient) AddPortOfType(ctx context.Context, bridgeName, portName, _ string) (*ovs.Port, error) {
+	return m.AddPort(ctx, bridgeName, portName)
+}
+
 func (m *ConfigurableMockOVSClient) DeletePort(ctx context.Context, bridgeName, portName string) error {
 	m.recordCall("DeletePort", bridgeName, portName)
 	if m.deletePortFunc != nil {

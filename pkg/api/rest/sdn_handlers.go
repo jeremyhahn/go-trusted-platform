@@ -507,7 +507,7 @@ type SDNServiceInterface interface {
 	SetBridgeProtocols(ctx context.Context, name string, protocols []string) error
 
 	// Port operations
-	AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error)
+	AddPortOfType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error)
 	DeletePort(ctx context.Context, bridgeName, portName string) error
 	GetPort(ctx context.Context, name string) (*ovs.Port, error)
 	ListPorts(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
@@ -796,7 +796,10 @@ func (h *SDNHandlers) handleAddPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port, err := h.sdnService.AddPort(ctx, bridgeID, req.Name)
+	// The interface is created with the requested type: a system interface
+	// ("") for a device that does not exist never gets an ofport or an
+	// admin_state, so the state route would answer them empty.
+	port, err := h.sdnService.AddPortOfType(ctx, bridgeID, req.Name, req.Type)
 	if err != nil {
 		h.logger.Error("Failed to add port", "error", err, "bridge", bridgeID, "port", req.Name)
 		h.writeSDNError(w, "add_port", err)

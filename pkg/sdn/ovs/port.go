@@ -23,8 +23,17 @@ const (
 	interfaceTable = "Interface"
 )
 
-// AddPort adds a port to a bridge
+// AddPort adds a port with a system interface to a bridge (AddPortOfType "").
 func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Port, error) {
+	return c.AddPortOfType(ctx, bridgeName, portName, "")
+}
+
+// AddPortOfType adds a port whose single interface has the given Open vSwitch
+// interface type ("" is a system interface, "internal" an OVS-created one).
+// It returns once ovs-vswitchd has applied the change, so the interface's
+// status columns (ofport, admin_state, link_state) are what vswitchd made of
+// it, not the empty columns of a row it has not seen yet.
+func (c *Client) AddPortOfType(ctx context.Context, bridgeName, portName, ifType string) (*Port, error) {
 	if bridgeName == "" {
 		return nil, ErrInvalidBridgeName
 	}
@@ -47,7 +56,7 @@ func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Por
 	// Create interface row
 	interfaceRow := map[string]interface{}{
 		"name": portName,
-		"type": "",
+		"type": ifType,
 	}
 	interfaceInsert := NewInsertOperation(interfaceTable, interfaceRow, "new_interface")
 
@@ -65,8 +74,8 @@ func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Por
 		[]Mutation{NewMutation("ports", "insert", NamedUUID{NamedUUID: "new_port"})},
 	)
 
-	// Execute transaction
-	results, err := c.Transact(ctx, interfaceInsert, portInsert, bridgeMutate)
+	// Execute transaction and wait for ovs-vswitchd to apply it
+	results, err := c.transactApplied(ctx, interfaceInsert, portInsert, bridgeMutate)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to add port", Err: err}
 	}

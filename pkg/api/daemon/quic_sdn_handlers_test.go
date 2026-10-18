@@ -215,6 +215,10 @@ func (m *MockOVSClientInterface) AddPort(ctx context.Context, bridgeName, portNa
 	return port, nil
 }
 
+func (m *MockOVSClientInterface) AddPortOfType(ctx context.Context, bridgeName, portName, _ string) (*ovs.Port, error) {
+	return m.AddPort(ctx, bridgeName, portName)
+}
+
 func (m *MockOVSClientInterface) DeletePort(ctx context.Context, bridgeName, portName string) error {
 	if m.deletePortErr != nil {
 		return m.deletePortErr
