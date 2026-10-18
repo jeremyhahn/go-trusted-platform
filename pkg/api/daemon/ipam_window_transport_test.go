@@ -182,9 +182,8 @@ func TestIPAMWindow_MCP(t *testing.T) {
 	assert.Equal(t, windowStart, out.(*ipam.Pool).RangeStart.String(), "the range is kept")
 
 	_, err = p.GatewayIPAMPoolUpdate(ctx, pool.ID, &mcp.IPAMPoolUpdateRequest{RangeStart: ipamWindowStr("nope")})
-	var window *ipam.ErrInvalidWindow
-	require.True(t, errors.As(err, &window))
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a malformed bound is InvalidArgument, as on gRPC: %v", err)
 
 	_, err = p.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "bad", CIDR: "10.4.6.0/24", RangeEnd: "10.4.6.9"})
-	require.True(t, errors.As(err, &window), "a half-set range is refused")
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a half-set range is refused: %v", err)
 }

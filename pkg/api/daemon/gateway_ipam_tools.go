@@ -67,15 +67,22 @@ func (t gatewayIPAMTools) GatewayIPAMPools(ctx context.Context, filterZone strin
 	return out, nil
 }
 
-// GatewayIPAMPoolGet retrieves a single IPAM pool by ID.
+// GatewayIPAMPoolGet retrieves a single IPAM pool by ID; an unknown pool is
+// NotFound, as GatewayService.GetIPAMPool answers.
 func (t gatewayIPAMTools) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
 	if err := t.requireIPAM(); err != nil {
 		return nil, err
 	}
-	return t.ipam.GetPool(ctx, poolID)
+	pool, err := t.ipam.GetPool(ctx, poolID)
+	if err != nil {
+		return nil, ipamErrToGRPC(err)
+	}
+	return pool, nil
 }
 
-// GatewayIPAMAllocate allocates an IP address from a pool.
+// GatewayIPAMAllocate allocates an IP address from a pool. IPAM errors carry
+// the class GatewayService.AllocateIP answers: an unknown pool is NotFound,
+// an exhausted one ResourceExhausted.
 func (t gatewayIPAMTools) GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error) {
 	if err := t.requireIPAM(); err != nil {
 		return nil, err
@@ -86,7 +93,7 @@ func (t gatewayIPAMTools) GatewayIPAMAllocate(ctx context.Context, poolID string
 		Hostname: hostname,
 	})
 	if err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
 	return alloc, nil
 }
@@ -98,7 +105,7 @@ func (t gatewayIPAMTools) GatewayIPAMRelease(ctx context.Context, ipStr string) 
 	}
 	addr, parseErr := netip.ParseAddr(ipStr)
 	if parseErr != nil {
-		return &WrappedError{Msg: fmt.Sprintf("invalid ip address %q", ipStr), Err: parseErr}
+		return mcp.ErrInvalidArgument{Msg: fmt.Sprintf("invalid ip address %q", ipStr), Cause: parseErr}
 	}
 	// The gRPC status carries the same class GatewayService.ReleaseIP
 	// answers, so an unknown address is NotFound on MCP too.
@@ -124,14 +131,16 @@ func (t gatewayIPAMTools) GatewayIPAMAllocations(ctx context.Context, poolID str
 	return out, nil
 }
 
-// GatewayIPAMPoolCreate creates a new IPAM pool.
+// GatewayIPAMPoolCreate creates a new IPAM pool. A malformed cidr, gateway
+// or window is InvalidArgument and a clashing pool AlreadyExists, as
+// GatewayService.CreateIPAMPool answers.
 func (t gatewayIPAMTools) GatewayIPAMPoolCreate(ctx context.Context, req *mcp.IPAMPoolCreateRequest) (interface{}, error) {
 	if err := t.requireIPAM(); err != nil {
 		return nil, err
 	}
 	cidr, err := netip.ParsePrefix(req.CIDR)
 	if err != nil {
-		return nil, &WrappedError{Msg: fmt.Sprintf("invalid cidr %q", req.CIDR), Err: err}
+		return nil, mcp.ErrInvalidArgument{Msg: fmt.Sprintf("invalid cidr %q", req.CIDR), Cause: err}
 	}
 	pool := &ipam.Pool{
 		ID:                   uuid.New().String(),
@@ -144,32 +153,37 @@ func (t gatewayIPAMTools) GatewayIPAMPoolCreate(ctx context.Context, req *mcp.IP
 	if req.Gateway != "" {
 		gw, parseErr := netip.ParseAddr(req.Gateway)
 		if parseErr != nil {
-			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
+			return nil, mcp.ErrInvalidArgument{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Cause: parseErr}
 		}
 		pool.Gateway = gw
 	}
 	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(req.Reserved, req.RangeStart, req.RangeEnd)
 	if err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
 	pool.Reserved = reserved
 	pool.RangeStart = rangeStart
 	pool.RangeEnd = rangeEnd
 	if err := t.ipam.CreatePool(ctx, pool); err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
-	return t.ipam.GetPool(ctx, pool.ID)
+	created, err := t.ipam.GetPool(ctx, pool.ID)
+	if err != nil {
+		return nil, ipamErrToGRPC(err)
+	}
+	return created, nil
 }
 
 // GatewayIPAMPoolUpdate updates mutable fields of an IPAM pool; empty
-// fields keep their current values. CIDR is immutable.
+// fields keep their current values. CIDR is immutable. Errors carry the
+// class GatewayService.UpdateIPAMPool answers.
 func (t gatewayIPAMTools) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *mcp.IPAMPoolUpdateRequest) (interface{}, error) {
 	if err := t.requireIPAM(); err != nil {
 		return nil, err
 	}
 	pool, err := t.ipam.GetPool(ctx, poolID)
 	if err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
 	if req.Name != "" {
 		pool.Name = req.Name
@@ -183,7 +197,7 @@ func (t gatewayIPAMTools) GatewayIPAMPoolUpdate(ctx context.Context, poolID stri
 	if req.Gateway != "" {
 		gw, parseErr := netip.ParseAddr(req.Gateway)
 		if parseErr != nil {
-			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
+			return nil, mcp.ErrInvalidArgument{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Cause: parseErr}
 		}
 		pool.Gateway = gw
 	}
@@ -191,18 +205,24 @@ func (t gatewayIPAMTools) GatewayIPAMPoolUpdate(ctx context.Context, poolID stri
 		pool.DefaultLeaseDuration = time.Duration(req.LeaseDurationSeconds) * time.Second
 	}
 	if err := pool.ApplyWindowUpdate(req.Reserved, req.RangeStart, req.RangeEnd); err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
 	if err := t.ipam.UpdatePool(ctx, pool); err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
-	return t.ipam.GetPool(ctx, poolID)
+	updated, err := t.ipam.GetPool(ctx, poolID)
+	if err != nil {
+		return nil, ipamErrToGRPC(err)
+	}
+	return updated, nil
 }
 
-// GatewayIPAMPoolDelete deletes an IPAM pool.
+// GatewayIPAMPoolDelete deletes an IPAM pool. An unknown pool is NotFound
+// and a pool still holding allocations FailedPrecondition, as
+// GatewayService.DeleteIPAMPool answers.
 func (t gatewayIPAMTools) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
 	if err := t.requireIPAM(); err != nil {
 		return err
 	}
-	return t.ipam.DeletePool(ctx, poolID)
+	return ipamErrToGRPC(t.ipam.DeletePool(ctx, poolID))
 }

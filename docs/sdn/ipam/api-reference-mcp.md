@@ -24,6 +24,23 @@ IPAM operations are exposed as gateway MCP tools
 `ReleaseIP` and `ListAllocations` do: the same allocations, and an unknown
 pool or address is the not-found class, not an internal error.
 
+## Errors
+
+Every tool answers the class the gRPC method it mirrors answers for the
+same error (`ipamErrToGRPC`, `pkg/api/daemon/gateway_grpc_service.go`); the
+JSON-RPC code is that class (`mcpwire.CodeForClass`,
+`sdk/go/wire/mcpwire/errorcodes.go`) and the message is the error text.
+
+| Code | Class | Raised by |
+|------|-------|-----------|
+| `-32602` | `InvalidArgument` | A malformed `cidr`, `gateway` or `ip`; a `reserved` entry that is not a prefix, or a `range_start`/`range_end` outside the pool or set alone |
+| `-32004` | `Unavailable` | IPAM is not configured, or its backend is unavailable |
+| `-32005` | `NotFound` | An unknown `pool_id` (get, update, delete, allocate, allocations); an `ip` with no allocation (release) |
+| `-32006` | `AlreadyExists` | A pool whose name or CIDR clashes with an existing pool (create) |
+| `-32007` | `FailedPrecondition` | Deleting a pool that still holds allocations |
+| `-32603` | `ResourceExhausted` | Allocating from a pool with no free address: `mcpwire` maps no code to this class, so MCP answers the internal code with the message `pool exhausted` |
+| `-32603` | `Internal` | Any other failure |
+
 Input schemas are declared per tool in `pkg/api/mcp/gateway_tools.go`
 (from line 314). Arguments are the CLI flags in snake case (`--pool-id` is
 `pool_id`); `lease_duration_seconds` has no CLI flag. `gateway_ipam_pools`
