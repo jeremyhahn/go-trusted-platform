@@ -68,7 +68,7 @@ return `{"status": {"success": true, "message": "..."}}`. `vm_create` returns
 |-------|------|
 | `name` | string (required by the service) |
 | `description` | string |
-| `firmware` | `FIRMWARE_TYPE_UNSPECIFIED`, `FIRMWARE_TYPE_BIOS`, `FIRMWARE_TYPE_UEFI`, `FIRMWARE_TYPE_UEFI_SECURE_BOOT` |
+| `firmware` | `FIRMWARE_TYPE_UNSPECIFIED` (boots UEFI), `FIRMWARE_TYPE_UEFI`, `FIRMWARE_TYPE_UEFI_SECURE_BOOT`; `FIRMWARE_TYPE_BIOS` is refused |
 | `boot_device` | `BOOT_DEVICE_UNSPECIFIED`, `BOOT_DEVICE_DISK`, `BOOT_DEVICE_CDROM`, `BOOT_DEVICE_NETWORK` |
 | `cpu` | `{"cores", "sockets", "threads", "model", "features": [string]}` |
 | `memory` | `{"size_mb", "hugepages", "shared"}` |
