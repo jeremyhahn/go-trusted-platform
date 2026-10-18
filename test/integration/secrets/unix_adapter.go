@@ -436,13 +436,13 @@ func (s *UnixAdapter) Prefix(ctx context.Context, prefix string, includeData boo
 func (s *UnixAdapter) secretStatusToString(status pb.SecretStatus) string {
 	switch status {
 	case pb.SecretStatus_SECRET_STATUS_ENABLED:
-		return "enabled"
+		return "ENABLED"
 	case pb.SecretStatus_SECRET_STATUS_DISABLED:
-		return "disabled"
+		return "DISABLED"
 	case pb.SecretStatus_SECRET_STATUS_DELETED:
-		return "deleted"
+		return "DELETED"
 	default:
-		return "unspecified"
+		return "UNSPECIFIED"
 	}
 }
 

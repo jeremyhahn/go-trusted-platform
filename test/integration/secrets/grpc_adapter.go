@@ -304,9 +304,10 @@ func (g *GRPCAdapter) Status(ctx context.Context, name string, enabled bool) (*S
 		return nil, ErrGRPCCallFailed{Method: "UpdateSecretStatus", Err: err}
 	}
 
-	statusStr := "disabled"
+	// docs/kms/cli.md §secrets reports the status as ENABLED or DISABLED.
+	statusStr := "DISABLED"
 	if resp.Status == pb.SecretStatus_SECRET_STATUS_ENABLED {
-		statusStr = "enabled"
+		statusStr = "ENABLED"
 	}
 
 	return &StatusResult{
