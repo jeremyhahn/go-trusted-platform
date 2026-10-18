@@ -594,22 +594,31 @@ build_gatewayd() {
     echo "gatewayd built: ${GATEWAYD_PATH}"
 }
 
-# prepare_iso_customize builds what `platformctl iso customize` stages from
-# beside platformd and fails without (pkg/iso/customize.go StageMedia):
-# platform-initrd, which dracut calls at boot to unlock the root, and gatewayd,
-# which the gateway-role single-node template the iso suite bakes in needs
-# (pkg/iso/gatewayd.go). platform-initrd comes from its own make target, which
-# owns its build tags; GOFLAGS=-buildvcs=false for the reason build_binaries
+# prepare_iso_customize builds what `platformctl iso customize` stages onto the
+# media into ISO_BINARY_DIR: platformd, the platformctl the autoinstaller runs
+# beside it, platform-initrd, which dracut calls at boot to unlock the root,
+# and gatewayd, which the gateway-role single-node template the iso suite
+# bakes in needs (pkg/iso/customize.go StageMedia, pkg/iso/gatewayd.go). They
+# come from the Makefile's build and platform-initrd targets, which own their
+# build tags and build CGO-free: the guest that runs them is the musl Alpine
+# live environment, which cannot run the glibc-linked /tmp/platformd the
+# daemon suites use. GOFLAGS=-buildvcs=false for the reason build_binaries
 # gives.
+ISO_BINARY_DIR=/tmp/iso-bin
 prepare_iso_customize() {
     echo "=== Preparing iso customize binaries ==="
     if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
-        platform-initrd PLATFORM_INITRD=/tmp/platform-initrd; then
-        echo "FATAL: platform-initrd build failed"
+        build platform-initrd \
+        PLATFORMD="${ISO_BINARY_DIR}/platformd" \
+        PLATFORMCTL="${ISO_BINARY_DIR}/platformctl" \
+        GATEWAYD="${ISO_BINARY_DIR}/gatewayd" \
+        DEPLOYER_PIN="${ISO_BINARY_DIR}/deployer-pin" \
+        PLATFORM_INITRD="${ISO_BINARY_DIR}/platform-initrd"; then
+        echo "FATAL: iso customize binaries build failed"
         exit 1
     fi
-    echo "platform-initrd built: /tmp/platform-initrd"
-    build_gatewayd
+    export PLATFORM_ISO_BINARY_DIR="${ISO_BINARY_DIR}"
+    echo "iso customize binaries built: ${PLATFORM_ISO_BINARY_DIR}"
 }
 
 # prepare_gatewayd_supervision readies the proxy suite's supervised-process
@@ -1244,8 +1253,7 @@ else
     fi
 fi
 
-# The iso suite's customize step stages platform-initrd and gatewayd from
-# beside /tmp/platformd.
+# The iso suite's customize step stages the binaries in ISO_BINARY_DIR.
 if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "all" ]; then
     prepare_iso_customize
 fi

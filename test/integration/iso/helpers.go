@@ -18,8 +18,6 @@ package iso
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -34,6 +32,7 @@ const (
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
 	EnvISOTestWorkDir       = "ISO_TEST_WORK_DIR"
 	EnvISOTestSkipCleanup   = "ISO_TEST_SKIP_CLEANUP"
+	EnvISOBinaryDir         = "PLATFORM_ISO_BINARY_DIR"
 )
 
 // Default test values
@@ -91,23 +90,18 @@ func GetServiceEndpoints() *ServiceEndpoints {
 // directory.
 const PlatformConfigTemplate = "../../../configs/platform/templates/single-node/default.yaml"
 
-// PlatformBinaryDir returns the directory of the platformctl the suite drives,
-// with symlinks resolved. `iso customize` takes platformd from there by default
-// and stages platform-initrd and gatewayd from beside platformd.
-func PlatformBinaryDir() (string, error) {
-	binaryPath := os.Getenv(EnvPlatformCTL)
-	if binaryPath == "" {
-		binaryPath = GetServiceEndpoints().PlatformCTL
+// ISOBinaryDir returns the directory, named by PLATFORM_ISO_BINARY_DIR, of the
+// platformd that `iso customize` stages onto the media and the platformctl,
+// platform-initrd and gatewayd it stages from beside platformd. They are the
+// Makefile's CGO-free builds: the guest that runs them is the musl Alpine
+// live environment, which cannot run the glibc-linked platformctl the suite
+// drives on the host.
+func ISOBinaryDir() (string, error) {
+	dir := os.Getenv(EnvISOBinaryDir)
+	if dir == "" {
+		return "", ErrEnvNotSet{Name: EnvISOBinaryDir}
 	}
-	resolved, err := exec.LookPath(binaryPath)
-	if err != nil {
-		return "", ErrBinaryNotFound{Name: "platformctl", Path: binaryPath, Err: err}
-	}
-	resolved, err = filepath.EvalSymlinks(resolved)
-	if err != nil {
-		return "", ErrBinaryNotFound{Name: "platformctl", Path: binaryPath, Err: err}
-	}
-	return filepath.Dir(resolved), nil
+	return dir, nil
 }
 
 // VM tool paths the devcontainer image installs (qemu-system-x86 and swtpm
@@ -227,6 +221,45 @@ func (e ErrBinaryNotFound) Error() string {
 
 func (e ErrBinaryNotFound) Unwrap() error {
 	return e.Err
+}
+
+// minInstalledDiskBytes is the size below which a disk image holds no
+// installed system: the threshold iso test install applies to a VM that
+// exits non-zero (pkg/cli/commands/iso/test.go installWaitResult).
+const minInstalledDiskBytes = 100 * 1024 * 1024
+
+// ErrDiskNotInstalled indicates a disk image too small to hold an installed system.
+type ErrDiskNotInstalled struct {
+	Path string
+	Size int64
+}
+
+func (e ErrDiskNotInstalled) Error() string {
+	return fmt.Sprintf("disk image %s is %d bytes, under the %d an installed system takes", e.Path, e.Size, minInstalledDiskBytes)
+}
+
+// InstalledDiskError reports whether path holds an installed system. A failed
+// autoinstall powers the guest off just as a finished one does
+// (run-autoinstall.sh in pkg/iso/customize.go), so a clean QEMU exit alone
+// does not prove the install happened.
+func InstalledDiskError(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ErrDiskNotFound{Path: path}
+	}
+	if info.Size() < minInstalledDiskBytes {
+		return ErrDiskNotInstalled{Path: path, Size: info.Size()}
+	}
+	return nil
+}
+
+// ErrEnvNotSet indicates an environment variable the suite needs is unset.
+type ErrEnvNotSet struct {
+	Name string
+}
+
+func (e ErrEnvNotSet) Error() string {
+	return fmt.Sprintf("environment variable %s is not set", e.Name)
 }
 
 // ErrDirectoryNotFound indicates a directory was not found.

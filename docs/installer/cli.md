@@ -368,9 +368,13 @@ platformctl iso test firstboot --disk alpine-platform-installed.qcow2
 platformctl iso test all
 ```
 
-**`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
-script reboots, QEMU exits non-zero, and the harness treats that as success if
-the disk exists and exceeds 100 MB.
+**`iso test install` succeeds when the guest powers off.** A customized ISO's
+autoinstaller powers off when it finishes (`after-install: poweroff`, the
+default) and QEMU exits. A QEMU that exits non-zero still counts as an install
+if the disk exists and exceeds 100 MB. The autoinstaller also powers off when
+it fails, so a clean exit does not prove the disk holds a system: the boot test
+does. Install mode does not pass QEMU `-no-reboot`, so an ISO built with
+`after-install: reboot` boots again instead of ending the run.
 
 **A VM test waits until the guest powers off.** Interactively you end it with
 Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
