@@ -251,6 +251,9 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	}
 	oomBefore := memoryEvent(t, leaf, "oom_kill")
 	failedBefore := load.failed.Load()
+	// Lowering the limit only shrinks usage, so this peak is the one the
+	// killed child reached.
+	logLeafMemory(t, fmt.Sprintf("%s pid %d before the 1 MiB limit", victim, before[victim]), leaf)
 
 	// Take swap away so reclaim cannot satisfy the limit, then set one far
 	// below what any Go process needs: the kernel's OOM killer acts inside
@@ -269,6 +272,7 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 		t.Errorf("relaunched %s memory.max = %s, want the class value %d restored", victim, limit, def.MemoryMax)
 	}
 	t.Logf("%s: pid %d OOM-killed, pid %d relaunched", victim, before[victim], after[victim])
+	logLeafMemory(t, fmt.Sprintf("%s successor pid %d", victim, after[victim]), leaf)
 
 	load.waitForTraffic(t)
 	if failed := load.failed.Load(); failed != failedBefore {
@@ -423,6 +427,9 @@ func startSupervisedGatewayd(t *testing.T) *supervisedGatewayd {
 	// stop reads the supervisor when the test ends, so it stops a successor
 	// a test launched as well as this one.
 	t.Cleanup(func() { gw.stop(t) })
+	// Cleanups run last-in first-out: this reads the leaves before stop
+	// lets the supervisor remove them.
+	t.Cleanup(func() { gw.logChildMemory(t) })
 	gw.launch(t)
 	return gw
 }
@@ -843,9 +850,7 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 	if t.Failed() {
 		t.Logf("gatewayd log:\n%s", g.log(t))
 	}
-	if err := os.Remove(filepath.Join(cgroupRoot, g.cgroupParent)); err != nil && !os.IsNotExist(err) {
-		t.Errorf("remove cgroup parent (a leaf left behind?): %v", err)
-	}
+	g.removeCgroupParent(t)
 }
 
 func (g *supervisedGatewayd) log(t *testing.T) string {
@@ -1005,4 +1010,121 @@ func memoryEvent(t *testing.T, leaf, event string) int64 {
 	}
 	t.Fatalf("%s/memory.events has no %s counter", leaf, event)
 	return 0
+}
+
+// memoryPeakUnavailableError is a leaf whose memory.peak cannot be read:
+// kernels before 5.19 keep no high-water mark. The log line carries it in
+// place of the number; it is not a failure.
+type memoryPeakUnavailableError struct {
+	Leaf  string
+	Cause error
+}
+
+func (e *memoryPeakUnavailableError) Error() string {
+	return fmt.Sprintf("%s/memory.peak unavailable: %v", e.Leaf, e.Cause)
+}
+
+func (e *memoryPeakUnavailableError) Unwrap() error { return e.Cause }
+
+// logLeafMemory logs a child leaf's memory accounting in bytes: its current
+// charge, its high-water mark, its limit and its oom_kill count. These are the
+// measured basis for the class MemoryMax values (#955), which move only on
+// such a number. memory.peak spans the leaf's lifetime, so after a relaunch
+// it includes the predecessor; memory.current is the successor alone.
+func logLeafMemory(t *testing.T, label, leaf string) {
+	t.Helper()
+	peak := "memory.peak="
+	if data, err := os.ReadFile(filepath.Join(leaf, "memory.peak")); err != nil {
+		peak = (&memoryPeakUnavailableError{Leaf: leaf, Cause: err}).Error()
+	} else {
+		peak += strings.TrimSpace(string(data))
+	}
+	t.Logf("%s: memory.current=%s %s memory.max=%s oom_kill=%d", label,
+		readTrimmed(t, filepath.Join(leaf, "memory.current")), peak,
+		readTrimmed(t, filepath.Join(leaf, "memory.max")), memoryEvent(t, leaf, "oom_kill"))
+}
+
+// childLeaves lists the leaf directories under this gatewayd's cgroup
+// parent; none when the parent does not exist (yet, or any more).
+func (g *supervisedGatewayd) childLeaves(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(cgroupRoot, g.cgroupParent))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("list cgroup leaves: %v", err)
+	}
+	var leaves []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			leaves = append(leaves, entry.Name())
+		}
+	}
+	return leaves
+}
+
+// logChildMemory logs every child leaf's memory accounting with its class:
+// the normal run of each class, read before the supervisor stops and
+// removes the leaves.
+func (g *supervisedGatewayd) logChildMemory(t *testing.T) {
+	t.Helper()
+	for _, name := range g.childLeaves(t) {
+		def, err := process.DefinitionByName(name)
+		if err != nil {
+			t.Errorf("cgroup leaf %s names no supervised process: %v", name, err)
+			continue
+		}
+		logLeafMemory(t, fmt.Sprintf("%s (%s class) at teardown", name, def.Class),
+			filepath.Join(cgroupRoot, g.cgroupParent, name))
+	}
+}
+
+// leafDrainBound is how long teardown gives each child leaf to report
+// populated 0 once gatewayd has exited. A leaf can still count a child the
+// supervisor already reaped for a moment, and neither it nor the parent can
+// be removed until it empties.
+const leafDrainBound = 10 * time.Second
+
+// populatedLeaves returns the leaves whose cgroup.events reports populated 1.
+func (g *supervisedGatewayd) populatedLeaves(t *testing.T, leaves []string) []string {
+	t.Helper()
+	var populated []string
+	for _, leaf := range leaves {
+		events := readTrimmed(t, filepath.Join(cgroupRoot, g.cgroupParent, leaf, "cgroup.events"))
+		if slices.Contains(strings.Split(events, "\n"), "populated 1") {
+			populated = append(populated, leaf)
+		}
+	}
+	return populated
+}
+
+// removeCgroupParent waits for every leaf left under the parent to empty,
+// removes those leaves and then the parent. The supervisor removes its leaves
+// on a clean stop; a leaf still here is one whose removal raced its last
+// child's exit, or one a killed supervisor never reached.
+func (g *supervisedGatewayd) removeCgroupParent(t *testing.T) {
+	t.Helper()
+	leaves := g.childLeaves(t)
+	deadline := time.NewTimer(leafDrainBound)
+	defer deadline.Stop()
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for populated := g.populatedLeaves(t, leaves); len(populated) > 0; populated = g.populatedLeaves(t, leaves) {
+		select {
+		case <-deadline.C:
+			t.Errorf("cgroup leaves %v still populated %v after gatewayd exited", populated, leafDrainBound)
+			return
+		case <-poll.C:
+		}
+	}
+	for _, leaf := range leaves {
+		t.Logf("cgroup leaf %s outlived gatewayd; removing it", leaf)
+		if err := os.Remove(filepath.Join(cgroupRoot, g.cgroupParent, leaf)); err != nil {
+			t.Errorf("remove cgroup leaf %s: %v", leaf, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(cgroupRoot, g.cgroupParent)); err != nil && !os.IsNotExist(err) {
+		t.Errorf("remove cgroup parent: %v", err)
+	}
 }

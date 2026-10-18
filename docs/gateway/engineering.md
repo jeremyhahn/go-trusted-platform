@@ -1391,6 +1391,15 @@ its limit from outside. It checks the child sits in its own leaf at the class
 - the relaunch rewrites the class limit (`Prepare` runs on every launch);
 - the proxy loses no request.
 
+It logs the leaf's `memory.current`, `memory.peak` and `oom_kill` for the
+killed child before the limit drops and for its successor after the relaunch.
+Every test logs the same for each class's leaf at teardown. These logs are the
+measured basis for the class `MemoryMax` values, and no class limit changes
+without one. A kernel without `memory.peak` logs the read error instead of a
+number. Teardown waits for every leaf left after gatewayd exits to report
+`populated 0` in `cgroup.events`, then removes those leaves and the parent.
+If a leaf has not emptied after 10s, teardown fails and names it.
+
 `TestGatewaydSupervisorDeathLeavesTheDatapath` kills the supervisor instead
 of a child, then asserts the following:
 
@@ -1408,7 +1417,15 @@ because a cgroup holding processes cannot enable controllers for its children.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
-choice, not a documented contract. **BGP graceful restart** is not proven
+choice, not a documented contract. The supervisor dials a child's socket
+right after exec, before the child listens. With gRPC's default reconnect
+backoff (1s, growing 1.6x) a child that listened a few seconds late was not
+reached until the next retry at 2.6s, 5.2s or 9.3s, which is how the
+datapath relaunch overran this bound (#955). `ipc.Dial` retries a refused
+local socket within 200ms instead
+(`TestDial_ReachesASocketThatListensAfterARefusedConnect`), and the
+supervisor logs `process answering` with the time each child took to
+answer. **BGP graceful restart** is not proven
 here, because this suite has no BGP peer. It has its own test instead:
 `TestBGPGracefulRestart_UpstreamKeepsTheGatewaysRoutes`
 (`make integration-test-sdn`) runs the platform speaker against a GoBGP
