@@ -221,6 +221,14 @@ func (s *Simulator) Credentials() (username, password string) {
 	return s.username, s.password
 }
 
+// OpenSessions returns the number of sessions the simulator holds open: a
+// session leaves the count only when the client sends Close Session.
+func (s *Simulator) OpenSessions() int {
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	return len(s.sessions)
+}
+
 // LocalAddr returns the simulator's bound UDP address. Returns nil if
 // the simulator has not been started.
 func (s *Simulator) LocalAddr() *net.UDPAddr {

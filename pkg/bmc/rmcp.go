@@ -347,10 +347,15 @@ func (s *rmcpSession) Close() error {
 	if s.conn == nil {
 		return nil
 	}
-	// Best-effort close session command. Ignore errors since we're closing.
+	// closed is already set, so every later Send is refused; Close Session
+	// goes through exchange, which an in-flight Send finishes before. A
+	// BMC that does not answer must not keep the socket open, so the
+	// exchange error is logged and the socket closed regardless.
 	closeData := make([]byte, 4)
 	binary.LittleEndian.PutUint32(closeData, s.bmcSessionID)
-	_, _ = s.Send(netFnApp, cmdCloseSession, closeData)
+	if _, err := s.exchange(netFnApp, cmdCloseSession, closeData); err != nil {
+		s.logger.Debug("bmc: close session not acknowledged", "error", err)
+	}
 	return s.conn.Close()
 }
 
@@ -360,6 +365,13 @@ func (s *rmcpSession) Send(netfn, cmd byte, data []byte) ([]byte, error) {
 	if s.closed.Load() {
 		return nil, ErrSessionClosed{}
 	}
+	return s.exchange(netfn, cmd, data)
+}
+
+// exchange sends one IPMI request inside the session envelope and returns
+// the unwrapped response. It does not check closed, so Close can still send
+// Close Session after it has refused every later Send.
+func (s *rmcpSession) exchange(netfn, cmd byte, data []byte) ([]byte, error) {
 	s.exchangeMu.Lock()
 	defer s.exchangeMu.Unlock()
 

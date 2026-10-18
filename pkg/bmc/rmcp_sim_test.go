@@ -96,6 +96,59 @@ func TestRMCPSession_FullHandshake(t *testing.T) {
 	}
 }
 
+func TestRMCPSession_CloseSendsCloseSession(t *testing.T) {
+	sim := startSim(t, "admin", simPassword)
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: simPassword,
+		Protocol: bmc.ProtocolIPMI,
+	}
+
+	session := bmc.NewTestRMCPSession(config, slog.Default())
+	if err := session.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	if got := sim.OpenSessions(); got != 1 {
+		t.Fatalf("OpenSessions() after Open = %d, want 1", got)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+	if got := sim.OpenSessions(); got != 0 {
+		t.Errorf("OpenSessions() after Close = %d, want 0: Close Session never reached the BMC", got)
+	}
+}
+
+func TestRMCPSession_SendAfterCloseIsRefused(t *testing.T) {
+	sim := startSim(t, "admin", simPassword)
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: simPassword,
+		Protocol: bmc.ProtocolIPMI,
+	}
+
+	session := bmc.NewTestRMCPSession(config, slog.Default())
+	if err := session.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Errorf("second Close() error: %v, want nil", err)
+	}
+	if _, err := session.Send(bmc.NetFnApp, bmc.CmdCloseSession, nil); !errors.As(err, &bmc.ErrSessionClosed{}) {
+		t.Errorf("Send() after Close error = %v, want ErrSessionClosed", err)
+	}
+}
+
 func TestRMCPSession_FullHandshake_BadPassword(t *testing.T) {
 	sim := startSim(t, "admin", "correct_password")
 
