@@ -23,9 +23,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -141,25 +142,11 @@ func (c *CLIAdapter) createTestConfig() error {
 	}
 	c.configDir = tmpDir
 
-	configPath := filepath.Join(tmpDir, "config.yaml")
-
 	// The kms verbs the CA suite runs (`kms key csr`) open the CLI's
-	// quicbaas client, which a local context dials at /run/quicbaas.sock.
-	// The devcontainer runs no quicbaasd: platformd embeds quicbaas and
-	// serves the quicbaas.kms.v1 services on its own Unix listener, so the
-	// quicbaas address is platformd's socket (docs/kms/cli.md §3).
-	configContent := fmt.Sprintf(`current_context: integration-test
-contexts:
-  - name: integration-test
-    type: local
-    local:
-      socket_path: %s
-      grpc_addr: %s
-      quicbaas_addr: %s
-      quicbaas_transport: unix
-`, c.socketPath, c.grpcEndpoint, c.socketPath)
-
-	if writeErr := os.WriteFile(configPath, []byte(configContent), 0600); writeErr != nil {
+	// quicbaas client. The shared harness config points it at platformd's
+	// gRPC listener with the harness mTLS files (docs/kms/cli.md §3).
+	configPath, writeErr := helpers.WriteLocalCLIConfig(tmpDir, c.socketPath, c.grpcEndpoint)
+	if writeErr != nil {
 		return ErrCLIConfigCreationFailed{Cause: writeErr}
 	}
 

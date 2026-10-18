@@ -23,26 +23,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestCreateTestConfigPointsQuicBaaSAtPlatformd pins the context the CA
 // suite's platformctl runs under: the quicbaas client the kms verbs open
-// must dial platformd's Unix socket, which serves quicbaas.kms.v1, and not
-// the /run/quicbaas.sock default nothing in the devcontainer serves.
+// must dial platformd's gRPC listener, which serves quicbaas.kms.v1, over
+// the harness TLS, and not the /run/quicbaas.sock default nothing in the
+// devcontainer serves.
 func TestCreateTestConfigPointsQuicBaaSAtPlatformd(t *testing.T) {
+	t.Setenv(helpers.EnvCACert, "/certs/ca.crt")
 	adapter := &CLIAdapter{socketPath: "/run/platformd-it.sock", grpcEndpoint: "127.0.0.1:10443"}
 	require.NoError(t, adapter.createTestConfig())
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(adapter.configDir)) })
 
 	config, err := cli.LoadConfig(adapter.configPath)
 	require.NoError(t, err)
-	context, err := config.GetContext("integration-test")
+	context, err := config.GetContext(helpers.CLIContextName)
 	require.NoError(t, err)
 
 	require.Equal(t, adapter.socketPath, context.Local.SocketPath)
-	require.Equal(t, adapter.socketPath, context.ResolveQuicBaaSAddr())
+	require.Equal(t, adapter.grpcEndpoint, context.ResolveQuicBaaSAddr())
 	require.NotEqual(t, cli.DefaultQuicBaaSSocketPath, context.ResolveQuicBaaSAddr())
-	require.Equal(t, "unix", context.ResolveQuicBaaSTransport())
+	require.Equal(t, "grpc", context.ResolveQuicBaaSTransport())
+	require.Equal(t, "/certs/ca.crt", context.Local.QuicBaaSCACert)
 }
 
 // TestCreateTestConfigReportsUnwritableTempDir checks a temp directory that

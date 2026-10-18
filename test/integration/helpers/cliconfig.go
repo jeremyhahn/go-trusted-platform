@@ -33,6 +33,13 @@ const CLIContextName = "integration-test"
 // /run/platformd.sock -- the production path, which the devcontainer harness
 // never creates. That is how the tenant CLI adapter reported "failed to
 // connect via unix to /run/platformd.sock" for every call (#730).
+//
+// The context's quicbaas connection (the verbs that open Client.QuicBaaS(),
+// such as `kms key csr`, `dek` and `secrets`) also goes to platformd: the
+// devcontainer runs no quicbaasd, and platformd serves the quicbaas.kms.v1
+// services itself (docs/kms/cli.md §3). It goes to grpcAddr with the harness
+// TLS files, not to socketPath: the quicbaas SDK requires TLS on every
+// transport, and platformd's Unix socket is plaintext with peer credentials.
 func WriteLocalCLIConfig(dir, socketPath, grpcAddr string) (string, error) {
 	content := "current_context: " + CLIContextName + "\n" +
 		"contexts:\n" +
@@ -41,11 +48,27 @@ func WriteLocalCLIConfig(dir, socketPath, grpcAddr string) (string, error) {
 		"    local:\n" +
 		"      socket_path: " + socketPath + "\n" +
 		"      grpc_addr: " + grpcAddr + "\n"
+	if grpcAddr != "" {
+		content += "      quicbaas_addr: " + grpcAddr + "\n" +
+			"      quicbaas_transport: grpc\n" +
+			localContextFileLine("quicbaas_ca_cert", os.Getenv(EnvCACert)) +
+			localContextFileLine("quicbaas_client_cert", os.Getenv(EnvClientCert)) +
+			localContextFileLine("quicbaas_client_key", os.Getenv(EnvClientKey))
+	}
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// localContextFileLine renders one local-context file field, or nothing when
+// the harness did not set the file.
+func localContextFileLine(key, path string) string {
+	if path == "" {
+		return ""
+	}
+	return "      " + key + ": " + path + "\n"
 }
 
 // WriteTempLocalCLIConfig writes the WriteLocalCLIConfig file into a new
