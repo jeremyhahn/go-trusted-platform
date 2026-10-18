@@ -129,8 +129,14 @@ declare -A TARGET_ENV=(
 # diskimage suite boots an aarch64 guest under TCG emulation, where a first
 # boot through firstboot provisioning takes tens of minutes. The root package
 # and testenv-enrollment carry the enrollment test's own 30-minute context;
-# e2e carries a 45-minute one.
+# e2e carries a 45-minute one. sdn gets 5 minutes: every ovs-vsctl and
+# ovs-ofctl call it makes has a 30-second deadline (test/integration/helpers/
+# boundedexec), so a wedged OVS fails the call instead of eating the default.
+# iso gets 35 minutes: the 20-minute install budget (vmInstallTimeout) plus the
+# ISO build and customize steps; a guest stuck at its GRUB menu fails in 2.
 declare -A TARGET_TIMEOUTS=(
+    [sdn]="5m"
+    [iso]="35m"
     [diskimage]="90m"
     [netboot]="40m"
     [nat64]="15m"
@@ -167,8 +173,9 @@ declare -A TARGET_NO_DAEMON=(
     [sdk]=1
 )
 
-# The suites `all` runs, in order, on the one shared platformd: the
-# daemon-free suites first, then every daemon-backed one. Left out, each for
+# The suites `all` runs on the one shared platformd: the daemon-free suites
+# first, all at once (run_concurrent), then every daemon-backed one, one at a
+# time in list order. Left out, each for
 # a reason the suite itself sets: cold-start and barrier-gate need the shared
 # daemon NOT running; bmc needs platformd started against the vBMC config;
 # diskimage, netboot, nat64 and ipsec need inputs only their make targets
@@ -516,21 +523,8 @@ build_binaries() {
     fi
     echo "Module dependencies downloaded"
 
-    # Pre-compile all test packages to cache build artifacts.
-    # This prevents 'go test' from spending its timeout on compilation.
-    #
-    # `go vet`, not `go test -count=0`: -count=0 still runs every TestMain,
-    # and test/integration/bmc's TestMain fails hard when it runs before the
-    # mTLS trio is set (which is exactly this point of the run), so the old step printed a bare FAIL through `tail -5` and
-    # "continued anyway". vet type-checks and compiles the test packages
-    # under the same tags without executing anything, so a failure here is a
-    # real compile error and stops the run with the file:line on screen.
-    echo "Pre-compiling test packages..."
-    if ! go vet -tags "${BUILD_TAGS}" ./test/integration/...; then
-        echo "ERROR: integration test packages do not compile (see above)"
-        exit 1
-    fi
-    echo "Test packages pre-compiled"
+    # No whole-tree pre-compile of ./test/integration/... here: compile_check
+    # vets each selected target's package on its own (CA m639).
 
     # ldflags to inject version and name into binaries
     LDFLAGS="-X github.com/jeremyhahn/go-trusted-platform/pkg/app.Version=0.0.0-test -X github.com/jeremyhahn/go-trusted-platform/pkg/app.Name=trusted-platform"
@@ -561,6 +555,24 @@ build_binaries() {
     export PATH="/tmp:${PATH}"
 
     echo "=== Binaries built ==="
+}
+
+# compile_check type-checks and compiles one target's package under the run's
+# tags without executing anything, so a compile error stops that target with
+# the file:line on screen. `go vet`, not `go test -count=0`: -count=0 still
+# runs every TestMain, and test/integration/bmc's TestMain fails hard before
+# the mTLS trio is set. vet compiles the package's dependencies into the same
+# build cache the target's `go test` then reuses, and it links nothing, so the
+# check adds only the analysis. It replaces a whole-tree vet of
+# ./test/integration/... that compiled every package, selected or not, before
+# the first test (CA m639).
+compile_check() {
+    local target="$1"
+    local pkg="${TARGET_PACKAGES[$target]}"
+    if ! go vet -tags "${BUILD_TAGS}" "$pkg"; then
+        echo "ERROR: $pkg ($target) does not compile (see above)"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -979,6 +991,13 @@ echo ""
 # Phase 1: Build binaries
 build_binaries
 
+# A single target's package is checked here, before OVS, swtpm or platformd
+# start, so a compile error ends the run with the file:line first. `all`
+# checks each package just before its own run (run_test).
+if [ "$RUN_TARGET" != "all" ] && ! compile_check "$RUN_TARGET"; then
+    exit 1
+fi
+
 # Phase 2: Setup infrastructure
 setup_devices
 
@@ -1111,13 +1130,37 @@ echo ""
 # Track overall result
 RESULT=0
 
+# Per-target outcome (PASS or FAIL) and the targets in run order, for the
+# summary.
+declare -A TARGET_RESULT=()
+RAN_TARGETS=()
+
+# record_result notes one target's outcome for the summary and folds a
+# failure into RESULT.
+record_result() {
+    local target="$1"
+    local rc="$2"
+    RAN_TARGETS+=("$target")
+    if [ "$rc" -eq 0 ]; then
+        TARGET_RESULT[$target]="PASS"
+    else
+        TARGET_RESULT[$target]="FAIL"
+        RESULT=1
+    fi
+}
+
 # run_test runs one target's package with that target's timeout and -run
-# filter, recording a failure in RESULT.
+# filter, and returns non-zero when it fails.
 run_test() {
     local target="$1"
     local pkg="${TARGET_PACKAGES[$target]}"
     echo ""
     echo "--- Testing $pkg ($target) ---"
+    # A single target was checked before any daemon started (Main).
+    if [ "$RUN_TARGET" = "all" ] && ! compile_check "$target"; then
+        echo "--- FAIL: $pkg ---"
+        return 1
+    fi
     local timeout="${TARGET_TIMEOUTS[$target]:-10m}"
     local run_args=()
     if [ -n "${TARGET_RUN[$target]:-}" ]; then
@@ -1131,17 +1174,61 @@ run_test() {
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"
-        RESULT=1
+        return 1
     fi
 }
 
+# run_concurrent runs the given targets at once. Each writes its own log,
+# printed whole as soon as that target ends, so the suites' -v output never
+# interleaves.
+run_concurrent() {
+    local log_dir="/tmp/integration-logs"
+    rm -rf "$log_dir"
+    mkdir -p "$log_dir"
+    local -A pid_target=()
+    local target pid rc
+    for target in "$@"; do
+        run_test "$target" > "$log_dir/$target.log" 2>&1 &
+        pid_target[$!]="$target"
+    done
+    while [ "${#pid_target[@]}" -gt 0 ]; do
+        pid=""
+        wait -n -p pid "${!pid_target[@]}"
+        rc=$?
+        # wait returns without a pid only when a signal interrupts it.
+        if [ -z "$pid" ]; then
+            continue
+        fi
+        target="${pid_target[$pid]}"
+        unset "pid_target[$pid]"
+        echo ""
+        echo "=== ${target} log ==="
+        cat "$log_dir/$target.log"
+        record_result "$target" "$rc"
+    done
+}
+
 if [ "$RUN_TARGET" = "all" ]; then
-    # Every suite in ALL_TARGETS, on the one shared platformd.
+    # The daemon-free suites of ALL_TARGETS (TARGET_NO_DAEMON) run at once:
+    # none shares state with another or with platformd. Every daemon-backed
+    # suite then runs alone on the one shared platformd, in list order.
+    DAEMON_FREE_TARGETS=()
+    DAEMON_TARGETS=()
     for target in "${ALL_TARGETS[@]}"; do
+        if [ -n "${TARGET_NO_DAEMON[$target]:-}" ]; then
+            DAEMON_FREE_TARGETS+=("$target")
+        else
+            DAEMON_TARGETS+=("$target")
+        fi
+    done
+    run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    for target in "${DAEMON_TARGETS[@]}"; do
         run_test "$target"
+        record_result "$target" "$?"
     done
 else
     run_test "$RUN_TARGET"
+    record_result "$RUN_TARGET" "$?"
 fi
 
 echo ""
@@ -1163,6 +1250,10 @@ echo "=== end platformd diagnostics ==="
 
 echo ""
 echo "============================================="
+for target in "${RAN_TARGETS[@]}"; do
+    echo "  ${TARGET_RESULT[$target]}  ${target}"
+done
+echo "---------------------------------------------"
 if [ $RESULT -eq 0 ]; then
     echo "  ALL INTEGRATION TESTS PASSED"
 else

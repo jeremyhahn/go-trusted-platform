@@ -18,11 +18,11 @@ package sdn
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,7 +228,7 @@ func addPort(bridge, port string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to add port: %v, output: %s", err, output)
@@ -240,7 +240,7 @@ func deletePort(bridge, port string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "del-port", bridge, port)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "del-port", bridge, port)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete port: %v, output: %s", err, output)
@@ -266,7 +266,7 @@ func listPorts(bridge string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "list-ports", bridge)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "list-ports", bridge)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list ports: %v, output: %s", err, output)
@@ -286,7 +286,7 @@ func getPortInfo(port string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "list", "port", port)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "list", "port", port)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get port info: %v, output: %s", err, output)
@@ -298,7 +298,7 @@ func setPortVLAN(bridge, port string, tag int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "port", port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "port", port,
 		fmt.Sprintf("tag=%d", tag))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -319,7 +319,7 @@ func setPortVLANTrunks(bridge, port string, trunks []int) error {
 		trunkStr += fmt.Sprintf("%d", trunk)
 	}
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "port", port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "port", port,
 		fmt.Sprintf("trunks=[%s]", trunkStr))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -332,7 +332,7 @@ func setPortExternalID(port, key, value string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "port", port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "port", port,
 		fmt.Sprintf("external-ids:%s=%s", key, value))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -345,7 +345,7 @@ func getPortExternalID(port, key string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "get", "port", port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "port", port,
 		fmt.Sprintf("external-ids:%s", key))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -361,7 +361,7 @@ func addBondPort(bridge, bond string, interfaces []string) error {
 	args := []string{"add-bond", bridge, bond}
 	args = append(args, interfaces...)
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", args...)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to add bond port: %v, output: %s", err, output)
@@ -373,7 +373,7 @@ func setBondMode(bond, mode string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "port", bond,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "port", bond,
 		fmt.Sprintf("bond_mode=%s", mode))
 	output, err := cmd.CombinedOutput()
 	if err != nil {

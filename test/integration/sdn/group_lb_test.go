@@ -22,7 +22,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 const (
@@ -266,7 +266,7 @@ func installLBHarnessFlows(t *testing.T, client *ovs.Client, bridge string, back
 func requireOVSRunning(t *testing.T) {
 	t.Helper()
 	require.Zero(t, os.Geteuid(), "the load balancer datapath test needs root (run it in the devcontainer)")
-	out, err := exec.Command("ovs-vsctl", "list-br").CombinedOutput()
+	out, err := boundedexec.Command("ovs-vsctl", "list-br").CombinedOutput()
 	require.NoError(t, err, "Open vSwitch must be running: %s", out)
 }
 
@@ -382,7 +382,7 @@ func TestGroupLoadBalancer(t *testing.T) {
 			{"ovs-appctl", "dpctl/dump-conntrack"},
 			{"ovs-appctl", "dpctl/dump-flows"},
 		} {
-			out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+			out, err := boundedexec.Command(args[0], args[1:]...).CombinedOutput()
 			t.Logf("%s (err=%v):\n%s", strings.Join(args, " "), err, out)
 		}
 	})

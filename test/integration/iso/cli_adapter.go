@@ -678,8 +678,9 @@ func (c *CLIAdapter) TestInstall(ctx context.Context, opts TestInstallOptions) (
 		args = append(args, "--debug")
 	}
 
-	// Test commands can run for a long time
-	output, err := c.runCommandWithTimeout(ctx, 60*time.Minute, args...)
+	// The install streams the guest's serial console: a guest stuck at the
+	// GRUB menu fails within grubMenuGrace instead of using up the budget.
+	output, err := c.runWatched(ctx, vmInstallTimeout, newGRUBMenuDetector(grubMenuGrace), args...)
 	elapsed := time.Since(startTime)
 	if err != nil {
 		return &TestResult{

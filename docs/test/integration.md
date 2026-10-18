@@ -354,6 +354,23 @@ none (`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `installer`, `lb`,
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`.
 
+Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
+`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `ipxe`, `installer`, `e2e`)
+run concurrently. Each writes its own log under `/tmp/integration-logs/`, and
+the runner prints that log whole when the suite ends, so the `-v` output of two
+suites never interleaves. The daemon-backed keys then run one at a time, in
+list order, on the one shared `platformd`. The run fails if any suite fails,
+and the closing summary lists every key with its `PASS` or `FAIL`.
+
+The runner does not pre-compile the whole of `./test/integration/...`. Each
+suite's package is checked with `go vet` under the run's tags, which compiles
+it without running a `TestMain`. A single key is checked before Open vSwitch,
+the software TPM or `platformd` starts, so a compile error ends the run with
+its `file:line` first. Under `make integration-test` each package is checked
+just before its own run. A compile error fails that suite, and the others
+still run. The check compiles the package's dependencies into the build cache
+that the suite's `go test` then reuses.
+
 Kept out of the runner, or out of its default set:
 
 | Directory | Why | How it runs |

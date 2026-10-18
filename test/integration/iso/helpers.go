@@ -18,7 +18,9 @@ package iso
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 // Environment variable names for service endpoints
@@ -68,6 +70,14 @@ func GetServiceEndpoints() *ServiceEndpoints {
 
 // VM tool paths the devcontainer image installs (qemu-system-x86 and swtpm
 // packages) and checks at build time.
+// VM wait budgets (CA m639). vmInstallTimeout bounds `iso test install`;
+// grubMenuGrace is how long a GRUB menu on the serial console may wait for a
+// kernel boot line before the install fails with ErrGRUBMenuNoBoot.
+const (
+	vmInstallTimeout = 20 * time.Minute
+	grubMenuGrace    = 2 * time.Minute
+)
+
 const (
 	QEMUBinaryPath  = "/usr/bin/qemu-system-x86_64"
 	SwtpmBinaryPath = "/usr/bin/swtpm"
@@ -193,6 +203,19 @@ type ErrCommandTimeout struct {
 
 func (e ErrCommandTimeout) Error() string {
 	return fmt.Sprintf("command %s timed out after %s", e.Command, e.Timeout)
+}
+
+// ErrGRUBMenuNoBoot is returned when a guest draws the GRUB menu on its serial
+// console and no kernel boot line follows within grubMenuGrace: the guest is
+// stuck at the menu, and waiting out the install timeout would only spend time.
+type ErrGRUBMenuNoBoot struct {
+	Waited    time.Duration
+	LastLines []string
+}
+
+func (e ErrGRUBMenuNoBoot) Error() string {
+	return fmt.Sprintf("guest stopped at the GRUB menu: no kernel boot line on the serial console %s after the menu appeared; last serial lines:\n%s",
+		e.Waited, strings.Join(e.LastLines, "\n"))
 }
 
 // =============================================================================

@@ -28,6 +28,7 @@ import (
 	"github.com/vishvananda/netns"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 // nsEndpoint is one network-namespace endpoint attached to an OVS test
@@ -58,17 +59,16 @@ type nsEndpoint struct {
 // runCmd executes a command and fails the test with full output on error.
 func runCmd(t *testing.T, name string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command(name, args...).CombinedOutput()
+	out, err := boundedexec.Command(name, args...).CombinedOutput()
 	if err != nil {
-		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+		t.Fatalf("%v\n%s", err, out)
 	}
 	return string(out)
 }
 
 // runCmdQuiet executes a command ignoring failures (cleanup paths).
 func runCmdQuiet(name string, args ...string) {
-	cmd := exec.Command(name, args...)
-	if err := cmd.Run(); err != nil {
+	if err := boundedexec.Command(name, args...).Run(); err != nil {
 		// Best-effort cleanup: the resource may already be gone.
 		_ = err
 	}
@@ -244,7 +244,7 @@ func bringInternalPortUp(ctx context.Context, port string) ([]byte, error) {
 // logBridge logs the bridge's flow table, with packet counts, now.
 func logBridge(t *testing.T, bridge string) {
 	t.Helper()
-	out, err := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge).CombinedOutput()
+	out, err := boundedexec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge).CombinedOutput()
 	t.Logf("flows on %s (err=%v):\n%s", bridge, err, out)
 }
 
@@ -258,9 +258,9 @@ func dumpBridgeOnFailure(t *testing.T, bridge string) {
 		if !t.Failed() {
 			return
 		}
-		out, err := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge).CombinedOutput()
+		out, err := boundedexec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge).CombinedOutput()
 		t.Logf("flows on %s (err=%v):\n%s", bridge, err, out)
-		groups, err := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-groups", bridge).CombinedOutput()
+		groups, err := boundedexec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-groups", bridge).CombinedOutput()
 		t.Logf("groups on %s (err=%v):\n%s", bridge, err, groups)
 	})
 }

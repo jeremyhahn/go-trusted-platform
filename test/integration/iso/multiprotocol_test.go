@@ -29,6 +29,7 @@ package iso
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -885,11 +886,27 @@ func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir s
 
 	result, err := cmd.TestInstall(testCtx, installOptions(isoPath, workDir))
 	if err != nil {
+		requireInstallDidNotHang(t, err)
 		t.Logf("TestInstall failed (may require interactive session): %v", err)
 		return
 	}
 	require.NotNil(t, result, "Result should not be nil")
 	t.Logf("TestInstall completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
+}
+
+// requireInstallDidNotHang fails the test when the install error is a hang: a
+// guest stuck at the GRUB menu, or an install that used its whole
+// vmInstallTimeout. Logging those and passing would work like a skip (CA m639).
+func requireInstallDidNotHang(t *testing.T, err error) {
+	t.Helper()
+	var grubErr ErrGRUBMenuNoBoot
+	if errors.As(err, &grubErr) {
+		t.Fatalf("TestInstall: %v", grubErr)
+	}
+	var timeoutErr ErrCommandTimeout
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("TestInstall: %v", timeoutErr)
+	}
 }
 
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {

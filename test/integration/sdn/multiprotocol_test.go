@@ -17,13 +17,13 @@ package sdn
 
 import (
 	"context"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
@@ -417,7 +417,7 @@ func testPortSetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	// Open vSwitch stores policing in kbps and kb.
 	for column, want := range map[string]string{"ingress_policing_rate": "10000", "ingress_policing_burst": "1000"} {
-		out, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portOpts.Name, column).CombinedOutput()
+		out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portOpts.Name, column).CombinedOutput()
 		if err != nil {
 			t.Fatalf("ovs-vsctl get %s: %v: %s", column, err, out)
 		}
@@ -427,13 +427,13 @@ func testPortSetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	}
 
 	// Egress shaping is a linux-htb QoS on the port, stored in bps.
-	out, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "port", portOpts.Name, "qos").CombinedOutput()
+	out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "port", portOpts.Name, "qos").CombinedOutput()
 	if err != nil {
 		t.Fatalf("ovs-vsctl get port qos: %v: %s", err, out)
 	}
 	qosUUID := strings.TrimSpace(string(out))
 	for column, want := range map[string]string{"type": "linux-htb", "other_config:max-rate": `"20000000"`} {
-		out, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "qos", qosUUID, column).CombinedOutput()
+		out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "qos", qosUUID, column).CombinedOutput()
 		if err != nil {
 			t.Fatalf("ovs-vsctl get qos %s: %v: %s", column, err, out)
 		}

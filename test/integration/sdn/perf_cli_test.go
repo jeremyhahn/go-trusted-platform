@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"testing"
 	"time"
@@ -32,6 +31,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 // perfCLIBridge is the dedicated bridge every perf measurement targets so
@@ -513,7 +513,7 @@ func (a *perfMCPAdapter) PerfConntrack(ctx context.Context, zone *uint32) (*perf
 // daemon's OVS instance.
 func setupPerfBridge(t *testing.T) {
 	t.Helper()
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", perfCLIBridge).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", perfCLIBridge).Run()
 	runCmd(t, "ovs-vsctl", "add-br", perfCLIBridge)
 	runCmd(t, "ovs-vsctl", "set", "bridge", perfCLIBridge, "protocols=OpenFlow13")
 	t.Cleanup(func() {

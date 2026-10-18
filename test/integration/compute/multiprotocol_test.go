@@ -57,10 +57,12 @@ func TestComputeMultiProtocol(t *testing.T) {
 		}
 	})
 
+	// A protocol that fails stops the test: the remaining protocols drive the
+	// same daemon and would spend their deadlines on the same fault.
 	gate := helpers.NewAdapterGate(t, "compute", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -77,6 +79,9 @@ func TestComputeMultiProtocol(t *testing.T) {
 			t.Run("VMCreateRefusesUnsupportedField", func(t *testing.T) { testVMCreateRefusesUnsupportedField(t, ctx, adapter, fixture) })
 			t.Run("VMSuspendResumeReboot", func(t *testing.T) { testVMSuspendResumeReboot(t, ctx, adapter, fixture) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
@@ -102,9 +107,9 @@ func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute snapshots", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -114,6 +119,9 @@ func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 
 			t.Run("VMSnapshots", func(t *testing.T) { testVMSnapshots(t, ctx, adapter) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
@@ -283,9 +291,9 @@ func TestComputeAttestationMultiProtocol(t *testing.T) {
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute attestation", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -295,6 +303,9 @@ func TestComputeAttestationMultiProtocol(t *testing.T) {
 
 			t.Run("VMAttestation", func(t *testing.T) { testVMAttestation(t, ctx, adapter) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 

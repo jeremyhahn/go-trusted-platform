@@ -125,12 +125,13 @@ RUN set -eu; \
     useradd -m -u 10001 -g dev -d /home/dev dev; \
     install -d -m 0755 -o 10001 -g 10001 /src
 COPY --from=modules /gomodcache /gomodcache
-# Pre-warm the race-instrumented standard library, then open the build cache to
-# any uid (the toolchain image runs as the invoking user).
+# Open the module cache for reading and the (empty) build cache for writing to
+# any uid (the toolchain image runs as the invoking user). The race-instrumented
+# standard library is not pre-built here: it cost 11 minutes of every uncached
+# image build (CA m639), and the race job builds it on first use.
 RUN set -eu; \
     chmod -R a+rX /gomodcache; \
-    go build -race std; \
-    chmod -R a+rwX /gocache
+    install -d -m 0777 /gocache
 # Nothing fetches a module at run time (devcontainer.md §4).
 ENV GOPROXY=off
 
