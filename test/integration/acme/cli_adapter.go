@@ -156,8 +156,9 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 
 // AccountCreate creates a new ACME account via CLI.
 func (c *CLIAdapter) AccountCreate(ctx context.Context, opts AccountCreateOptions) (*AccountCreateResult, error) {
-	// acme register takes --directory, --ca-cert and --email only
-	// (docs/ca/cli.md §3); it has no external account binding flags.
+	// acme register has one flag, --email (pkg/cli/commands/acme/register.go):
+	// it takes no --directory or --ca-cert, so opts.DirectoryURL is not
+	// passed, and it has no external account binding flags.
 	if opts.ExternalAccountID != "" || opts.ExternalAccountKey != "" {
 		return nil, ErrCLIFlagNotDocumented{Verb: "register", Option: "external account binding"}
 	}
@@ -166,10 +167,6 @@ func (c *CLIAdapter) AccountCreate(ctx context.Context, opts AccountCreateOption
 
 	if opts.Email != "" {
 		args = append(args, "--email", opts.Email)
-	}
-
-	if opts.DirectoryURL != "" {
-		args = append(args, "--directory", opts.DirectoryURL)
 	}
 
 	output, err := c.runCommand(ctx, args...)
