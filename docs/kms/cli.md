@@ -105,8 +105,12 @@ dials `/run/quicbaas.sock` unless `quicbaas_addr` or `PLATFORMCTL_QUICBAAS_ADDR`
 says otherwise. Under embedded quicbaas (the daemon default) there is no
 quicbaasd and nothing serves that socket; platformd serves the
 `quicbaas.kms.v1` services on its own TCP and Unix listeners
-([api.md §1](api.md#1-the-six-transports)), so point `quicbaas_addr` at
-platformd's socket with `quicbaas_transport: unix`.
+([api.md §1](api.md#1-the-six-transports)). The quicbaas SDK requires TLS on
+every transport, its Unix one included, and platformd's Unix socket is plaintext
+gRPC authenticated by peer credentials, so the two cannot meet there. Point
+`quicbaas_addr` at platformd's TCP gRPC listener with `quicbaas_transport: grpc`
+and give the context the TLS files that verify it (`quicbaas_ca_cert`, and for
+mTLS `quicbaas_client_cert` and `quicbaas_client_key`).
 
 **Output format.** `--output` selects `table`, `json` or `yaml`. Verbs that
 declare their own `-o, --output` (an output *file*) shadow it: on `crypto
