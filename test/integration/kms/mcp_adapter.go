@@ -363,9 +363,23 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 		Arguments: args,
 	}
 
-	var toolResult mcpCallToolResult
-	if err := m.sendRequest(ctx, "tools/call", toolReq, &toolResult); err != nil {
+	var raw json.RawMessage
+	if err := m.sendRequest(ctx, "tools/call", toolReq, &raw); err != nil {
 		return err
+	}
+
+	// The platform MCP server returns the tool's result object itself as the
+	// JSON-RPC result (pkg/api/mcp handleToolsCall); an MCP content[] envelope
+	// is read when a server sends one.
+	var toolResult mcpCallToolResult
+	if err := json.Unmarshal(raw, &toolResult); err != nil || len(toolResult.Content) == 0 {
+		if result == nil || len(raw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(raw, result); err != nil {
+			return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
+		}
+		return nil
 	}
 
 	if toolResult.IsError {
@@ -381,7 +395,7 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 	}
 
 	// Parse the text content as JSON into the result
-	if result != nil && len(toolResult.Content) > 0 {
+	if result != nil {
 		for _, item := range toolResult.Content {
 			if item.Type == "text" && item.Text != "" {
 				if err := json.Unmarshal([]byte(item.Text), result); err != nil {

@@ -22,7 +22,11 @@ A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms` (`pkg/webservice/v1/rest/kms/router.go`).
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK `0xF0`–`0xF5`,
 plus a **KMS extended category opcode `0xCD`**.
-MCP: 21 `kms_*` tools and 6 `secret_*` tools.
+MCP: 21 `kms_*` tools and 6 `secret_*` tools. A `tools/call` result is the
+tool's result object itself, in its JSON field names (`handleToolsCall`,
+`pkg/api/mcp/server.go`), not an MCP `content[]` envelope; the
+`test/integration/kms` and `test/integration/secrets` MCP adapters read that
+object, and a `content[].text` envelope only when a server sends one.
 
 ---
 
