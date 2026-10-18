@@ -442,6 +442,9 @@ type CAServiceInterface interface {
 	SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
 	// Revoke revokes a certificate.
 	Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
+	// SupersedeForRenewal rotates the certificate's held key, then revokes
+	// the certificate and removes it from the store (issuance.SupersedeForRenewal).
+	SupersedeForRenewal(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
 	// CertificateStore returns the certificate store.
 	CertificateStore() xkmssdk.CertStore
 	// CABundle returns the CA bundle.
@@ -954,19 +957,18 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	// Supersede the existing certificate before issuing the renewal. The
-	// non-nil keyAttrs signals DeleteKeys=true, which is what removes the old
-	// cert-store entry (and the leaf's CN-namespaced key) — without it
-	// IssueCertificate still fails with ErrCertificateAlreadyExists.
-	oldKeyAttrs := &xkmssdk.KeyAttributes{
-		CN:           existingCert.Subject.CommonName,
-		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyType:      xkmssdk.KeyTypeTLS,
-	}
-	if revokeErr := h.ca.Revoke(r.Context(), existingCert, oldKeyAttrs); revokeErr != nil {
-		h.logger.Error("Failed to revoke old certificate during renewal", "error", revokeErr, "serial", serial)
-		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: revokeErr})
+	// Supersede the existing certificate before issuing the renewal: rotate
+	// its held key, then revoke it and remove it from the store. The key is
+	// kept, so IssueCertificate certifies the rotated key instead of
+	// generating one under a name the KMS still holds (docs/ca/user.md
+	// §Renewing). Refusals answer as a failed precondition.
+	if err := h.ca.SupersedeForRenewal(r.Context(), existingCert, caReq.KeyAttributes); err != nil {
+		h.logger.Error("Failed to supersede old certificate during renewal", "error", err, "serial", serial)
+		code := http.StatusInternalServerError
+		if issuance.IsRenewalRefused(err) {
+			code = http.StatusPreconditionFailed
+		}
+		h.writeError(w, code, ErrCertificateRenewFailed{Serial: serial, Err: err})
 		return
 	}
 

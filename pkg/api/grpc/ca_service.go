@@ -590,6 +590,18 @@ func (s *CAGRPCService) RenewCertificate(
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
+	// Supersede the existing certificate before issuing the renewal: rotate
+	// its held key, then revoke it and remove it from the store. The key is
+	// kept, so IssueCertificate certifies the rotated key (docs/ca/user.md
+	// §Renewing).
+	if err := issuance.SupersedeForRenewal(ctx, s.ca, existingCert, caReq.KeyAttributes); err != nil {
+		s.logger.Error(err, "failed to supersede old certificate during renewal")
+		if issuance.IsRenewalRefused(err) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	// Issue the renewed certificate
 	issuedRenew, err := s.ca.IssueCertificate(ctx, caReq)
 	if err != nil {

@@ -17,6 +17,7 @@ package quicbaas_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -335,6 +336,13 @@ func TestKVService_List(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
+		// Declared gap: go-quicbaas #1534 — flips to the success path on the pin bump that carries the fix.
+		// The embedded KV List merges every page the server streams into one
+		// answer, so a PageSize of 5 over 20 entities answers all 20.
+		if helpers.GapEmbeddedKVListPageSize.Defect(t, "List", len(resp.Entities) == 20,
+			"PageSize 5 ignored: all 20 entities", strconv.Itoa(len(resp.Entities))+" entities") {
+			return
+		}
 		assert.LessOrEqual(t, len(resp.Entities), 5)
 	})
 }
@@ -499,6 +507,10 @@ func TestKVService_Batch(t *testing.T) {
 		resp, err := batch.Execute(ctx, &quicbaassdk.BatchRequest{
 			Operations: ops,
 		})
+		// Declared gap: go-quicbaas #1533 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedBatch.Unserved(t, "Execute", err) {
+			return
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
@@ -521,6 +533,10 @@ func TestKVService_Batch(t *testing.T) {
 		_, err := batch.Execute(ctx, &quicbaassdk.BatchRequest{
 			Operations: ops,
 		})
+		// Declared gap: go-quicbaas #1533 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedBatch.Unserved(t, "Execute", err) {
+			return
+		}
 		require.NoError(t, err)
 
 		// Batch delete
@@ -567,6 +583,10 @@ func TestKVService_Transaction(t *testing.T) {
 				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value1},
 			},
 		})
+		// Declared gap: go-quicbaas #1319 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedTransaction.Mistyped(t, "Execute", err) {
+			return
+		}
 		require.NoError(t, err)
 		assert.True(t, createResp.Succeeded)
 

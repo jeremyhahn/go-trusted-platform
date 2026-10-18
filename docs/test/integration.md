@@ -837,6 +837,19 @@ Do not add a phrase list to a suite. If a transport lacks an operation, make
 its adapter return `ErrNoSurface`. If the server refuses for a deployment
 reason, match its sentinel with `IsDeclaredRefusal`.
 
+An upstream defect in the pinned go-quicbaas SDK is declared with
+`helpers.DeclaredGap` (`test/integration/helpers/declaredgap.go`), which names
+the go-quicbaas issue that fixes it. The subtest asserts the typed refusal
+(`Unserved`: the embedded transport's `UnknownMethodError`; `Mistyped`: its
+`InvalidRequestTypeError`) or the recorded behaviour (`Defect`), then returns
+before its success path. When a pin bump carries the fix, the assertion fails
+with the issue's name; deleting the gap check restores the success path. The
+quicbaas and sdk suites declare five today: embedded `quicbaas.Batch/Execute`
+unrouted (go-quicbaas #1533), embedded Transaction request type mismatch
+(#1319), embedded KV List ignoring `PageSize` (#1534), embedded
+`quicbaas.Ollama` unrouted (#1535), and embedded `quicbaas.Vector` unrouted in
+the pinned SDK (#1404, fixed on go-quicbaas main).
+
 ## Best Practices
 
 1. **Unique Test Data** - Use timestamp prefixes to avoid collisions

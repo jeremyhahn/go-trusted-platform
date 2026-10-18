@@ -21,6 +21,8 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 )
 
 // =============================================================================
@@ -112,6 +114,13 @@ func (a *CAAuthorityAdapter) Revoke(ctx context.Context, cert *x509.Certificate,
 	return a.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{
 		DeleteKeys: keyAttrs != nil,
 	})
+}
+
+// SupersedeForRenewal runs the shared renewal step: it rotates the held key,
+// then revokes the old certificate and removes it from the store, keeping the
+// key so the renewal certifies its rotated version.
+func (a *CAAuthorityAdapter) SupersedeForRenewal(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+	return issuance.SupersedeForRenewal(ctx, a.ca, cert, keyAttrs)
 }
 
 // CertificateStore returns the CA's certificate store.
