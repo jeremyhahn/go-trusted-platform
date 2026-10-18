@@ -110,30 +110,14 @@ func (e *TenantEntity) ToIAM() *iam.Tenant {
 	}
 }
 
-// platformMetadata encodes the entity's platform record as the IAM tenant
-// metadata that persists it.
-func (e *TenantEntity) platformMetadata() (map[string]string, error) {
-	data, err := json.Marshal(platformRecord{
-		DisplayName:  e.DisplayName,
-		State:        e.State,
-		ComputeQuota: e.ComputeQuota,
-		NetworkQuota: e.NetworkQuota,
-		StorageQuota: e.StorageQuota,
-		Labels:       e.Labels,
-		Annotations:  e.Annotations,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return map[string]string{PlatformRecordKey: string(data)}, nil
-}
-
 // restorePlatformRecord applies the platform record an IAM tenant carries. A
-// tenant without one was created outside the tenant manager: it keeps the
-// defaults FromIAM gave it, suspended when IAM says so.
+// tenant without one (every tenant over the pinned embedded transport, which
+// stores no metadata) reads as active, suspended when IAM says so, with the
+// rest of the defaults the caller gave it.
 func (e *TenantEntity) restorePlatformRecord(t *iam.Tenant) error {
 	data, ok := t.Metadata[PlatformRecordKey]
 	if !ok {
+		e.State = StateActive
 		if t.Status == iam.TenantStatusSuspended {
 			e.State = StateSuspended
 		}
@@ -162,21 +146,6 @@ func (e *TenantEntity) restorePlatformRecord(t *iam.Tenant) error {
 		e.Annotations = record.Annotations
 	}
 	return nil
-}
-
-// iamStatus is the IAM tenant status that mirrors the lifecycle state. IAM has
-// no created or deleting status, so those states leave it unchanged (nil).
-func (e *TenantEntity) iamStatus() *iam.TenantStatus {
-	var status iam.TenantStatus
-	switch e.State {
-	case StateActive:
-		status = iam.TenantStatusActive
-	case StateSuspended:
-		status = iam.TenantStatusSuspended
-	default:
-		return nil
-	}
-	return &status
 }
 
 // Clone creates a deep copy of the TenantEntity.

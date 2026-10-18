@@ -81,6 +81,10 @@ created ──> active ──> suspended
   with a new keyspace and DEK.
 - **Repeating an operation is safe.** Suspending an already-suspended tenant
   succeeds rather than erroring, so retries and reconciliation loops behave.
+- **Suspend, resume, update and quota changes are a declared gap.** Until a
+  go-quicbaas release stores a tenant's metadata and status, they are refused
+  with "cannot be stored: declared gap" (501 on REST, `Unimplemented`
+  elsewhere) rather than reporting a change that would not survive a restart.
 
 ```bash
 platformctl tenant suspend tenant-a

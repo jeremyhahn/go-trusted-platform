@@ -169,22 +169,12 @@ func (m *mockIAMClient) Update(ctx context.Context, tenantID string, req *iam.Up
 		return nil, errors.New("tenant not found")
 	}
 
-	// The pinned go-quicbaas embedded handleIAMTenantUpdate
-	// (sdk/go/transport/embedded/handlers_iam.go:204-208) writes
-	// DisplayName into the tenant's canonical name, so the double does too.
+	// The double behaves as the pinned go-quicbaas embedded
+	// handleIAMTenantUpdate (sdk/go/transport/embedded/handlers_iam.go:204-208)
+	// does: DisplayName is written into the tenant's canonical name, and
+	// Metadata and Status are dropped.
 	if req.DisplayName != "" {
 		tenant.Name = req.DisplayName
-	}
-	if req.Metadata != nil {
-		if tenant.Metadata == nil {
-			tenant.Metadata = make(map[string]string)
-		}
-		for k, v := range req.Metadata {
-			tenant.Metadata[k] = v
-		}
-	}
-	if req.Status != nil {
-		tenant.Status = *req.Status
 	}
 	tenant.UpdatedAt = time.Now()
 
@@ -627,12 +617,11 @@ func TestCreateTenant_Success(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
+	// Only the identity is storable over the pinned SDK: a display name
+	// equal to the name and no labels (persistence_test.go covers the rest).
 	req := &CreateTenantRequest{
 		Name:        "test-tenant",
-		DisplayName: "Test Tenant",
-		Labels: map[string]string{
-			"env": "test",
-		},
+		DisplayName: "test-tenant",
 	}
 
 	entity, err := manager.CreateTenant(ctx, req)
@@ -656,8 +645,8 @@ func TestCreateTenant_Success(t *testing.T) {
 		t.Errorf("expected state %q, got %q", StateActive, entity.State)
 	}
 
-	if entity.Labels["env"] != "test" {
-		t.Error("expected labels to be set")
+	if len(entity.Labels) != 0 {
+		t.Errorf("expected no labels, got %v", entity.Labels)
 	}
 }
 
@@ -722,7 +711,7 @@ func TestCreateTenant_DuplicateName(t *testing.T) {
 }
 
 func TestCreateTenant_WithCustomQuotas(t *testing.T) {
-	manager, _ := newTestManager(t)
+	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
 
 	customCompute := &ComputeQuota{
@@ -736,17 +725,17 @@ func TestCreateTenant_WithCustomQuotas(t *testing.T) {
 		ComputeQuota: customCompute,
 	}
 
-	entity, err := manager.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	// A custom quota is the declared gap: the pinned SDK cannot store it.
+	_, err := manager.CreateTenant(ctx, req)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
 	}
-
-	if entity.ComputeQuota.MaxVMs != customCompute.MaxVMs {
-		t.Errorf("expected MaxVMs %d, got %d", customCompute.MaxVMs, entity.ComputeQuota.MaxVMs)
+	if !slices.Equal(gap.Fields, []string{"compute_quota"}) {
+		t.Errorf("expected fields [compute_quota], got %v", gap.Fields)
 	}
-
-	if entity.ComputeQuota.MaxVCPUs != customCompute.MaxVCPUs {
-		t.Errorf("expected MaxVCPUs %d, got %d", customCompute.MaxVCPUs, entity.ComputeQuota.MaxVCPUs)
+	if len(iamClient.tenants) != 0 {
+		t.Errorf("expected the IAM tenant rolled back, %d remain", len(iamClient.tenants))
 	}
 }
 
@@ -754,19 +743,13 @@ func TestCreateTenant_WithAllCustomQuotas(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
-	customCompute := &ComputeQuota{
-		MaxVMs:        20,
-		MaxContainers: 50,
-		MaxVCPUs:      64,
-		MaxMemoryMB:   131072,
-	}
-
+	defaults := DefaultConfig()
+	sameAsDefault := defaults.DefaultComputeQuota
 	customNetwork := &NetworkQuota{
 		MaxBridges:       5,
 		MaxPorts:         100,
-		MaxBandwidthMbps: 10000,
+		MaxBandwidthMbps: 1,
 	}
-
 	customStorage := &StorageQuota{
 		MaxVolumesGB: 1000,
 		MaxSnapshots: 50,
@@ -774,26 +757,20 @@ func TestCreateTenant_WithAllCustomQuotas(t *testing.T) {
 
 	req := &CreateTenantRequest{
 		Name:         "test-tenant",
-		ComputeQuota: customCompute,
+		ComputeQuota: &sameAsDefault,
 		NetworkQuota: customNetwork,
 		StorageQuota: customStorage,
 	}
 
-	entity, err := manager.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	// Each quota section is checked on its own: a section equal to the
+	// configured default is storable, a custom one is the declared gap.
+	_, err := manager.CreateTenant(ctx, req)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
 	}
-
-	if entity.ComputeQuota.MaxContainers != customCompute.MaxContainers {
-		t.Errorf("expected MaxContainers %d, got %d", customCompute.MaxContainers, entity.ComputeQuota.MaxContainers)
-	}
-
-	if entity.NetworkQuota.MaxBridges != customNetwork.MaxBridges {
-		t.Errorf("expected MaxBridges %d, got %d", customNetwork.MaxBridges, entity.NetworkQuota.MaxBridges)
-	}
-
-	if entity.StorageQuota.MaxVolumesGB != customStorage.MaxVolumesGB {
-		t.Errorf("expected MaxVolumesGB %d, got %d", customStorage.MaxVolumesGB, entity.StorageQuota.MaxVolumesGB)
+	if want := []string{"network_quota", "storage_quota"}; !slices.Equal(gap.Fields, want) {
+		t.Errorf("expected fields %v, got %v", want, gap.Fields)
 	}
 }
 
@@ -930,13 +907,17 @@ func TestCreateTenant_WithAnnotations(t *testing.T) {
 		},
 	}
 
-	entity, err := manager.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	// Annotations are the declared gap: the pinned SDK cannot store them.
+	_, err := manager.CreateTenant(ctx, req)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
 	}
-
-	if entity.Annotations["description"] != "Test tenant for unit tests" {
-		t.Error("expected annotations to be set")
+	if !slices.Equal(gap.Fields, []string{"annotations"}) {
+		t.Errorf("expected fields [annotations], got %v", gap.Fields)
+	}
+	if manager.GetCacheSize() != 0 {
+		t.Errorf("expected no cached tenant, got %d", manager.GetCacheSize())
 	}
 }
 
@@ -948,8 +929,7 @@ func TestGetTenant_Success(t *testing.T) {
 
 	// Create tenant first
 	createReq := &CreateTenantRequest{
-		Name:        "test-tenant",
-		DisplayName: "Test Tenant",
+		Name: "test-tenant",
 	}
 
 	created, err := manager.CreateTenant(ctx, createReq)
@@ -1246,19 +1226,15 @@ func TestListTenants_WithTenants(t *testing.T) {
 // store: listing used to replace every cached tenant with its IAM copy,
 // resetting a suspended tenant to created and dropping its labels.
 func TestListTenants_KeepsCachedState(t *testing.T) {
-	manager, _ := newTestManager(t)
+	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
 
-	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
-		Name:   "listed-tenant",
-		Labels: map[string]string{"team": "platform"},
-	})
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "listed-tenant"})
 	if err != nil {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
-	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
-		t.Fatalf("failed to suspend tenant: %v", err)
-	}
+	// IAM suspended the tenant behind the manager's cache.
+	iamClient.tenants[created.ID].Status = iam.TenantStatusSuspended
 
 	tenants, _, err := manager.ListTenants(ctx, 10, 0)
 	if err != nil {
@@ -1270,9 +1246,6 @@ func TestListTenants_KeepsCachedState(t *testing.T) {
 	if tenants[0].State != StateSuspended {
 		t.Errorf("listed state = %s, want %s", tenants[0].State, StateSuspended)
 	}
-	if tenants[0].Labels["team"] != "platform" {
-		t.Errorf("listed labels = %v, want team=platform", tenants[0].Labels)
-	}
 
 	got, err := manager.GetTenant(ctx, created.ID)
 	if err != nil {
@@ -1281,8 +1254,11 @@ func TestListTenants_KeepsCachedState(t *testing.T) {
 	if got.State != StateSuspended {
 		t.Errorf("state after list = %s, want %s", got.State, StateSuspended)
 	}
-	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
-		t.Errorf("resume after list: %v", err)
+
+	// Resuming would need an IAM status write the pinned SDK drops.
+	var gap ErrTenantFieldNotPersisted
+	if err := manager.ResumeTenant(ctx, created.ID); !errors.As(err, &gap) {
+		t.Errorf("resume after list error = %v, want ErrTenantFieldNotPersisted", err)
 	}
 }
 
@@ -1331,8 +1307,7 @@ func TestUpdateTenant_Success(t *testing.T) {
 	ctx := context.Background()
 
 	createReq := &CreateTenantRequest{
-		Name:        "test-tenant",
-		DisplayName: "Original Name",
+		Name: "test-tenant",
 	}
 
 	created, err := manager.CreateTenant(ctx, createReq)
@@ -1348,17 +1323,23 @@ func TestUpdateTenant_Success(t *testing.T) {
 		},
 	}
 
-	updated, err := manager.UpdateTenant(ctx, created.ID, updateReq)
+	// Display name and labels are the declared gap: the pinned SDK stores
+	// neither, so the update is refused and the cache keeps the old values.
+	_, err = manager.UpdateTenant(ctx, created.ID, updateReq)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
+	}
+	if want := []string{"display_name", "labels"}; !slices.Equal(gap.Fields, want) {
+		t.Errorf("expected fields %v, got %v", want, gap.Fields)
+	}
+
+	got, err := manager.GetTenant(ctx, created.ID)
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("failed to get tenant: %v", err)
 	}
-
-	if updated.DisplayName != newDisplayName {
-		t.Errorf("expected display name %q, got %q", newDisplayName, updated.DisplayName)
-	}
-
-	if updated.Labels["updated"] != "true" {
-		t.Error("expected labels to be updated")
+	if got.DisplayName != "test-tenant" || len(got.Labels) != 0 {
+		t.Errorf("cache holds the refused update: display name %q, labels %v", got.DisplayName, got.Labels)
 	}
 }
 
@@ -1411,13 +1392,13 @@ func TestUpdateTenant_WithAnnotations(t *testing.T) {
 		},
 	}
 
-	updated, err := manager.UpdateTenant(ctx, created.ID, updateReq)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	_, err = manager.UpdateTenant(ctx, created.ID, updateReq)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
 	}
-
-	if updated.Annotations["note"] != "updated annotation" {
-		t.Error("expected annotations to be updated")
+	if !slices.Equal(gap.Fields, []string{"annotations"}) {
+		t.Errorf("expected fields [annotations], got %v", gap.Fields)
 	}
 }
 
@@ -1434,15 +1415,11 @@ func TestUpdateTenant_IAMError(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	// Inject update error
-	iamClient.updateErr = errors.New("IAM update failed")
+	// Inject a read error: the update checks what IAM stores before it
+	// caches anything.
+	iamClient.getErr = errors.New("IAM read failed")
 
-	newDisplayName := "Updated Name"
-	updateReq := &UpdateTenantRequest{
-		DisplayName: &newDisplayName,
-	}
-
-	_, err = manager.UpdateTenant(ctx, created.ID, updateReq)
+	_, err = manager.UpdateTenant(ctx, created.ID, &UpdateTenantRequest{})
 	if err == nil {
 		t.Fatal("expected error when IAM fails")
 	}
@@ -1553,7 +1530,7 @@ func TestDeleteTenant_WithUsageTrackerInvalidation(t *testing.T) {
 
 // Tests for SuspendTenant
 
-func TestSuspendTenant_Success(t *testing.T) {
+func TestSuspendTenant_IsADeclaredGap(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
@@ -1566,9 +1543,14 @@ func TestSuspendTenant_Success(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
+	// The pinned SDK drops the IAM status, so a suspension cannot be stored.
 	err = manager.SuspendTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
+	}
+	if !slices.Equal(gap.Fields, []string{"state"}) {
+		t.Errorf("expected fields [state], got %v", gap.Fields)
 	}
 
 	// Verify state
@@ -1577,8 +1559,8 @@ func TestSuspendTenant_Success(t *testing.T) {
 		t.Fatalf("failed to get tenant: %v", err)
 	}
 
-	if entity.State != StateSuspended {
-		t.Errorf("expected state %q, got %q", StateSuspended, entity.State)
+	if entity.State != StateActive {
+		t.Errorf("expected state %q, got %q", StateActive, entity.State)
 	}
 }
 
@@ -1603,7 +1585,7 @@ func TestSuspendTenant_NotFound(t *testing.T) {
 }
 
 func TestSuspendTenant_AlreadySuspended(t *testing.T) {
-	manager, _ := newTestManager(t)
+	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
 
 	createReq := &CreateTenantRequest{
@@ -1615,14 +1597,13 @@ func TestSuspendTenant_AlreadySuspended(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	// Suspend first time
-	err = manager.SuspendTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
+	// IAM holds the tenant suspended; the manager reads it from there.
+	iamClient.tenants[created.ID].Status = iam.TenantStatusSuspended
+	manager.InvalidateCache(created.ID)
 
 	// Suspend again - should succeed (idempotent operation)
-	// The state machine allows same-state transitions for idempotency
+	// The state machine allows same-state transitions for idempotency, and
+	// the state already matches what IAM stores.
 	err = manager.SuspendTenant(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("expected no error for idempotent suspend, got %v", err)
@@ -1641,8 +1622,8 @@ func TestSuspendTenant_AlreadySuspended(t *testing.T) {
 
 // Tests for ResumeTenant
 
-func TestResumeTenant_Success(t *testing.T) {
-	manager, _ := newTestManager(t)
+func TestResumeTenant_IsADeclaredGap(t *testing.T) {
+	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
 
 	createReq := &CreateTenantRequest{
@@ -1654,16 +1635,15 @@ func TestResumeTenant_Success(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	// Suspend first
-	err = manager.SuspendTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("failed to suspend tenant: %v", err)
-	}
+	// IAM holds the tenant suspended; the manager reads it from there.
+	iamClient.tenants[created.ID].Status = iam.TenantStatusSuspended
+	manager.InvalidateCache(created.ID)
 
-	// Resume
+	// The pinned SDK drops the IAM status, so a resume cannot be stored.
 	err = manager.ResumeTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
 	}
 
 	// Verify state
@@ -1672,8 +1652,8 @@ func TestResumeTenant_Success(t *testing.T) {
 		t.Fatalf("failed to get tenant: %v", err)
 	}
 
-	if entity.State != StateActive {
-		t.Errorf("expected state %q, got %q", StateActive, entity.State)
+	if entity.State != StateSuspended {
+		t.Errorf("expected state %q, got %q", StateSuspended, entity.State)
 	}
 }
 
@@ -1766,7 +1746,7 @@ func TestGetQuotas_NotFound(t *testing.T) {
 
 // Tests for UpdateQuotas
 
-func TestUpdateQuotas_Success(t *testing.T) {
+func TestUpdateQuotas_IsADeclaredGap(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
@@ -1779,16 +1759,21 @@ func TestUpdateQuotas_Success(t *testing.T) {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	newQuotas := &TenantQuotas{
-		Compute: ComputeQuota{
-			MaxVMs:   100,
-			MaxVCPUs: 200,
-		},
-	}
-
-	err = manager.UpdateQuotas(ctx, created.ID, newQuotas)
+	newQuotas, err := manager.GetQuotas(ctx, created.ID)
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("failed to get quotas: %v", err)
+	}
+	newQuotas.Compute.MaxVMs = 100
+	newQuotas.Compute.MaxVCPUs = 200
+
+	// Quota limits other than the configured defaults cannot be stored.
+	err = manager.UpdateQuotas(ctx, created.ID, newQuotas)
+	var gap ErrTenantFieldNotPersisted
+	if !errors.As(err, &gap) {
+		t.Fatalf("expected ErrTenantFieldNotPersisted, got %v", err)
+	}
+	if !slices.Equal(gap.Fields, []string{"compute_quota"}) {
+		t.Errorf("expected fields [compute_quota], got %v", gap.Fields)
 	}
 
 	// Verify
@@ -1797,8 +1782,8 @@ func TestUpdateQuotas_Success(t *testing.T) {
 		t.Fatalf("failed to get quotas: %v", err)
 	}
 
-	if quotas.Compute.MaxVMs != 100 {
-		t.Errorf("expected MaxVMs 100, got %d", quotas.Compute.MaxVMs)
+	if want := DefaultConfig().DefaultComputeQuota.MaxVMs; quotas.Compute.MaxVMs != want {
+		t.Errorf("expected MaxVMs %d, got %d", want, quotas.Compute.MaxVMs)
 	}
 }
 
@@ -1808,6 +1793,12 @@ func TestUpdateQuotas_Success(t *testing.T) {
 func TestUpdateQuotas_KeepsUsageCounters(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
+
+	// The update below sets the configured defaults, the only limits the
+	// pinned SDK can store (a reload rebuilds them), so it succeeds.
+	manager.config.DefaultComputeQuota = ComputeQuota{MaxVMs: 20, MaxDiskGB: 600}
+	manager.config.DefaultNetworkQuota = NetworkQuota{MaxBridges: 8}
+	manager.config.DefaultStorageQuota = StorageQuota{MaxVolumesGB: 1000}
 
 	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "usage-tenant"})
 	if err != nil {
@@ -2010,14 +2001,10 @@ func TestCheckQuota_NoQuotaEnforcer(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
+	manager.config.DefaultComputeQuota = ComputeQuota{MaxVMs: 10}
 	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "quota-entity-tenant"})
 	if err != nil {
 		t.Fatalf("failed to create tenant: %v", err)
-	}
-	if err := manager.UpdateQuotas(ctx, created.ID, &TenantQuotas{
-		Compute: ComputeQuota{MaxVMs: 10},
-	}); err != nil {
-		t.Fatalf("UpdateQuotas: %v", err)
 	}
 	cached, ok := manager.cache.Load(created.ID)
 	if !ok {
@@ -3037,7 +3024,9 @@ func TestConcurrentSuspendResume(t *testing.T) {
 		tenantIDs[i] = created.ID
 	}
 
-	// Concurrent suspend operations
+	// Concurrent suspend operations. The pinned SDK cannot store the
+	// suspended state, so every one must report the declared gap and none
+	// may leave a suspended entity behind in the cache.
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(tenantIDs))
 
@@ -3045,11 +3034,7 @@ func TestConcurrentSuspendResume(t *testing.T) {
 		wg.Add(1)
 		go func(tenantID string) {
 			defer wg.Done()
-
-			err := manager.SuspendTenant(ctx, tenantID)
-			if err != nil {
-				errChan <- err
-			}
+			errChan <- manager.SuspendTenant(ctx, tenantID)
 		}(id)
 	}
 
@@ -3057,17 +3042,20 @@ func TestConcurrentSuspendResume(t *testing.T) {
 	close(errChan)
 
 	for err := range errChan {
-		t.Errorf("concurrent suspend error: %v", err)
+		var gap ErrTenantFieldNotPersisted
+		if !errors.As(err, &gap) {
+			t.Errorf("expected ErrTenantFieldNotPersisted, got %v", err)
+		}
 	}
 
-	// Verify all tenants suspended
+	// Verify no tenant changed state
 	for _, id := range tenantIDs {
 		entity, err := manager.GetTenant(ctx, id)
 		if err != nil {
 			t.Fatalf("failed to get tenant: %v", err)
 		}
-		if entity.State != StateSuspended {
-			t.Errorf("expected tenant %s to be suspended, got %s", id, entity.State)
+		if entity.State != StateActive {
+			t.Errorf("expected tenant %s to stay active, got %s", id, entity.State)
 		}
 	}
 }

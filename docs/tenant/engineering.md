@@ -99,7 +99,9 @@ through `SetLimits`, which copies the `Max*` fields and leaves the `Used*`
 counters alone; usage moves only through `Reserve` and `Release`.
 `TenantGRPCServer.UpdateQuotas` starts from `GetQuotas` and overwrites only the
 limits the request carries, so an absent section keeps its limits and
-`MaxDiskGB`, which the gRPC message cannot carry, keeps its value.
+`MaxDiskGB`, which the gRPC message cannot carry, keeps its value. Until a
+go-quicbaas tag stores quotas, a limit that differs from the default is
+`ErrTenantFieldNotPersisted` (§6).
 
 Exceeding a quota is `ErrQuotaExceeded`; hitting a hard resource ceiling is
 `ErrResourceLimitReached`.
@@ -121,7 +123,11 @@ Typed structs, plus two sentinels:
 **Typed:** `ErrTenantExists`, `ErrTenantNotFound`, `ErrInvalidRequest`,
 `ErrInvalidState`, `ErrInvalidTransition`, `ErrStorageFailed`,
 `ErrQuotaExceeded`, `ErrResourceLimitReached`, `ErrDEKOperationFailed`,
-`ErrConfigValidation`, `ErrBarrierOperationFailed`, `ErrBarrierNotSupported`.
+`ErrConfigValidation`, `ErrBarrierOperationFailed`, `ErrBarrierNotSupported`,
+`ErrTenantFieldNotPersisted`.
+
+`ErrTenantFieldNotPersisted` is the declared gap of §6: a write that would
+change a field the pinned go-quicbaas SDK cannot store.
 
 `ErrBarrierNotSupported` is the one to notice: **per-tenant barriers are not
 available in every configuration.** Code must handle the capability being absent
@@ -158,37 +164,39 @@ persistence failures. The IAM tenant record (reached through the SDK
 
 - **Identity** — ID, name and timestamps are IAM tenant fields. The name is
   canonical: no write after create changes it.
-- **Platform record** — display name, lifecycle state, the
-  compute/network/storage quotas (limits and usage counters), labels and
-  annotations. The manager stores them as one JSON value under the IAM tenant
-  metadata key `platform.tenant` (`PlatformRecordKey`), replaced whole on
-  every write. The display name is never sent as IAM's `DisplayName`: the
-  pinned go-quicbaas embedded `handleIAMTenantUpdate`
-  (`sdk/go/transport/embedded/handlers_iam.go:204-208`) writes that field into
-  the tenant's name, so `acme` would become `Acme Corporation` and vanish from
-  `GetTenantByName("acme")`. A tenant whose record holds no display name shows
-  its name.
-- **Upstream gap** — the same embedded handler passes only the name to
-  `UpdateTenant` and drops `Metadata` and `Status`, and `tenantToSDK`
-  returns no metadata, so over the embedded transport the platform record
-  does not reach IAM yet. The manager is written against the SDK contract;
-  the fix belongs in go-quicbaas.
-- **IAM status** mirrors the state where IAM has one: `active` and
-  `suspended`. `created` and `deleting` leave the IAM status unchanged.
+- **Declared gap: every other field.** Display name, lifecycle state, the
+  compute/network/storage quota limits, labels and annotations cannot be
+  stored until a go-quicbaas tag persists them. The pinned go-quicbaas
+  v0.12.0-alpha embedded `handleIAMTenantUpdate`
+  (`sdk/go/transport/embedded/handlers_iam.go:204-208`) passes only
+  `DisplayName` to `UpdateTenant`, as the tenant's new *name*, and drops
+  `Metadata` and `Status`; `tenantToSDK` returns no metadata, status or
+  display name. The display name is no exception: sending it would rename
+  `acme` to `Acme Corporation` and lose it from `GetTenantByName("acme")`.
 
-Every write (create, update, quota update, suspend, resume, the `deleting`
-step of delete) saves to IAM **before** it updates the in-memory cache, so the
-cache never holds a state IAM refused, and a failed save returns
-`ErrStorageFailed` with the cache unchanged. A failed save during create rolls
-the IAM tenant and DEK back. Reads that miss the cache (`GetTenant`,
-`GetTenantByName`, `ListTenants`) rebuild the entity from the record, so a
-restarted daemon serves the state, quotas and labels it last stored.
-`ListTenants` always reads IAM and replaces each listed tenant's cache entry
-with the entity it rebuilt: the record is authoritative, so a tenant another
-daemon changed lists in its new state and later cached reads see it too. A record
-that does not parse, or names an unknown state, is `ErrStorageFailed`. A
-tenant created outside the manager has no record: it reads as `created`
-(`suspended` when IAM says so) with zero quotas and no labels.
+The manager therefore never calls IAM `Update`. Every write (create, update,
+quota update, suspend, resume) builds the entity it would store and compares
+it with the entity a reload rebuilds from IAM. If they agree, only the cache is
+updated and the write succeeds. If any field differs, the write returns
+`ErrTenantFieldNotPersisted{TenantID, Fields}`, naming each field
+(`display_name`, `state`, `compute_quota`, `network_quota`, `storage_quota`,
+`labels`, `annotations`), and the cache is unchanged: no write reports success
+for data that is not stored. A create that carries such a field rolls the IAM
+tenant and DEK back. The error is `Unimplemented` on gRPC, Unix, QUIC and MCP
+and `501 Not Implemented` on REST.
+
+A reload rebuilds: the IAM identity; state `active` (`suspended` when IAM's
+status says so); the configured default quotas (`Config.Default*Quota`) with
+zero usage; display name = name; no labels or annotations. If a transport does
+store the JSON record under the IAM metadata key `platform.tenant`
+(`PlatformRecordKey`), reads parse it over that baseline; a record that does
+not parse, or names an unknown state, is `ErrStorageFailed`. Usage counters
+move only through `Reserve` and `Release` and live in the cache. The
+`deleting` step of delete is cache-only, since IAM has no such status.
+
+Reads that miss the cache (`GetTenant`, `GetTenantByName`, `ListTenants`)
+rebuild the entity from IAM. `ListTenants` always reads IAM and replaces each
+listed tenant's cache entry with the entity it rebuilt.
 
 The DEK path is not stored; it is derived from the tenant ID.
 

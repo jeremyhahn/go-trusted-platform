@@ -261,6 +261,7 @@ type tenantParityHarness struct {
 	manager  *tenant.Manager
 	server   *TenantGRPCServer
 	tools    *mcp.ToolRegistry
+	iam      *mockIAMClientForServer
 	deks     *memoryTenantDEKs
 	barriers *memoryTenantBarriers
 }
@@ -273,11 +274,12 @@ func newTenantParityHarness(t *testing.T) *tenantParityHarness {
 	cfg.EnableDEKIsolation = true
 	h := &tenantParityHarness{
 		ids:      make(map[string]string, len(parityTenantNames)),
+		iam:      newMockIAMClientForServer(),
 		deks:     newMemoryTenantDEKs(),
 		barriers: newMemoryTenantBarriers(),
 	}
 	manager, err := tenant.NewManager(&tenant.ManagerConfig{
-		IAMTenantClient:     newMockIAMClientForServer(),
+		IAMTenantClient:     h.iam,
 		IAMRoleClient:       newMockIAMClientForServer(),
 		DEKClient:           h.deks,
 		TenantBarrierClient: h.barriers,
@@ -443,6 +445,10 @@ type tenantParityOp struct {
 	// missing is the class both transports answer for an unknown tenant;
 	// codes.OK means the method answers rather than fails.
 	missing codes.Code
+	// gap marks a write the pinned go-quicbaas SDK cannot store: every
+	// transport admits it and answers the declared gap,
+	// tenant.ErrTenantFieldNotPersisted (docs/tenant/engineering.md §6).
+	gap bool
 }
 
 func tenantIDArgs(subject string) map[string]interface{} {
@@ -514,7 +520,7 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_create", caller: paritySystemTenant, subject: parityNewTenant, systemOnly: true,
+			tool: "tenant_create", caller: paritySystemTenant, subject: parityNewTenant, systemOnly: true, gap: true,
 			args: func(subject string) map[string]interface{} {
 				return map[string]interface{}{"name": subject, "display_name": "Tenant C", "max_vms": 3}
 			},
@@ -534,7 +540,7 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_update", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
+			tool: "tenant_update", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound, gap: true,
 			args: withTenantID(map[string]interface{}{"display_name": "Tenant A"}),
 			keys: []string{"success", "message", "tenant.display_name"},
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
@@ -576,7 +582,7 @@ func tenantParityOps() []tenantParityOp {
 		{
 			// The tool keeps every limit not given, so its RPC is the same
 			// read-modify-write a gRPC client does.
-			tool: "tenant_update_quotas", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
+			tool: "tenant_update_quotas", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound, gap: true,
 			args: withTenantID(map[string]interface{}{"max_vms": 7}),
 			keys: []string{"success", "message", "compute.max_vms", "network.max_bridges"},
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
@@ -631,7 +637,7 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_suspend", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
+			tool: "tenant_suspend", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound, gap: true,
 			args: tenantIDArgs, keys: statusKeys,
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
 				resp, err := s.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{TenantId: subject})
@@ -642,11 +648,15 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_resume", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
+			// The tenants are suspended in IAM, the only place a
+			// suspension survives a reload.
+			tool: "tenant_resume", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound, gap: true,
 			args: tenantIDArgs, keys: statusKeys,
 			before: func(t *testing.T, h *tenantParityHarness) {
-				require.NoError(t, h.manager.SuspendTenant(context.Background(), h.id(parityTenantA)))
-				require.NoError(t, h.manager.SuspendTenant(context.Background(), h.id(parityTenantB)))
+				for _, label := range []string{parityTenantA, parityTenantB} {
+					h.iam.suspend(h.id(label))
+					h.manager.InvalidateCache(h.id(label))
+				}
 			},
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
 				resp, err := s.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{TenantId: subject})
@@ -779,17 +789,45 @@ func TestTenantTransportsAgree(t *testing.T) {
 	for _, op := range ops {
 		t.Run(op.tool, func(t *testing.T) {
 			grpcSide, mcpSide := parityHarnesses(t, op)
+			before := grpcSide.snapshot()
 
-			want, err := grpcSide.callGRPC(op, op.caller, op.subject)
-			require.NoError(t, err)
-			got, err := mcpSide.callMCP(t, op, op.caller, op.subject)
-			require.NoError(t, err)
+			want, grpcErr := grpcSide.callGRPC(op, op.caller, op.subject)
+			got, mcpErr := mcpSide.callMCP(t, op, op.caller, op.subject)
+
+			if op.gap {
+				assertSameDeclaredGap(t, grpcErr, mcpErr)
+				assert.Equal(t, before, grpcSide.snapshot(), "the refused write changed nothing")
+				assert.Equal(t, grpcSide.snapshot(), mcpSide.snapshot(), "both leave the tenants in the same state")
+				return
+			}
+			require.NoError(t, grpcErr)
+			require.NoError(t, mcpErr)
 
 			require.Len(t, want, len(op.keys), "the gRPC view names every key")
 			assert.Equal(t, want, got, "MCP answers what gRPC answers")
 			assert.Equal(t, grpcSide.snapshot(), mcpSide.snapshot(), "both leave the tenants in the same state")
 		})
 	}
+}
+
+// assertSameDeclaredGap checks that gRPC and MCP both answer a write the
+// pinned SDK cannot store with the declared gap and name the same fields, so
+// an MCP tool that dropped or invented an argument names different ones.
+func assertSameDeclaredGap(t *testing.T, grpcErr, mcpErr error) {
+	t.Helper()
+	require.Equal(t, codes.Unimplemented, status.Code(grpcErr), "gRPC: %v", grpcErr)
+	require.Equal(t, codes.Unimplemented, status.Code(mcpErr), "MCP: %v", mcpErr)
+	assert.Equal(t, declaredGapFields(grpcErr), declaredGapFields(mcpErr))
+}
+
+// declaredGapFields is a declared-gap message without its leading
+// "tenant <id>: ", the one part that differs between two harnesses.
+func declaredGapFields(err error) string {
+	message := status.Convert(err).Message()
+	if _, fields, found := strings.Cut(message, ": "); found {
+		return fields
+	}
+	return message
 }
 
 func TestTenantTransportsAgreeOnMissingTenant(t *testing.T) {
@@ -915,12 +953,17 @@ func TestTenantSystemTenantActsOnEveryTenant(t *testing.T) {
 		t.Run(op.tool, func(t *testing.T) {
 			grpcSide, mcpSide := parityHarnesses(t, op)
 
-			want, err := grpcSide.callGRPC(op, paritySystemTenant, parityTenantB)
-			require.NoError(t, err)
-			got, err := mcpSide.callMCP(t, op, paritySystemTenant, parityTenantB)
-			require.NoError(t, err)
+			want, grpcErr := grpcSide.callGRPC(op, paritySystemTenant, parityTenantB)
+			got, mcpErr := mcpSide.callMCP(t, op, paritySystemTenant, parityTenantB)
 
-			assert.Equal(t, want, got)
+			if op.gap {
+				// Admitted: the refusal is the declared gap, not PermissionDenied.
+				assertSameDeclaredGap(t, grpcErr, mcpErr)
+			} else {
+				require.NoError(t, grpcErr)
+				require.NoError(t, mcpErr)
+				assert.Equal(t, want, got)
+			}
 			assert.Equal(t, grpcSide.snapshot(), mcpSide.snapshot())
 		})
 	}
@@ -930,26 +973,34 @@ func TestTenantSystemTenantActsOnEveryTenant(t *testing.T) {
 // one limit keeps every other limit, including MaxDiskGB, which has no wire
 // field, on both transports. A tenant updates its own quotas here, as
 // `platformctl tenant quotas set` sends only the sections it was given.
+// The pinned SDK stores only the configured default limits, so each update
+// restates the compute limits it carries and omits the network and storage
+// sections and MaxDiskGB. It succeeds only if every omitted limit is kept: a
+// transport that zeroed one would leave a limit the SDK cannot store and answer
+// the declared gap instead.
 func TestTenantUpdateQuotasKeepsWhatTheRequestOmits(t *testing.T) {
-	seed := tenant.TenantQuotas{
-		Compute: tenant.ComputeQuota{MaxVMs: 10, MaxContainers: 40, MaxVCPUs: 64, MaxMemoryMB: 8192, MaxDiskGB: 500},
-		Network: tenant.NetworkQuota{MaxBridges: 4, MaxPorts: 100, MaxBandwidthMbps: 1000},
-		Storage: tenant.StorageQuota{MaxVolumesGB: 900, MaxSnapshots: 20},
+	cfg := tenant.DefaultConfig()
+	want := tenant.TenantQuotas{
+		Compute: cfg.DefaultComputeQuota,
+		Network: cfg.DefaultNetworkQuota,
+		Storage: cfg.DefaultStorageQuota,
 	}
-	want := seed
-	want.Compute.MaxVMs = 25
+	compute := want.Compute
 
 	update := map[string]func(h *tenantParityHarness, a string) error{
 		"gRPC": func(h *tenantParityHarness, a string) error {
 			_, err := h.server.UpdateQuotas(tokenCallerContext(a), &platformv1.UpdateQuotasRequest{
 				TenantId: a,
-				Compute:  &platformv1.ComputeQuota{MaxVms: 25, MaxContainers: 40, MaxVcpus: 64, MaxMemoryMb: 8192},
+				Compute: &platformv1.ComputeQuota{
+					MaxVms: compute.MaxVMs, MaxContainers: compute.MaxContainers,
+					MaxVcpus: compute.MaxVCPUs, MaxMemoryMb: compute.MaxMemoryMB,
+				},
 			})
 			return err
 		},
 		"MCP": func(h *tenantParityHarness, a string) error {
 			_, err := h.tools.ExecuteTool(mcpTokenCtx(a, "tenant:read", "tenant:write"), "tenant_update_quotas",
-				map[string]interface{}{"tenant_id": a, "max_vms": 25})
+				map[string]interface{}{"tenant_id": a, "max_vms": compute.MaxVMs})
 			return err
 		},
 	}
@@ -957,15 +1008,12 @@ func TestTenantUpdateQuotasKeepsWhatTheRequestOmits(t *testing.T) {
 		t.Run(transport, func(t *testing.T) {
 			h := newTenantParityHarness(t)
 			a := h.id(parityTenantA)
-			ctx := context.Background()
-			seeded := seed
-			require.NoError(t, h.manager.UpdateQuotas(ctx, a, &seeded))
 
 			require.NoError(t, call(h, a))
 
-			got, err := h.manager.GetQuotas(ctx, a)
+			got, err := h.manager.GetQuotas(context.Background(), a)
 			require.NoError(t, err)
-			assert.Equal(t, want, *got, "only MaxVMs changes")
+			assert.Equal(t, want, *got, "every omitted limit is kept")
 		})
 	}
 }
