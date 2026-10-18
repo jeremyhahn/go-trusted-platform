@@ -40,7 +40,10 @@ func (r *Registry) PutBlob(ctx context.Context, digest string, content []byte) e
 	if r.storage == nil {
 		return ErrStorageNotConfigured{Op: "PutBlob"}
 	}
-	return r.storage.StoreBlob(ctx, digest, content)
+	if err := verifyBlobDigest(digest, content); err != nil {
+		return err
+	}
+	return r.storeBlob(ctx, digest, content, nil)
 }
 
 // GetBlob returns the bytes at the supplied digest.

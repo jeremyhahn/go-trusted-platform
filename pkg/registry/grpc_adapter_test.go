@@ -116,6 +116,28 @@ func TestGRPCAdapter_PushRefusesAnExistingTagWithoutOverwrite(t *testing.T) {
 	}
 }
 
+func TestGRPCAdapter_PushRefusesALayerNotMatchingItsDigest(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	var img Image
+	if err := json.Unmarshal(pushEnvelope(t, []byte("one")), &img); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	declared := img.Layers[0].Digest
+	img.Layers[0].Content = []byte("two")
+	envelope, err := json.Marshal(img)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	_, err = a.PushStream(context.Background(), meta, bytes.NewReader(envelope))
+
+	var invalid grpcapi.ErrInvalidArtifactDigest
+	if !errors.As(err, &invalid) || invalid.Digest != declared {
+		t.Fatalf("PushStream error = %v, want ErrInvalidArtifactDigest for %s", err, declared)
+	}
+}
+
 // TestGRPCAdapter_PushOverwriteReplacesTheTag pins the overwrite annotation:
 // the adapter used to drop it, so `registry push --overwrite` and the REST
 // X-Trusted-Platform-Overwrite header were refused like a plain push.

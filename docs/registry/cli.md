@@ -119,6 +119,10 @@ platformctl registry pull registry.example.com/apps/api:1.4.2 \
 `--verify` is opt-in, not the default. In an environment where image
 provenance matters, pass it — or pull through tooling that always does.
 
+Every pull rehashes each layer and the config against the digests the
+manifest names, so blob bytes replaced in storage fail the pull with
+`ErrDigestMismatch`.
+
 ---
 
 ## 5. `platformctl registry inspect <image-reference>`

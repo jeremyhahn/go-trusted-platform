@@ -97,7 +97,14 @@ a live backend. They are the fault-injection points:
    hold.
 4. **Digests are verified on the way in and on the way out.** A blob whose
    computed digest does not match its descriptor produces `ErrDigestMismatch`
-   and is never written to storage nor returned to a client.
+   and is never written to storage nor returned to a client. A push checks
+   every layer and the config before it stores anything; every pull rehashes
+   each returned layer and the config — an encrypted layer over its decrypted
+   plaintext — so a blob replaced in storage under a signed manifest is refused
+   (Codex RC 5611, `pkg/registry/blob_integrity.go`). A stored digest is never
+   overwritten with different bytes: such a push fails with `ErrBlobConflict`
+   and the stored blob is kept. The one accepted difference is an encrypted
+   re-push whose stored envelope decrypts to the same plaintext.
 5. **Encryption is per layer, not per image.** Each layer carries its own DEK
    (`EncryptedLayerMeta`); the DEKs are wrapped by a KMS key. Rotating the KMS
    key rewraps DEKs and does not re-encrypt layer bytes.
@@ -128,6 +135,7 @@ ones a caller must handle by type:
 | `ErrImageNotFound` / `ErrManifestNotFound` / `ErrBlobNotFound` | Reference resolves to nothing | n/a |
 | `ErrImageExists` / `ErrImageAlreadyExists` | Push would overwrite without `--overwrite` | n/a |
 | `ErrDigestMismatch` | Computed digest differs from the descriptor | yes |
+| `ErrBlobConflict` | Push would overwrite a stored blob with different bytes | yes |
 | `ErrInvalidDigest` / `ErrInvalidImageRef` / `ErrInvalidManifest` | Malformed input | yes |
 | `ErrImageEmpty` | Push carried no layers | yes |
 | `ErrEncryptionNotConfigured` | `--encrypt` with no encryption backend | yes |
