@@ -118,10 +118,10 @@ func TestMCPServiceProvider_VTPMSeal_PropagatesPCRBoundRefusal(t *testing.T) {
 	}
 	p := newMCPProviderWithVTPM(mock)
 
-	_, err := p.VTPMSeal(context.Background(), "vm1", []byte("secret"), []int{7})
+	_, err := p.VTPMSeal(context.Background(), "vm1", []byte("secret"), []int{7}, "")
 	assert.True(t, errors.As(err, &common.ErrPCRBoundSealUnavailable{}), "got %v", err)
 
-	sealed, err := p.VTPMSeal(context.Background(), "vm1", []byte("secret"), nil)
+	sealed, err := p.VTPMSeal(context.Background(), "vm1", []byte("secret"), nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("sealed-secret"), sealed)
 }
