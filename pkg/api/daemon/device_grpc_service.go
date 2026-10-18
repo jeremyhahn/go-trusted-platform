@@ -1081,13 +1081,15 @@ func deviceStatusError(err error) error {
 		vlans            device.ErrProfileVLANsNotDistinct
 		tlsClear         device.ErrTLSServerNameClearConflict
 		identityRequired device.ErrDeviceIdentityRequired
+		serialRequired   device.ErrDeviceSerialRequired
 		templateID       device.ErrInvalidTemplateID
 		templateName     device.ErrTemplateNameRequired
 		templateAbsent   device.ErrNilTemplate
 		evidence         ErrInvalidAttestationEvidence
 	)
 	if errors.As(err, &vlans) || errors.As(err, &tlsClear) ||
-		errors.As(err, &identityRequired) || errors.As(err, &templateID) ||
+		errors.As(err, &identityRequired) || errors.As(err, &serialRequired) ||
+		errors.As(err, &templateID) ||
 		errors.As(err, &templateName) || errors.As(err, &templateAbsent) ||
 		errors.As(err, &evidence) {
 		return status.Error(codes.InvalidArgument, errStr)

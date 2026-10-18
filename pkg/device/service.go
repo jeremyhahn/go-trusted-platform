@@ -99,6 +99,13 @@ func (s *Service) Create(ctx context.Context, device *entities.Device) error {
 	if device == nil {
 		return ErrNilDevice
 	}
+	// The serial is the key enrollment and RecordHeartbeat match a TPM
+	// against, so a device created without one could never be claimed.
+	// Refusing it here refuses it on every transport, not only on those
+	// whose decoder checks it first.
+	if device.Serial == "" {
+		return ErrDeviceSerialRequired{}
+	}
 
 	if device.ID == 0 {
 		device.ID = NewID()

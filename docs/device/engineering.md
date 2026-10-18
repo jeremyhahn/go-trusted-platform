@@ -133,7 +133,10 @@ over here.
    path. A caller-supplied non-zero ID is honoured rather than refused, which
    is what the REST create handler has always done; `Create` is therefore an
    upsert on that path exactly as `Save` is, and is not a claim that the ID
-   is unused.
+   is unused. `Create` refuses an empty serial with `ErrDeviceSerialRequired`
+   before it mints anything: the REST and MCP decoders check the serial
+   first, but gRPC, Unix and QUIC hand the decoded device straight to
+   `Create`, so until #949 those three stored a device no TPM could claim.
 
    Every transport's create verb goes through it: `CreateDevice` on the
    daemon gRPC service (which gRPC, Unix and QUIC `OpDeviceRegister` all

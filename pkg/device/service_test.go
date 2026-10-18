@@ -1346,6 +1346,24 @@ func TestService_Create_RefusesATakenSerial(t *testing.T) {
 	assert.Equal(t, "first", stored.Model)
 }
 
+// A create without a serial is refused by the service itself, so every
+// transport refuses it, including gRPC and QUIC, whose decoders do not check
+// the serial (#949).
+func TestService_Create_RefusesAnEmptySerial(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	device := &entities.Device{Model: "no-serial"}
+	err = service.Create(ctx, device)
+	assert.Equal(t, ErrDeviceSerialRequired{}, err)
+	assert.Zero(t, device.ID, "a refused create must not be assigned an ID")
+
+	count, err := service.Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, count, "the refused create must not write a row")
+}
+
 func TestService_Create_SerialCheckStorageFaultIsNotADuplicate(t *testing.T) {
 	ds, mockStorage := testServiceDatastoreWithMock(t)
 	service, err := NewService(ds)
