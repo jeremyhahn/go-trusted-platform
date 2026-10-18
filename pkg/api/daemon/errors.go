@@ -837,6 +837,12 @@ func (e ErrInvalidAttestationEvidence) Error() string {
 	return fmt.Sprintf("invalid attestation evidence: %s", e.Reason)
 }
 
+// GRPCStatus classifies unusable evidence as the caller's fault on every
+// transport, including MCP, which classifies the typed error it is handed.
+func (e ErrInvalidAttestationEvidence) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrDeviceOperationFailed is returned when a device operation fails
 type ErrDeviceOperationFailed struct {
 	Operation string
