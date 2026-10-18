@@ -181,6 +181,16 @@ TPM-held Raft keys are out of scope until the issuer of peer certificates is
 ruled on. The [cluster user guide](../cluster/user.md#configuring-a-cluster)
 has the full example.
 
+### Values platformd copies into the embedded server
+
+Some embedded-server settings are not `quicbaas:` keys. `App.initStores`
+copies them from other sections before the store starts:
+
+| Source | Embedded server setting | Rule |
+|--------|-------------------------|------|
+| `tpm.device` | `seal.tpm2.device` | Copied when `tpm.simulator` is off and the device is a concrete path, not empty and not `auto`. go-quicbaas's hardware probe and its tpm2 seal strategy then open the platform's TPM. Without the copy, they open the default `/dev/tpmrm0` while the store starts, even when the platform's TPM is a swtpm socket. On a shared CI runner, that is the runner's own TPM. |
+| `barrier.seal_strategy: shamir` | `seal.strategy` and the shamir threshold and share count | The quorum is copied so the embedded barrier enforces it. |
+
 ## Example Configurations
 
 ### Development (loopback, the defaults)

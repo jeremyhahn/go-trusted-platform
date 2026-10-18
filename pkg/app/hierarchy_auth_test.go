@@ -40,6 +40,21 @@ func TestSealHierarchyAuth_SealsThePIN(t *testing.T) {
 	assert.Equal(t, []byte("so-pin-secret"), pin.Bytes(), "sealing must not wipe the caller's PIN")
 }
 
+// hierarchyAuthValue opens a sealed hierarchy auth for comparison; a nil
+// auth (an unowned hierarchy) reads as the empty string.
+func hierarchyAuthValue(t *testing.T, auth *quicbaassecret.SecretValue) string {
+	t.Helper()
+	if auth == nil {
+		return ""
+	}
+	var value string
+	require.NoError(t, auth.WithBytes(func(b []byte) error {
+		value = string(b)
+		return nil
+	}))
+	return value
+}
+
 func TestSealHierarchyAuth_NoPINIsNoAuth(t *testing.T) {
 	// A nil or empty SO PIN is the TCG factory state: the hierarchy keeps
 	// empty auth, so the config field stays nil rather than holding an
