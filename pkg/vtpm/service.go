@@ -143,12 +143,20 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 	// Build the bundle
 	bundle, err := s.buildBundle(ctx, bundleID, bundlePath, opts)
 	if err != nil {
-		// Cleanup on failure
-		os.RemoveAll(bundlePath)
-		return nil, err
+		return nil, removeFailedBundle(bundleID, bundlePath, err)
 	}
 
 	return bundle, nil
+}
+
+// removeFailedBundle removes the directory of a bundle that failed to build and
+// returns the build error. When the directory cannot be removed the result is
+// ErrBundleCleanupFailed, which still unwraps to the build error.
+func removeFailedBundle(bundleID, bundlePath string, buildErr error) error {
+	if err := os.RemoveAll(bundlePath); err != nil {
+		return ErrBundleCleanupFailed{BundleID: bundleID, Path: bundlePath, BuildErr: buildErr, Cause: err}
+	}
+	return buildErr
 }
 
 // generateBundleID generates a unique bundle ID.

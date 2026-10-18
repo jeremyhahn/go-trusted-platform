@@ -203,6 +203,65 @@ func TestService_CreateBundle_InvalidEKAlgorithm(t *testing.T) {
 	}
 }
 
+// A bundle that fails to build loses its partial directory and the caller gets
+// the build error itself.
+func TestRemoveFailedBundle_RemovesDirectoryAndReturnsBuildError(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "host-1")
+	if err := os.MkdirAll(filepath.Join(bundlePath, "tpm"), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	buildErr := ErrSWTPMOperationFailed{Operation: "start", Cause: os.ErrDeadlineExceeded}
+
+	err := removeFailedBundle("host-1", bundlePath, buildErr)
+
+	var swtpmErr ErrSWTPMOperationFailed
+	if !errors.As(err, &swtpmErr) || swtpmErr.Operation != "start" {
+		t.Fatalf("expected the build error, got %v", err)
+	}
+	var cleanupErr ErrBundleCleanupFailed
+	if errors.As(err, &cleanupErr) {
+		t.Fatalf("a removed directory must not report a cleanup failure: %v", err)
+	}
+	if _, statErr := os.Stat(bundlePath); !os.IsNotExist(statErr) {
+		t.Fatalf("bundle directory should be removed, stat: %v", statErr)
+	}
+}
+
+// A partial directory that cannot be removed is reported with its cause, and the
+// error still carries the build error that refused the bundle.
+func TestRemoveFailedBundle_ReportsCleanupFailure(t *testing.T) {
+	// A regular file where the bundles directory should be makes the removal
+	// fail with ENOTDIR, whoever runs the test.
+	notADir := filepath.Join(t.TempDir(), "bundles")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	bundlePath := filepath.Join(notADir, "host-1")
+	buildErr := ErrSWTPMOperationFailed{Operation: "start", Cause: os.ErrDeadlineExceeded}
+
+	err := removeFailedBundle("host-1", bundlePath, buildErr)
+
+	var cleanupErr ErrBundleCleanupFailed
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("expected ErrBundleCleanupFailed, got %v", err)
+	}
+	if cleanupErr.BundleID != "host-1" || cleanupErr.Path != bundlePath {
+		t.Errorf("unexpected bundle or path: %+v", cleanupErr)
+	}
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("expected the removal cause ENOTDIR, got %v", err)
+	}
+	var swtpmErr ErrSWTPMOperationFailed
+	if !errors.As(err, &swtpmErr) || swtpmErr.Operation != "start" {
+		t.Errorf("the build error must stay reachable, got %v", err)
+	}
+	for _, part := range []string{"host-1", "swtpm start failed", bundlePath} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error %q should mention %q", err.Error(), part)
+		}
+	}
+}
+
 func TestService_GetBundle_NotFound(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
