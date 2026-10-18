@@ -1391,6 +1391,15 @@ its limit from outside. It checks the child sits in its own leaf at the class
 - the relaunch rewrites the class limit (`Prepare` runs on every launch);
 - the proxy loses no request.
 
+It logs the leaf's `memory.current`, `memory.peak` and `oom_kill` for the
+killed child before the limit drops and for its successor after the relaunch.
+Every test logs the same for each class's leaf at teardown. These logs are the
+measured basis for the class `MemoryMax` values, and no class limit changes
+without one. A kernel without `memory.peak` logs the read error instead of a
+number. Teardown waits for every leaf left after gatewayd exits to report
+`populated 0` in `cgroup.events`, then removes those leaves and the parent.
+If a leaf has not emptied after 10s, teardown fails and names it.
+
 `TestGatewaydSupervisorDeathLeavesTheDatapath` kills the supervisor instead
 of a child, then asserts the following:
 
