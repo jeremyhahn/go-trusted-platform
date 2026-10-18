@@ -22,6 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -152,6 +154,34 @@ func TestGatewayIPAMTools_AllocateReleaseAllocations(t *testing.T) {
 		assert.Equal(t, alloc.IP, allocs[0].(*ipam.Allocation).IP)
 
 		require.NoError(t, tools.GatewayIPAMRelease(ctx, alloc.IP.String()))
+
+		// The memory backend keeps the released allocation for audit; the
+		// list must not, as GatewayService.ListAllocations does not (#949).
+		allocs, err = tools.GatewayIPAMAllocations(ctx, pool.ID)
+		require.NoError(t, err)
+		assert.Empty(t, allocs, "a released address is not listed")
+	})
+
+	t.Run("lists every pool when no pool is given", func(t *testing.T) {
+		tools, pool := newIPAMToolsWithPool(t)
+		other, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{
+			Name: "other",
+			CIDR: "10.8.0.0/24",
+		})
+		require.NoError(t, err)
+
+		_, err = tools.GatewayIPAMAllocate(ctx, pool.ID, "dev-1", "")
+		require.NoError(t, err)
+		_, err = tools.GatewayIPAMAllocate(ctx, other.(*ipam.Pool).ID, "dev-2", "")
+		require.NoError(t, err)
+
+		allocs, err := tools.GatewayIPAMAllocations(ctx, "")
+		require.NoError(t, err)
+		devices := make([]string, 0, len(allocs))
+		for _, a := range allocs {
+			devices = append(devices, a.(*ipam.Allocation).DeviceID)
+		}
+		assert.ElementsMatch(t, []string{"dev-1", "dev-2"}, devices)
 	})
 
 	t.Run("refuses an unknown pool and a malformed address", func(t *testing.T) {
@@ -163,6 +193,16 @@ func TestGatewayIPAMTools_AllocateReleaseAllocations(t *testing.T) {
 		var wrapped *WrappedError
 		err = tools.GatewayIPAMRelease(ctx, "not-an-ip")
 		assert.True(t, errors.As(err, &wrapped), "got %T: %v", err, err)
+	})
+
+	t.Run("answers NotFound as gRPC does, not Internal", func(t *testing.T) {
+		tools, _ := newIPAMToolsWithPool(t)
+
+		_, err := tools.GatewayIPAMAllocations(ctx, "missing")
+		assert.Equal(t, codes.NotFound, status.Code(err), "unknown pool: %v", err)
+
+		err = tools.GatewayIPAMRelease(ctx, "10.9.0.200")
+		assert.Equal(t, codes.NotFound, status.Code(err), "unallocated address: %v", err)
 	})
 }
 

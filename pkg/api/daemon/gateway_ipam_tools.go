@@ -100,17 +100,22 @@ func (t gatewayIPAMTools) GatewayIPAMRelease(ctx context.Context, ipStr string) 
 	if parseErr != nil {
 		return &WrappedError{Msg: fmt.Sprintf("invalid ip address %q", ipStr), Err: parseErr}
 	}
-	return t.ipam.Release(ctx, addr)
+	// The gRPC status carries the same class GatewayService.ReleaseIP
+	// answers, so an unknown address is NotFound on MCP too.
+	return ipamErrToGRPC(t.ipam.Release(ctx, addr))
 }
 
-// GatewayIPAMAllocations lists all IP address allocations for a pool.
+// GatewayIPAMAllocations lists the active and reserved allocations of a
+// pool, or of every pool when poolID is empty, exactly as
+// GatewayService.ListAllocations does: a released address is not listed,
+// and an unknown pool is NotFound.
 func (t gatewayIPAMTools) GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error) {
 	if err := t.requireIPAM(); err != nil {
 		return nil, err
 	}
-	allocs, err := t.ipam.GetAllocationsByPool(ctx, poolID)
+	allocs, err := activeAllocations(ctx, t.ipam, poolID)
 	if err != nil {
-		return nil, err
+		return nil, ipamErrToGRPC(err)
 	}
 	out := make([]interface{}, 0, len(allocs))
 	for _, a := range allocs {
