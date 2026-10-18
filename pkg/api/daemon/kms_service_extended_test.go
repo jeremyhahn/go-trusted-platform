@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"testing"
 	"time"
@@ -109,6 +110,10 @@ func (m *extKMSClientMock) BackendStatus(ctx context.Context) (*kms.BackendStatu
 type extSecretsClientMock struct {
 	setRotationPolicyFn func(ctx context.Context, req *secrets.SetRotationPolicyRequest) error
 	getRotationPolicyFn func(ctx context.Context, secretID string) (*secrets.RotationPolicy, error)
+	rotateFn            func(ctx context.Context, req *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error)
+	updateStatusFn      func(ctx context.Context, req *secrets.UpdateSecretStatusRequest) error
+	listFn              func(ctx context.Context, prefix string) (*secrets.ListSecretsResponse, error)
+	getFn               func(ctx context.Context, path string) (*secrets.Secret, error)
 
 	lastSetPolicyReq *secrets.SetRotationPolicyRequest
 	lastGetPolicyID  string
@@ -121,10 +126,16 @@ func (m *extSecretsClientMock) Store(ctx context.Context, req *secrets.StoreSecr
 }
 
 func (m *extSecretsClientMock) Get(ctx context.Context, path string, opts ...secrets.GetOption) (*secrets.Secret, error) {
+	if m.getFn != nil {
+		return m.getFn(ctx, path)
+	}
 	return nil, errKMSLifecycleMock{method: "Get"}
 }
 
 func (m *extSecretsClientMock) List(ctx context.Context, prefix string) (*secrets.ListSecretsResponse, error) {
+	if m.listFn != nil {
+		return m.listFn(ctx, prefix)
+	}
 	return nil, errKMSLifecycleMock{method: "List"}
 }
 
@@ -145,6 +156,9 @@ func (m *extSecretsClientMock) ListVersions(ctx context.Context, secretID string
 }
 
 func (m *extSecretsClientMock) Rotate(ctx context.Context, req *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error) {
+	if m.rotateFn != nil {
+		return m.rotateFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "Rotate"}
 }
 
@@ -153,6 +167,9 @@ func (m *extSecretsClientMock) Rollback(ctx context.Context, req *secrets.Rollba
 }
 
 func (m *extSecretsClientMock) UpdateStatus(ctx context.Context, req *secrets.UpdateSecretStatusRequest) error {
+	if m.updateStatusFn != nil {
+		return m.updateStatusFn(ctx, req)
+	}
 	return errKMSLifecycleMock{method: "UpdateStatus"}
 }
 
@@ -573,6 +590,163 @@ func TestSecretsServerAdapterSetRotationPolicy(t *testing.T) {
 			SecretId: "db/password",
 			Policy:   &pb.SecretRotationPolicy{},
 		})
+		requireGRPCCode(t, err, codes.Internal)
+	})
+}
+
+func TestSecretsServerAdapterRotateSecret(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success", func(t *testing.T) {
+		var got *secrets.RotateSecretRequest
+		mock := &extSecretsClientMock{
+			rotateFn: func(ctx context.Context, req *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error) {
+				got = req
+				return &secrets.RotateSecretResponse{SecretID: req.SecretID, OldVersion: 1, NewVersion: 2}, nil
+			},
+		}
+		adapter := NewSecretsServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{
+			SecretId: "db/password",
+			NewData:  []byte("next"),
+			Metadata: map[string]string{"owner": "dba"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "db/password", resp.SecretId)
+		assert.Equal(t, uint64(1), resp.OldVersion)
+		assert.Equal(t, uint64(2), resp.NewVersion)
+		require.NotNil(t, got)
+		assert.Equal(t, []byte("next"), got.NewData)
+		assert.Equal(t, "dba", got.Metadata["owner"])
+	})
+
+	t.Run("MissingSecretID", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+		_, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{NewData: []byte("next")})
+		requireGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("BackendError", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+		_, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: "db/password"})
+		requireGRPCCode(t, err, codes.Internal)
+	})
+}
+
+func TestSecretsServerAdapterUpdateSecretStatus(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Disable", func(t *testing.T) {
+		var got *secrets.UpdateSecretStatusRequest
+		mock := &extSecretsClientMock{
+			updateStatusFn: func(ctx context.Context, req *secrets.UpdateSecretStatusRequest) error {
+				got = req
+				return nil
+			},
+		}
+		adapter := NewSecretsServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{
+			SecretId: "db/password",
+			Status:   pb.SecretStatus_SECRET_STATUS_DISABLED,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, pb.SecretStatus_SECRET_STATUS_DISABLED, resp.Status)
+		require.NotNil(t, got)
+		assert.Equal(t, secrets.SecretStatusDisabled, got.Status)
+	})
+
+	t.Run("UnspecifiedStatus", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+		_, err := adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{SecretId: "db/password"})
+		requireGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("MissingSecretID", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+		_, err := adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{Status: pb.SecretStatus_SECRET_STATUS_ENABLED})
+		requireGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("BackendError", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+		_, err := adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{
+			SecretId: "db/password",
+			Status:   pb.SecretStatus_SECRET_STATUS_ENABLED,
+		})
+		requireGRPCCode(t, err, codes.Internal)
+	})
+}
+
+func TestSecretsServerAdapterGetSecretsByPrefix(t *testing.T) {
+	ctx := context.Background()
+	// The backend answers one path outside the prefix, which must not leak
+	// into the response.
+	listing := func(ctx context.Context, prefix string) (*secrets.ListSecretsResponse, error) {
+		return &secrets.ListSecretsResponse{Paths: []string{"app/b", "app/a", "other/c"}}, nil
+	}
+
+	t.Run("PathsOnly", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{listFn: listing}, slog.Default())
+
+		resp, err := adapter.GetSecretsByPrefix(ctx, &pb.GetSecretsByPrefixRequest{Prefix: "app/"})
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), resp.TotalCount)
+		assert.Len(t, resp.Secrets, 2)
+		assert.Contains(t, resp.Secrets, "app/a")
+		assert.Contains(t, resp.Secrets, "app/b")
+		assert.False(t, resp.HasMore)
+	})
+
+	t.Run("IncludeData", func(t *testing.T) {
+		mock := &extSecretsClientMock{
+			listFn: listing,
+			getFn: func(ctx context.Context, path string) (*secrets.Secret, error) {
+				return &secrets.Secret{
+					Path:     path,
+					Data:     map[string]interface{}{"value": base64.StdEncoding.EncodeToString([]byte("v-" + path))},
+					Metadata: map[string]string{"k": "v"},
+					Version:  3,
+				}, nil
+			},
+		}
+		adapter := NewSecretsServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GetSecretsByPrefix(ctx, &pb.GetSecretsByPrefixRequest{Prefix: "app/", IncludeData: true})
+		require.NoError(t, err)
+		require.Contains(t, resp.Secrets, "app/a")
+		assert.Equal(t, []byte("v-app/a"), resp.Secrets["app/a"].Data["value"])
+		assert.Equal(t, int64(3), resp.Secrets["app/a"].Version)
+		assert.Equal(t, "v", resp.Secrets["app/a"].Metadata["k"])
+	})
+
+	t.Run("Paged", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{listFn: listing}, slog.Default())
+
+		resp, err := adapter.GetSecretsByPrefix(ctx, &pb.GetSecretsByPrefixRequest{Prefix: "app/", Limit: 1})
+		require.NoError(t, err)
+		assert.Len(t, resp.Secrets, 1)
+		assert.Contains(t, resp.Secrets, "app/a")
+		assert.True(t, resp.HasMore)
+		assert.Equal(t, int32(2), resp.TotalCount)
+	})
+
+	t.Run("NegativeLimit", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{listFn: listing}, slog.Default())
+		_, err := adapter.GetSecretsByPrefix(ctx, &pb.GetSecretsByPrefixRequest{Prefix: "app/", Limit: -1})
+		requireGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("ListError", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+		_, err := adapter.GetSecretsByPrefix(ctx, &pb.GetSecretsByPrefixRequest{Prefix: "app/"})
+		requireGRPCCode(t, err, codes.Internal)
+	})
+
+	t.Run("GetError", func(t *testing.T) {
+		adapter := NewSecretsServerAdapter(&extSecretsClientMock{listFn: listing}, slog.Default())
+		_, err := adapter.GetSecretsByPrefix(ctx, &pb.GetSecretsByPrefixRequest{Prefix: "app/", IncludeData: true})
 		requireGRPCCode(t, err, codes.Internal)
 	})
 }
