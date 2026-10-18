@@ -125,6 +125,7 @@ platformctl iso extract --iso work/alpine-standard-3.22.2-x86_64.iso
 # Customize ISO (integrates platform binaries and configuration)
 platformctl iso customize --iso-dir work/iso \
   --platformd-binary ./platformd-static \
+  --platform-config configs/platform/templates/single-node/default.yaml \
   --keys-dir secure-boot-keys
 
 # Build final bootable ISO

@@ -183,6 +183,34 @@ func ensureExtractedISO(t *testing.T, ctx context.Context, cmd ISOCommands, work
 	return isoDir
 }
 
+// customizeInputs returns the platformd binary and the platform configuration
+// `iso customize` stages into the ISO (docs/installer/cli.md §4). customize
+// also stages platform-initrd and, for the gateway-role template, gatewayd
+// from beside platformd and fails without them; the runner builds all three
+// into the directory of platformctl.
+func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
+	t.Helper()
+	binDir, err := PlatformBinaryDir()
+	if err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
+	for _, name := range []string{"platformd", "platform-initrd", "gatewayd"} {
+		path := filepath.Join(binDir, name)
+		if !FileExists(path) {
+			t.Fatalf("missing prerequisite: %v", ErrBinaryNotFound{Name: name, Path: path})
+		}
+	}
+
+	platformConfig, err = filepath.Abs(PlatformConfigTemplate)
+	if err != nil {
+		t.Fatalf("missing prerequisite: resolving the platform config template %s: %v", PlatformConfigTemplate, err)
+	}
+	if !FileExists(platformConfig) {
+		t.Fatalf("missing prerequisite: platform config template not found: %s", platformConfig)
+	}
+	return filepath.Join(binDir, "platformd"), platformConfig
+}
+
 // ensureBuiltISO returns an ISO rebuilt from the extracted tree, building it first.
 func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
 	t.Helper()
@@ -421,10 +449,13 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 		require.NoError(t, os.MkdirAll(filepath.Join(overlayDir, "etc"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(overlayDir, "etc", "test-overlay"), []byte("test content\n"), 0o644))
 
+		platformdPath, platformConfig := customizeInputs(t)
 		result, err := cmd.Customize(testCtx, CustomizeOptions{
-			ISODir:  isoDir,
-			Overlay: overlayDir,
-			WorkDir: workDir,
+			ISODir:         isoDir,
+			Overlay:        overlayDir,
+			PlatformdPath:  platformdPath,
+			PlatformConfig: platformConfig,
+			WorkDir:        workDir,
 		})
 		require.NoError(t, err)
 		assert.True(t, result.Success)

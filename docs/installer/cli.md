@@ -486,8 +486,12 @@ is refused), `--work-dir` (`work`), `--debug`. Prints `success`, `output_dir`,
 
 **`iso customize`** — `--iso-dir` (**required**), `--overlay`, `--keys-dir`,
 `--platformd-binary` (`""` → `platformd` beside `platformctl`),
-`--platform-config` (platform config baked into the ISO), `--config` (ISO build
-configuration file), `--work-dir` (`work`), `--debug`. Prints `success`,
+`--platform-config` (platform config baked into the ISO; **required** unless
+the `--config` file names a config server), `--config` (ISO build
+configuration file), `--work-dir` (`work`), `--debug`. `platform-initrd` and
+`gatewayd` are taken from beside `platformd`; `gatewayd` is required when the
+platform config enables the gateway role, as
+`configs/platform/templates/single-node/default.yaml` does. Prints `success`,
 `iso_dir`, `message`.
 
 **`iso build`** — `--iso-dir` (**required**), `--output` (**required**),
