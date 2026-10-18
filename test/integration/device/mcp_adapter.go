@@ -725,11 +725,8 @@ func (a *MCPAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfi
 	}
 
 	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "AssignProfileToDevice",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	if err := decodeToolEntity("AssignProfileToDevice", result, &profile, nil); err != nil {
+		return nil, err
 	}
 
 	return &AssignProfileToDeviceResult{Profile: &profile}, nil
