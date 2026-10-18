@@ -588,22 +588,7 @@ func (g *GRPCAdapter) PortGetStats(ctx context.Context, bridgeID, portID string)
 
 // FlowAdd adds a flow to a bridge via gRPC.
 func (g *GRPCAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAddResult, error) {
-	protoActions := make([]*platformv1.FlowAction, 0, len(opts.Actions))
-	for _, a := range opts.Actions {
-		protoActions = append(protoActions, flowActionToProto(a))
-	}
-
-	req := &platformv1.AddFlowRequest{
-		Config: &platformv1.FlowConfig{
-			BridgeId:    opts.BridgeID,
-			Table:       platformv1.FlowTable(opts.Table),
-			Priority:    uint32(opts.Priority),
-			Match:       flowMatchToProto(opts.Match),
-			Actions:     protoActions,
-			IdleTimeout: uint32(opts.IdleTimeout),
-			HardTimeout: uint32(opts.HardTimeout),
-		},
-	}
+	req := &platformv1.AddFlowRequest{Config: flowConfigToProto(opts)}
 
 	resp, err := g.sdn.AddFlow(ctx, req)
 	if err != nil {
@@ -1062,6 +1047,26 @@ func flowMatchToProto(m FlowMatch) *platformv1.FlowMatch {
 		IpProto: uint32(m.NwProto),
 		TcpSrc:  uint32(m.TpSrc),
 		TcpDst:  uint32(m.TpDst),
+	}
+}
+
+// flowConfigToProto converts test flow options into the gRPC FlowConfig.
+// Every transport's AddFlow takes this message (MCP in its protojson form),
+// so the adapters share one conversion.
+func flowConfigToProto(opts FlowAddOptions) *platformv1.FlowConfig {
+	protoActions := make([]*platformv1.FlowAction, 0, len(opts.Actions))
+	for _, a := range opts.Actions {
+		protoActions = append(protoActions, flowActionToProto(a))
+	}
+
+	return &platformv1.FlowConfig{
+		BridgeId:    opts.BridgeID,
+		Table:       platformv1.FlowTable(opts.Table),
+		Priority:    uint32(opts.Priority),
+		Match:       flowMatchToProto(opts.Match),
+		Actions:     protoActions,
+		IdleTimeout: uint32(opts.IdleTimeout),
+		HardTimeout: uint32(opts.HardTimeout),
 	}
 }
 

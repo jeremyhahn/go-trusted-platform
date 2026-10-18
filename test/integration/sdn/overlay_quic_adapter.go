@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlog"
@@ -483,17 +484,6 @@ func (v *gatewayAdmittedVTEPInfo) gatewayAdmittedVTEPInfo() GatewayAdmittedVTEPI
 		ProfileID:      v.ProfileID,
 		VerdictAt:      verdictAt,
 	}
-}
-
-// gatewaySetModeRequest represents a gateway set mode request.
-type gatewaySetModeRequest struct {
-	Modes []string `codec:"modes"`
-}
-
-// gatewaySetModeResponse represents a gateway set mode response.
-type gatewaySetModeResponse struct {
-	Modes   []string `codec:"modes"`
-	Success bool     `codec:"success"`
 }
 
 // bgpStatusRequest represents a BGP status request.
@@ -1214,20 +1204,26 @@ func (q *OverlayQUICAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gateway
 
 // GatewaySetMode sets the gateway modes via QUIC.
 func (q *OverlayQUICAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
-	req := &gatewaySetModeRequest{Modes: opts.Modes}
+	// The QUIC handler decodes quicwire.GatewaySetModeRequest, whose modes
+	// field is the GatewayModeEnum bitmask, not the mode names.
+	req := &quicwire.GatewaySetModeRequest{Modes: gatewayModesToBitmask(opts.Modes)}
 
 	resp, err := q.sendCategoryRequest(ctx, OpCategoryGateway, SubOpGatewaySetMode, "GatewaySetMode", req)
 	if err != nil {
 		return nil, err
 	}
 
-	var wireResp gatewaySetModeResponse
+	var wireResp quicwire.GatewaySetModeResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "GatewaySetMode", Err: err}
 	}
 
+	var modes []string
+	if wireResp.Status != nil {
+		modes = gatewayModesFromBitmask(wireResp.Status.Modes)
+	}
 	return &GatewayModeResult{
-		Modes:   wireResp.Modes,
+		Modes:   modes,
 		Success: wireResp.Success,
 	}, nil
 }

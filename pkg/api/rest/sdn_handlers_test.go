@@ -165,7 +165,7 @@ func (m *mockSDNService) SetBridgeProtocols(ctx context.Context, name string, pr
 	return nil
 }
 
-func (m *mockSDNService) AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+func (m *mockSDNService) AddPortOfType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error) {
 	if m.addPortErr != nil {
 		return nil, m.addPortErr
 	}
@@ -182,6 +182,7 @@ func (m *mockSDNService) AddPort(ctx context.Context, bridgeName, portName strin
 		OtherConfig: make(map[string]string),
 	}
 	m.ports[portName] = port
+	m.interfaces[portName] = &ovs.Interface{Name: portName, Type: ifType}
 	m.bridges[bridgeName].Ports = append(m.bridges[bridgeName].Ports, portName)
 	return port, nil
 }
@@ -771,6 +772,27 @@ func TestAddPort(t *testing.T) {
 		var resp PortResponse
 		decodeSDNResponse(t, w.Body, &resp)
 		assert.Equal(t, "eth0", resp.Name)
+		assert.Equal(t, "", svc.interfaces["eth0"].Type, "no type is a system interface")
+	})
+
+	// The requested type reaches OVS: dropping it made every REST port a
+	// system interface for a device that does not exist, whose state then
+	// read back with an empty admin_state (#949).
+	t.Run("with interface type", func(t *testing.T) {
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		body, _ := json.Marshal(AddPortRequest{Name: "int0", Type: "internal"})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br-test/ports", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+		require.Contains(t, svc.interfaces, "int0")
+		assert.Equal(t, "internal", svc.interfaces["int0"].Type)
 	})
 
 	t.Run("with trunk VLANs", func(t *testing.T) {

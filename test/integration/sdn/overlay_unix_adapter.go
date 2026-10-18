@@ -519,7 +519,7 @@ func (a *OverlayUnixAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusR
 		return nil, ErrOverlayUnixInvalidResponse{Method: "GetGatewayStatus", Details: "nil status"}
 	}
 
-	modes := overlayUnixGatewayModesFromBitmask(resp.Status.Modes)
+	modes := gatewayModesFromBitmask(resp.Status.Modes)
 
 	return &GatewayStatusResult{
 		NodeID:     resp.Status.NodeId,
@@ -553,7 +553,7 @@ func (a *OverlayUnixAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gateway
 
 // GatewaySetMode sets gateway mode via Unix socket.
 func (a *OverlayUnixAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
-	modesBitmask := overlayUnixGatewayModesToBitmask(opts.Modes)
+	modesBitmask := gatewayModesToBitmask(opts.Modes)
 
 	resp, err := a.gateway.SetGatewayMode(ctx, &platformv1.SetGatewayModeRequest{
 		Modes: modesBitmask,
@@ -566,7 +566,7 @@ func (a *OverlayUnixAdapter) GatewaySetMode(ctx context.Context, opts GatewayMod
 
 	var resultModes []string
 	if resp.GatewayStatus != nil {
-		resultModes = overlayUnixGatewayModesFromBitmask(resp.GatewayStatus.Modes)
+		resultModes = gatewayModesFromBitmask(resp.GatewayStatus.Modes)
 	}
 
 	return &GatewayModeResult{
@@ -821,8 +821,8 @@ func overlayUnixParseIPAddr(ipStr string) (netip.Addr, error) {
 	return netip.ParseAddr(ipStr)
 }
 
-// overlayUnixGatewayModesFromBitmask converts a bitmask to a slice of mode strings.
-func overlayUnixGatewayModesFromBitmask(modes uint32) []string {
+// gatewayModesFromBitmask converts a bitmask to a slice of mode strings.
+func gatewayModesFromBitmask(modes uint32) []string {
 	var result []string
 	if modes&uint32(platformv1.GatewayModeEnum_GATEWAY_MODE_OVERLAY) != 0 {
 		result = append(result, "overlay")
@@ -836,8 +836,8 @@ func overlayUnixGatewayModesFromBitmask(modes uint32) []string {
 	return result
 }
 
-// overlayUnixGatewayModesToBitmask converts a slice of mode strings to a bitmask.
-func overlayUnixGatewayModesToBitmask(modes []string) uint32 {
+// gatewayModesToBitmask converts a slice of mode strings to a bitmask.
+func gatewayModesToBitmask(modes []string) uint32 {
 	var bitmask uint32
 	for _, mode := range modes {
 		switch strings.ToLower(mode) {

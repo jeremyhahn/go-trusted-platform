@@ -26,13 +26,21 @@ every SDN tool has one.
 
 | Tool | Description |
 |------|-------------|
-| `sdn_add_port` | Add a port to an OVS bridge |
+| `sdn_add_port` | Add a port to an OVS bridge; `port_type` `internal` gets an Open vSwitch `internal` interface, any other type a system interface |
 | `sdn_delete_port` | Delete a port from an OVS bridge |
-| `sdn_get_port_state` | Get the state of an OVS port |
+| `sdn_get_port_state` | Get an OVS port; its `status` is the interface's `admin_state` (`1` up, `2` down, absent when Open vSwitch holds none) |
 | `sdn_set_port_state` | Set a port's admin state (`up`/`down`) and optional ingress policing (`ingress_rate` bps, `ingress_burst` bits) and egress shaping (`egress_rate` bps, `egress_burst` bits) |
 | `sdn_get_port_stats` | Get statistics for a port (`port_name`); scope `sdn:read` |
 | `sdn_authenticate_port` | Refused, see below; scope `sdn:write` |
 | `sdn_revoke_port_auth` | Refused, see below; scope `sdn:write` |
+
+The port tools go through `SDNService` (see
+[api-reference-grpc.md](api-reference-grpc.md)): `sdn_add_port` creates the
+interface through `ovs.Client.AddPortOfType`, as REST add-port does, and
+`sdn_get_port_state` and `sdn_set_port_state` read the port's state back from
+Open vSwitch, so a port set down reads back down. Until #949 `sdn_add_port`
+gave an `internal` port a system interface and `sdn_get_port_state` answered
+up for every port.
 
 The port-authentication tools carry gRPC's scope, `sdn:write`, and refuse
 every call with `policy.ErrPortAuthNotEnforced`, class `FailedPrecondition`,

@@ -27,122 +27,68 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
-// CLI response wrapper types that match protobuf JSON output structure.
-// Protobuf uses snake_case JSON tags and integer enum values with encoding/json.
+// platformctl vtpm prints the SDK domain responses (sdk/go/services/vtpm)
+// with encoding/json, so the adapter decodes into those same types: enum
+// names such as "BUNDLE_MODE_PRE_ASSIGNED", RFC 3339 timestamps and base64
+// byte fields all round-trip without a hand-kept mirror of the output.
 
-// cliBundle matches the protobuf Bundle JSON output (uses snake_case JSON tags)
-type cliBundle struct {
-	ID             string                 `json:"id"`
-	Mode           int                    `json:"mode"` // Protobuf enum: 1=template, 2=pre-assigned
-	Manifest       *cliManifest           `json:"manifest"`
-	TPMState       *cliTPMState           `json:"tpm_state"`
-	OVMFState      *cliOVMFState          `json:"ovmf_state"`
-	SecureBootKeys *cliSecureBootKeyPaths `json:"secure_boot_keys"`
-	CreatedAt      *cliTimestamp          `json:"created_at"`
-	ClonedFrom     string                 `json:"cloned_from,omitempty"`
+// bundleModes maps the SDK bundle mode names to the vtpm package modes.
+var bundleModes = map[vtpmsvc.BundleMode]vtpm.BundleMode{
+	vtpmsvc.BundleModeTemplate:    vtpm.BundleModeTemplate,
+	vtpmsvc.BundleModePreAssigned: vtpm.BundleModePreAssigned,
 }
 
-type cliManifest struct {
-	Version           string            `json:"version"`
-	ID                string            `json:"id"`
-	Mode              int               `json:"mode"` // Protobuf enum: 1=template, 2=pre-assigned
-	Hostname          string            `json:"hostname"`
-	EKAlgorithm       int               `json:"ek_algorithm"` // Protobuf enum: 1=RSA, 2=ECC
-	SecureBootEnabled bool              `json:"secure_boot_enabled"`
-	CreatedAt         *cliTimestamp     `json:"created_at"`
-	ClonedFrom        string            `json:"cloned_from,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
+// ekAlgorithms maps the SDK EK algorithm names to the vtpm package algorithms.
+var ekAlgorithms = map[vtpmsvc.EKAlgorithm]vtpm.EKAlgorithm{
+	vtpmsvc.EKAlgorithmRSA: vtpm.EKAlgorithmRSA,
+	vtpmsvc.EKAlgorithmECC: vtpm.EKAlgorithmECC,
 }
 
-type cliTPMState struct {
-	StateDir string `json:"state_dir"`
+// decodeCLIResponse decodes the JSON a CLI command printed into T. A decode
+// failure is a CLIAdapterError that wraps the json error and carries the
+// output, so the log says which field failed.
+func decodeCLIResponse[T any](operation string, output []byte) (*T, error) {
+	var resp T
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: operation,
+			Message:   "failed to parse response",
+			Output:    string(output),
+			Err:       err,
+		}
+	}
+	return &resp, nil
 }
 
-type cliOVMFState struct {
-	NVRAMFile string `json:"nvram_file"`
-}
-
-type cliSecureBootKeyPaths struct {
-	Dir     string `json:"dir"`
-	PKKey   string `json:"pk_key"`
-	PKCert  string `json:"pk_crt"`
-	KEKKey  string `json:"kek_key"`
-	KEKCert string `json:"kek_crt"`
-	DBKey   string `json:"db_key"`
-	DBCert  string `json:"db_crt"`
-}
-
-// cliTimestamp handles protobuf timestamp JSON format (either string or {seconds, nanos})
-type cliTimestamp struct {
-	Seconds int64 `json:"seconds,omitempty"`
-	Nanos   int32 `json:"nanos,omitempty"`
-}
-
-func (t *cliTimestamp) ToTime() time.Time {
+// timeFromDomain returns the time an SDK response carried, or the zero time.
+func timeFromDomain(t *time.Time) time.Time {
 	if t == nil {
 		return time.Time{}
 	}
-	return time.Unix(t.Seconds, int64(t.Nanos))
+	return *t
 }
 
-// bundleModeFromInt converts protobuf BundleMode int to vtpm.BundleMode
-func bundleModeFromInt(mode int) vtpm.BundleMode {
-	switch mode {
-	case 1:
-		return vtpm.BundleModeTemplate
-	case 2:
-		return vtpm.BundleModePreAssigned
-	default:
-		return vtpm.BundleMode("")
-	}
-}
-
-// ekAlgorithmFromInt converts protobuf EKAlgorithm int to vtpm.EKAlgorithm
-func ekAlgorithmFromInt(alg int) vtpm.EKAlgorithm {
-	switch alg {
-	case 1:
-		return vtpm.EKAlgorithmRSA
-	case 2:
-		return vtpm.EKAlgorithmECC
-	default:
-		return vtpm.EKAlgorithm("")
-	}
-}
-
-// toVTPMBundle converts a CLI bundle to vtpm.Bundle
-func (b *cliBundle) toVTPMBundle() *vtpm.Bundle {
+// bundleFromDomain converts an SDK bundle to a vtpm.Bundle.
+func bundleFromDomain(b *vtpmsvc.Bundle) *vtpm.Bundle {
 	if b == nil {
 		return nil
 	}
 	bundle := &vtpm.Bundle{
 		ID:         b.ID,
-		Mode:       bundleModeFromInt(b.Mode),
+		Mode:       bundleModes[b.Mode],
+		CreatedAt:  timeFromDomain(b.CreatedAt),
 		ClonedFrom: b.ClonedFrom,
-	}
-	if b.CreatedAt != nil {
-		bundle.CreatedAt = b.CreatedAt.ToTime()
-	}
-	if b.Manifest != nil {
-		bundle.Manifest = &vtpm.Manifest{
-			Version:           b.Manifest.Version,
-			ID:                b.Manifest.ID,
-			Mode:              bundleModeFromInt(b.Manifest.Mode),
-			Hostname:          b.Manifest.Hostname,
-			EKAlgorithm:       ekAlgorithmFromInt(b.Manifest.EKAlgorithm),
-			SecureBootEnabled: b.Manifest.SecureBootEnabled,
-			ClonedFrom:        b.Manifest.ClonedFrom,
-			Labels:            b.Manifest.Labels,
-		}
-		if b.Manifest.CreatedAt != nil {
-			bundle.Manifest.CreatedAt = b.Manifest.CreatedAt.ToTime()
-		}
+		Manifest:   manifestFromDomain(b.Manifest),
 	}
 	if b.TPMState != nil {
 		bundle.TPMState = &vtpm.TPMState{
-			StateDir: b.TPMState.StateDir,
+			StateDir:     b.TPMState.StateDir,
+			PermallFile:  b.TPMState.PermallFile,
+			VolatileFile: b.TPMState.VolatileFile,
 		}
 	}
 	if b.OVMFState != nil {
@@ -164,108 +110,43 @@ func (b *cliBundle) toVTPMBundle() *vtpm.Bundle {
 	return bundle
 }
 
-// cliTemplate matches the protobuf Template JSON output (uses snake_case JSON tags)
-type cliTemplate struct {
-	ID                string        `json:"id"`
-	Description       string        `json:"description,omitempty"`
-	EKAlgorithm       int           `json:"ek_algorithm"` // Protobuf enum: 1=RSA, 2=ECC
-	SecureBootEnabled bool          `json:"secure_boot_enabled"`
-	TPMStateDir       string        `json:"tpm_state_dir"`
-	NVRAMPath         string        `json:"nvram_path"`
-	SecureBootKeysDir string        `json:"secure_boot_keys_dir"`
-	CreatedAt         *cliTimestamp `json:"created_at"`
+// manifestFromDomain converts an SDK bundle manifest to a vtpm.Manifest.
+func manifestFromDomain(m *vtpmsvc.BundleManifest) *vtpm.Manifest {
+	if m == nil {
+		return nil
+	}
+	manifest := &vtpm.Manifest{
+		Hostname:          m.Hostname,
+		CreatedAt:         timeFromDomain(m.CreatedAt),
+		EKAlgorithm:       ekAlgorithms[m.EKAlgorithm],
+		SecureBootEnabled: m.SecureBootEnabled,
+		Checksums:         m.Checksums,
+		Labels:            m.Labels,
+		ClonedFrom:        m.ClonedFrom,
+	}
+	if m.EKCertificate != nil {
+		manifest.EKCertificate = &vtpm.EKCertInfo{
+			Fingerprint: m.EKCertificate.Fingerprint,
+		}
+	}
+	return manifest
 }
 
-func (t *cliTemplate) toVTPMTemplate() *vtpm.Template {
+// templateFromDomain converts an SDK template to a vtpm.Template.
+func templateFromDomain(t *vtpmsvc.Template) *vtpm.Template {
 	if t == nil {
 		return nil
 	}
-	template := &vtpm.Template{
+	return &vtpm.Template{
 		ID:                t.ID,
 		Description:       t.Description,
-		EKAlgorithm:       ekAlgorithmFromInt(t.EKAlgorithm),
+		EKAlgorithm:       ekAlgorithms[t.EKAlgorithm],
 		SecureBootEnabled: t.SecureBootEnabled,
 		TPMStateDir:       t.TPMStateDir,
 		NVRAMPath:         t.NVRAMPath,
 		SecureBootKeysDir: t.SecureBootKeysDir,
+		CreatedAt:         timeFromDomain(t.CreatedAt),
 	}
-	if t.CreatedAt != nil {
-		template.CreatedAt = t.CreatedAt.ToTime()
-	}
-	return template
-}
-
-// CLI response wrappers that match protobuf JSON output
-type cliCreateBundleResponse struct {
-	Bundle *cliBundle `json:"bundle"`
-}
-
-type cliGetBundleResponse struct {
-	Bundle *cliBundle `json:"bundle"`
-}
-
-type cliListBundlesResponse struct {
-	Bundles []*cliBundle `json:"bundles"`
-	Total   int          `json:"total"`
-}
-
-type cliCreateTemplateResponse struct {
-	Template *cliTemplate `json:"template"`
-}
-
-type cliListTemplatesResponse struct {
-	Templates []*cliTemplate `json:"templates"`
-}
-
-type cliCloneTemplateResponse struct {
-	Bundle *cliBundle `json:"bundle"`
-}
-
-// CLI response wrappers for runtime TPM operations
-type cliStartVTPMResponse struct {
-	BundleID   string `json:"bundle_id"`
-	Running    bool   `json:"running"`
-	SocketPath string `json:"socket_path"`
-}
-
-type cliStopVTPMResponse struct {
-	BundleID string `json:"bundle_id"`
-	Stopped  bool   `json:"stopped"`
-}
-
-type cliIsVTPMRunningResponse struct {
-	BundleID string `json:"bundle_id"`
-	Running  bool   `json:"running"`
-}
-
-type cliQuoteVTPMResponse struct {
-	BundleID      string            `json:"bundle_id"`
-	Quote         string            `json:"quote"`      // base64-encoded by protobuf JSON
-	Signature     string            `json:"signature"`  // base64-encoded by protobuf JSON
-	PcrValues     map[string]string `json:"pcr_values"` // protobuf maps int32 keys as strings in JSON
-	HashAlgorithm string            `json:"hash_algorithm"`
-}
-
-type cliSealVTPMResponse struct {
-	BundleID   string `json:"bundle_id"`
-	SealedData string `json:"sealed_data"` // base64-encoded by protobuf JSON
-}
-
-type cliUnsealVTPMResponse struct {
-	BundleID string `json:"bundle_id"`
-	Data     string `json:"data"` // base64-encoded by protobuf JSON
-}
-
-type cliExtendVTPMPCRResponse struct {
-	BundleID string `json:"bundle_id"`
-	PcrIndex int    `json:"pcr_index"`
-	Extended bool   `json:"extended"`
-}
-
-type cliReadVTPMPCRResponse struct {
-	BundleID string `json:"bundle_id"`
-	PcrIndex int    `json:"pcr_index"`
-	Value    string `json:"value"` // base64-encoded by protobuf JSON
 }
 
 // CLIAdapterError represents an error from the CLI adapter.
@@ -273,11 +154,21 @@ type CLIAdapterError struct {
 	Operation string
 	Message   string
 	Output    string
+	// Err is the underlying cause, when there is one.
+	Err error
 }
 
 // Error returns the error message.
 func (e *CLIAdapterError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("CLI adapter error [%s]: %s: %v (output: %s)", e.Operation, e.Message, e.Err, e.Output)
+	}
 	return fmt.Sprintf("CLI adapter error [%s]: %s (output: %s)", e.Operation, e.Message, e.Output)
+}
+
+// Unwrap returns the underlying cause.
+func (e *CLIAdapterError) Unwrap() error {
+	return e.Err
 }
 
 // CLIAdapter implements VTPMCommands using the platformctl CLI.
@@ -374,16 +265,12 @@ func (a *CLIAdapter) CreateBundle(ctx context.Context, opts CreateBundleOptions)
 		return nil, err
 	}
 
-	var resp cliCreateBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "CreateBundle",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.CreateBundleResponse]("CreateBundle", output)
+	if err != nil {
+		return nil, err
 	}
 
-	return &CreateBundleResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &CreateBundleResult{Bundle: bundleFromDomain(resp.Bundle)}, nil
 }
 
 // GetBundle retrieves a bundle by its ID.
@@ -395,16 +282,12 @@ func (a *CLIAdapter) GetBundle(ctx context.Context, opts GetBundleOptions) (*Get
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetBundle",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.GetBundleResponse]("GetBundle", output)
+	if err != nil {
+		return nil, err
 	}
 
-	return &GetBundleResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &GetBundleResult{Bundle: bundleFromDomain(resp.Bundle)}, nil
 }
 
 // DeleteBundle removes a bundle.
@@ -438,23 +321,19 @@ func (a *CLIAdapter) ListBundles(ctx context.Context, opts ListBundlesOptions) (
 		return nil, err
 	}
 
-	var resp cliListBundlesResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ListBundles",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.ListBundlesResponse]("ListBundles", output)
+	if err != nil {
+		return nil, err
 	}
 
 	bundles := make([]*vtpm.Bundle, 0, len(resp.Bundles))
 	for _, b := range resp.Bundles {
-		bundles = append(bundles, b.toVTPMBundle())
+		bundles = append(bundles, bundleFromDomain(b))
 	}
 
 	return &ListBundlesResult{
 		Bundles: bundles,
-		Total:   resp.Total,
+		Total:   int(resp.Total),
 	}, nil
 }
 
@@ -486,16 +365,12 @@ func (a *CLIAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpti
 		return nil, err
 	}
 
-	var resp cliCreateTemplateResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "CreateTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.CreateTemplateResponse]("CreateTemplate", output)
+	if err != nil {
+		return nil, err
 	}
 
-	return &CreateTemplateResult{Template: resp.Template.toVTPMTemplate()}, nil
+	return &CreateTemplateResult{Template: templateFromDomain(resp.Template)}, nil
 }
 
 // GetTemplate retrieves a template by its ID.
@@ -509,18 +384,14 @@ func (a *CLIAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (
 		return nil, err
 	}
 
-	var resp cliListTemplatesResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.ListTemplatesResponse]("GetTemplate", output)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, t := range resp.Templates {
 		if t.ID == opts.ID {
-			return &GetTemplateResult{Template: t.toVTPMTemplate()}, nil
+			return &GetTemplateResult{Template: templateFromDomain(t)}, nil
 		}
 	}
 
@@ -552,18 +423,14 @@ func (a *CLIAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOption
 		return nil, err
 	}
 
-	var resp cliListTemplatesResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ListTemplates",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.ListTemplatesResponse]("ListTemplates", output)
+	if err != nil {
+		return nil, err
 	}
 
 	templates := make([]*vtpm.Template, 0, len(resp.Templates))
 	for _, t := range resp.Templates {
-		templates = append(templates, t.toVTPMTemplate())
+		templates = append(templates, templateFromDomain(t))
 	}
 
 	return &ListTemplatesResult{
@@ -585,16 +452,12 @@ func (a *CLIAdapter) CloneTemplate(ctx context.Context, opts CloneTemplateOption
 		return nil, err
 	}
 
-	var resp cliCloneTemplateResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "CloneTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.CloneResponse]("CloneTemplate", output)
+	if err != nil {
+		return nil, err
 	}
 
-	return &CloneTemplateResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &CloneTemplateResult{Bundle: bundleFromDomain(resp.Bundle)}, nil
 }
 
 // ============================================================================
@@ -642,17 +505,12 @@ func (a *CLIAdapter) ImportBundle(ctx context.Context, opts ImportBundleOptions)
 		return nil, err
 	}
 
-	// Import response uses same structure as create
-	var resp cliCreateBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ImportBundle",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.ImportBundleResponse]("ImportBundle", output)
+	if err != nil {
+		return nil, err
 	}
 
-	return &ImportBundleResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &ImportBundleResult{Bundle: bundleFromDomain(resp.Bundle)}, nil
 }
 
 // ValidateBundle validates bundle integrity.
@@ -666,11 +524,10 @@ func (a *CLIAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOpti
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if _, err := decodeCLIResponse[vtpmsvc.GetBundleResponse]("ValidateBundle", output); err != nil {
 		return &ValidateBundleResult{
 			Valid:  false,
-			Errors: []string{"failed to parse bundle: " + err.Error()},
+			Errors: []string{err.Error()},
 		}, nil
 	}
 
@@ -694,13 +551,9 @@ func (a *CLIAdapter) GetBundlePath(ctx context.Context, opts GetBundlePathOption
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetBundlePath",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.GetBundleResponse]("GetBundlePath", output)
+	if err != nil {
+		return nil, err
 	}
 
 	if resp.Bundle != nil && resp.Bundle.TPMState != nil {
@@ -724,13 +577,9 @@ func (a *CLIAdapter) GetTPMSocketPath(ctx context.Context, opts GetTPMSocketPath
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetTPMSocketPath",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.GetBundleResponse]("GetTPMSocketPath", output)
+	if err != nil {
+		return nil, err
 	}
 
 	if resp.Bundle != nil && resp.Bundle.TPMState != nil && resp.Bundle.TPMState.StateDir != "" {
@@ -754,13 +603,9 @@ func (a *CLIAdapter) GetNVRAMPath(ctx context.Context, opts GetNVRAMPathOptions)
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetNVRAMPath",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.GetBundleResponse]("GetNVRAMPath", output)
+	if err != nil {
+		return nil, err
 	}
 
 	if resp.Bundle != nil && resp.Bundle.OVMFState != nil {
@@ -790,13 +635,9 @@ func (a *CLIAdapter) Start(ctx context.Context, opts StartOptions) (*StartResult
 		return nil, err
 	}
 
-	var resp cliStartVTPMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Start",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.StartResponse]("Start", output)
+	if err != nil {
+		return nil, err
 	}
 
 	return &StartResult{
@@ -818,13 +659,9 @@ func (a *CLIAdapter) Stop(ctx context.Context, opts StopOptions) (*StopResult, e
 		return nil, err
 	}
 
-	var resp cliStopVTPMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Stop",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.StopResponse]("Stop", output)
+	if err != nil {
+		return nil, err
 	}
 
 	return &StopResult{
@@ -845,13 +682,9 @@ func (a *CLIAdapter) IsRunning(ctx context.Context, opts IsRunningOptions) (*IsR
 		return nil, err
 	}
 
-	var resp cliIsVTPMRunningResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "IsRunning",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.IsRunningResponse]("IsRunning", output)
+	if err != nil {
+		return nil, err
 	}
 
 	return &IsRunningResult{
@@ -880,60 +713,20 @@ func (a *CLIAdapter) Quote(ctx context.Context, opts QuoteOptions) (*QuoteResult
 		return nil, err
 	}
 
-	var resp cliQuoteVTPMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Quote",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	// Decode base64-encoded byte fields from protobuf JSON
-	quoteBytes, err := base64.StdEncoding.DecodeString(resp.Quote)
+	resp, err := decodeCLIResponse[vtpmsvc.QuoteResponse]("Quote", output)
 	if err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Quote",
-			Message:   "failed to decode quote: " + err.Error(),
-			Output:    string(output),
-		}
+		return nil, err
 	}
 
-	sigBytes, err := base64.StdEncoding.DecodeString(resp.Signature)
-	if err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Quote",
-			Message:   "failed to decode signature: " + err.Error(),
-			Output:    string(output),
-		}
-	}
-
-	// Convert PCR values from protobuf JSON format (string keys, base64 values)
-	pcrValues := make(map[int][]byte, len(resp.PcrValues))
-	for keyStr, valStr := range resp.PcrValues {
-		var idx int
-		if _, scanErr := fmt.Sscanf(keyStr, "%d", &idx); scanErr != nil {
-			return nil, &CLIAdapterError{
-				Operation: "Quote",
-				Message:   "failed to parse PCR index: " + scanErr.Error(),
-				Output:    string(output),
-			}
-		}
-		valBytes, decErr := base64.StdEncoding.DecodeString(valStr)
-		if decErr != nil {
-			return nil, &CLIAdapterError{
-				Operation: "Quote",
-				Message:   "failed to decode PCR value: " + decErr.Error(),
-				Output:    string(output),
-			}
-		}
-		pcrValues[idx] = valBytes
+	pcrValues := make(map[int][]byte, len(resp.PCRValues))
+	for idx, value := range resp.PCRValues {
+		pcrValues[int(idx)] = value
 	}
 
 	return &QuoteResult{
 		BundleID:      resp.BundleID,
-		Quote:         quoteBytes,
-		Signature:     sigBytes,
+		Quote:         resp.Quote,
+		Signature:     resp.Signature,
 		PCRValues:     pcrValues,
 		HashAlgorithm: resp.HashAlgorithm,
 	}, nil
@@ -964,27 +757,14 @@ func (a *CLIAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 		return nil, err
 	}
 
-	var resp cliSealVTPMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Seal",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	sealedBytes, err := base64.StdEncoding.DecodeString(resp.SealedData)
+	resp, err := decodeCLIResponse[vtpmsvc.SealResponse]("Seal", output)
 	if err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Seal",
-			Message:   "failed to decode sealed data: " + err.Error(),
-			Output:    string(output),
-		}
+		return nil, err
 	}
 
 	return &SealResult{
 		BundleID:   resp.BundleID,
-		SealedData: sealedBytes,
+		SealedData: resp.SealedData,
 	}, nil
 }
 
@@ -1005,27 +785,14 @@ func (a *CLIAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 		return nil, err
 	}
 
-	var resp cliUnsealVTPMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Unseal",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	dataBytes, err := base64.StdEncoding.DecodeString(resp.Data)
+	resp, err := decodeCLIResponse[vtpmsvc.UnsealResponse]("Unseal", output)
 	if err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "Unseal",
-			Message:   "failed to decode data: " + err.Error(),
-			Output:    string(output),
-		}
+		return nil, err
 	}
 
 	return &UnsealResult{
 		BundleID: resp.BundleID,
-		Data:     dataBytes,
+		Data:     resp.Data,
 	}, nil
 }
 
@@ -1043,18 +810,14 @@ func (a *CLIAdapter) ExtendPCR(ctx context.Context, opts ExtendPCROptions) (*Ext
 		return nil, err
 	}
 
-	var resp cliExtendVTPMPCRResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ExtendPCR",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp, err := decodeCLIResponse[vtpmsvc.ExtendPCRResponse]("ExtendPCR", output)
+	if err != nil {
+		return nil, err
 	}
 
 	return &ExtendPCRResult{
 		BundleID: resp.BundleID,
-		PCRIndex: resp.PcrIndex,
+		PCRIndex: int(resp.PCRIndex),
 		Extended: resp.Extended,
 	}, nil
 }
@@ -1072,28 +835,15 @@ func (a *CLIAdapter) ReadPCR(ctx context.Context, opts ReadPCROptions) (*ReadPCR
 		return nil, err
 	}
 
-	var resp cliReadVTPMPCRResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ReadPCR",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	valueBytes, err := base64.StdEncoding.DecodeString(resp.Value)
+	resp, err := decodeCLIResponse[vtpmsvc.ReadPCRResponse]("ReadPCR", output)
 	if err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ReadPCR",
-			Message:   "failed to decode PCR value: " + err.Error(),
-			Output:    string(output),
-		}
+		return nil, err
 	}
 
 	return &ReadPCRResult{
 		BundleID: resp.BundleID,
-		PCRIndex: resp.PcrIndex,
-		Value:    valueBytes,
+		PCRIndex: int(resp.PCRIndex),
+		Value:    resp.Value,
 	}, nil
 }
 

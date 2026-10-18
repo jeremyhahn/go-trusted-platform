@@ -717,6 +717,36 @@ func TestGatewayHandleSetMode(t *testing.T) {
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
+	t.Run("returns the not-configured refusal of a node without a gateway role", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestGatewayHandler()
+		service.setModeErr = ErrGatewayFeatureNotConfigured
+
+		resp := setMode(t, handler, quicwire.GatewayModeOverlay)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+		assert.Contains(t, string(resp.Payload), ErrGatewayFeatureNotConfigured.Error())
+		assert.Equal(t, quicwire.GatewayModeOverlay, service.lastModes)
+	})
+
+	t.Run("refuses mode names in place of the bitmask before the service", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestGatewayHandler()
+		payload, err := quicwire.EncodePayload(&struct {
+			Modes []string `codec:"modes"`
+		}{Modes: []string{"overlay"}})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
+			Payload: payload,
+		})
+
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+		assert.Contains(t, string(resp.Payload), "failed to decode gateway payload")
+		assert.Zero(t, service.lastModes)
+	})
+
 	t.Run("maps a gRPC status from the service to its QUIC status", func(t *testing.T) {
 		t.Parallel()
 		cases := map[codes.Code]byte{

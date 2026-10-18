@@ -1466,6 +1466,29 @@ func TestVTEPAdmitter_HoldsAStreamedFailureUntilANewerPass(t *testing.T) {
 	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
 }
 
+// A streamed failure refuses the VTEP for its verdict even when platformd
+// cannot serve the device's report: the failure is a judgement, not an
+// outage. A device the stream never failed stays an outage.
+func TestVTEPAdmitter_StreamedFailureRefusesWhileTheReportCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	f := newAdmissionFixture(t)
+	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+	f.verdicts.err = errPlatformDown
+
+	var unavailable ErrOverlayAdmissionUnavailable
+	require.True(t, errors.As(f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), &unavailable),
+		"a report read outage without a streamed failure is an outage")
+
+	deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "PCR mismatch"}, admissionNow))
+
+	err := f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP)
+	requireVerdictDenied(t, err, "failed verdict was streamed")
+	assert.ErrorIs(t, err, errPlatformDown)
+	var verdictErr ErrOverlayVTEPVerdict
+	require.True(t, errors.As(err, &verdictErr))
+	assert.Equal(t, uint64(7), verdictErr.DeviceID)
+}
+
 func TestVTEPAdmitter_HeldFailure(t *testing.T) {
 	ctx := context.Background()
 

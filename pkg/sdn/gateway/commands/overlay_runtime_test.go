@@ -389,10 +389,60 @@ func TestOverlayRuntimeVerdicts_SeparatesNotFoundFromOutage(t *testing.T) {
 		t.Fatalf("LatestDeviceVerdict without a report = %v, want gateway.ErrOverlayRecordNotFound", err)
 	}
 
+	// A platformd without a reporting collector answers FailedPrecondition
+	// through the SDK client, which wraps the status: it holds no verdict
+	// for any device, so the read is a miss, not an outage.
+	noReports := status.Error(codes.FailedPrecondition, "attestation reporting service is not configured on this node")
+	unconfigured := &overlayRuntimeVerdicts{client: &fakeOverlayReportClient{
+		err: &sdkattestation.ErrGetDeviceReportFailed{DeviceID: "42", Cause: noReports}}}
+	_, err := unconfigured.LatestDeviceVerdict(context.Background(), 42)
+	if !errors.Is(err, gateway.ErrOverlayRecordNotFound) || !errors.Is(err, noReports) {
+		t.Fatalf("LatestDeviceVerdict on a platformd keeping no reports = %v, want gateway.ErrOverlayRecordNotFound wrapping the status", err)
+	}
+
 	down := &overlayRuntimeVerdicts{client: &fakeOverlayReportClient{err: status.Error(codes.Unavailable, "down")}}
-	_, err := down.LatestDeviceVerdict(context.Background(), 42)
+	_, err = down.LatestDeviceVerdict(context.Background(), 42)
 	if err == nil || errors.Is(err, gateway.ErrOverlayRecordNotFound) {
 		t.Fatalf("LatestDeviceVerdict during an outage = %v, want a non-not-found error", err)
+	}
+}
+
+// Admission over the platformd readers: a device with no report, or on a
+// platformd that keeps no device reports, is refused for its verdict; a
+// platformd that cannot answer is an outage.
+func TestOverlayRuntimeVerdicts_AdmissionRefusesADeviceWithoutAVerdict(t *testing.T) {
+	cases := map[string]struct {
+		reportErr error
+		refused   bool
+	}{
+		"no report collected": {reportErr: status.Error(codes.NotFound, "no report has been collected for device 7"), refused: true},
+		"no reports kept": {reportErr: &sdkattestation.ErrGetDeviceReportFailed{DeviceID: "7",
+			Cause: status.Error(codes.FailedPrecondition, "attestation reporting service is not configured on this node")}, refused: true},
+		"platformd down": {reportErr: status.Error(codes.Unavailable, "connection refused")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			admitter, err := gateway.NewVTEPAdmitter(gateway.VTEPAdmissionConfig{
+				IPAM:     &overlayRuntimeIPAM{client: &fakeOverlayIPAMClient{allocations: []*platformv1.IPAllocation{fabricAllocation("10.0.0.1", "7")}}, now: steppingClock()},
+				Devices:  &overlayRuntimeDevices{client: &fakeOverlayDeviceClient{device: &platformv1.Device{Id: 7, Serial: "SN-7", Hostname: "node-7"}}},
+				Verdicts: &overlayRuntimeVerdicts{client: &fakeOverlayReportClient{err: tc.reportErr}},
+				Revoker:  overlayNopRevoker{},
+				Replayer: overlayNopRevoker{},
+			})
+			if err != nil {
+				t.Fatalf("NewVTEPAdmitter: %v", err)
+			}
+
+			err = admitter.AdmitVTEP(context.Background(), 100, netip.MustParseAddr("10.0.0.1"))
+			var refused gateway.ErrOverlayVTEPVerdict
+			var unavailable gateway.ErrOverlayAdmissionUnavailable
+			switch {
+			case tc.refused && (!errors.As(err, &refused) || refused.DeviceID != 7):
+				t.Fatalf("AdmitVTEP = %v, want device 7 refused for its verdict", err)
+			case !tc.refused && !errors.As(err, &unavailable):
+				t.Fatalf("AdmitVTEP = %v, want the verdict source unavailable", err)
+			}
+		})
 	}
 }
 

@@ -41,6 +41,7 @@ type ClientInterface interface {
 
 	// Port operations
 	AddPort(ctx context.Context, bridgeName, portName string) (*Port, error)
+	AddPortOfType(ctx context.Context, bridgeName, portName, ifType string) (*Port, error)
 	AddBond(ctx context.Context, bridgeName, bondName string, members []string, mode string, lacp string) (*Port, error)
 	DeletePort(ctx context.Context, bridgeName, portName string) error
 	GetPort(ctx context.Context, name string) (*Port, error)

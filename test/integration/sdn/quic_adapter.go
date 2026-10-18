@@ -927,21 +927,7 @@ func (q *QUICAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAd
 	// actions go in their structured fields, exactly as the gRPC adapter
 	// sends them. Stuffing the whole ovs-ofctl match string into InPort
 	// produced "in_port=dl_type=0x0800,..." on the server.
-	protoActions := make([]*platformv1.FlowAction, 0, len(opts.Actions))
-	for _, a := range opts.Actions {
-		protoActions = append(protoActions, flowActionToProto(a))
-	}
-	req := &platformv1.AddFlowRequest{
-		Config: &platformv1.FlowConfig{
-			BridgeId:    opts.BridgeID,
-			Table:       platformv1.FlowTable(opts.Table),
-			Priority:    uint32(opts.Priority),
-			Match:       flowMatchToProto(opts.Match),
-			Actions:     protoActions,
-			IdleTimeout: uint32(opts.IdleTimeout),
-			HardTimeout: uint32(opts.HardTimeout),
-		},
-	}
+	req := &platformv1.AddFlowRequest{Config: flowConfigToProto(opts)}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNFlowAdd, req)
 	if err != nil {

@@ -60,6 +60,13 @@ PUT    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Set port state
 GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 ```
 
+Add body: `name` (required), optional `type`, `vlan` and `trunks`. `type` is
+the Open vSwitch interface type: `internal` for an interface Open vSwitch
+creates, empty for a system interface, which names a device that already
+exists. Add answers once ovs-vswitchd has applied the port, so a state read
+that follows sees the `port_number` and `admin_state` it gave the interface.
+A system interface naming no device gets neither.
+
 The state and stats routes read the port's Open vSwitch interface row. State
 answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
 `link_state`, `speed` and `duplex`. Stats answers the interface counters:

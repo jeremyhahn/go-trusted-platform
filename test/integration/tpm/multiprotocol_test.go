@@ -151,7 +151,7 @@ func testTPMLifecycle(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	})
 
 	t.Run("SRKCreateRSA", func(t *testing.T) {
-		testSRKCreate(t, testCtx, cmd, "RSA-2048", true)
+		testSRKCreate(t, testCtx, cmd, "RSA-2048")
 	})
 
 	t.Run("SRKDelete", func(t *testing.T) {
@@ -170,7 +170,7 @@ func testTPMLifecycle(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	}
 
 	t.Run("SRKCreateECDSA", func(t *testing.T) {
-		testSRKCreate(t, testCtx, cmd, "ECDSA-P256", false)
+		testSRKCreate(t, testCtx, cmd, "ECDSA-P256")
 	})
 
 	if !t.Run("ClearBeforeProvision", func(t *testing.T) {
@@ -310,19 +310,18 @@ func testSRKInfo(t *testing.T, ctx context.Context, cmd TPMCommands) {
 }
 
 // testSRKCreate creates the SRK on a TPM whose SSRK handle is free.
-func testSRKCreate(t *testing.T, ctx context.Context, cmd TPMCommands, algorithm string, policy bool) {
+func testSRKCreate(t *testing.T, ctx context.Context, cmd TPMCommands, algorithm string) {
 	opts := SRKCreateOptions{
 		Algorithm:  algorithm,
-		Handle:     ssrkHandle,
 		Persistent: true,
-		Policy:     policy,
+		Parent:     ekHandle,
 	}
 
 	result, err := cmd.SRKCreate(ctx, opts)
 	require.NoError(t, err, "SRK create %s should succeed", algorithm)
 	require.NotNil(t, result, "Result should not be nil")
 	assert.True(t, result.Success, "SRK creation should be successful")
-	assert.NotZero(t, result.Handle, "Handle should be set")
+	assert.Equal(t, ssrkHandle, result.Handle, "SRK should persist at the configured SSRK handle")
 }
 
 // =============================================================================

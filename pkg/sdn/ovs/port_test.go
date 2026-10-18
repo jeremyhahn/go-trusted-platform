@@ -18,6 +18,7 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,6 +98,53 @@ func TestClient_AddPort(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrConnectionFailed)
 	})
+}
+
+// TestClient_AddPortOfType_CreatesTheTypedInterfaceOnceApplied: the interface
+// row carries the requested type, and the call returns only once vswitchd
+// reports the transaction's configuration applied (cur_cfg reaches next_cfg).
+func TestClient_AddPortOfType_CreatesTheTypedInterfaceOnceApplied(t *testing.T) {
+	client, server := setupPortTest(t)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ctx := context.Background()
+
+	port, err := client.AddPortOfType(ctx, "br-port-test", "int0", "internal")
+	require.NoError(t, err)
+	assert.Equal(t, "int0", port.Name)
+
+	iface, err := client.GetInterface(ctx, "int0")
+	require.NoError(t, err)
+	assert.Equal(t, "internal", iface.Type)
+
+	rows, err := client.Select(ctx, ovsTable, nil, []string{"next_cfg", "cur_cfg"})
+	require.NoError(t, err)
+	// One bump for the bridge's creation, one for the port's.
+	assert.Equal(t, float64(2), rows[0]["next_cfg"])
+	assert.Equal(t, float64(2), rows[0]["cur_cfg"])
+}
+
+func TestClient_AddPortOfType_ReportsAConfigurationNeverApplied(t *testing.T) {
+	client, server := setupPortTest(t)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	server.holdCurCfg.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := client.AddPortOfType(ctx, "br-port-test", "int-stuck", "internal")
+	var notApplied *ErrConfigNotApplied
+	require.ErrorAs(t, err, &notApplied)
+	assert.Equal(t, int64(2), notApplied.Target)
+}
+
+func TestClient_AddPortOfType_RefusesEmptyNames(t *testing.T) {
+	client, server := setupPortTest(t)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ctx := context.Background()
+
+	_, err := client.AddPortOfType(ctx, "", "int1", "internal")
+	assert.ErrorIs(t, err, ErrInvalidBridgeName)
+	_, err = client.AddPortOfType(ctx, "br-port-test", "", "internal")
+	assert.ErrorIs(t, err, ErrInvalidPortName)
 }
 
 func TestClient_DeletePort(t *testing.T) {

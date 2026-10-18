@@ -217,7 +217,7 @@ func (r *overlayRuntimeVerdicts) LatestDeviceVerdict(ctx context.Context, device
 	id := strconv.FormatUint(deviceID, 10)
 	report, err := r.client.GetDeviceReport(ctx, id)
 	if err != nil {
-		return nil, overlayPlatformError("attestation report for device "+id, err)
+		return nil, overlayReportError("attestation report for device "+id, err)
 	}
 	return &deviceverdict.RecordedDeviceVerdict{
 		Verdict: deviceverdict.DeviceVerdict{
@@ -289,6 +289,18 @@ func overlayPlatformError(record string, err error) error {
 		return &ErrOverlayPlatformRecordMissing{Record: record, Cause: err}
 	}
 	return err
+}
+
+// overlayReportError maps a failed device report read. Besides NotFound, a
+// platformd that keeps no device reports answers FailedPrecondition: it runs
+// no reporting collector (or no attestation service), so it holds no verdict
+// for any device, and the device is denied like one without a report. Any
+// other error stays an outage.
+func overlayReportError(record string, err error) error {
+	if status.Code(err) == codes.FailedPrecondition {
+		return &ErrOverlayPlatformRecordMissing{Record: record + " (platformd keeps no device reports)", Cause: err}
+	}
+	return overlayPlatformError(record, err)
 }
 
 // overlayIPAMAllocationFromProto converts a listed allocation, carrying the
