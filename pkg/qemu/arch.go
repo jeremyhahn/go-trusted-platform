@@ -71,7 +71,7 @@ var archProfiles = map[Arch]archProfile{
 		tpmDevice:   "tpm-tis",
 		nvram:       func(*Config) bool { return true },
 		machine:     x86Machine,
-		cpu:         func(*Config, bool) string { return "host" },
+		cpu:         x86CPU,
 		disk:        x86Disk,
 		boot:        x86Boot,
 		firmware:    x86Firmware,
@@ -121,11 +121,42 @@ func (c *Config) qemuBinary(p archProfile) string {
 	return p.binary
 }
 
-// kvm reports whether the guest runs under KVM: the caller asked for it
-// and the host can provide it for this guest architecture. Emulating a
-// foreign architecture always runs TCG.
-func (c *Config) kvm(p archProfile) bool {
-	return c.EnableKVM && c.hostArch() == p.kvmHostArch
+// kvm reports whether the guest runs under KVM: the caller asked for it,
+// the host can provide it for this guest architecture, and the KVM device
+// opens read-write. Emulating a foreign architecture always runs TCG. When
+// KVM was asked for but the device is unusable, the guest runs TCG and the
+// error says why.
+func (c *Config) kvm(p archProfile) (bool, error) {
+	if !c.EnableKVM || c.hostArch() != p.kvmHostArch {
+		return false, nil
+	}
+	probe := c.KVMProbe
+	if probe == nil {
+		probe = probeKVMDevice
+	}
+	if err := probe(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// kvmDevice is the KVM device QEMU opens for -enable-kvm.
+const kvmDevice = "/dev/kvm"
+
+// probeKVMDevice opens the KVM device read-write, as QEMU does, and closes
+// it again. A host without the device, or a user without access to it,
+// makes QEMU exit at once with "failed to initialize kvm".
+func probeKVMDevice() error {
+	return probeDeviceRW(kvmDevice)
+}
+
+// probeDeviceRW opens path read-write and closes it again.
+func probeDeviceRW(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return &SentinelCauseError{Sentinel: ErrKVMUnavailable, Cause: err}
+	}
+	return f.Close()
 }
 
 // hostArch is the GOARCH QEMU runs on: Config.HostArch, else the running
@@ -161,6 +192,16 @@ func x86Machine(c *Config, _ bool) string {
 		return "q35,smm=on"
 	}
 	return "q35"
+}
+
+// x86CPU passes the host CPU through under KVM. TCG cannot take "host"
+// (QEMU: "CPU model 'host' requires KVM or HVF"), so it emulates "max",
+// every feature TCG supports.
+func x86CPU(_ *Config, kvm bool) string {
+	if kvm {
+		return "host"
+	}
+	return "max"
 }
 
 // x86Disk attaches the disk through AHCI, not virtio: Ubuntu's OVMF has

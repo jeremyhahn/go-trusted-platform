@@ -288,8 +288,9 @@ QEMU Command Structure:
 ┌────────────────────────────────────────────────────────────────────┐
 │ qemu-system-x86_64                                                 │
 │   -name <instance-name>                                            │
-│   -machine q35,accel=kvm                                           │
-│   -cpu host                                                        │
+│   -enable-kvm                         ← KVM only (see below)       │
+│   -machine q35                                                     │
+│   -cpu host                           ← max under TCG              │
 │   -smp <cpus>                                                      │
 │   -m <memory>                                                      │
 │   -drive file=<disk>,format=qcow2,if=virtio                        │
@@ -313,6 +314,15 @@ as the Raspberry Pi 4, runs `qemu-system-aarch64` with:
 - `-cpu host` under KVM, `cortex-a72` without;
 - the same two pflash drives, carrying AAVMF;
 - `-device tpm-tis-device` for the vTPM.
+
+KVM runs only when `enable_kvm` is set, the guest architecture matches the
+host's, and `/dev/kvm` opens read-write. When `enable_kvm` is set but
+`/dev/kvm` is missing or not accessible (a CI runner or container without
+the device), the VM runs TCG instead of failing to start: no `-enable-kvm`,
+`-cpu max` for x86_64 (TCG cannot take `-cpu host`), and `virt,gic-version=3`
+with `cortex-a72` for aarch64. platformd logs one warning naming the reason
+each time it builds that command line. A guest of a foreign architecture
+always runs TCG, without probing the device.
 
 The arch keys and their defaults are in
 [engineering.md §4](engineering.md#4-configuration).

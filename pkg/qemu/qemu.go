@@ -185,7 +185,10 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 	// and friends) so a custom build (like the CanoKey QEMU) finds them.
 	args := append([]string{}, romDirArgs(c, p)...)
 
-	kvm := c.kvm(p)
+	kvm, kvmErr := c.kvm(p)
+	if kvmErr != nil {
+		vm.logger.Warnf("KVM requested but unusable, running TCG: %v", kvmErr)
+	}
 	if kvm {
 		args = append(args, "-enable-kvm")
 	}
