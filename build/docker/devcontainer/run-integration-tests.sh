@@ -578,6 +578,48 @@ build_binaries() {
 # vBMC Setup (bmc integration target only)
 # =============================================================================
 
+# build_gatewayd builds gatewayd into /tmp beside platformd, once per run.
+build_gatewayd() {
+    if [ -x /tmp/gatewayd ] && [ -n "${GATEWAYD_PATH:-}" ]; then
+        return 0
+    fi
+    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/gatewayd ./cmd/gatewayd/; then
+        echo "FATAL: gatewayd build failed"
+        exit 1
+    fi
+    export GATEWAYD_PATH=/tmp/gatewayd
+    echo "gatewayd built: ${GATEWAYD_PATH}"
+}
+
+# prepare_iso_customize builds what `platformctl iso customize` stages onto the
+# media into ISO_BINARY_DIR: platformd, the platformctl the autoinstaller runs
+# beside it, platform-initrd, which dracut calls at boot to unlock the root,
+# and gatewayd, which the gateway-role single-node template the iso suite
+# bakes in needs (pkg/iso/customize.go StageMedia, pkg/iso/gatewayd.go). They
+# come from the Makefile's build and platform-initrd targets, which own their
+# build tags and build CGO-free: the guest that runs them is the musl Alpine
+# live environment, which cannot run the glibc-linked /tmp/platformd the
+# daemon suites use. GOFLAGS=-buildvcs=false for the reason build_binaries
+# gives.
+ISO_BINARY_DIR=/tmp/iso-bin
+prepare_iso_customize() {
+    echo "=== Preparing iso customize binaries ==="
+    if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
+        build platform-initrd \
+        PLATFORMD="${ISO_BINARY_DIR}/platformd" \
+        PLATFORMCTL="${ISO_BINARY_DIR}/platformctl" \
+        GATEWAYD="${ISO_BINARY_DIR}/gatewayd" \
+        DEPLOYER_PIN="${ISO_BINARY_DIR}/deployer-pin" \
+        PLATFORM_INITRD="${ISO_BINARY_DIR}/platform-initrd"; then
+        echo "FATAL: iso customize binaries build failed"
+        exit 1
+    fi
+    export PLATFORM_ISO_BINARY_DIR="${ISO_BINARY_DIR}"
+    echo "iso customize binaries built: ${PLATFORM_ISO_BINARY_DIR}"
+}
+
 # prepare_gatewayd_supervision readies the proxy suite's supervised-process
 # tests (#557): it builds gatewayd, which those tests run as a real
 # `gatewayd serve` with the `process:` section on, and delegates the memory
@@ -588,14 +630,7 @@ build_binaries() {
 # the step docker-in-docker takes for the same reason.
 prepare_gatewayd_supervision() {
     echo "=== Preparing gatewayd supervision ==="
-    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
-        -ldflags "${LDFLAGS}" \
-        -o /tmp/gatewayd ./cmd/gatewayd/; then
-        echo "FATAL: gatewayd build failed"
-        exit 1
-    fi
-    export GATEWAYD_PATH=/tmp/gatewayd
-    echo "gatewayd built: ${GATEWAYD_PATH}"
+    build_gatewayd
 
     local root=/sys/fs/cgroup
     if [ ! -f "${root}/cgroup.controllers" ]; then
@@ -1215,6 +1250,11 @@ else
     if [ "$RUN_TARGET" = "all" ]; then
         prepare_gatewayd_supervision
     fi
+fi
+
+# The iso suite's customize step stages the binaries in ISO_BINARY_DIR.
+if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "all" ]; then
+    prepare_iso_customize
 fi
 
 # Phase 3: Configure environment for test adapters

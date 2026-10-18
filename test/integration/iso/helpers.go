@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 // Environment variable names for service endpoints
@@ -31,6 +32,7 @@ const (
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
 	EnvISOTestWorkDir       = "ISO_TEST_WORK_DIR"
 	EnvISOTestSkipCleanup   = "ISO_TEST_SKIP_CLEANUP"
+	EnvISOBinaryDir         = "PLATFORM_ISO_BINARY_DIR"
 )
 
 // Default test values
@@ -42,6 +44,22 @@ const (
 	DefaultDiskSize      = "10G"
 	DefaultMemoryMB      = 4096
 	DefaultCPUs          = 2
+)
+
+// VM run bounds. The package runs under a 130m go test timeout
+// (run-integration-tests.sh TARGET_TIMEOUTS[iso]); an install plus a boot,
+// each with its stop grace, fit inside it with room for the other tests.
+const (
+	// vmInstallTimeout is the --timeout of iso test install.
+	vmInstallTimeout = 45 * time.Minute
+	// vmBootTimeout is the --timeout of iso test boot.
+	vmBootTimeout = 20 * time.Minute
+	// vmStopGrace is how long platformctl gets past --timeout to stop QEMU
+	// and the software TPM and report ErrVMTimeout before it is killed.
+	vmStopGrace = 2 * time.Minute
+	// commandWaitDelay is how long a killed command's output pipe is
+	// drained before CombinedOutput returns regardless.
+	commandWaitDelay = 10 * time.Second
 )
 
 // ServiceEndpoints contains default endpoints for all protocols.
@@ -64,6 +82,26 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformUnix: "/run/platformd.sock",
 		PlatformCTL:  "platformctl",
 	}
+}
+
+// PlatformConfigTemplate is the platform configuration `iso customize` bakes
+// into the ISO: the single-node default template docs/installer/iso-building.md
+// names, relative to this package's directory, which is go test's working
+// directory.
+const PlatformConfigTemplate = "../../../configs/platform/templates/single-node/default.yaml"
+
+// ISOBinaryDir returns the directory, named by PLATFORM_ISO_BINARY_DIR, of the
+// platformd that `iso customize` stages onto the media and the platformctl,
+// platform-initrd and gatewayd it stages from beside platformd. They are the
+// Makefile's CGO-free builds: the guest that runs them is the musl Alpine
+// live environment, which cannot run the glibc-linked platformctl the suite
+// drives on the host.
+func ISOBinaryDir() (string, error) {
+	dir := os.Getenv(EnvISOBinaryDir)
+	if dir == "" {
+		return "", ErrEnvNotSet{Name: EnvISOBinaryDir}
+	}
+	return dir, nil
 }
 
 // VM tool paths the devcontainer image installs (qemu-system-x86 and swtpm
@@ -165,6 +203,63 @@ type ErrDiskNotFound struct {
 
 func (e ErrDiskNotFound) Error() string {
 	return fmt.Sprintf("disk image not found: %s", e.Path)
+}
+
+// ErrBinaryNotFound indicates a binary the suite hands to platformctl was not found.
+type ErrBinaryNotFound struct {
+	Name string
+	Path string
+	Err  error
+}
+
+func (e ErrBinaryNotFound) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s binary not found at %s: %v", e.Name, e.Path, e.Err)
+	}
+	return fmt.Sprintf("%s binary not found at %s", e.Name, e.Path)
+}
+
+func (e ErrBinaryNotFound) Unwrap() error {
+	return e.Err
+}
+
+// minInstalledDiskBytes is the size below which a disk image holds no
+// installed system: the threshold iso test install applies to a VM that
+// exits non-zero (pkg/cli/commands/iso/test.go installWaitResult).
+const minInstalledDiskBytes = 100 * 1024 * 1024
+
+// ErrDiskNotInstalled indicates a disk image too small to hold an installed system.
+type ErrDiskNotInstalled struct {
+	Path string
+	Size int64
+}
+
+func (e ErrDiskNotInstalled) Error() string {
+	return fmt.Sprintf("disk image %s is %d bytes, under the %d an installed system takes", e.Path, e.Size, minInstalledDiskBytes)
+}
+
+// InstalledDiskError reports whether path holds an installed system. A failed
+// autoinstall powers the guest off just as a finished one does
+// (run-autoinstall.sh in pkg/iso/customize.go), so a clean QEMU exit alone
+// does not prove the install happened.
+func InstalledDiskError(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ErrDiskNotFound{Path: path}
+	}
+	if info.Size() < minInstalledDiskBytes {
+		return ErrDiskNotInstalled{Path: path, Size: info.Size()}
+	}
+	return nil
+}
+
+// ErrEnvNotSet indicates an environment variable the suite needs is unset.
+type ErrEnvNotSet struct {
+	Name string
+}
+
+func (e ErrEnvNotSet) Error() string {
+	return fmt.Sprintf("environment variable %s is not set", e.Name)
 }
 
 // ErrDirectoryNotFound indicates a directory was not found.

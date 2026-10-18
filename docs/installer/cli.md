@@ -348,6 +348,7 @@ Flags shared by `install`, `firstboot`, `boot` and `all`:
 | `--u2f-device` | string | `""` | Host hidraw device for U2F passthrough |
 | `--qemu-binary` | string | `""` | Custom QEMU binary |
 | `--network` | string | `""` | `user`, `bridge`, `none`; empty auto-detects |
+| `--timeout` | duration | `0` (none) | Bound on each VM run (e.g. `45m`); see below |
 
 `--work-dir` holds the artefacts (disk, NVRAM, TPM state, logs) and may be as
 deep as you like. The VM's runtime unix sockets (QMP, console) do **not** live
@@ -367,9 +368,20 @@ platformctl iso test firstboot --disk alpine-platform-installed.qcow2
 platformctl iso test all
 ```
 
-**`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
-script reboots, QEMU exits non-zero, and the harness treats that as success if
-the disk exists and exceeds 100 MB.
+**`iso test install` succeeds when the guest powers off.** A customized ISO's
+autoinstaller powers off when it finishes (`after-install: poweroff`, the
+default) and QEMU exits. A QEMU that exits non-zero still counts as an install
+if the disk exists and exceeds 100 MB. The autoinstaller also powers off when
+it fails, so a clean exit does not prove the disk holds a system: the boot test
+does. Install mode does not pass QEMU `-no-reboot`, so an ISO built with
+`after-install: reboot` boots again instead of ending the run.
+
+**A VM test waits until the guest powers off.** Interactively you end it with
+Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
+QEMU, stops the software TPM and fails with `ErrVMTimeout`, naming the
+timeout. A run cut off this way never counts as an install, whatever the disk
+size. A guest with no autoinstaller (a stock Alpine ISO) sits at its login
+prompt and never powers off, so it always ends at the timeout.
 
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them
@@ -478,8 +490,12 @@ is refused), `--work-dir` (`work`), `--debug`. Prints `success`, `output_dir`,
 
 **`iso customize`** — `--iso-dir` (**required**), `--overlay`, `--keys-dir`,
 `--platformd-binary` (`""` → `platformd` beside `platformctl`),
-`--platform-config` (platform config baked into the ISO), `--config` (ISO build
-configuration file), `--work-dir` (`work`), `--debug`. Prints `success`,
+`--platform-config` (platform config baked into the ISO; **required** unless
+the `--config` file names a config server), `--config` (ISO build
+configuration file), `--work-dir` (`work`), `--debug`. `platform-initrd` and
+`gatewayd` are taken from beside `platformd`; `gatewayd` is required when the
+platform config enables the gateway role, as
+`configs/platform/templates/single-node/default.yaml` does. Prints `success`,
 `iso_dir`, `message`.
 
 **`iso build`** — `--iso-dir` (**required**), `--output` (**required**),

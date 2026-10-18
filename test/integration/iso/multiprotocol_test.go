@@ -183,7 +183,39 @@ func ensureExtractedISO(t *testing.T, ctx context.Context, cmd ISOCommands, work
 	return isoDir
 }
 
-// ensureBuiltISO returns an ISO rebuilt from the extracted tree, building it first.
+// customizeInputs returns the platformd binary and the platform configuration
+// `iso customize` stages into the ISO (docs/installer/cli.md §4). customize
+// also stages platformctl, which the autoinstaller runs, platform-initrd and,
+// for the gateway-role template, gatewayd from beside platformd; the runner
+// builds all four into ISOBinaryDir.
+func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
+	t.Helper()
+	binDir, err := ISOBinaryDir()
+	if err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
+	for _, name := range []string{"platformd", "platformctl", "platform-initrd", "gatewayd"} {
+		path := filepath.Join(binDir, name)
+		if !FileExists(path) {
+			t.Fatalf("missing prerequisite: %v", ErrBinaryNotFound{Name: name, Path: path})
+		}
+	}
+
+	platformConfig, err = filepath.Abs(PlatformConfigTemplate)
+	if err != nil {
+		t.Fatalf("missing prerequisite: resolving the platform config template %s: %v", PlatformConfigTemplate, err)
+	}
+	if !FileExists(platformConfig) {
+		t.Fatalf("missing prerequisite: platform config template not found: %s", platformConfig)
+	}
+	return filepath.Join(binDir, "platformd"), platformConfig
+}
+
+// ensureBuiltISO returns a self-installing ISO, building it first: the
+// extracted stock tree is customized with the platform binaries, the
+// single-node platform config and pre-fetched APKs, then rebuilt. A stock
+// Alpine ISO has no installer; its guest sits at the login prompt and never
+// powers off, so installing one can only end at vmInstallTimeout.
 func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
 	t.Helper()
 	isoPath := builtISOPath(workDir)
@@ -192,6 +224,17 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	}
 
 	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
+	platformdPath, platformConfig := customizeInputs(t)
+	if _, err := cmd.Customize(ctx, CustomizeOptions{
+		ISODir:         isoDir,
+		PlatformdPath:  platformdPath,
+		PlatformConfig: platformConfig,
+		ConfigFile:     writeSelfInstallConfig(t, workDir),
+		WorkDir:        workDir,
+	}); err != nil {
+		t.Fatalf("missing prerequisite: customizing the ISO fixture: %v", err)
+	}
+
 	result, err := cmd.Build(ctx, BuildOptions{SourceDir: isoDir, Output: isoPath, VolumeID: "TEST_ISO"})
 	if err != nil {
 		t.Fatalf("missing prerequisite: building the ISO fixture: %v", err)
@@ -205,6 +248,22 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	return isoPath
 }
 
+// writeSelfInstallConfig writes the ISO build configuration the VM fixture is
+// customized with. pre-fetch puts every APK the autoinstaller adds onto the
+// media (/media/cdrom/apks-prefetch), so the guest installs offline: whenever
+// /media/cdrom/apks exists the autoinstaller's repositories are the CD's alone
+// (pkg/iso/customize.go), and a stock ISO's apks/ carries Alpine's own package
+// set, not the installer's. after-install stays at its
+// poweroff default, which is what ends the install VM.
+func writeSelfInstallConfig(t *testing.T, workDir string) string {
+	t.Helper()
+	path := filepath.Join(workDir, "self-install.yaml")
+	if err := os.WriteFile(path, []byte("pre-fetch: true\n"), 0o644); err != nil {
+		t.Fatalf("missing prerequisite: writing the ISO build config %s: %v", path, err)
+	}
+	return path
+}
+
 // installOptions installs isoPath onto the work directory's test disk.
 func installOptions(isoPath, workDir string) TestInstallOptions {
 	return TestInstallOptions{
@@ -216,6 +275,7 @@ func installOptions(isoPath, workDir string) TestInstallOptions {
 		WorkDir:    workDir,
 		SecureBoot: false,
 		Debug:      true,
+		Timeout:    vmInstallTimeout,
 	}
 }
 
@@ -231,8 +291,8 @@ func ensureInstalledDisk(t *testing.T, ctx context.Context, cmd ISOCommands, wor
 	if _, err := cmd.TestInstall(ctx, installOptions(isoPath, workDir)); err != nil {
 		t.Fatalf("missing prerequisite: installing the ISO fixture onto %s: %v", diskPath, err)
 	}
-	if !FileExists(diskPath) {
-		t.Fatalf("missing prerequisite: %v", ErrDiskNotFound{Path: diskPath})
+	if err := InstalledDiskError(diskPath); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
 	}
 	return diskPath
 }
@@ -420,10 +480,13 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 		require.NoError(t, os.MkdirAll(filepath.Join(overlayDir, "etc"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(overlayDir, "etc", "test-overlay"), []byte("test content\n"), 0o644))
 
+		platformdPath, platformConfig := customizeInputs(t)
 		result, err := cmd.Customize(testCtx, CustomizeOptions{
-			ISODir:  isoDir,
-			Overlay: overlayDir,
-			WorkDir: workDir,
+			ISODir:         isoDir,
+			Overlay:        overlayDir,
+			PlatformdPath:  platformdPath,
+			PlatformConfig: platformConfig,
+			WorkDir:        workDir,
 		})
 		require.NoError(t, err)
 		assert.True(t, result.Success)
@@ -643,35 +706,38 @@ func TestISOVMTests(t *testing.T) {
 	workDir := CreateTestWorkDir(t, "iso-vm-test-")
 	defer CleanupTestWorkDir(t, workDir)
 
-	t.Run("TestInstall", func(t *testing.T) {
+	installed := t.Run("TestInstall", func(t *testing.T) {
 		testVMInstall(t, ctx, adapter, workDir)
 	})
 
 	t.Run("TestBoot", func(t *testing.T) {
+		if !installed {
+			// A cut-off install can leave a partly written disk behind;
+			// booting it would only report the install failure again.
+			t.Fatalf("missing prerequisite: TestInstall did not produce an installed disk")
+		}
 		testVMBoot(t, ctx, adapter, workDir)
 	})
 }
 
+// testVMInstall installs the built ISO headless. The install is bounded by
+// vmInstallTimeout: a guest that never powers off fails the test with the
+// command output instead of holding the package until go test panics.
 func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
-	testCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
-	defer cancel()
+	isoPath := ensureBuiltISO(t, ctx, cmd, workDir)
 
-	isoPath := ensureBuiltISO(t, testCtx, cmd, workDir)
-
-	result, err := cmd.TestInstall(testCtx, installOptions(isoPath, workDir))
+	opts := installOptions(isoPath, workDir)
+	result, err := cmd.TestInstall(ctx, opts)
 	if err != nil {
-		t.Logf("TestInstall failed (may require interactive session): %v", err)
-		return
+		t.Fatalf("iso test install --timeout %s: %v", opts.Timeout, err)
 	}
 	require.NotNil(t, result, "Result should not be nil")
-	t.Logf("TestInstall completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
+	require.NoError(t, InstalledDiskError(opts.Disk), "the install should leave an installed system on the disk; output:\n%s", result.Message)
+	t.Logf("TestInstall completed in %v", result.ElapsedTime)
 }
 
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
 	diskPath := ensureInstalledDisk(t, ctx, cmd, workDir)
-
-	testCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
 
 	opts := TestBootOptions{
 		Disk:       diskPath,
@@ -680,15 +746,15 @@ func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir stri
 		WorkDir:    workDir,
 		SecureBoot: false,
 		Debug:      true,
+		Timeout:    vmBootTimeout,
 	}
 
-	result, err := cmd.TestBoot(testCtx, opts)
+	result, err := cmd.TestBoot(ctx, opts)
 	if err != nil {
-		t.Logf("TestBoot failed (may require interactive session): %v", err)
-		return
+		t.Fatalf("iso test boot --timeout %s: %v", opts.Timeout, err)
 	}
 	require.NotNil(t, result, "Result should not be nil")
-	t.Logf("TestBoot completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
+	t.Logf("TestBoot completed in %v", result.ElapsedTime)
 }
 
 // =============================================================================

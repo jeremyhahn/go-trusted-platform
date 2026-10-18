@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -79,6 +80,17 @@ func (c *CLIAdapter) Teardown() error {
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	// platformctl leads its own process group, so cancelling kills the
+	// QEMU it started as well: QEMU would otherwise outlive it and hold the
+	// output pipe open, and CombinedOutput would never return.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// The software TPM runs in a group of its own and, with --debug,
+	// writes to this pipe too: stop waiting for the pipe this long after
+	// the kill.
+	cmd.WaitDelay = commandWaitDelay
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return output, fmt.Errorf("command failed: %s: %w", string(output), err)
@@ -91,6 +103,17 @@ func (c *CLIAdapter) runCommandWithTimeout(ctx context.Context, timeout time.Dur
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return c.runCommand(timeoutCtx, args...)
+}
+
+// vmCommandTimeout passes --timeout when the caller bounds the VM run and
+// returns how long to wait for platformctl: the VM bound plus the time it
+// takes to stop QEMU and the software TPM, or fallback when the run is
+// unbounded.
+func vmCommandTimeout(args []string, timeout, fallback time.Duration) ([]string, time.Duration) {
+	if timeout <= 0 {
+		return args, fallback
+	}
+	return append(args, "--timeout", timeout.String()), timeout + vmStopGrace
 }
 
 // runVerb runs an iso verb and decodes its result from stdout. stderr carries
@@ -457,8 +480,8 @@ func (c *CLIAdapter) TestInstall(ctx context.Context, opts TestInstallOptions) (
 		args = append(args, "--debug")
 	}
 
-	// Test commands can run for a long time
-	output, err := c.runCommandWithTimeout(ctx, 60*time.Minute, args...)
+	args, wait := vmCommandTimeout(args, opts.Timeout, 60*time.Minute)
+	output, err := c.runCommandWithTimeout(ctx, wait, args...)
 	elapsed := time.Since(startTime)
 	if err != nil {
 		return &TestResult{
@@ -546,7 +569,8 @@ func (c *CLIAdapter) TestBoot(ctx context.Context, opts TestBootOptions) (*TestR
 		args = append(args, "--debug")
 	}
 
-	output, err := c.runCommandWithTimeout(ctx, 30*time.Minute, args...)
+	args, wait := vmCommandTimeout(args, opts.Timeout, 30*time.Minute)
+	output, err := c.runCommandWithTimeout(ctx, wait, args...)
 	elapsed := time.Since(startTime)
 	if err != nil {
 		return &TestResult{

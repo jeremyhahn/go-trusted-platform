@@ -15,6 +15,7 @@ package iso
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -57,6 +59,9 @@ type testFlags struct {
 
 	// Network mode flag
 	networkMode string
+
+	// timeout bounds a headless run; zero waits until the guest powers off
+	timeout time.Duration
 }
 
 // newTestCommand creates the test subcommand for ISO testing
@@ -178,6 +183,8 @@ Example:
 			"Custom QEMU binary path (default: qemu-system-x86_64, use qemu-system-x86_64-canokey for CanoKey)")
 		subcmd.Flags().StringVar(&flags.networkMode, "network", "",
 			"Network mode: 'user' (NAT), 'bridge' (requires bridge helper), or 'none' (default: auto-detect)")
+		subcmd.Flags().DurationVar(&flags.timeout, "timeout", 0,
+			"Stop the VM and fail when the guest has not powered off within this duration, e.g. 45m (default: wait until it powers off)")
 	}
 
 	// ISO flag only for install and all commands
@@ -200,7 +207,7 @@ func runTestInstall(commonFlags *cli.CommonFlags, flags *testFlags) error {
 	}
 
 	logger := createTestLogger(flags.debug)
-	ctx, cancel := createTestContext()
+	ctx, cancel := createTestContext(flags.timeout)
 	defer cancel()
 
 	printTestHeader("ISO Installation Test")
@@ -263,7 +270,7 @@ func runTestInstall(commonFlags *cli.CommonFlags, flags *testFlags) error {
 	printInfo("Press Ctrl+C to exit when installation is complete")
 
 	if err := runTestQEMUInstall(ctx, logger, config); err != nil {
-		return &WrappedError{Msg: "QEMU installation failed", Err: err}
+		return testVMError(flags.timeout, "QEMU installation failed", err)
 	}
 
 	printSuccess("Installation test completed")
@@ -288,7 +295,7 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	}
 
 	logger := createTestLogger(flags.debug)
-	ctx, cancel := createTestContext()
+	ctx, cancel := createTestContext(flags.timeout)
 	defer cancel()
 
 	printTestHeader(testName)
@@ -332,7 +339,7 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	printInfo("Press Ctrl+C to exit")
 
 	if err := runTestQEMUBoot(ctx, logger, config); err != nil {
-		return &WrappedError{Msg: "QEMU boot failed", Err: err}
+		return testVMError(flags.timeout, "QEMU boot failed", err)
 	}
 
 	printSuccess("Boot test completed")
@@ -429,8 +436,13 @@ func createTestLogger(debug bool) *logging.Logger {
 }
 
 // createTestContext creates a context with cancellation support
-func createTestContext() (context.Context, context.CancelFunc) {
+func createTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
+	if timeout > 0 {
+		// A headless run (CI) has nobody to press Ctrl+C: the deadline
+		// kills QEMU when the guest never powers off.
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	}
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
@@ -631,24 +643,47 @@ func runTestQEMUInstall(ctx context.Context, logger *logging.Logger, config *qem
 
 	// Wait for VM to complete
 	logger.Info("VM started, waiting for installation to complete (press Ctrl+C to exit)...")
-	err = vm.Wait()
+	return installWaitResult(ctx, vm.Wait(), config.DiskPath, logger)
+}
 
-	// Check if the VM exited due to reboot (expected after successful installation)
-	// When the autoinstall script reboots the system, QEMU exits with exit code 1
-	// This is normal and expected behavior, not an error
-	if err != nil {
-		// Check if disk was created and has reasonable size (installation happened)
-		if info, diskErr := os.Stat(config.DiskPath); diskErr == nil && info.Size() > 100*1024*1024 {
-			// Disk exists and is > 100MB, installation likely succeeded
+// installWaitResult decides whether an install VM that has exited
+// installed the disk. A VM killed at the context deadline failed even
+// when the disk already holds data: the install was cut off. Otherwise a
+// non-zero exit is the reboot that ends the autoinstall (or Ctrl+C), and
+// it counts as success when the disk exceeds 100 MB.
+func installWaitResult(ctx context.Context, waitErr error, diskPath string, logger *logging.Logger) error {
+	if err := vmDeadlineError(ctx); err != nil {
+		return err
+	}
+	if waitErr != nil {
+		if info, diskErr := os.Stat(diskPath); diskErr == nil && info.Size() > 100*1024*1024 {
 			logger.Info("Installation completed successfully (VM rebooted)")
 			return nil
 		}
-		// Disk doesn't exist or is too small, this is a real error
-		return &WrappedError{Msg: "VM execution failed", Err: err}
+		return &WrappedError{Msg: "VM execution failed", Err: waitErr}
 	}
 
 	logger.Info("Installation completed successfully")
 	return nil
+}
+
+// vmDeadlineError reports a VM wait that ended because the context's
+// deadline passed, which means QEMU was killed with the guest still
+// running.
+func vmDeadlineError(ctx context.Context) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &WrappedError{Msg: "the VM was still running at the deadline", Err: context.DeadlineExceeded}
+	}
+	return nil
+}
+
+// testVMError reports a failed VM test; a VM stopped because --timeout
+// expired is ErrVMTimeout, naming the timeout.
+func testVMError(timeout time.Duration, msg string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrVMTimeout{Timeout: timeout}
+	}
+	return &WrappedError{Msg: msg, Err: err}
 }
 
 // runTestQEMUBoot runs QEMU for boot test
@@ -667,8 +702,12 @@ func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.C
 
 	// Wait for VM to complete
 	logger.Info("VM started, waiting for boot to complete (press Ctrl+C to exit)...")
-	if err := vm.Wait(); err != nil {
-		return &WrappedError{Msg: "VM execution failed", Err: err}
+	waitErr := vm.Wait()
+	if err := vmDeadlineError(ctx); err != nil {
+		return err
+	}
+	if waitErr != nil {
+		return &WrappedError{Msg: "VM execution failed", Err: waitErr}
 	}
 
 	logger.Info("Boot test completed successfully")
