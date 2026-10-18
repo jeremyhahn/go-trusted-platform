@@ -44,32 +44,6 @@ type MockAdapter struct {
 	containers map[string]*Container
 	logs       map[string][]string
 	idCounter  int64
-
-	// Call tracking for test assertions
-	createCalls int32
-	startCalls  int32
-	stopCalls   int32
-	removeCalls int32
-	getCalls    int32
-	listCalls   int32
-	logsCalls   int32
-	attestCalls int32
-
-	// Configurable failures for error testing
-	failOnCreate bool
-	failOnStart  bool
-	failOnStop   bool
-	failOnRemove bool
-	failOnGet    bool
-	failOnList   bool
-	failOnLogs   bool
-	failOnAttest bool
-	failError    error
-
-	// Latency simulation
-	createLatency time.Duration
-	startLatency  time.Duration
-	stopLatency   time.Duration
 }
 
 // NewMockAdapter creates a new mock adapter for integration testing.
@@ -93,7 +67,6 @@ func (m *MockAdapter) Setup(ctx context.Context) error {
 	m.containers = make(map[string]*Container)
 	m.logs = make(map[string][]string)
 	atomic.StoreInt64(&m.idCounter, 0)
-	m.resetCallCounters()
 
 	return nil
 }
@@ -111,23 +84,6 @@ func (m *MockAdapter) Teardown() error {
 
 // Create creates a new mock container.
 func (m *MockAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
-	atomic.AddInt32(&m.createCalls, 1)
-
-	if m.failOnCreate {
-		if m.failError != nil {
-			return nil, m.failError
-		}
-		return nil, ErrCommandFailed{Command: "create", Output: "", Err: fmt.Errorf("mock create failure")}
-	}
-
-	if m.createLatency > 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(m.createLatency):
-		}
-	}
-
 	if opts.Name == "" {
 		return nil, ErrCommandFailed{Command: "create", Output: "", Err: fmt.Errorf("container name is required")}
 	}
@@ -168,23 +124,6 @@ func (m *MockAdapter) Create(ctx context.Context, opts CreateOptions) (*Containe
 
 // Start starts a mock container.
 func (m *MockAdapter) Start(ctx context.Context, id string) error {
-	atomic.AddInt32(&m.startCalls, 1)
-
-	if m.failOnStart {
-		if m.failError != nil {
-			return m.failError
-		}
-		return ErrCommandFailed{Command: "start", Output: "", Err: fmt.Errorf("mock start failure")}
-	}
-
-	if m.startLatency > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(m.startLatency):
-		}
-	}
-
 	if id == "" {
 		return ErrCommandFailed{Command: "start", Output: "", Err: fmt.Errorf("container ID is required")}
 	}
@@ -213,23 +152,6 @@ func (m *MockAdapter) Start(ctx context.Context, id string) error {
 
 // Stop stops a mock container.
 func (m *MockAdapter) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	atomic.AddInt32(&m.stopCalls, 1)
-
-	if m.failOnStop {
-		if m.failError != nil {
-			return m.failError
-		}
-		return ErrCommandFailed{Command: "stop", Output: "", Err: fmt.Errorf("mock stop failure")}
-	}
-
-	if m.stopLatency > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(m.stopLatency):
-		}
-	}
-
 	if id == "" {
 		return ErrCommandFailed{Command: "stop", Output: "", Err: fmt.Errorf("container ID is required")}
 	}
@@ -259,15 +181,6 @@ func (m *MockAdapter) Stop(ctx context.Context, id string, timeout time.Duration
 
 // Remove removes a mock container.
 func (m *MockAdapter) Remove(ctx context.Context, id string, force bool) error {
-	atomic.AddInt32(&m.removeCalls, 1)
-
-	if m.failOnRemove {
-		if m.failError != nil {
-			return m.failError
-		}
-		return ErrCommandFailed{Command: "remove", Output: "", Err: fmt.Errorf("mock remove failure")}
-	}
-
 	if id == "" {
 		return ErrCommandFailed{Command: "remove", Output: "", Err: fmt.Errorf("container ID is required")}
 	}
@@ -292,15 +205,6 @@ func (m *MockAdapter) Remove(ctx context.Context, id string, force bool) error {
 
 // Get retrieves a mock container by ID.
 func (m *MockAdapter) Get(ctx context.Context, id string) (*Container, error) {
-	atomic.AddInt32(&m.getCalls, 1)
-
-	if m.failOnGet {
-		if m.failError != nil {
-			return nil, m.failError
-		}
-		return nil, ErrCommandFailed{Command: "get", Output: "", Err: fmt.Errorf("mock get failure")}
-	}
-
 	if id == "" {
 		return nil, ErrCommandFailed{Command: "get", Output: "", Err: fmt.Errorf("container ID is required")}
 	}
@@ -332,15 +236,6 @@ func (m *MockAdapter) Get(ctx context.Context, id string) (*Container, error) {
 
 // List lists mock containers.
 func (m *MockAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, error) {
-	atomic.AddInt32(&m.listCalls, 1)
-
-	if m.failOnList {
-		if m.failError != nil {
-			return nil, m.failError
-		}
-		return nil, ErrCommandFailed{Command: "list", Output: "", Err: fmt.Errorf("mock list failure")}
-	}
-
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -404,15 +299,6 @@ func (m *MockAdapter) List(ctx context.Context, opts ListOptions) ([]*Container,
 
 // Logs retrieves mock container logs.
 func (m *MockAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	atomic.AddInt32(&m.logsCalls, 1)
-
-	if m.failOnLogs {
-		if m.failError != nil {
-			return nil, m.failError
-		}
-		return nil, ErrCommandFailed{Command: "logs", Output: "", Err: fmt.Errorf("mock logs failure")}
-	}
-
 	if id == "" {
 		return nil, ErrCommandFailed{Command: "logs", Output: "", Err: fmt.Errorf("container ID is required")}
 	}
@@ -443,15 +329,6 @@ func (m *MockAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]s
 
 // Attest performs mock attestation.
 func (m *MockAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	atomic.AddInt32(&m.attestCalls, 1)
-
-	if m.failOnAttest {
-		if m.failError != nil {
-			return nil, m.failError
-		}
-		return nil, ErrCommandFailed{Command: "attest", Output: "", Err: fmt.Errorf("mock attest failure")}
-	}
-
 	if id == "" {
 		return nil, ErrCommandFailed{Command: "attest", Output: "", Err: fmt.Errorf("container ID is required")}
 	}
@@ -485,163 +362,6 @@ func (m *MockAdapter) Attest(ctx context.Context, id string) (*AttestationReport
 // =============================================================================
 // Mock Configuration Methods
 // =============================================================================
-
-// SetFailure configures the mock to fail specific operations.
-func (m *MockAdapter) SetFailure(operation string, fail bool, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.failError = err
-
-	switch operation {
-	case "create":
-		m.failOnCreate = fail
-	case "start":
-		m.failOnStart = fail
-	case "stop":
-		m.failOnStop = fail
-	case "remove":
-		m.failOnRemove = fail
-	case "get":
-		m.failOnGet = fail
-	case "list":
-		m.failOnList = fail
-	case "logs":
-		m.failOnLogs = fail
-	case "attest":
-		m.failOnAttest = fail
-	case "all":
-		m.failOnCreate = fail
-		m.failOnStart = fail
-		m.failOnStop = fail
-		m.failOnRemove = fail
-		m.failOnGet = fail
-		m.failOnList = fail
-		m.failOnLogs = fail
-		m.failOnAttest = fail
-	}
-}
-
-// SetLatency configures operation latencies for testing timeouts.
-func (m *MockAdapter) SetLatency(operation string, latency time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	switch operation {
-	case "create":
-		m.createLatency = latency
-	case "start":
-		m.startLatency = latency
-	case "stop":
-		m.stopLatency = latency
-	}
-}
-
-// ClearFailures clears all configured failures.
-func (m *MockAdapter) ClearFailures() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.failOnCreate = false
-	m.failOnStart = false
-	m.failOnStop = false
-	m.failOnRemove = false
-	m.failOnGet = false
-	m.failOnList = false
-	m.failOnLogs = false
-	m.failOnAttest = false
-	m.failError = nil
-}
-
-// ClearLatencies clears all configured latencies.
-func (m *MockAdapter) ClearLatencies() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.createLatency = 0
-	m.startLatency = 0
-	m.stopLatency = 0
-}
-
-// AddMockContainer directly adds a container to the mock for test setup.
-func (m *MockAdapter) AddMockContainer(container *Container) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.containers[container.ID] = container
-	m.logs[container.ID] = []string{}
-}
-
-// AddMockLogs adds log entries for a container.
-func (m *MockAdapter) AddMockLogs(id string, logs []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, ok := m.logs[id]; !ok {
-		m.logs[id] = []string{}
-	}
-	m.logs[id] = append(m.logs[id], logs...)
-}
-
-// =============================================================================
-// Call Counter Methods
-// =============================================================================
-
-// GetCreateCalls returns the number of Create calls.
-func (m *MockAdapter) GetCreateCalls() int32 {
-	return atomic.LoadInt32(&m.createCalls)
-}
-
-// GetStartCalls returns the number of Start calls.
-func (m *MockAdapter) GetStartCalls() int32 {
-	return atomic.LoadInt32(&m.startCalls)
-}
-
-// GetStopCalls returns the number of Stop calls.
-func (m *MockAdapter) GetStopCalls() int32 {
-	return atomic.LoadInt32(&m.stopCalls)
-}
-
-// GetRemoveCalls returns the number of Remove calls.
-func (m *MockAdapter) GetRemoveCalls() int32 {
-	return atomic.LoadInt32(&m.removeCalls)
-}
-
-// GetGetCalls returns the number of Get calls.
-func (m *MockAdapter) GetGetCalls() int32 {
-	return atomic.LoadInt32(&m.getCalls)
-}
-
-// GetListCalls returns the number of List calls.
-func (m *MockAdapter) GetListCalls() int32 {
-	return atomic.LoadInt32(&m.listCalls)
-}
-
-// GetLogsCalls returns the number of Logs calls.
-func (m *MockAdapter) GetLogsCalls() int32 {
-	return atomic.LoadInt32(&m.logsCalls)
-}
-
-// GetAttestCalls returns the number of Attest calls.
-func (m *MockAdapter) GetAttestCalls() int32 {
-	return atomic.LoadInt32(&m.attestCalls)
-}
-
-// ResetCallCounters resets all call counters to zero.
-func (m *MockAdapter) ResetCallCounters() {
-	m.resetCallCounters()
-}
-
-func (m *MockAdapter) resetCallCounters() {
-	atomic.StoreInt32(&m.createCalls, 0)
-	atomic.StoreInt32(&m.startCalls, 0)
-	atomic.StoreInt32(&m.stopCalls, 0)
-	atomic.StoreInt32(&m.removeCalls, 0)
-	atomic.StoreInt32(&m.getCalls, 0)
-	atomic.StoreInt32(&m.listCalls, 0)
-	atomic.StoreInt32(&m.logsCalls, 0)
-	atomic.StoreInt32(&m.attestCalls, 0)
-}
 
 // =============================================================================
 // Internal Helpers

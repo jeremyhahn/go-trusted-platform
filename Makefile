@@ -1534,6 +1534,12 @@ coverage-compute: test-compute-coverage
 	@go tool cover -html=/tmp/compute.cover -o build/coverage/compute.html
 	@echo "Coverage report: build/coverage/compute.html"
 
+## bench-compute: Run compute orchestration benchmarks
+.PHONY: bench-compute
+bench-compute:
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/compute/...
+
 # BMC Tests
 ## test-bmc: Run BMC package unit tests
 .PHONY: test-bmc
