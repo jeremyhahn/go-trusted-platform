@@ -72,11 +72,16 @@ func (e *ErrMergeReadFile) Unwrap() error {
 	return e.Cause
 }
 
-// DeepMergeYAML merges override YAML bytes onto base YAML bytes.
-// Override values replace base values. Maps merge recursively.
-// Slices of objects are merged by matching on identity keys (name, id,
-// role); plain scalar slices from override replace base slices entirely.
-// Zero/nil values in override do NOT clear base values.
+// DeepMergeYAML merges override YAML bytes onto base YAML bytes with JSON
+// Merge Patch semantics (RFC 7386 §2), extended to merge keyed lists:
+//   - Maps merge recursively; override scalars replace base values.
+//   - An explicit null in override deletes the key from the result, at any
+//     depth. A null for a key the base does not have changes nothing.
+//   - A list of objects that share an identity key (name, id, role) with the
+//     base list merges element by element (see mergeSlices).
+//   - Any other list in override, including [], replaces the base list.
+//
+// A key override does not mention keeps its base value.
 func DeepMergeYAML(base, overrides []byte) ([]byte, error) {
 	var baseMap map[string]interface{}
 	if err := yaml.Unmarshal(base, &baseMap); err != nil {
@@ -115,11 +120,9 @@ func DeepMergeYAMLFiles(basePath, overridesPath string) ([]byte, error) {
 	return DeepMergeYAML(baseData, overrideData)
 }
 
-// DeepMergeMaps recursively merges src into dst in place. For each key in src:
-//   - If both dst and src have a map at the key, recurse.
-//   - If both dst and src have slices, merge using identity-key matching.
-//   - If src has a non-nil value, replace dst value.
-//   - If src has nil or key is missing, keep dst value.
+// DeepMergeMaps recursively merges src into dst in place, by the rules of
+// DeepMergeYAML: a nil in src deletes the key from dst, maps merge, keyed
+// slices merge by identity key, and any other src value replaces dst's.
 //
 // This is the exported entry point for callers that already have parsed maps
 // (e.g. profile creation from templates with override maps).
@@ -128,36 +131,35 @@ func DeepMergeMaps(dst, src map[string]interface{}) {
 }
 
 // deepMergeMaps recursively merges src into dst. For each key in src:
-//   - If both dst and src have a map at the key, recurse.
+//   - If src has nil, delete the key from dst.
+//   - If src has a map, merge it into dst's map (or an empty one), so
+//     nulls inside it delete or drop keys too.
 //   - If both dst and src have slices, merge using mergeSlices.
-//   - If src has a non-nil value, replace dst value.
-//   - If src has nil or key is missing, keep dst value.
+//   - Otherwise, replace dst value with src value.
 func deepMergeMaps(dst, src map[string]interface{}) {
 	if src == nil {
 		return
 	}
 	for key, srcVal := range src {
 		if srcVal == nil {
+			delete(dst, key)
 			continue
 		}
 
-		dstVal, exists := dst[key]
-		if !exists {
-			dst[key] = srcVal
-			continue
-		}
-
-		srcMap, srcIsMap := toStringMap(srcVal)
-		dstMap, dstIsMap := toStringMap(dstVal)
-
-		if srcIsMap && dstIsMap {
+		// A map merges into the base's map at the key, or into an empty one
+		// when the base has none, so its own nulls are dropped either way.
+		if srcMap, srcIsMap := toStringMap(srcVal); srcIsMap {
+			dstMap, dstIsMap := toStringMap(dst[key])
+			if !dstIsMap {
+				dstMap = make(map[string]interface{}, len(srcMap))
+			}
 			deepMergeMaps(dstMap, srcMap)
 			dst[key] = dstMap
 			continue
 		}
 
 		srcSlice, srcIsSlice := srcVal.([]interface{})
-		dstSlice, dstIsSlice := dstVal.([]interface{})
+		dstSlice, dstIsSlice := dst[key].([]interface{})
 
 		if srcIsSlice && dstIsSlice {
 			dst[key] = mergeSlices(dstSlice, srcSlice)
@@ -172,14 +174,12 @@ func deepMergeMaps(dst, src map[string]interface{}) {
 // contain map objects that share a common identity key (name, id, role),
 // elements are matched by that key and deep-merged. Override elements
 // with no match in the base are appended. Base elements with no match
-// in the override are preserved. If no common identity key is found
-// (e.g. scalar slices), the override slice replaces the base entirely.
+// in the override are preserved. If either slice is empty, or no common
+// identity key is found (e.g. scalar slices), the override slice replaces
+// the base entirely, so an override of [] empties the list.
 func mergeSlices(base, override []interface{}) []interface{} {
-	if len(base) == 0 {
+	if len(base) == 0 || len(override) == 0 {
 		return override
-	}
-	if len(override) == 0 {
-		return base
 	}
 
 	// Determine if both slices contain maps with a shared identity key.

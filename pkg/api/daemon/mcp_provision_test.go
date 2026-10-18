@@ -19,6 +19,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
@@ -349,6 +351,23 @@ func TestMCPProvision_FulfillSession_NotFound(t *testing.T) {
 	var notFound configdelivery.ErrSessionNotFound
 	if !errors.As(err, &notFound) {
 		t.Fatalf("err = %v, want configdelivery.ErrSessionNotFound", err)
+	}
+}
+
+func TestMCPProvision_FulfillSession_ZeroProfileID(t *testing.T) {
+	backing := newCDTestService(t, &cdMockProfileResolver{}, nil)
+	p := newProvisionMCPProvider(backing)
+	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
+
+	_, err := p.ProvisionFulfillSession(context.Background(), session.ID, 0)
+
+	var required configdelivery.ErrProfileIDRequired
+	if !errors.As(err, &required) {
+		t.Fatalf("err = %v, want configdelivery.ErrProfileIDRequired", err)
+	}
+	var classified ErrConfigDeliveryClassified
+	if !errors.As(err, &classified) || classified.Code != codes.InvalidArgument {
+		t.Fatalf("err = %v, want ErrConfigDeliveryClassified with InvalidArgument", err)
 	}
 }
 

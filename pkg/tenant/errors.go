@@ -175,6 +175,40 @@ func (e ErrBarrierNotSupported) Error() string {
 	return fmt.Sprintf("barrier operation not supported: %s", e.Operation)
 }
 
+// ErrNameLookupDenied is returned when a caller other than the system tenant
+// looks a tenant up by a name that is not its own tenant's. A name that does
+// not exist gets the same error, so the denial says nothing about which names
+// exist. It carries no field for the same reason: the two cases must read
+// alike on every transport.
+type ErrNameLookupDenied struct{}
+
+func (e ErrNameLookupDenied) Error() string {
+	return "tenant lookup by name: a tenant may resolve only its own name"
+}
+
+// ErrTenantForbidden is returned when a request names a tenant other than
+// the caller's own and the caller is not the system tenant
+// (AuthorizeTenantAccess). Every transport refuses with it: gRPC as
+// PermissionDenied, daemon REST as 403.
+type ErrTenantForbidden struct {
+	Requested string
+}
+
+func (e ErrTenantForbidden) Error() string {
+	return fmt.Sprintf("tenant request names tenant %q: caller may not act on another tenant", e.Requested)
+}
+
+// ErrTenantSystemOnly is returned when a caller other than the system tenant
+// makes a request that acts across tenants (AuthorizeCrossTenant). Method is
+// the TenantService method the request maps to on every transport.
+type ErrTenantSystemOnly struct {
+	Method string
+}
+
+func (e ErrTenantSystemOnly) Error() string {
+	return fmt.Sprintf("%s acts across tenants: only the system tenant may call it", e.Method)
+}
+
 // ErrNilBarrierStatus is returned when the barrier status RPC returns nil
 // without an error. It is a sentinel for an inconsistent SDK state and
 // callers should treat it as a hard failure rather than retry.

@@ -191,10 +191,36 @@ cannot ship unclassified.
 `RestartService` need `platform:write`. `Shutdown` and `DumpEntityType` need
 `platform:admin`.
 
-MCP is default-deny too (#300). The eight `platform_daemon_*` tools are
-unclassified, so every caller is refused with `AuthErrorToolNotClassified`. The
-`platform_health`, `platform_liveness` and `platform_readiness` tools are
-explicitly open.
+MCP is default-deny too (#300). Seven `platform_daemon_*` tools carry the
+scope of their gRPC twin (#304) and reach the same `daemon.Service` gRPC
+serves: `platform_daemon_status`, `_version`, `_list_services` and
+`_get_service` need `platform:read`, and `_start_service`, `_stop_service` and
+`_restart_service` need `platform:write`. `platform_daemon_list_protocols` has
+no gRPC twin, so it is unclassified and every caller is refused with
+`AuthErrorToolNotClassified`. The `platform_health`, `platform_liveness` and
+`platform_readiness` tools are explicitly open.
+
+**Service start, stop and restart do what they say or refuse (#317).** The
+seven configured services (`tpm`, `sdn`, `compute`, `dns`, `acme`,
+`webservice`, `attestation`) are registered as `subsystemService`
+(`pkg/api/daemon/managed_service.go`). The process owns each of them and none
+has a lifecycle that is safe to run again, so `Start` and `Stop` return
+`ErrServiceNotControllable` (`FailedPrecondition`). `Service.StartService`,
+`StopService` and the daemon REST handlers check `processOwned` first and
+refuse before they touch the recorded status, counters or last error;
+`RestartService` is Stop then Start, so it refuses at the stop. `IsRunning`
+reads a probe: the in-daemon subsystems (`tpm`, `sdn`, `compute`, `dns`,
+`attestation`) are probed by whether `New` wired them, read once at
+registration because `Daemon.Stop` holds `d.mu` while it drains, and
+`webservice` and `acme` by a counter `serve.go` holds while `WebServerV1.Run`
+blocks, set through `SetSubsystemProbe` (a lock-free `sync.Map`). Every status
+read goes through `serviceState.observedStatus`: `IsRunning` wins, then a
+recorded `STARTING`, `STOPPING` or `ERROR`, else `STOPPED`. Auto-start and
+`Shutdown` skip process-owned services, so they are never marked `ERROR`. The
+per-transport mapping is in [api.md](api.md) §2;
+`TestProcessOwnedService_RefusedOnEveryTransport`
+(`managed_service_test.go`) drives every verb over gRPC, Unix, REST, QUIC and
+MCP and checks that the service is still running afterwards.
 
 The catalog totals and the pre-auth list are in [api.md](api.md) §5.
 

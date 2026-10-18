@@ -23,22 +23,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The Raspberry Pi compute roles `diskimage create --role compute` builds.
-// The hardware model is the board name pkg/diskimage/rpi gives the image,
-// so the quirk the installer resolves and the template agree.
-var raspberryPiComputeTemplates = map[string]string{
-	"rpi4": "Raspberry Pi 4 Model B",
-	"rpi5": "Raspberry Pi 5",
+// raspberryPiTemplate names a template `diskimage create --model <model>
+// --role <role>` builds.
+type raspberryPiTemplate struct{ model, role string }
+
+func (p raspberryPiTemplate) path() string {
+	return filepath.Join(templateRoot, "dedicated", "raspberrypi", p.model, p.role+".yaml")
 }
 
-func raspberryPiComputeTemplate(model string) string {
-	return filepath.Join(templateRoot, "dedicated", "raspberrypi", model, "compute.yaml")
+// The Raspberry Pi templates, each with its board. The hardware model is the
+// board name pkg/diskimage/rpi gives the image, so the quirk the installer
+// resolves and the template agree.
+var raspberryPiTemplates = map[raspberryPiTemplate]string{
+	{"rpi4", "compute"}:       "Raspberry Pi 4 Model B",
+	{"rpi5", "compute"}:       "Raspberry Pi 5",
+	{"cm4", "control-plane"}:  "Raspberry Pi Compute Module 4",
+	{"rpi4", "control-plane"}: "Raspberry Pi 4 Model B",
 }
 
-func TestRaspberryPiComputeTemplates_LoadAndValidate(t *testing.T) {
-	for model, board := range raspberryPiComputeTemplates {
-		t.Run(model, func(t *testing.T) {
-			a := loadTemplate(t, raspberryPiComputeTemplate(model))
+func TestRaspberryPiTemplates_LoadAndValidate(t *testing.T) {
+	for template, board := range raspberryPiTemplates {
+		t.Run(template.model+"/"+template.role, func(t *testing.T) {
+			a := loadTemplate(t, template.path())
 
 			require.NotNil(t, a.SDNConfig)
 			require.NoError(t, a.SDNConfig.Validate())
@@ -46,7 +52,7 @@ func TestRaspberryPiComputeTemplates_LoadAndValidate(t *testing.T) {
 			require.NoError(t, a.NetworkConfig.Validate(a.SDNConfig.Plan()))
 			require.NoError(t, a.validateHostNetwork())
 
-			assert.Equal(t, installer.HostRoleCompute, a.NetworkConfig.Role)
+			assert.Equal(t, installer.HostRole(template.role), a.NetworkConfig.Role)
 			assert.Empty(t, a.NetworkConfig.Bonds, "a one-port Pi has no bond")
 			require.NotNil(t, a.OSConfig)
 			assert.Equal(t, "aarch64", a.OSConfig.Architecture)
@@ -59,10 +65,26 @@ func TestRaspberryPiComputeTemplates_LoadAndValidate(t *testing.T) {
 	}
 }
 
+// A Pi control plane is a standalone one: QuicBaaS on the file backend with
+// no Raft peers to join.
+func TestRaspberryPiControlPlaneTemplates_Standalone(t *testing.T) {
+	for template := range raspberryPiTemplates {
+		if template.role != string(installer.HostRoleControlPlane) {
+			continue
+		}
+		t.Run(template.model, func(t *testing.T) {
+			a := loadTemplate(t, template.path())
+			require.NotNil(t, a.QuicBaaSConfig)
+			assert.Equal(t, "file", a.QuicBaaSConfig.StorageBackend)
+			assert.Empty(t, a.QuicBaaSConfig.JoinAddresses)
+		})
+	}
+}
+
 // The Pi 5 has one Ethernet port, so the template carries no bond; a bond
 // with one member is a configuration the validation refuses.
 func TestRaspberryPiComputeTemplates_OneMemberBondRefused(t *testing.T) {
-	a := loadTemplate(t, raspberryPiComputeTemplate("rpi5"))
+	a := loadTemplate(t, raspberryPiTemplate{"rpi5", "compute"}.path())
 	a.NetworkConfig.Bonds = []installer.BondConfig{{Name: "bond0", Mode: "active-backup", Interfaces: []string{"eth0"}}}
 
 	err := a.validateHostNetwork()

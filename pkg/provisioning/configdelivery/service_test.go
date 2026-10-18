@@ -283,6 +283,42 @@ func TestService_FulfillSession_NotFound(t *testing.T) {
 	}
 }
 
+// TestService_FulfillSession_ZeroProfileID asserts profile_id 0 is refused
+// with ErrProfileIDRequired before the session is touched, so every
+// transport answers it with the same typed error (#304).
+func TestService_FulfillSession_ZeroProfileID(t *testing.T) {
+	svc := testService(t, &mockProfileResolver{}, &mockEABService{})
+	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+
+	err := svc.FulfillSession(context.Background(), session.ID, 0)
+
+	var required ErrProfileIDRequired
+	if !errors.As(err, &required) {
+		t.Fatalf("expected ErrProfileIDRequired, got %T: %v", err, err)
+	}
+	unchanged, err := svc.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unchanged.Fulfilled {
+		t.Fatal("session must stay unfulfilled after a zero profile_id")
+	}
+}
+
+// TestService_FulfillSession_ZeroProfileIDUnknownSession asserts the
+// profile_id check runs first: a zero ID on an unknown session is a bad
+// request, not a missing session.
+func TestService_FulfillSession_ZeroProfileIDUnknownSession(t *testing.T) {
+	svc := testService(t, &mockProfileResolver{}, &mockEABService{})
+
+	err := svc.FulfillSession(context.Background(), "nonexistent-id", 0)
+
+	var required ErrProfileIDRequired
+	if !errors.As(err, &required) {
+		t.Fatalf("expected ErrProfileIDRequired, got %T: %v", err, err)
+	}
+}
+
 func TestService_FulfillSession_Expired(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	svc, err := NewService(ServiceParams{

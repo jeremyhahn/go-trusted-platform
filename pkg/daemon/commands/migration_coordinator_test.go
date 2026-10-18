@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,7 @@ func TestCoordinator_PrepareIncoming_HappyPath(t *testing.T) {
 		InstanceID: "vm-1",
 		VMName:     "guest",
 		Mode:       compute.MigrateModeCold,
+		Arch:       qemu.ArchAArch64,
 		Config:     &compute.InstanceConfig{Memory: 2048, CPUs: 2, TPMEnabled: true, MACAddress: "aa:bb"},
 	}
 	endpoint, err := coord.PrepareIncoming(context.Background(), "dest.example:10443", spec)
@@ -97,6 +99,7 @@ func TestCoordinator_PrepareIncoming_HappyPath(t *testing.T) {
 	require.NotNil(t, peer.lastPrep.GetSpec())
 	assert.Equal(t, int32(2048), peer.lastPrep.GetSpec().GetMemoryMb())
 	assert.True(t, peer.lastPrep.GetSpec().GetTpmEnabled())
+	assert.Equal(t, "aarch64", peer.lastPrep.GetSpec().GetArch())
 
 	// The receiver token is retained for a later finalize.
 	coord.mu.Lock()
@@ -213,12 +216,15 @@ func TestNewMigrationClientTLSConfig_NilCA(t *testing.T) {
 }
 
 func TestToProtoMigrationSpec(t *testing.T) {
-	assert.Nil(t, toProtoMigrationSpec(nil))
+	assert.Nil(t, toProtoMigrationSpec(compute.MigrationSpec{Arch: qemu.ArchX86_64}))
 
-	got := toProtoMigrationSpec(&compute.InstanceConfig{
-		Memory: 4096, CPUs: 4, DiskSize: "40G", BootMode: "boot",
-		SecureBoot: true, EnableKVM: true, TPMEnabled: true,
-		NetworkMode: "bridge", MACAddress: "52:54:00:aa:bb:cc",
+	got := toProtoMigrationSpec(compute.MigrationSpec{
+		Arch: qemu.ArchAArch64,
+		Config: &compute.InstanceConfig{
+			Memory: 4096, CPUs: 4, DiskSize: "40G", BootMode: "boot",
+			SecureBoot: true, EnableKVM: true, TPMEnabled: true,
+			NetworkMode: "bridge", MACAddress: "52:54:00:aa:bb:cc",
+		},
 	})
 	require.NotNil(t, got)
 	assert.Equal(t, int32(4096), got.GetMemoryMb())
@@ -227,4 +233,5 @@ func TestToProtoMigrationSpec(t *testing.T) {
 	assert.True(t, got.GetSecureBoot())
 	assert.True(t, got.GetEnableKvm())
 	assert.Equal(t, "52:54:00:aa:bb:cc", got.GetMacAddress())
+	assert.Equal(t, "aarch64", got.GetArch())
 }

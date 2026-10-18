@@ -30,14 +30,14 @@ import (
 // error class as its gRPC twin.
 var _ mcp.AttestationManifestProvider = (*MCPServiceProvider)(nil)
 
-var manifestResultJSON = protojson.MarshalOptions{UseProtoNames: true}
+var protoResultJSON = protojson.MarshalOptions{UseProtoNames: true}
 
 // AttestationGetManifest serves attestation_get_manifest.
 func (p *MCPServiceProvider) AttestationGetManifest(ctx context.Context, id string) (any, error) {
 	if p.attestationServer == nil {
 		return nil, mcp.ErrAttestationManifestsNotConfigured
 	}
-	return manifestResult(p.attestationServer.GetManifest(ctx, &platformv1.GetManifestRequest{Id: id}))
+	return protoResult(p.attestationServer.GetManifest(ctx, &platformv1.GetManifestRequest{Id: id}))
 }
 
 // AttestationListManifests serves attestation_list_manifests.
@@ -45,7 +45,7 @@ func (p *MCPServiceProvider) AttestationListManifests(ctx context.Context, limit
 	if p.attestationServer == nil {
 		return nil, mcp.ErrAttestationManifestsNotConfigured
 	}
-	return manifestResult(p.attestationServer.ListManifests(ctx, &platformv1.ListManifestsRequest{
+	return protoResult(p.attestationServer.ListManifests(ctx, &platformv1.ListManifestsRequest{
 		Limit:  limit,
 		Offset: offset,
 	}))
@@ -60,7 +60,7 @@ func (p *MCPServiceProvider) AttestationBuildManifest(ctx context.Context, req m
 	if err != nil {
 		return nil, err
 	}
-	return manifestResult(p.attestationServer.BuildManifest(ctx, &platformv1.BuildManifestRequest{
+	return protoResult(p.attestationServer.BuildManifest(ctx, &platformv1.BuildManifestRequest{
 		Config: &platformv1.ManifestBuilderConfig{
 			HostId:        req.HostID,
 			HashAlgorithm: hash,
@@ -86,7 +86,7 @@ func (p *MCPServiceProvider) AttestationVerifyManifest(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	return manifestResult(p.attestationServer.VerifyManifest(ctx, &platformv1.VerifyManifestRequest{
+	return protoResult(p.attestationServer.VerifyManifest(ctx, &platformv1.VerifyManifestRequest{
 		Manifest:      got.GetManifest(),
 		ExpectedNonce: req.ExpectedNonce,
 		PublicKeyPem:  req.PublicKeyPEM,
@@ -99,15 +99,17 @@ func (p *MCPServiceProvider) AttestationDeleteManifest(ctx context.Context, id s
 	if p.attestationServer == nil {
 		return nil, mcp.ErrAttestationManifestsNotConfigured
 	}
-	return manifestResult(p.attestationServer.DeleteManifest(ctx, &platformv1.DeleteManifestRequest{Id: id}))
+	return protoResult(p.attestationServer.DeleteManifest(ctx, &platformv1.DeleteManifestRequest{Id: id}))
 }
 
-// manifestResult renders a gRPC response as JSON, or passes its error on.
-func manifestResult(resp proto.Message, err error) (any, error) {
+// protoResult renders a gRPC response as JSON in the proto's own field
+// names, or passes its error on. The MCP tools that answer through their
+// gRPC twin (attestation manifests, VM lifecycle) share it.
+func protoResult(resp proto.Message, err error) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := manifestResultJSON.Marshal(resp)
+	data, err := protoResultJSON.Marshal(resp)
 	if err != nil {
 		return nil, err
 	}

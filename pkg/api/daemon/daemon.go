@@ -36,6 +36,7 @@ import (
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
@@ -205,7 +206,7 @@ type Daemon struct {
 	fido2Service                 *FIDO2GRPCService
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
-	bmcService                   BMCServicer
+	bmcGRPCService               *BMCGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
 	eabDelivery                  EABDeliveryServicer
@@ -255,6 +256,11 @@ type Daemon struct {
 
 	running atomic.Bool
 	mu      sync.RWMutex
+
+	// subsystemProbes holds, per platformv1.ServiceType, the func() bool
+	// probes SetSubsystemProbe stored for the subsystems run outside the
+	// daemon. Lock-free because status RPCs read it while Stop holds mu.
+	subsystemProbes sync.Map
 
 	// onAutoStart, when non-nil, is invoked by autoStartServices after it has
 	// finished its pass over the configured services. It turns a background
@@ -1454,8 +1460,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Each route requires the scope its RPC requires on gRPC, checked by one
 	// guard: a platform token, else the verified client certificate. The
 	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
+	var restGuard *restapi.ScopeGuard
 	if daemon.concreteRestServer != nil {
-		restGuard, guardErr := newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		var guardErr error
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, logger)
 		if guardErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
 			logger.Error(constructErr, "component", "rest_server")
@@ -1517,9 +1525,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// TenantService methods would return FailedPrecondition. The manager
 	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
 	// transport sees identical per-tenant state including barrier lifecycle.
+	// REST and gRPC both authorize the caller against the same system tenant.
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
-			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager)
+			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
 		}
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
@@ -1769,10 +1778,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			}
 		}
 
-		// Stash the BMC service so the MCP server (created below) can
-		// expose it via the platform_bmc_* tools. Direct field assignment
-		// keeps the gRPC and MCP surfaces backed by the same Servicer.
-		daemon.bmcService = bmcSvc
+		// Stash the BMC gRPC servicer so the MCP server (created below)
+		// serves the platform_bmc_* tools through it: MCP and gRPC then
+		// answer and refuse alike.
+		daemon.bmcGRPCService = bmcGRPCService
 	}
 
 	// Create MCP server if enabled and not overridden by option
@@ -1913,13 +1922,11 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		HealthService:         d.service,
 		Logger:                d.logger.Slog(),
 		ComputeOrchestrator:   d.config.ComputeOrchestrator,
-		BMCService:            d.bmcService,
 		RegistryService:       d.config.RegistryService,
 		EABService:            d.eabService,
 		EABDelivery:           d.eabDelivery,
 		ClusterService:        d.clusterService,
 		InvitationService:     d.invitationService,
-		BMCEnroller:           d.config.App,
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
 		GatewayPerf:           d.gatewayPerfService,
@@ -1968,12 +1975,11 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.secretsService = d.config.App.Secrets()
 	}
 
-	// Wire the BMCRestorer into the MCP provider so the platform_bmc_cert_restore
-	// tool executes the real ceremony. Guarded on both App and DeviceProfileService
-	// being present, matching the gRPC and QUIC wiring pattern.
-	if d.config.App != nil && d.config.DeviceProfileService != nil {
-		serviceProvider.SetBMCRestorer(d.config.App, d.config.DeviceProfileService)
-		d.logger.Info("BMC MCP restorer wired")
+	// The platform_bmc_* tools call the gRPC BMC servicer, which already
+	// carries the enroller and restorer. The nil check keeps a missing BMC
+	// service a nil interface, so the tools refuse with ErrBMCNotConfigured.
+	if d.bmcGRPCService != nil {
+		serviceProvider.SetBMCServer(d.bmcGRPCService)
 	}
 
 	// Mirror the invitation servicer into the gRPC service so MCP and gRPC
@@ -3276,10 +3282,12 @@ func (d *Daemon) IsGRPCTCPEnabled() bool {
 	return d.config.EnableGRPCTCP && d.grpcServer != nil
 }
 
-// registerConfiguredServices registers a configManagedService for each
-// enabled entry in d.config.Services that has a valid protobuf ServiceType
-// mapping, making them visible via ListServices and manageable through
-// all protocols (gRPC, REST, CLI, QUIC, MCP, Unix).
+// registerConfiguredServices registers a subsystemService for each enabled
+// entry in d.config.Services that names a platform subsystem, making it
+// visible via ListServices on every protocol (gRPC, REST, CLI, QUIC, MCP,
+// Unix). Its status is the subsystem's real state; start, stop and restart
+// are refused with ErrServiceNotControllable because platformd owns the
+// subsystem's lifecycle.
 func (d *Daemon) registerConfiguredServices() {
 	for name, cfg := range d.config.Services {
 		if !cfg.Enabled {
@@ -3288,14 +3296,51 @@ func (d *Daemon) registerConfiguredServices() {
 		// Only register services that have a valid protobuf ServiceType mapping.
 		// Services without mappings (e.g., kms, vtpm, ca, mcp) cannot be
 		// managed through gRPC/CLI which require ServiceType enum values.
-		if serviceTypeFromName(name) == platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+		svcType := serviceTypeFromName(name)
+		spec, known := subsystemSpecs[svcType]
+		if !known {
 			continue
 		}
-		svc := newConfigManagedService(name, cfg)
+		svc := &subsystemService{
+			name:    name,
+			reason:  spec.reason,
+			running: d.subsystemProbe(svcType, spec),
+		}
 		if err := d.RegisterService(svc); err != nil {
 			d.logger.Warn("Failed to register configured service", "service", name, "error", err)
 		}
 	}
+}
+
+// subsystemProbe returns how a configured subsystem's state is observed.
+// Start calls it with d.mu held, so a daemon-built subsystem's wiring is read
+// once here. The returned probe never takes d.mu: Stop holds that lock while
+// it drains in-flight status RPCs, which call the probe.
+func (d *Daemon) subsystemProbe(svcType platformv1.ServiceType, spec subsystemSpec) func() bool {
+	if spec.wired == nil {
+		return func() bool {
+			probe, ok := d.subsystemProbes.Load(svcType)
+			if !ok {
+				return false
+			}
+			running, ok := probe.(func() bool)
+			return ok && running()
+		}
+	}
+	wired := spec.wired(d)
+	return func() bool { return wired }
+}
+
+// SetSubsystemProbe reports the live state of a subsystem the composition
+// root runs outside the daemon: the web services and the ACME server they
+// carry. Until a probe is set, or after a nil one, the subsystem reports
+// stopped.
+func (d *Daemon) SetSubsystemProbe(svcType platformv1.ServiceType, running func() bool) {
+	if running == nil {
+		d.subsystemProbes.Delete(svcType)
+		return
+	}
+	d.subsystemProbes.Store(svcType, running)
 }
 
 // autoStartServices starts services configured for auto-start
@@ -3326,11 +3371,15 @@ func (d *Daemon) autoStartServices(ctx context.Context) {
 		if !exists {
 			continue
 		}
+		// A process-owned subsystem came up with the process; there is
+		// nothing to start, and its refusal is not a failure.
+		if _, owned := processOwned(state.service); owned {
+			continue
+		}
 
 		// Start the service directly using the state
 		state.mu.Lock()
-		currentStatus := platformv1.ServiceStatus(state.status.Load())
-		if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+		if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 			state.mu.Unlock()
 			continue
 		}

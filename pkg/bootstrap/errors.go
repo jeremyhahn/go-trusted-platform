@@ -686,3 +686,33 @@ type ErrUnknownNode struct {
 func (e ErrUnknownNode) Error() string {
 	return "bootstrap: no node " + e.Hostname + " in the bootstrap config"
 }
+
+// ErrDisklessImageTarget is a diskless node whose merged config asks the
+// installer for install-target: image. The image target builds a
+// factory SD image on a build host; a diskless node boots from the
+// network and its installer runs on the node itself, so it needs the
+// disk target to clear the TPM and read its boot model.
+type ErrDisklessImageTarget struct {
+	Hostname  string
+	BootModel string
+}
+
+func (e ErrDisklessImageTarget) Error() string {
+	return "bootstrap: node " + e.Hostname + " boots " + e.BootModel +
+		" but its config sets install-target: image; set install-target: disk in its overrides"
+}
+
+// ErrDuplicateNodeAddress is two nodes whose merged configs give the
+// same address, usually because both take it from a shared role template.
+type ErrDuplicateNodeAddress struct {
+	Address       string
+	Hostname      string
+	Where         string
+	OtherHostname string
+	OtherWhere    string
+}
+
+func (e ErrDuplicateNodeAddress) Error() string {
+	return "bootstrap: address " + e.Address + " is on node " + e.OtherHostname + " (" + e.OtherWhere +
+		") and on node " + e.Hostname + " (" + e.Where + "); give each node its own address in nodes[].overrides"
+}

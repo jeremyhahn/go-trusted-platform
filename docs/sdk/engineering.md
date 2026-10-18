@@ -1,6 +1,6 @@
 # Go SDK — Engineering
 
-> **Status: NORMATIVE** · Scope: building, extending and testing `sdk/go` · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: building, extending and testing `sdk/go` · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -137,7 +137,14 @@ change set:
    the field is cleared from the body, and a zero value is
    `codes.InvalidArgument` before anything is sent. An unmapped method falls back to a guessed
    `POST /api/v1/<service>/<method>`. Do not rely on the fallback: map the
-   method explicitly.
+   method explicitly. Two servers answer `/api/v1`, and every route claim is
+   checked against the built table of the one that serves its prefix:
+   `TestSDKRouteClaims` (`pkg/webservice/v1/route_coverage_test.go`) for the
+   webservice router, `TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes`
+   (`pkg/api/daemon/rest_route_claims_test.go`) for the daemon REST server.
+   The prefixes only the daemon serves are `DaemonOnlyPrefixes` in
+   `pkg/testutil/routeclaims.go`; [../api/rest-routers.md](../api/rest-routers.md)
+   §"Where SDK route claims are served" lists them.
 4. **QUIC.** Add the method to `grpcMethodToOpcodeMap`. For a method in a
    category opcode, also add it to `categorySubOpcodeMap`. A missing
    sub-opcode panics at `init` with `ErrCategorySubOpcodeMissing`, so the

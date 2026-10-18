@@ -205,9 +205,16 @@ list ([`docs/daemon/api.md`](../daemon/api.md) §5).
 grant as the virtual-datapath `SDNService.SetPortState` (`sdn:write`), under its
 own resource.
 
-**Every `switch_*` MCP tool is refused.** None is in the MCP permission map
-(`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
-`AuthErrorToolNotClassified` for every caller until they are classified.
+**MCP requires the same `switch` scopes (#304).** `switch_list_ports` and
+`switch_port_status` need `switch:read`; `switch_enable_port`,
+`switch_disable_port` and `switch_set_vlan` need `switch:write`
+(`pkg/api/mcp/authz.go`). A caller without the scope gets `PermissionDenied`
+(`-32003`) and the tool never runs. Switch ports are platform-level: no
+transport scopes them to a tenant.
+
+The daemon's MCP provider does not yet expose a switch service, so a
+classified caller still gets `SWITCH_SERVICE_UNAVAILABLE` (§9). A provider
+that implements `mcp.SwitchManagerProvider` serves the tools.
 
 **QUIC requires the `switch` scopes (#767).** Under `OpSwitchCategory`
 (`0xCC`), `SwitchSubListPorts` and `SwitchSubGetPortStatus` need
@@ -239,7 +246,7 @@ above. See
 |---|---|---|---|---|
 | `0x00` | `StatusOK` | 200 | OK | — |
 | `0x01` | `StatusInvalidRequest` | 400 | — | Payload decode failure; empty QUIC payload (missing sub-opcode) |
-| `0x02` | `StatusNotFound` | 404 | `NotFound` | `ErrManagerNotFound` → `ErrSwitchNotFound` / `ErrSwitchNotFoundQUIC`; `ErrPortNotFound` (**REST/gRPC mapping exists but the SSH driver never produces it** — [engineering.md](engineering.md) §8) |
+| `0x02` | `StatusNotFound` | 404 | `NotFound` | `ErrManagerNotFound` → `ErrSwitchNotFound` / `ErrSwitchNotFoundQUIC` / MCP `SWITCH_NOT_FOUND`; `ErrPortNotFound` → MCP `SWITCH_PORT_NOT_FOUND` (**REST/gRPC mapping exists but the SSH driver never produces it** — [engineering.md](engineering.md) §8) |
 | `0x03` | `StatusUnauthorized` | 401 | `Unauthenticated` | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | `Internal` | `ErrSSHConnectionFailed`, `ErrSSHCommandFailed`, `ErrSSHParseOutputFailed`, `ErrPortVLANSetFailed` |
 | `0x09` | `StatusInvalidArgument` | 400 | `InvalidArgument` | Missing `switch_name` / `port_name`; `vlan_id` zero or > 4094 |
@@ -282,7 +289,7 @@ Until that is wired:
 | REST | **503** from the `requireService` catch-all under `/api/v1/switches/`, body `{"code":503,"error":"switch service not configured by daemon — REST surface is dark","success":false,"service":"switch","reason":"SERVICE_NOT_CONFIGURED"}`; clients branch on `reason`, never on the prose; the daemon logs a startup warning |
 | gRPC / Unix | `codes.FailedPrecondition` — `"switch service not initialized"` |
 | QUIC | `StatusUnavailable` — `ErrQUICServiceUnavailable{Service:"switch"}` |
-| MCP | `SWITCH_SERVICE_UNAVAILABLE` |
+| MCP | `SWITCH_SERVICE_UNAVAILABLE`, class `Unavailable` (the REST and QUIC answer, not gRPC's `FailedPrecondition`) |
 | Embedded | Not reachable at all — §2 |
 
 `GET /api/v1/platform/service-registry` reports the `switch` entry with

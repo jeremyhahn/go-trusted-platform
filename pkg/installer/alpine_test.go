@@ -43,7 +43,29 @@ func TestInstalledServices_EnablesTheIPsecServices(t *testing.T) {
 		{name: "networking", runlevel: "default"},
 		{name: "xkms-p11-kit", runlevel: "default"},
 		{name: "charon", runlevel: "default"},
-	}, installedServices(root))
+	}, installedServices(root, nil))
+}
+
+// TestInstalledServices_EnablesConfiguredServices: a target that names extra
+// services (the Pi's pcscd) gets them in the default runlevel after the
+// installer's own set; a node without them configured never enables them,
+// even when the init script is present.
+func TestInstalledServices_EnablesConfiguredServices(t *testing.T) {
+	root := t.TempDir()
+	installInitScripts(t, root, "networking", "pcscd")
+
+	assert.Equal(t, []openRCService{
+		{name: "networking", runlevel: "default"},
+		{name: "pcscd", runlevel: "default"},
+	}, installedServices(root, []string{"pcscd"}))
+
+	assert.Equal(t, []openRCService{
+		{name: "networking", runlevel: "default"},
+	}, installedServices(root, nil), "pcscd is enabled only where configured")
+
+	assert.Equal(t, []openRCService{
+		{name: "networking", runlevel: "default"},
+	}, installedServices(root, []string{"missing"}), "a configured service without an init script is skipped")
 }
 
 // TestInstalledServices_SkipsServicesNotInstalled: a node without the
@@ -55,9 +77,9 @@ func TestInstalledServices_SkipsServicesNotInstalled(t *testing.T) {
 		assert.Equal(t, []openRCService{
 			{name: "networking", runlevel: "default"},
 			{name: "sshd", runlevel: "default"},
-		}, installedServices(root))
+		}, installedServices(root, nil))
 	})
 	t.Run("no init.d", func(t *testing.T) {
-		assert.Empty(t, installedServices(t.TempDir()))
+		assert.Empty(t, installedServices(t.TempDir(), []string{"pcscd"}))
 	})
 }

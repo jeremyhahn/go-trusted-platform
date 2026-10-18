@@ -152,17 +152,26 @@ func (s *TenantGRPCServer) GetTenantByName(
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
-	if err := s.authorizeSystemTenant(ctx, "GetTenantByName"); err != nil {
-		return nil, err
-	}
 
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 
+	// The name is resolved before the caller is checked: a tenant-bound
+	// caller may look up its own tenant, and only the resolved ID can say
+	// whether the name is its own.
 	entity, err := s.manager.GetTenantByName(ctx, req.GetName())
 	if err != nil {
 		s.logger.Error("failed to get tenant by name", "name", req.GetName(), "error", err)
+	}
+	resolvedID := ""
+	if err == nil {
+		resolvedID = entity.ID
+	}
+	if authErr := s.authorizeTenantName(ctx, resolvedID); authErr != nil {
+		return nil, authErr
+	}
+	if err != nil {
 		return nil, s.toGRPCError(err)
 	}
 
@@ -441,34 +450,34 @@ func (s *TenantGRPCServer) UpdateQuotas(
 		return nil, err
 	}
 
-	quotas := &tenant.TenantQuotas{}
-
-	if req.GetCompute() != nil {
-		quotas.Compute = tenant.ComputeQuota{
-			MaxVMs:        req.GetCompute().GetMaxVms(),
-			MaxContainers: req.GetCompute().GetMaxContainers(),
-			MaxVCPUs:      req.GetCompute().GetMaxVcpus(),
-			MaxMemoryMB:   req.GetCompute().GetMaxMemoryMb(),
-		}
-	}
-
-	if req.GetNetwork() != nil {
-		quotas.Network = tenant.NetworkQuota{
-			MaxBridges:       req.GetNetwork().GetMaxBridges(),
-			MaxPorts:         req.GetNetwork().GetMaxPorts(),
-			MaxBandwidthMbps: req.GetNetwork().GetMaxBandwidthMbps(),
-		}
-	}
-
-	if req.GetStorage() != nil {
-		quotas.Storage = tenant.StorageQuota{
-			MaxVolumesGB: req.GetStorage().GetMaxVolumesGb(),
-			MaxSnapshots: req.GetStorage().GetMaxSnapshots(),
-		}
-	}
-
-	err := s.manager.UpdateQuotas(ctx, req.GetTenantId(), quotas)
+	// Start from the tenant's current quotas so a section the request
+	// leaves out keeps its limits, and a limit the wire does not carry
+	// (MaxDiskGB) is never zeroed.
+	quotas, err := s.manager.GetQuotas(ctx, req.GetTenantId())
 	if err != nil {
+		s.logger.Error("failed to read quotas for update", "tenant_id", req.GetTenantId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	if compute := req.GetCompute(); compute != nil {
+		quotas.Compute.MaxVMs = compute.GetMaxVms()
+		quotas.Compute.MaxContainers = compute.GetMaxContainers()
+		quotas.Compute.MaxVCPUs = compute.GetMaxVcpus()
+		quotas.Compute.MaxMemoryMB = compute.GetMaxMemoryMb()
+	}
+
+	if network := req.GetNetwork(); network != nil {
+		quotas.Network.MaxBridges = network.GetMaxBridges()
+		quotas.Network.MaxPorts = network.GetMaxPorts()
+		quotas.Network.MaxBandwidthMbps = network.GetMaxBandwidthMbps()
+	}
+
+	if storage := req.GetStorage(); storage != nil {
+		quotas.Storage.MaxVolumesGB = storage.GetMaxVolumesGb()
+		quotas.Storage.MaxSnapshots = storage.GetMaxSnapshots()
+	}
+
+	if err := s.manager.UpdateQuotas(ctx, req.GetTenantId(), quotas); err != nil {
 		s.logger.Error("failed to update quotas", "tenant_id", req.GetTenantId(), "error", err)
 		return nil, s.toGRPCError(err)
 	}

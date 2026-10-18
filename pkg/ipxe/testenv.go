@@ -244,7 +244,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 		DHCPRangeEnd:      cfg.DHCPEnd.String(),
 		DHCPSubnetMask:    net.IP(cfg.Subnet.Mask).String(),
 		DHCPGateway:       cfg.Gateway.String(),
-		DHCPDNS:           cfg.DNS,
+		DHCPDNS:           testEnvDNS(cfg.DNS),
 		DHCPLeaseTime:     DefaultLeaseTime,
 		DHCPServerIP:      cfg.ServerIP.String(),
 		TFTPServerName:    "",
@@ -324,6 +324,14 @@ func (t *TestEnv) dhcpConfig() *DHCPConfig {
 		dhcpCfg.DNSServers = []net.IP{net.ParseIP(t.config.DNS).To4()}
 	}
 	return dhcpCfg
+}
+
+// testEnvDNS is the server's DNS list for the environment's one DNS server.
+func testEnvDNS(dns string) []string {
+	if dns == "" {
+		return nil
+	}
+	return []string{dns}
 }
 
 // Start starts the PXE server components (HTTP, TFTP, DHCP) on the isolated network.

@@ -42,6 +42,16 @@ func (r *tpmCallRecorder) TPMProvision(ctx context.Context, ownerPassword string
 	return r.mockServiceProvider.TPMProvision(ctx, ownerPassword)
 }
 
+func (r *tpmCallRecorder) TPMCapabilities(ctx context.Context) (interface{}, error) {
+	r.hit("TPMCapabilities")
+	return r.mockServiceProvider.TPMCapabilities(ctx)
+}
+
+func (r *tpmCallRecorder) TPMPlatform(ctx context.Context) (interface{}, error) {
+	r.hit("TPMPlatform")
+	return r.mockServiceProvider.TPMPlatform(ctx)
+}
+
 func (r *tpmCallRecorder) TPMClear(ctx context.Context, ownerPassword string) (interface{}, error) {
 	r.hit("TPMClear")
 	return r.mockServiceProvider.TPMClear(ctx, ownerPassword)
@@ -216,6 +226,8 @@ const testNVIndex = float64(0x01500016)
 
 var classifiedTPMTools = []classifiedTPMTool{
 	{"platform_tpm_info", "tpm:read", nil, "TPMInfo"},
+	{"platform_tpm_capabilities", "tpm:read", nil, "TPMCapabilities"},
+	{"platform_tpm_platform", "tpm:read", nil, "TPMPlatform"},
 	{"platform_tpm_ek", "tpm:read", nil, "TPMGetEK"},
 	{"platform_tpm_ek_cert", "tpm:read", nil, "TPMGetEKCert"},
 	{"platform_tpm_srk", "tpm:read", nil, "TPMGetSRK"},

@@ -31,10 +31,11 @@ func (ErrLDevIDServiceNotConfigured) Error() string {
 	return "idevid: LDevID service not configured for this transport"
 }
 
-// ldevidGRPCToHTTPStatus maps a gRPC status error returned by
-// IDevIDGRPCService.CreateLDevID to the closest HTTP status code so the REST
-// transport reports the same failure class the gRPC transport does.
-func ldevidGRPCToHTTPStatus(err error) int {
+// idevidGRPCToHTTPStatus maps a gRPC status error returned by
+// IDevIDGRPCService (LDevID issuance, and the IDevID and IAK key-delete
+// refusal) to the closest HTTP status code so the REST transport reports the
+// same failure class the gRPC transport does.
+func idevidGRPCToHTTPStatus(err error) int {
 	switch status.Code(err) {
 	case codes.OK:
 		return http.StatusOK
@@ -57,15 +58,18 @@ func ldevidGRPCToHTTPStatus(err error) int {
 	}
 }
 
-// ldevidGRPCToQUICStatus maps a gRPC status error returned by
-// IDevIDGRPCService.CreateLDevID to the closest QUIC status byte so the QUIC
-// transport reports the same failure class the gRPC transport does.
-func ldevidGRPCToQUICStatus(err error) byte {
+// idevidGRPCToQUICStatus maps a gRPC status error returned by
+// IDevIDGRPCService (LDevID issuance, and the IDevID and IAK key-delete
+// refusal) to the closest QUIC status byte so the QUIC transport reports the
+// same failure class the gRPC transport does.
+func idevidGRPCToQUICStatus(err error) byte {
 	switch status.Code(err) {
 	case codes.OK:
 		return quicwire.StatusOK
-	case codes.InvalidArgument, codes.FailedPrecondition:
+	case codes.InvalidArgument:
 		return quicwire.StatusInvalidArgument
+	case codes.FailedPrecondition:
+		return quicwire.StatusFailedPrecondition
 	case codes.NotFound:
 		return quicwire.StatusNotFound
 	case codes.AlreadyExists:

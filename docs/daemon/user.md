@@ -83,6 +83,16 @@ curl -s -X POST https://platform.example.com/api/v1/platform/services/dns/stop
 curl -s -X POST https://platform.example.com/api/v1/platform/services/dns/restart
 ```
 
+**Start, stop and restart are refused for every service today.** `tpm`, `sdn`,
+`compute`, `dns`, `acme`, `webservice` and `attestation` are built once by
+`platformd serve` and live as long as the process, so each verb answers
+`service <name> cannot be started or stopped at runtime: <reason>` and changes
+nothing (400 on REST, `FailedPrecondition` on gRPC and the Unix socket,
+`StatusInvalidRequest` on QUIC, `-32007` on MCP). Restart the daemon instead:
+`systemctl restart platformd`. `list` and `get` report what is actually
+running, read from the subsystem itself. The reasons per service are in
+[api.md](api.md) §2.
+
 **A service that is off answers 503, not 404.** Across the whole platform, 503
 means "this capability exists and is not running or not wired in" — configuration,
 not a crash. That distinction is deliberate and is the first thing to check when
@@ -215,10 +225,12 @@ required scope: the `PlatformDaemon` observers need `platform:read`,
 `platform:write`, and `Shutdown` and `DumpEntityType` need `platform:admin`.
 Only `grpc.health.v1.Health/Check` answers without a token.
 
-On MCP only 370 of 469 tools are classified, and the rest — including every
-`platform_daemon_*` tool — are refused with `AuthErrorToolNotClassified`
-however broad the token is. If an MCP call fails that way, use gRPC or REST
-for it. The full picture is in [api.md](api.md) §5.
+On MCP 446 of 469 tools are classified. `platform_daemon_status`, `_version`,
+`_list_services` and `_get_service` need `platform:read`, and the service
+start, stop and restart tools need `platform:write`, as on gRPC. The rest —
+including `platform_daemon_list_protocols` — are refused with
+`AuthErrorToolNotClassified` however broad the token is. If an MCP call fails
+that way, use gRPC or REST for it. The full picture is in [api.md](api.md) §5.
 
 ---
 

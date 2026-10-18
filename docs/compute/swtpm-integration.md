@@ -192,7 +192,8 @@ go test -v -run TestQEMUOrchestrator_SWTPM_Integration ./pkg/compute
 ### System Dependencies
 - `swtpm` - Software TPM emulator
 - `swtpm_setup` - TPM state initialization tool
-- `qemu-system-x86_64` - QEMU virtualization
+- `qemu-system-x86_64` (amd64 host) or `qemu-system-aarch64` (arm64 host) -
+  QEMU virtualization
 
 ### Installation
 
@@ -202,6 +203,9 @@ sudo apt-get install swtpm swtpm-tools qemu-system-x86
 
 # Fedora/RHEL
 sudo dnf install swtpm swtpm-tools qemu-kvm
+
+# Alpine arm64 (the Raspberry Pi 4 compute template)
+apk add qemu-system-aarch64 qemu-img swtpm swtpm-tools aavmf
 ```
 
 ## QEMU Integration

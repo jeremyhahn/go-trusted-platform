@@ -73,12 +73,6 @@ type IDevIDCertificateRESTInfo struct {
 	PEM          string    `json:"pem,omitempty"`
 }
 
-// IDevIDDeleteRESTResponse represents an IDevID deletion response.
-type IDevIDDeleteRESTResponse struct {
-	Deleted bool   `json:"deleted"`
-	Message string `json:"message,omitempty"`
-}
-
 // IDevIDCSRRESTRequest represents an IDevID CSR generation request.
 type IDevIDCSRRESTRequest struct {
 	CommonName         string   `json:"common_name"`
@@ -145,12 +139,6 @@ type IAKInfoRESTResponse struct {
 	Exists       bool   `json:"exists"`
 	PublicKeyPEM string `json:"public_key_pem,omitempty"`
 	CreatedAt    int64  `json:"created_at,omitempty"`
-}
-
-// IAKDeleteRESTResponse represents an IAK deletion response.
-type IAKDeleteRESTResponse struct {
-	Deleted bool   `json:"deleted"`
-	Message string `json:"message,omitempty"`
 }
 
 // IAKCSRRESTRequest represents an IAK CSR generation request.
@@ -344,23 +332,10 @@ func (s *RESTServer) handleHasIDevID(w http.ResponseWriter, r *http.Request) {
 
 // handleIDevIDDelete handles DELETE /api/v1/tpm/idevid
 func (s *RESTServer) handleIDevIDDelete(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
-		return
-	}
-
-	// Delete the IDevID certificate first
-	if err := s.tpm2Service.DeleteIDevIDCertificate(); err != nil {
-		s.logger.Debug("IDevID certificate deletion skipped", "error", err)
-	}
-
-	resp := &IDevIDDeleteRESTResponse{
-		Deleted: true,
-		Message: "IDevID key deleted successfully",
-	}
-
-	s.logger.Info("IDevID key deleted")
-	s.writeJSON(w, http.StatusOK, resp)
+	// The persistent IDevID key is not evicted, so refuse as the gRPC
+	// service does and touch nothing; the certificate has DELETE .../cert.
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}
+	s.writeError(w, idevidGRPCToHTTPStatus(refused), refused)
 }
 
 // handleIDevIDCSR handles POST /api/v1/tpm/idevid/csr
@@ -603,23 +578,10 @@ func (s *RESTServer) handleHasIAK(w http.ResponseWriter, r *http.Request) {
 
 // handleIAKDelete handles DELETE /api/v1/tpm/iak
 func (s *RESTServer) handleIAKDelete(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
-		return
-	}
-
-	// Delete the IAK certificate first
-	if err := s.tpm2Service.DeleteIAKCertificate(); err != nil {
-		s.logger.Debug("IAK certificate deletion skipped", "error", err)
-	}
-
-	resp := &IAKDeleteRESTResponse{
-		Deleted: true,
-		Message: "IAK key deleted successfully",
-	}
-
-	s.logger.Info("IAK key deleted")
-	s.writeJSON(w, http.StatusOK, resp)
+	// The persistent IAK is not evicted, so refuse as the gRPC service does
+	// and touch nothing; the certificate has DELETE .../cert.
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
+	s.writeError(w, idevidGRPCToHTTPStatus(refused), refused)
 }
 
 // handleIAKCSR handles POST /api/v1/tpm/iak/csr

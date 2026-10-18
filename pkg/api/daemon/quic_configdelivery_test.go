@@ -714,6 +714,18 @@ func TestProvisioningQUIC_FulfillSession_MissingSessionID(t *testing.T) {
 	}
 }
 
+func TestProvisioningQUIC_FulfillSession_ZeroProfileID(t *testing.T) {
+	handler, backing := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
+	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
+
+	resp := handler.HandleRequest(context.Background(),
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFulfillSession,
+			&platformv1.FulfillSessionRequest{SessionId: session.ID}))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Fatalf("expected StatusInvalidArgument, got 0x%02x", resp.Status)
+	}
+}
+
 func TestProvisioningQUIC_ListSessions(t *testing.T) {
 	handler, backing := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 	first := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")

@@ -102,7 +102,7 @@ func TestMCPService_VTPMCreate_NoService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("VTPMCreate without vTPM service", func(t *testing.T) {
-		result, err := provider.VTPMCreate(ctx, "test-vtpm", "ECC")
+		result, err := provider.VTPMCreate(ctx, "test-vtpm", "ECC", false, nil)
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})

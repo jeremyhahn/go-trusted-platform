@@ -124,6 +124,10 @@ type InstallerOverrides struct {
 	KernelPackage string `yaml:"kernel_package,omitempty" json:"kernel_package,omitempty"`
 	// ExtraPackages are additional apk packages to prefetch and install.
 	ExtraPackages []string `yaml:"extra_packages,omitempty" json:"extra_packages,omitempty"`
+	// ExtraServices are OpenRC services, shipped by ExtraPackages, that the
+	// installed system starts in the default runlevel
+	// (installer.OSConfig.Services).
+	ExtraServices []string `yaml:"extra_services,omitempty" json:"extra_services,omitempty"`
 	// HardwareManufacturer and HardwareModel select the pkg/quirks entry
 	// whose kernel command line and console wiring the target needs. Empty
 	// means the generic default quirk.

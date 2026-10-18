@@ -66,6 +66,14 @@ platform SDK.
 is the port state machine; `pkg/policy/opa` decides container admission. They
 answer different questions and neither is a token-authorization decision point.
 
+**The API does not reach the engine yet, so it refuses port authentication.**
+The daemon builds the engine for quarantine and enrollment only (`initSDNPolicy`,
+`pkg/daemon/commands/quarantine_init.go`), and it has no certificate validator
+that checks the chain to the platform anchor and that the certificate is an
+IDevID. Until both exist, `SDNService.AuthenticatePort` and `RevokePortAuth`
+refuse on every transport with `policy.ErrPortAuthNotEnforced`
+(`FailedPrecondition`) and keep no state ([api.md](api.md) §4, #304).
+
 ## Data flow — a device joining the network
 
 1. Link comes up. Port state is `unconnected`.

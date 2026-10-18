@@ -133,9 +133,9 @@ dns:
 | `allow-external-registration` | bool | `false` | Allow registration in public zones |
 | `allow-internal-registration` | bool | `true` | Allow registration in internal zones |
 | `default-ttl` | int | `3600` | Default TTL for dynamic records (seconds) |
-| `private-ipv4` | string | - | Private IPv4 address for `${PRIVATE_IPv4}` macro |
+| `private-ipv4` | string | detected | Private IPv4 address for the `${PRIVATE_IPv4}` macro and for the internal-zone record each webservice registers for its certificate CN. Set it on a host with several interfaces (a boot node serving one VLAN): left empty, both take the host's default-route address |
 | `private-ipv6` | string | - | Private IPv6 address for `${PRIVATE_IPv6}` macro |
-| `public-ipv4` | string | - | Public IPv4 address for `${PUBLIC_IPv4}` macro |
+| `public-ipv4` | string | detected | Public IPv4 address for the `${PUBLIC_IPv4}` macro and for the public-zone record each webservice registers; a configured value wins over the detected one |
 | `public-ipv6` | string | - | Public IPv6 address for `${PUBLIC_IPv6}` macro |
 | `zone-subdomains` | bool | `false` | Enable per-network-zone subdomains. When true, the internal DNS server pre-creates one sub-zone per network zone (`<zone>.<domain>`) and device enrollment registers hosts as `<host>.<zone>.<domain>` in addition to `<host>.<domain>`. BMC names are never zone-qualified. Requires `sdn.zones` to be validated before DNS startup so that resolved zone names are available. |
 

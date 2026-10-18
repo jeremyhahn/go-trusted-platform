@@ -595,6 +595,14 @@ var iamTokenNotImplementedOpcodes = map[byte]bool{
 	quicwire.OpIAMTokenRevoke: true,
 }
 
+// deviceIdentityKeyDeleteRefusals are the tpm2-family key-delete opcodes. They
+// refuse whatever the TPM state (#304), as the gRPC IDevIDService does, so a
+// bare handler answers the refusal instead of the tpm2-unavailable error.
+var deviceIdentityKeyDeleteRefusals = map[byte]ErrDeviceIdentityKeyNotDeletable{
+	quicwire.OpIDevIDDelete: {Key: "IDevID"},
+	quicwire.OpIAKDelete:    {Key: "IAK"},
+}
+
 // assertDispatchFamily drives one request through HandleRequest and
 // asserts the response carries the family signature.
 func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payload []byte, family string) {
@@ -615,6 +623,14 @@ func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payl
 		if resp.Status != quicwire.StatusNotImplemented {
 			t.Fatalf("opcode 0x%02X: expected iam-token NotImplemented (OIDC), got status 0x%02X payload %q",
 				opcode, resp.Status, resp.Payload)
+		}
+		return
+	}
+
+	if refused, ok := deviceIdentityKeyDeleteRefusals[opcode]; ok {
+		if resp.Status != quicwire.StatusFailedPrecondition || string(resp.Payload) != refused.Error() {
+			t.Fatalf("opcode 0x%02X: expected key-delete refusal %q, got status 0x%02X payload %q",
+				opcode, refused.Error(), resp.Status, resp.Payload)
 		}
 		return
 	}

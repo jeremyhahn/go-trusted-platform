@@ -489,7 +489,7 @@ func TestServer_BuildDHCPConfig(t *testing.T) {
 				DHCPRangeEnd:   "127.0.0.10",
 				DHCPSubnetMask: "255.255.255.0",
 				DHCPGateway:    "127.0.0.1",
-				DHCPDNS:        "8.8.8.8",
+				DHCPDNS:        []string{"8.8.8.8"},
 				DHCPLeaseTime:  1 * time.Hour,
 				BootFilename:   "ipxe.efi",
 				LocalFilesDir:  "/tmp",
@@ -714,8 +714,8 @@ func TestServer_DHCPConfigWithoutOptionalFields(t *testing.T) {
 		DHCPSubnetMask: "255.255.255.0",
 		DHCPServerIP:   "127.0.0.1",
 		DHCPLeaseTime:  1 * time.Hour,
-		DHCPGateway:    "", // Empty - optional
-		DHCPDNS:        "", // Empty - optional
+		DHCPGateway:    "",  // Empty - optional
+		DHCPDNS:        nil, // Empty - optional
 		LocalFilesDir:  "/tmp",
 		BootEntries: []BootEntry{
 			{Name: "test", Description: "Test", Kernel: "http://example.com/kernel"},
@@ -857,7 +857,7 @@ func TestServer_BuildDHCPConfig_WithOptionalFields(t *testing.T) {
 		DHCPSubnetMask: "255.255.255.0",
 		DHCPLeaseTime:  1 * time.Hour,
 		DHCPGateway:    "192.168.1.1",
-		DHCPDNS:        "8.8.8.8",
+		DHCPDNS:        []string{"8.8.8.8"},
 		BootEntries: []BootEntry{
 			{Name: "test", Description: "Test", Kernel: "http://example.com/kernel"},
 		},

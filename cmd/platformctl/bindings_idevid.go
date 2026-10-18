@@ -85,7 +85,9 @@ func (b *IDevIDBinding) HasIDevID() (map[string]interface{}, error) {
 	return protoToMap(resp)
 }
 
-// DeleteIDevID removes the IDevID key from the TPM.
+// DeleteIDevID asks the daemon to delete the IDevID key. The daemon refuses
+// with FailedPrecondition on every transport and the key stays in the TPM;
+// the refusal is returned as the error.
 func (b *IDevIDBinding) DeleteIDevID() (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {
@@ -145,7 +147,9 @@ func (b *IDevIDBinding) HasIAK() (map[string]interface{}, error) {
 	return protoToMap(resp)
 }
 
-// DeleteIAK removes the IAK key from the TPM.
+// DeleteIAK asks the daemon to delete the IAK. The daemon refuses with
+// FailedPrecondition on every transport and the key stays in the TPM; the
+// refusal is returned as the error.
 func (b *IDevIDBinding) DeleteIAK() (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {

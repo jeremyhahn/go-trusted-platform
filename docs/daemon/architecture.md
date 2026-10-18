@@ -403,6 +403,12 @@ type ManagedService interface {
 }
 ```
 
+The services configured under `services:` are owned by the process, not by
+this state machine: they are registered as `subsystemService`, whose `Start`
+and `Stop` refuse with `ErrServiceNotControllable` (`FailedPrecondition`) and
+whose `IsRunning` reads the subsystem itself. A refused verb leaves the
+recorded state untouched ([api.md](api.md) §2).
+
 ## Protocol Feature Matrix
 
 | Feature | REST | gRPC | QUIC | MCP | Unix |

@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // ErrMockServiceError is a standard mock service error for testing.
@@ -38,14 +39,14 @@ type mockServiceProvider struct {
 	lastZoneUpdateName string
 
 	// vTPM
-	vtpmCreateFunc    func(ctx context.Context, name, algorithm string) (interface{}, error)
+	vtpmCreateFunc    func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error)
 	vtpmDeleteFunc    func(ctx context.Context, name string) error
-	vtpmListFunc      func(ctx context.Context) ([]interface{}, error)
+	vtpmListFunc      func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error)
 	vtpmStartFunc     func(ctx context.Context, name string) error
 	vtpmStopFunc      func(ctx context.Context, name string) error
 	vtpmQuoteFunc     func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
-	vtpmSealFunc      func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error)
-	vtpmUnsealFunc    func(ctx context.Context, name string, sealed []byte) ([]byte, error)
+	vtpmSealFunc      func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error)
+	vtpmUnsealFunc    func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error)
 	vtpmExtendPCRFunc func(ctx context.Context, name string, pcr int, data []byte) error
 	vtpmReadPCRFunc   func(ctx context.Context, name string, pcr int) ([]byte, error)
 
@@ -252,13 +253,13 @@ type perfFlowsCall struct {
 func newMockServiceProvider() *mockServiceProvider {
 	return &mockServiceProvider{
 		// vTPM defaults
-		vtpmCreateFunc: func(ctx context.Context, name, algorithm string) (interface{}, error) {
+		vtpmCreateFunc: func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 			return map[string]interface{}{"name": name, "algorithm": algorithm, "status": "created"}, nil
 		},
 		vtpmDeleteFunc: func(ctx context.Context, name string) error {
 			return nil
 		},
-		vtpmListFunc: func(ctx context.Context) ([]interface{}, error) {
+		vtpmListFunc: func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 			return []interface{}{
 				map[string]interface{}{"name": "vtpm-1", "status": "running"},
 				map[string]interface{}{"name": "vtpm-2", "status": "stopped"},
@@ -273,10 +274,10 @@ func newMockServiceProvider() *mockServiceProvider {
 		vtpmQuoteFunc: func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error) {
 			return map[string]interface{}{"quote": "base64-quote-data", "signature": "base64-sig"}, nil
 		},
-		vtpmSealFunc: func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+		vtpmSealFunc: func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 			return []byte("sealed-data"), nil
 		},
-		vtpmUnsealFunc: func(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+		vtpmUnsealFunc: func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 			return []byte("unsealed-data"), nil
 		},
 		vtpmExtendPCRFunc: func(ctx context.Context, name string, pcr int, data []byte) error {
@@ -834,9 +835,9 @@ func newMockServiceProvider() *mockServiceProvider {
 }
 
 // vTPM implementations
-func (m *mockServiceProvider) VTPMCreate(ctx context.Context, name, algorithm string) (interface{}, error) {
+func (m *mockServiceProvider) VTPMCreate(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 	if m.vtpmCreateFunc != nil {
-		return m.vtpmCreateFunc(ctx, name, algorithm)
+		return m.vtpmCreateFunc(ctx, name, algorithm, secureBoot, labels)
 	}
 	return nil, nil
 }
@@ -848,9 +849,9 @@ func (m *mockServiceProvider) VTPMDelete(ctx context.Context, name string) error
 	return nil
 }
 
-func (m *mockServiceProvider) VTPMList(ctx context.Context) ([]interface{}, error) {
+func (m *mockServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 	if m.vtpmListFunc != nil {
-		return m.vtpmListFunc(ctx)
+		return m.vtpmListFunc(ctx, opts)
 	}
 	return nil, nil
 }
@@ -876,16 +877,16 @@ func (m *mockServiceProvider) VTPMQuote(ctx context.Context, name string, nonce 
 	return nil, nil
 }
 
-func (m *mockServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+func (m *mockServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 	if m.vtpmSealFunc != nil {
-		return m.vtpmSealFunc(ctx, name, data, pcrs)
+		return m.vtpmSealFunc(ctx, name, data, pcrs, authValue)
 	}
 	return nil, nil
 }
 
-func (m *mockServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+func (m *mockServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 	if m.vtpmUnsealFunc != nil {
-		return m.vtpmUnsealFunc(ctx, name, sealed)
+		return m.vtpmUnsealFunc(ctx, name, sealed, authValue)
 	}
 	return nil, nil
 }

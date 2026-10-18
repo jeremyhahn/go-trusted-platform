@@ -23,8 +23,18 @@ opcode table, the platform authorization model — is
 | **Unix** | **The same 23 RPCs.** Unix is gRPC over a UDS; `BMCService` is registered on both `grpcServer` and `grpcUDSServer` | same |
 | **REST** | base path `/api/v1/bmc/{profileID}`, **20 route registrations over 17 paths** | `pkg/api/daemon/rest_service.go`; handlers in `pkg/webservice/v1/bmc/` |
 | **QUIC** | `OpBMCCategory` = `0x9F`, sub-opcodes `BMCSubEnroll` `0x01` and `BMCSubRestore` `0x02` — **two operations, nothing else** | `sdk/go/wire/quicwire/phase35_opcodes.go`; handler `pkg/api/daemon/quic_bmc.go` |
-| **MCP** | **16 tools**, all named `platform_bmc_*` | `pkg/api/mcp/bmc_tools.go` |
+| **MCP** | **23 tools**, all named `platform_bmc_*`, one per gRPC RPC | `pkg/api/mcp/bmc_tools.go`; servicer wired in `pkg/api/daemon/daemon.go` |
 | **Embedded** | **None** | see §2 |
+
+Each MCP tool calls the same `BMCService` servicer gRPC registers. Its
+arguments are the RPC's request message and its result is the RPC's response
+message, both in protobuf JSON under the proto field names: enums by name
+(`BMC_BOOT_DEVICE_PXE`), 64-bit integers as strings, `bytes` fields base64. An
+argument the request message does not declare is refused as
+`InvalidArgument` before the servicer runs. A tool therefore succeeds and
+refuses with the gRPC status its RPC gives the same caller; the one MCP-only
+refusal is `Unavailable` (`ErrBMCNotConfigured`) on a daemon with no BMC
+service.
 
 ## 2. Embedded has no BMC route at all
 
@@ -71,7 +81,9 @@ Request/response shapes: gRPC `BMCPowerRequest{profile_id}` →
 `BMCPowerResponse` (the SDK's `PowerResponse` exposes `PreviousState` and
 `CurrentState`); `BMCPowerStatusRequest` → `BMCPowerStatusResponse{state}`.
 `PowerState` on the wire is `ON` / `OFF` / `UNKNOWN` / `UNSPECIFIED`; in
-`pkg/bmc` it is `"on"` / `"off"` / `"unknown"`. MCP arguments: `profile_id`.
+`pkg/bmc` it is `"on"` / `"off"` / `"unknown"`. MCP arguments: `profile_id`;
+the MCP result is the gRPC response, e.g.
+`{"previous_state":"BMC_POWER_STATE_OFF","current_state":"BMC_POWER_STATE_ON"}`.
 
 ---
 
@@ -117,8 +129,8 @@ lazily-created Redfish sub-client on port 443.
 | Get sensors | `Service.GetSensors` | `MISSING — docs/13 G7` | `GetSensors` | `GET /api/v1/bmc/{profileID}/sensors` | `GetSensors` | `MISSING — docs/13 G7` | `platform_bmc_get_sensors` |
 | Get system info | `Service.GetSystemInfo` | `MISSING — docs/13 G7` | `GetSystemInfo` | `GET .../system-info` | `GetSystemInfo` | `MISSING — docs/13 G7` | `platform_bmc_get_system_info` |
 | **Hardware identity (quirk-matching)** | `bmc.Client.HardwareIdentity` | in-process only | in-process only | in-process only | in-process only | in-process only | in-process only |
-| Provision | — (`baremetal` service) | `MISSING — docs/13 G7` | `Provision` | `POST .../provision` | `Provision` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Provision status | — (`baremetal` service) | `MISSING — docs/13 G7` | `ProvisionStatus` | `GET .../provision` | `ProvisionStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Provision | — (`baremetal` service) | `MISSING — docs/13 G7` | `Provision` | `POST .../provision` | `Provision` | `MISSING — docs/13 G7` | `platform_bmc_provision` |
+| Provision status | — (`baremetal` service) | `MISSING — docs/13 G7` | `ProvisionStatus` | `GET .../provision` | `ProvisionStatus` | `MISSING — docs/13 G7` | `platform_bmc_provision_status` |
 | **Host MAC discovery** | `bmc.DiscoverMAC` / `bmc.DiscoverMACs` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Protocol detection** | `bmc.DetectProtocol` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Vendor probe** | `VendorProbe.Detect` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -156,12 +168,12 @@ orchestrator *is* wired: `409` `ErrProvisionInProgress`, `400`
 | Capability | Embedded Go call | Embedded transport | Unix | REST | gRPC | QUIC | MCP |
 |---|---|---|---|---|---|---|---|
 | Get web certificate | `Service.GetWebCertificate` | `MISSING — docs/13 G7` | `GetWebCertificate` | `GET /api/v1/bmc/{profileID}/cert` | `GetWebCertificate` | `MISSING — docs/13 G7` | `platform_bmc_get_web_certificate` |
-| Replace web certificate | `Service.ReplaceWebCertificate` | `MISSING — docs/13 G7` | `ReplaceWebCertificate` | `PUT .../cert` | `ReplaceWebCertificate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Replace web certificate | `Service.ReplaceWebCertificate` | `MISSING — docs/13 G7` | `ReplaceWebCertificate` | `PUT .../cert` | `ReplaceWebCertificate` | `MISSING — docs/13 G7` | `platform_bmc_replace_web_certificate` |
 | List users | `Service.ListUsers` | `MISSING — docs/13 G7` | `ListUsers` | `GET .../users` | `ListUsers` | `MISSING — docs/13 G7` | `platform_bmc_list_users` |
-| Create user | `Service.CreateUser` | `MISSING — docs/13 G7` | `CreateUser` | `POST .../users` | `CreateUser` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Delete user | `Service.DeleteUser` | `MISSING — docs/13 G7` | `DeleteUser` | `DELETE .../users/{slot}` | `DeleteUser` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Set user password | `Service.SetUserPassword` | `MISSING — docs/13 G7` | `SetUserPassword` | `PUT .../users/{slot}/password` | `SetUserPassword` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Set user privilege | `Service.SetUserPrivilege` | `MISSING — docs/13 G7` | `SetUserPrivilege` | `PUT .../users/{slot}/privilege` | `SetUserPrivilege` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create user | `Service.CreateUser` | `MISSING — docs/13 G7` | `CreateUser` | `POST .../users` | `CreateUser` | `MISSING — docs/13 G7` | `platform_bmc_create_user` |
+| Delete user | `Service.DeleteUser` | `MISSING — docs/13 G7` | `DeleteUser` | `DELETE .../users/{slot}` | `DeleteUser` | `MISSING — docs/13 G7` | `platform_bmc_delete_user` |
+| Set user password | `Service.SetUserPassword` | `MISSING — docs/13 G7` | `SetUserPassword` | `PUT .../users/{slot}/password` | `SetUserPassword` | `MISSING — docs/13 G7` | `platform_bmc_set_user_password` |
+| Set user privilege | `Service.SetUserPrivilege` | `MISSING — docs/13 G7` | `SetUserPrivilege` | `PUT .../users/{slot}/privilege` | `SetUserPrivilege` | `MISSING — docs/13 G7` | `platform_bmc_set_user_privilege` |
 | **Enrollment ceremony** | `App.EnrollBMC(ctx, deviceID, cfg, opts)` | `MISSING — docs/13 G7` | `EnrollBMC` | `POST .../enroll` | `EnrollBMC` | `OpBMCCategory` `0x9F` / `BMCSubEnroll` `0x01` | `platform_bmc_enroll` |
 | **Factory-cert restore** | `App.RestoreBMC(ctx, deviceID, cfg)` | `MISSING — docs/13 G7` | `RestoreFactoryCert` | `POST .../cert/restore` | `RestoreFactoryCert` | `OpBMCCategory` `0x9F` / `BMCSubRestore` `0x02` | `platform_bmc_cert_restore` |
 | **Password rotation** | `RotationEngine.RotateOnce` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -170,14 +182,13 @@ orchestrator *is* wired: `409` `ErrProvisionInProgress`, `400`
 The two ceremonies are the **only** BMC capabilities on QUIC, and the only ones
 present on five of the six transports.
 
-**Four of five user-management operations are MCP-invisible.** An MCP client can
-enumerate BMC accounts but cannot create, delete, re-password or re-privilege
-one. Given §8, that is the safer half of the asymmetry — but it is an asymmetry,
-not a decision recorded anywhere in code.
-
-**`platform_bmc_cert_restore` is on MCP and `platform_bmc_replace_web_certificate`
-is not.** An MCP client can strip a BMC's platform-issued identity and cannot
-give it one back. Restore is the destructive direction.
+MCP carries every certificate and user operation gRPC carries, under the same
+`bmc:admin` scope (§8). Their arguments hold secrets exactly as the gRPC
+requests do: `platform_bmc_replace_web_certificate` takes `cert_pem` and
+`key_pem` (base64 of the PEM bytes), and `platform_bmc_create_user` and
+`platform_bmc_set_user_password` take `password` in clear. `create_user` takes
+`user` as a `BMCUser` object (`slot`, `username`, `enabled`, `privilege`,
+`channel`); privileges are `BMC_USER_PRIVILEGE_*` names.
 
 REST request/response detail:
 
@@ -253,11 +264,15 @@ serves both:
 
 | Permission | Meaning | gRPC `BMCService` RPCs | MCP `platform_bmc_*` tools |
 |---|---|---|---|
-| `bmc:read` | observation | `PowerStatus`, `GetBootDevice`, `VirtualMediaStatus`, `GetSensors`, `GetSystemInfo`, `ListUsers`, `GetWebCertificate`, `ProvisionStatus` | `power_status`, `get_boot_device`, `virtual_media_status`, `get_sensors`, `get_system_info`, `list_users`, `get_web_certificate` |
+| `bmc:read` | observation | `PowerStatus`, `GetBootDevice`, `VirtualMediaStatus`, `GetSensors`, `GetSystemInfo`, `ListUsers`, `GetWebCertificate`, `ProvisionStatus` | `power_status`, `get_boot_device`, `virtual_media_status`, `get_sensors`, `get_system_info`, `list_users`, `get_web_certificate`, `provision_status` |
 | `bmc:write` | recoverable state change | `PowerOn`, `SetBootDevice` | `power_on`, `set_boot_device` |
 | `bmc:power` | interrupts a running node | `PowerOff`, `PowerReset`, `PowerCycle` | `power_off`, `power_reset`, `power_cycle` |
 | `bmc:media` | chooses what the machine boots | `MountISO`, `UnmountISO` | `mount_iso`, `unmount_iso` |
-| `bmc:admin` | changes which credentials the BMC trusts | `EnrollBMC`, `RestoreFactoryCert`, `ReplaceWebCertificate`, `CreateUser`, `DeleteUser`, `SetUserPassword`, `SetUserPrivilege`, `Provision` | `enroll`, `cert_restore` |
+| `bmc:admin` | changes which credentials the BMC trusts | `EnrollBMC`, `RestoreFactoryCert`, `ReplaceWebCertificate`, `CreateUser`, `DeleteUser`, `SetUserPassword`, `SetUserPrivilege`, `Provision` | `enroll`, `cert_restore`, `replace_web_certificate`, `create_user`, `delete_user`, `set_user_password`, `set_user_privilege`, `provision` |
+
+Each MCP tool's scope is held on its `bmcTools` entry in
+`pkg/api/mcp/bmc_tools.go`, and a unit test holds it equal to its RPC's scope
+in `pkg/api/grpc/method_permissions.go`.
 
 QUIC carries only two BMC operations: `OpBMCCategory` (`0x9F`) subs
 `BMCSubEnroll` and `BMCSubRestore`, which require `bmc:admin` in
@@ -300,6 +315,11 @@ those routes**. This is a client-side gap, distinct from the transport gaps in
 §3–§6, and it is why the `platformctl bmc cert` / `enroll` / `user` verbs use
 the gRPC path rather than the raw-HTTP path the other verbs use.
 
+The SDK's MCP transport has no such gap: `sdk/go/transport/mcp/bmc.go` maps
+all 23 methods onto the `platform_bmc_*` tools of §1, so a client on
+`--transport mcp` reaches every RPC, with the reply and the refusal code its
+gRPC call gives.
+
 ## 10. Two REST route registries, and they disagree
 
 BMC routes are registered in two places:
@@ -335,12 +355,11 @@ table are in [`docs/daemon/api.md`](../daemon/api.md) §4.
 |---|---|
 | No BMC in the embedded `ServiceRegistry` | **every** capability |
 | QUIC carries only the two ceremonies | 21 of 23 RPC-backed capabilities |
-| MCP omits provision, provision-status, replace-cert, and four user verbs | 7 |
 | `MountVirtualMedia`, `UnmountVirtualMedia`, `ClearUEFIBootEntries` have no transport | 3 |
 | MAC discovery, protocol detection, vendor probe have no transport | 3 |
 | Password rotation and credential-store CRUD have no transport | 2 |
 | SDK REST adapter maps 14 of 23 RPCs | 9 |
 | `BMCRouter` omits enroll and cert-restore | 2 |
-| REST and QUIC carry no BMC scope check (§8) | every REST route, both QUIC ceremonies |
+| REST carries no BMC scope check (§8) | every REST route |
 
 All are recorded as `docs/13 G7` debt, not as design.

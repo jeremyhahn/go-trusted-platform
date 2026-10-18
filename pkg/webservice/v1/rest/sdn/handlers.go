@@ -87,7 +87,7 @@ func (h *SDNHandlers) handleGRPCError(w http.ResponseWriter, r *http.Request, er
 	switch st.Code() {
 	case codes.NotFound:
 		h.respWriter.Error404(w, r, err)
-	case codes.InvalidArgument:
+	case codes.InvalidArgument, codes.FailedPrecondition:
 		h.respWriter.Error400(w, r, err)
 	case codes.PermissionDenied, codes.Unauthenticated:
 		h.respWriter.Error401(w, r, err)

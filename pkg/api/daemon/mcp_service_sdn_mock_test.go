@@ -38,7 +38,6 @@ func createMCPTestSDNService(mockOVS *ConfigurableMockOVSClient) *SDNService {
 		ports:     make(map[string]*portResource),
 		taps:      make(map[string]*tapResource),
 		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
 	}
 }
 

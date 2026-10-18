@@ -113,7 +113,7 @@ func (vm *VM) initializeNVRAM() error {
 	if err != nil {
 		return err
 	}
-	if !p.nvram {
+	if !p.nvram(vm.config) {
 		return nil
 	}
 	nvramPath := vm.config.GetNVRAMPath()
@@ -169,7 +169,7 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 		args = append(args, "-enable-kvm")
 	}
 
-	args = append(args, "-machine", p.machine(c))
+	args = append(args, "-machine", p.machine(c, kvm))
 	args = append(args, "-cpu", p.cpu(c, kvm))
 	args = append(args, "-smp", fmt.Sprintf("cores=%d,threads=1", c.CPUs))
 	args = append(args, "-m", strconv.Itoa(c.Memory))

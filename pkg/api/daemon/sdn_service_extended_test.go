@@ -30,11 +30,10 @@ import (
 
 func TestSDNService_ovsBridgeToPb(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	t.Run("full bridge conversion", func(t *testing.T) {
@@ -144,11 +143,10 @@ func TestSDNService_ovsBridgeToPb(t *testing.T) {
 
 func TestSDNService_ovsPortToPb(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	t.Run("full port conversion", func(t *testing.T) {
@@ -274,11 +272,10 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 
 func TestSDNService_ovsFlowToPb(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	t.Run("full flow conversion", func(t *testing.T) {
@@ -387,11 +384,10 @@ func TestSDNService_ovsFlowToPb(t *testing.T) {
 
 func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	t.Run("config with empty match struct", func(t *testing.T) {
@@ -703,28 +699,6 @@ func TestSDNService_ResourceStructures(t *testing.T) {
 		assert.ElementsMatch(t, []string{"port1", "port2"}, vr.ports)
 		assert.Equal(t, now, vr.createdAt)
 	})
-
-	t.Run("portAuthResource fields", func(t *testing.T) {
-		authTime := time.Now()
-		expireTime := authTime.Add(24 * time.Hour)
-		par := &portAuthResource{
-			portID:          "port-id",
-			bridgeID:        "bridge-id",
-			certificateCN:   "test.example.com",
-			certificate:     []byte("cert-data"),
-			authenticatedAt: authTime,
-			expiresAt:       expireTime,
-			authorizedVLANs: []uint32{100, 200, 300},
-		}
-
-		assert.Equal(t, "port-id", par.portID)
-		assert.Equal(t, "bridge-id", par.bridgeID)
-		assert.Equal(t, "test.example.com", par.certificateCN)
-		assert.Equal(t, []byte("cert-data"), par.certificate)
-		assert.Equal(t, authTime, par.authenticatedAt)
-		assert.Equal(t, expireTime, par.expiresAt)
-		assert.ElementsMatch(t, []uint32{100, 200, 300}, par.authorizedVLANs)
-	})
 }
 
 // =============================================================================
@@ -734,32 +708,28 @@ func TestSDNService_ResourceStructures(t *testing.T) {
 func TestSDNService_MapInitialization(t *testing.T) {
 	t.Run("empty service has initialized maps", func(t *testing.T) {
 		svc := &SDNService{
-			bridges:   make(map[string]*bridgeResource),
-			ports:     make(map[string]*portResource),
-			taps:      make(map[string]*tapResource),
-			vlans:     make(map[string]*vlanResource),
-			portAuths: make(map[string]*portAuthResource),
+			bridges: make(map[string]*bridgeResource),
+			ports:   make(map[string]*portResource),
+			taps:    make(map[string]*tapResource),
+			vlans:   make(map[string]*vlanResource),
 		}
 
 		assert.NotNil(t, svc.bridges)
 		assert.NotNil(t, svc.ports)
 		assert.NotNil(t, svc.taps)
 		assert.NotNil(t, svc.vlans)
-		assert.NotNil(t, svc.portAuths)
 		assert.Len(t, svc.bridges, 0)
 		assert.Len(t, svc.ports, 0)
 		assert.Len(t, svc.taps, 0)
 		assert.Len(t, svc.vlans, 0)
-		assert.Len(t, svc.portAuths, 0)
 	})
 
 	t.Run("service can store and retrieve resources", func(t *testing.T) {
 		svc := &SDNService{
-			bridges:   make(map[string]*bridgeResource),
-			ports:     make(map[string]*portResource),
-			taps:      make(map[string]*tapResource),
-			vlans:     make(map[string]*vlanResource),
-			portAuths: make(map[string]*portAuthResource),
+			bridges: make(map[string]*bridgeResource),
+			ports:   make(map[string]*portResource),
+			taps:    make(map[string]*tapResource),
+			vlans:   make(map[string]*vlanResource),
 		}
 
 		// Add resources
@@ -767,20 +737,17 @@ func TestSDNService_MapInitialization(t *testing.T) {
 		svc.ports["port0"] = &portResource{id: "id2", name: "port0"}
 		svc.taps["tap0"] = &tapResource{name: "tap0"}
 		svc.vlans["br0:100"] = &vlanResource{id: "id3", vlanID: 100}
-		svc.portAuths["br0:port0"] = &portAuthResource{portID: "port0"}
 
 		// Verify
 		assert.Len(t, svc.bridges, 1)
 		assert.Len(t, svc.ports, 1)
 		assert.Len(t, svc.taps, 1)
 		assert.Len(t, svc.vlans, 1)
-		assert.Len(t, svc.portAuths, 1)
 
 		// Retrieve
 		assert.Equal(t, "id1", svc.bridges["br0"].id)
 		assert.Equal(t, "id2", svc.ports["port0"].id)
 		assert.Equal(t, "tap0", svc.taps["tap0"].name)
 		assert.Equal(t, "id3", svc.vlans["br0:100"].id)
-		assert.Equal(t, "port0", svc.portAuths["br0:port0"].portID)
 	})
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -33,7 +34,7 @@ const configRoute = "GET /api/v1/devices/config"
 func TestRegisterRoutes_ConfigRouteIsNotMounted(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
-	assert.NotContains(t, walkRoutes(t, router), configRoute)
+	assert.NotContains(t, testutil.WalkRoutes(t, router), configRoute)
 
 	var match mux.RouteMatch
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/config?mac=52:54:00:aa:bb:cc", nil)
@@ -50,10 +51,10 @@ func TestRegisterProvisioningRoutes_MountsOnlyTheConfigRoute(t *testing.T) {
 	root := mux.NewRouter()
 	assert.True(t, NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter).RegisterProvisioningRoutes(root, "/api/v1"))
 
-	for _, route := range walkRoutes(t, root) {
+	for _, route := range testutil.WalkRoutes(t, root) {
 		assert.Contains(t, []string{configRoute, "GET /api/v1"}, route, "provisioning routes mounted %q", route)
 	}
-	assert.Contains(t, walkRoutes(t, root), configRoute)
+	assert.Contains(t, testutil.WalkRoutes(t, root), configRoute)
 
 	var match mux.RouteMatch
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/templates", nil)
@@ -67,5 +68,5 @@ func TestRegisterProvisioningRoutes_NoProfileServiceMountsNothing(t *testing.T) 
 
 	root := mux.NewRouter()
 	assert.False(t, NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter).RegisterProvisioningRoutes(root, "/api/v1"))
-	assert.Empty(t, walkRoutes(t, root))
+	assert.Empty(t, testutil.WalkRoutes(t, root))
 }

@@ -80,9 +80,6 @@ var sentinelClasses = []struct {
 
 	{ErrDeviceProfileIdentityRequired, codes.InvalidArgument},
 	{ErrDeviceProfileMatchCriteriaRequired, codes.InvalidArgument},
-	{ErrBMCProfileIDRequired, codes.InvalidArgument},
-	{ErrBMCBootDeviceRequired, codes.InvalidArgument},
-	{ErrBMCISOURLRequired, codes.InvalidArgument},
 	{ErrClusterSeedAddressRequired, codes.InvalidArgument},
 	{ErrEABCredentialIDRequired, codes.InvalidArgument},
 	{ErrEABKeyIDRequired, codes.InvalidArgument},
@@ -98,7 +95,6 @@ var sentinelClasses = []struct {
 	{ErrInvitationUserIDRequired, codes.InvalidArgument},
 	{ErrInvitationRevokerIDRequired, codes.InvalidArgument},
 	{ErrProvisionSessionIDRequired, codes.InvalidArgument},
-	{ErrProvisionProfileIDRequired, codes.InvalidArgument},
 	{ErrProvisionDigestRequired, codes.InvalidArgument},
 	{ErrProxyIDRequired, codes.InvalidArgument},
 	{ErrProxyRouteRequired, codes.InvalidArgument},

@@ -370,7 +370,7 @@ wired: the sealed object's auth is `--password`, and PCR binding is `--pcrs`
 |---|---|
 | `generate` | `--algorithm` (default `ECDSA-P256`), `--overwrite` |
 | `info` | — |
-| `delete` | — |
+| `delete` | — (refused, see below) |
 | `csr` | `--common-name`, `--organization`, `--country`, `--state`, `--locality`, `--organizational-unit` |
 | `install` | `--cert-file` (**required** — `MarkFlagRequired`, PEM) |
 | `certificate` (alias `cert`) | — |
@@ -378,6 +378,13 @@ wired: the sealed object's auth is `--password`, and PCR binding is `--pcrs`
 **`--common-name` on `csr` is described as required in its help text but is not
 marked required by the parser.** Omitting it produces a server-side failure, not
 a usage error. `--cert-file` on `install` *is* enforced locally.
+
+**`delete` is refused until the owner rules on eviction.** The key is
+TPM-resident and the daemon does not evict it: every transport answers
+`FailedPrecondition` and changes nothing — no key, no certificate, no state
+(#304). The command prints nothing on stdout, writes
+`Error: IDevID key delete refused: the key is TPM-resident and is not evicted; nothing was changed`
+to stderr and exits `1`. The same holds for `tpm iak delete`.
 
 ### `platformctl tpm iak`
 

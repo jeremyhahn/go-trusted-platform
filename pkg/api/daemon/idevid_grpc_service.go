@@ -148,26 +148,12 @@ func (s *IDevIDGRPCService) HasIDevID(ctx context.Context, req *platformv1.HasID
 	}, nil
 }
 
-// DeleteIDevID removes the IDevID key from the TPM.
+// DeleteIDevID refuses with ErrDeviceIdentityKeyNotDeletable (FailedPrecondition)
+// and changes nothing.
 func (s *IDevIDGRPCService) DeleteIDevID(ctx context.Context, req *platformv1.DeleteIDevIDRequest) (*platformv1.DeleteIDevIDResponse, error) {
-	if s.tpm2Service == nil {
-		return nil, status.Error(codes.FailedPrecondition, "TPM2 service not initialized")
-	}
-
-	// Delete the IDevID certificate first
-	if err := s.tpm2Service.DeleteIDevIDCertificate(); err != nil {
-		// Log but continue - certificate might not exist
-		s.logger.Debug("IDevID certificate deletion skipped", "error", err)
-	}
-
-	s.logger.Info("IDevID deleted")
-
-	return &platformv1.DeleteIDevIDResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "IDevID deleted successfully",
-		},
-	}, nil
+	// The persistent IDevID key is not evicted here, so refuse rather than
+	// report a deletion; the certificate has DeleteIDevIDCertificate.
+	return nil, ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}
 }
 
 // =============================================================================
@@ -254,26 +240,12 @@ func (s *IDevIDGRPCService) HasIAK(ctx context.Context, req *platformv1.HasIAKRe
 	}, nil
 }
 
-// DeleteIAK removes the IAK key from the TPM.
+// DeleteIAK refuses with ErrDeviceIdentityKeyNotDeletable (FailedPrecondition)
+// and changes nothing.
 func (s *IDevIDGRPCService) DeleteIAK(ctx context.Context, req *platformv1.DeleteIAKRequest) (*platformv1.DeleteIAKResponse, error) {
-	if s.tpm2Service == nil {
-		return nil, status.Error(codes.FailedPrecondition, "TPM2 service not initialized")
-	}
-
-	// Delete the IAK certificate first
-	if err := s.tpm2Service.DeleteIAKCertificate(); err != nil {
-		// Log but continue - certificate might not exist
-		s.logger.Debug("IAK certificate deletion skipped", "error", err)
-	}
-
-	s.logger.Info("IAK deleted")
-
-	return &platformv1.DeleteIAKResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "IAK deleted successfully",
-		},
-	}, nil
+	// The persistent IAK is not evicted here, so refuse rather than report a
+	// deletion; the certificate has DeleteIAKCertificate.
+	return nil, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
 }
 
 // =============================================================================

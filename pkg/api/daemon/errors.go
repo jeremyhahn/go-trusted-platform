@@ -148,6 +148,26 @@ func (e ErrServiceStopFailed) Error() string {
 	return fmt.Sprintf("service %s failed to stop: %s", e.ServiceName, e.Reason)
 }
 
+// ErrServiceNotControllable is returned when start, stop or restart names a
+// service whose lifecycle belongs to the platformd process, not to the
+// daemon's service registry: it comes up with the process and goes down with
+// it, and driving it at runtime is refused rather than faked.
+type ErrServiceNotControllable struct {
+	ServiceName string
+	Reason      string
+}
+
+func (e ErrServiceNotControllable) Error() string {
+	return fmt.Sprintf("service %s cannot be started or stopped at runtime: %s", e.ServiceName, e.Reason)
+}
+
+// GRPCStatus classifies the refusal as FailedPrecondition: the RPC is
+// implemented, and the named service's state (owned by the process) does not
+// allow it. Unimplemented would mark a missing capability instead.
+func (e ErrServiceNotControllable) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
+
 // ErrConfigNotFound is returned when requested configuration does not exist
 type ErrConfigNotFound struct {
 	ConfigKey string
@@ -1089,28 +1109,6 @@ func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
-// ErrTenantForbidden is returned when a TenantService request names a tenant
-// other than the caller's own and the caller is not the system tenant. It is
-// the gRPC twin of the REST tenant guard's 403 from RequireOwnTenantOrSystem.
-type ErrTenantForbidden struct {
-	Requested string
-}
-
-func (e ErrTenantForbidden) Error() string {
-	return fmt.Sprintf("tenant request names tenant %q: caller may not act on another tenant", e.Requested)
-}
-
-// ErrTenantSystemOnly is returned when a caller other than the system tenant
-// calls a cross-tenant TenantService method. It is the gRPC twin of the REST
-// tenant guard's 403 from RequireSystemTenant.
-type ErrTenantSystemOnly struct {
-	Method string
-}
-
-func (e ErrTenantSystemOnly) Error() string {
-	return fmt.Sprintf("%s acts across tenants: only the system tenant may call it", e.Method)
-}
-
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so
@@ -1815,6 +1813,37 @@ type ErrConfigDeliveryServiceNotAvailable struct{}
 // Error implements the error interface.
 func (e ErrConfigDeliveryServiceNotAvailable) Error() string {
 	return "config delivery service is not available"
+}
+
+// GRPCStatus classifies the error as Unavailable, the code the gRPC
+// ConfigDeliveryService answers with when no service is wired, so MCP
+// reports the same error class.
+func (e ErrConfigDeliveryServiceNotAvailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
+// ErrConfigDeliveryClassified carries a config delivery error over MCP with
+// the gRPC code the ConfigDeliveryService answers the same error with, so
+// both transports report one error class. Unwrap keeps the typed cause
+// reachable through errors.As.
+type ErrConfigDeliveryClassified struct {
+	Code codes.Code
+	Err  error
+}
+
+// Error implements the error interface.
+func (e ErrConfigDeliveryClassified) Error() string {
+	return e.Err.Error()
+}
+
+// Unwrap returns the config delivery error.
+func (e ErrConfigDeliveryClassified) Unwrap() error {
+	return e.Err
+}
+
+// GRPCStatus returns the gRPC status for the classified error.
+func (e ErrConfigDeliveryClassified) GRPCStatus() *status.Status {
+	return status.New(e.Code, e.Err.Error())
 }
 
 // ErrConfigSerializationFailed is returned when a resolved device

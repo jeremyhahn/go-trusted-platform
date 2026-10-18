@@ -4043,6 +4043,7 @@ type VMMigrationSpec struct {
 	TpmEnabled    bool                   `protobuf:"varint,7,opt,name=tpm_enabled,json=tpmEnabled,proto3" json:"tpm_enabled,omitempty"`
 	NetworkMode   string                 `protobuf:"bytes,8,opt,name=network_mode,json=networkMode,proto3" json:"network_mode,omitempty"`
 	MacAddress    string                 `protobuf:"bytes,9,opt,name=mac_address,json=macAddress,proto3" json:"mac_address,omitempty"`
+	Arch          string                 `protobuf:"bytes,10,opt,name=arch,proto3" json:"arch,omitempty"` // source guest arch: "x86_64" | "aarch64"; empty = x86_64. A mismatched destination refuses.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4136,6 +4137,13 @@ func (x *VMMigrationSpec) GetNetworkMode() string {
 func (x *VMMigrationSpec) GetMacAddress() string {
 	if x != nil {
 		return x.MacAddress
+	}
+	return ""
+}
+
+func (x *VMMigrationSpec) GetArch() string {
+	if x != nil {
+		return x.Arch
 	}
 	return ""
 }
@@ -6200,7 +6208,7 @@ const file_compute_proto_rawDesc = "" +
 	"\x0elive_migration\x18\x03 \x01(\bR\rliveMigration\x120\n" +
 	"\x14bandwidth_limit_mbps\x18\x04 \x01(\x04R\x12bandwidthLimitMbps\"@\n" +
 	"\x11MigrateVMResponse\x12+\n" +
-	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"\xa1\x02\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"\xb5\x02\n" +
 	"\x0fVMMigrationSpec\x12\x1b\n" +
 	"\tmemory_mb\x18\x01 \x01(\x05R\bmemoryMb\x12\x12\n" +
 	"\x04cpus\x18\x02 \x01(\x05R\x04cpus\x12\x1b\n" +
@@ -6214,7 +6222,9 @@ const file_compute_proto_rawDesc = "" +
 	"tpmEnabled\x12!\n" +
 	"\fnetwork_mode\x18\b \x01(\tR\vnetworkMode\x12\x1f\n" +
 	"\vmac_address\x18\t \x01(\tR\n" +
-	"macAddress\"\x8d\x01\n" +
+	"macAddress\x12\x12\n" +
+	"\x04arch\x18\n" +
+	" \x01(\tR\x04arch\"\x8d\x01\n" +
 	"\x17PrepareMigrationRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
 	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12\x12\n" +

@@ -121,6 +121,12 @@ does not read, so every console fulfil ran with profile id 0 and answered
 `404 profile not found`. The `Session` body's `profile_id` is still emitted as a
 JSON number; that row is #425.
 
+A missing or zero `profile_id` names no profile. `configdelivery.Service`
+refuses it with `ErrProfileIDRequired`
+(`configdelivery: profile_id is required and must be non-zero`) before it looks
+the session up, so every transport answers it the same way: REST `400`, gRPC and
+Unix `InvalidArgument`, QUIC `StatusInvalidArgument`, MCP `InvalidParams` (#304).
+
 `SignDigest` signs a Secure Boot digest **on the platform**, so the signing key
 never travels to the machine being provisioned.
 
@@ -175,8 +181,8 @@ different request messages (`RegisterProvisioningDeviceRequest` versus
 `BMCService` (`pkg/api/grpc/proto/bmc.proto`) carries 23 RPCs — power control,
 boot device, virtual media, sensors, system info, provisioning, web certificate
 management, enrollment, factory restore and user management. QUIC reaches BMC
-enrollment through the **BMC category opcode `0x9F`**, and there are 16
-`platform_bmc_*` MCP tools.
+enrollment through the **BMC category opcode `0x9F`**, and there are 23
+`platform_bmc_*` MCP tools, one per RPC.
 
 **BMC internals are not documented in this pass** — see
 [engineering.md](engineering.md) §1. The transport shape is recorded here so the
@@ -207,8 +213,9 @@ services is classified in the gRPC catalog (`pkg/api/grpc/method_permissions.go`
 | `pxe:read` | `OpPXEListDevices`, `OpPXEGetDevice` |
 | `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry` |
 | `pxe:delete` | `OpPXERemoveDevice` |
-| `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `GetNonce`, `FetchConfig`, `PollSession`, `ListSessions`, `GetSession` |
-| `provisioning:write` | subs `SignDigest`, `FulfillSession` |
+| `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `ListSessions`, `GetSession` |
+| `provisioning:write` | sub `FulfillSession` |
+| open (pre-auth) | subs `GetNonce`, `FetchConfig`, `SignDigest`, `PollSession`, as on gRPC (#317) |
 | `device:write` | subs `DeviceProfileSubAssign`, `DeviceProfileSubUnassign`, `DeviceSubRecordAttestCert`, `DeviceSubDisable`, `DeviceSubEnable` |
 
 The EAB sub-opcodes of the same category carry the `eab` scopes
@@ -228,9 +235,18 @@ device-facing routes take no scope (§3). The gateway's device reports under
 `/api/v1/provisioning/devices/{mac}` require `provisioning:write` the same way
 (§4).
 
-On MCP, the 16 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
-The `provision_*` tools are not in the permission map, so every caller is
-refused with `AuthErrorToolNotClassified` until they are classified.
+On MCP, the 23 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
+The `provision_*` tools take the scopes of their gRPC twin (#304):
+`provision_list_sessions` and `provision_get_session` need `provisioning:read`,
+`provision_fulfill_session` needs `provisioning:write`, and
+`provision_get_nonce`, `provision_fetch_config`, `provision_sign_digest` and
+`provision_poll_session` are open, as the gRPC methods are pre-auth. The open
+tools reach the same `configdelivery.Service`, which checks the nonce, EAB HMAC
+and EK binding before it answers. QUIC serves the same four open, through
+its pre-auth sub-opcode list (#317); before #317 it required
+`provisioning:read` or `provisioning:write` for them, so a device without a
+token could not provision over QUIC. No transport binds a caller to a
+session's tenant, so `provisioning:read` lists every tenant's sessions.
 
 Note that the config-delivery path is *separately* protected: a device presents
 an EAB credential and a nonce, and `RateLimitConfig` bounds the endpoint. That

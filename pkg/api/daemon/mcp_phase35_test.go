@@ -121,6 +121,7 @@ type recordingLUKSBackend struct {
 	inner      LUKSBackend
 	removeHit  int
 	changeHit  int
+	unlockHit  int
 	lastEnroll *LUKSEnrollTPMRequest
 }
 
@@ -151,6 +152,7 @@ func (r *recordingLUKSBackend) RemoveKey(ctx context.Context, req *LUKSRemoveKey
 	return r.inner.RemoveKey(ctx, req)
 }
 func (r *recordingLUKSBackend) TestUnlock(ctx context.Context, req *LUKSTestUnlockRequest) (bool, error) {
+	r.unlockHit++
 	return r.inner.TestUnlock(ctx, req)
 }
 func (r *recordingLUKSBackend) ChangePassphrase(ctx context.Context, req *LUKSChangePassphraseRequest) error {
@@ -274,8 +276,8 @@ func TestPhase35Provider_NotConfigured(t *testing.T) {
 	if _, err := p.LUKSRemoveKey(ctx, nil); !errors.Is(err, ErrLUKSNotConfigured) {
 		t.Errorf("LUKSRemoveKey: want ErrLUKSNotConfigured, got %v", err)
 	}
-	if _, err := p.LUKSTestUnlock(ctx, nil); !errors.Is(err, ErrLUKSNotConfigured) {
-		t.Errorf("LUKSTestUnlock: want ErrLUKSNotConfigured, got %v", err)
+	if _, err := p.LUKSTestUnlock(ctx, nil); !errors.Is(err, ErrLUKSTestUnlockUnverified) {
+		t.Errorf("LUKSTestUnlock: want ErrLUKSTestUnlockUnverified, got %v", err)
 	}
 	if _, err := p.LUKSChangePassphrase(ctx, nil); !errors.Is(err, ErrLUKSNotConfigured) {
 		t.Errorf("LUKSChangePassphrase: want ErrLUKSNotConfigured, got %v", err)
@@ -532,14 +534,6 @@ func TestPhase35Provider_LUKSDelegation(t *testing.T) {
 	}
 	if lb.removeHit != 1 {
 		t.Errorf("RemoveKey: want 1 call, got %d", lb.removeHit)
-	}
-	res, err := p.LUKSTestUnlock(ctx, map[string]interface{}{"device": "/dev/x", "slot": float64(2)})
-	if err != nil {
-		t.Fatalf("LUKSTestUnlock: %v", err)
-	}
-	m := res.(map[string]interface{})
-	if m["unlocked"] != true {
-		t.Errorf("TestUnlock: want unlocked=true, got %v", m)
 	}
 	if _, err := p.LUKSChangePassphrase(ctx, map[string]interface{}{
 		"device": "/dev/x", "slot": float64(1), "old_passphrase": "a", "new_passphrase": "b",

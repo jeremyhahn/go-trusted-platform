@@ -67,3 +67,32 @@ func TestLinuxDeployerAdapter_DeployConfig(t *testing.T) {
 	var invalid deployer.ErrInvalidDeployConfig
 	assert.ErrorAs(t, teardown.Validate(), &invalid, "an incomplete section fails the deployer's validation")
 }
+
+// TestLinuxDeployerAdapter_DeployConfig_BootNode: boot_node and
+// firmware_cache_dir reach the deployer, and the cache defaults beside
+// data_dir when unset.
+func TestLinuxDeployerAdapter_DeployConfig_BootNode(t *testing.T) {
+	cfg := &DeployerConfig{Host: "10.0.0.1", DataDir: "/srv/pxeboot", BootNode: true}
+	dc := newLinuxDeployerAdapter(cfg, nil, nil).deployConfig("/tmp/manifest.yaml")
+	assert.True(t, dc.BootNode)
+	assert.Equal(t, "/srv/pxeboot-firmware", dc.FirmwareCacheDir)
+
+	cfg.FirmwareCacheDir = "/var/lib/pxe-firmware"
+	dc = newLinuxDeployerAdapter(cfg, nil, nil).deployConfig("/tmp/manifest.yaml")
+	assert.Equal(t, "/var/lib/pxe-firmware", dc.FirmwareCacheDir)
+
+	dc = newLinuxDeployerAdapter(&DeployerConfig{Host: "10.0.0.1"}, nil, nil).deployConfig("")
+	assert.False(t, dc.BootNode)
+	assert.Empty(t, dc.FirmwareCacheDir, "default mode mounts no firmware cache")
+}
+
+// TestLinuxDeployerAdapter_DeployConfig_NoRouter: bootstrap_no_router
+// reaches the deployer, and off it stays off.
+func TestLinuxDeployerAdapter_DeployConfig_NoRouter(t *testing.T) {
+	dc := newLinuxDeployerAdapter(&DeployerConfig{Host: "10.0.0.1", BootstrapNoRouter: true}, nil, nil).deployConfig("")
+	assert.True(t, dc.BootstrapNoRouter)
+
+	dc = newLinuxDeployerAdapter(&DeployerConfig{Host: "10.0.0.1", BootstrapGateway: "192.0.2.1"}, nil, nil).deployConfig("")
+	assert.False(t, dc.BootstrapNoRouter)
+	assert.Equal(t, "192.0.2.1", dc.BootstrapGateway)
+}

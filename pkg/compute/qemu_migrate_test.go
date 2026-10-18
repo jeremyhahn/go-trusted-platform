@@ -120,6 +120,7 @@ func (f *fakeMigrateSession) Quit(ctx context.Context) error {
 // endpoint.
 type fakeCoordinator struct {
 	prepared    bool
+	spec        MigrationSpec // spec passed to the last PrepareIncoming call
 	finalized   bool
 	finalizeErr error // streamErr passed to the last Finalize call
 	prepareErr  error
@@ -131,6 +132,7 @@ func (c *fakeCoordinator) PrepareIncoming(ctx context.Context, destination strin
 		return nil, c.prepareErr
 	}
 	c.prepared = true
+	c.spec = spec
 	if c.endpoint != nil {
 		return c.endpoint, nil
 	}
@@ -220,6 +222,17 @@ func TestMigrateVM_ColdHappyPath(t *testing.T) {
 	// Source bookkeeping is retired.
 	_, err = orch.Get(context.Background(), "vm1")
 	assert.ErrorIs(t, err, ErrInstanceNotFound)
+}
+
+// The destination refuses a guest of another architecture, so the source names
+// its guest's architecture in the handshake.
+func TestMigrateVM_SpecCarriesTheGuestArch(t *testing.T) {
+	orch, coord, _, _ := migrateTestOrchestrator(t, false)
+	orch.config.Arch = qemu.ArchAArch64
+
+	_, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, qemu.ArchAArch64, coord.spec.Arch)
 }
 
 func TestMigrateVM_LiveHappyPath(t *testing.T) {

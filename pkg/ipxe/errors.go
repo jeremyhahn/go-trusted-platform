@@ -186,6 +186,25 @@ func (e *SocketOptionError) Unwrap() error {
 	return e.Err
 }
 
+// DHCPAddressError reports a DHCP option address that is not IPv4. It
+// matches ErrInvalidConfig, the sentinel the rest of config validation
+// reports.
+type DHCPAddressError struct {
+	// Option names the setting, "gateway" or "dns".
+	Option string
+	Value  string
+}
+
+// Error implements the error interface.
+func (e *DHCPAddressError) Error() string {
+	return fmt.Sprintf("DHCP %s %q is not an IPv4 address", e.Option, e.Value)
+}
+
+// Is reports whether target is ErrInvalidConfig.
+func (e *DHCPAddressError) Is(target error) bool {
+	return target == ErrInvalidConfig
+}
+
 // SentinelCauseError attaches an underlying cause to a package sentinel
 // error so errors.Is matches both the sentinel and the cause.
 type SentinelCauseError struct {

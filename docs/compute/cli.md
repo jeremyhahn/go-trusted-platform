@@ -200,7 +200,7 @@ This is the **only attestation verb in the entire CLI** — see
 
 | Capability | Reach it with |
 |---|---|
-| Suspend / resume a VM | QUIC, MCP |
+| Suspend / resume a VM | QUIC |
 | VM snapshots (create, list, delete, restore) | REST, gRPC, MCP |
 | Disk attach / detach / resize | REST, gRPC, QUIC, MCP |
 | VM metrics, container metrics | REST, gRPC, QUIC, MCP |

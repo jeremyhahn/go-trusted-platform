@@ -509,6 +509,21 @@ func TestConfigDeliveryGRPC_FulfillSession_MissingSessionID(t *testing.T) {
 	assertGRPCCode(t, err, codes.InvalidArgument)
 }
 
+// TestConfigDeliveryGRPC_FulfillSession_ZeroProfileID asserts gRPC (and
+// the Unix socket, which serves the same service) answers profile_id 0
+// with InvalidArgument from the service's ErrProfileIDRequired (#304).
+func TestConfigDeliveryGRPC_FulfillSession_ZeroProfileID(t *testing.T) {
+	backing := newCDTestService(t, &cdMockProfileResolver{}, nil)
+	svc := newCDGRPCService(t, backing)
+	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
+
+	_, err := svc.FulfillSession(context.Background(), &platformv1.FulfillSessionRequest{SessionId: session.ID})
+	assertGRPCCode(t, err, codes.InvalidArgument)
+	if !strings.Contains(status.Convert(err).Message(), configdelivery.ErrProfileIDRequired{}.Error()) {
+		t.Fatalf("message = %q, want the ErrProfileIDRequired text", status.Convert(err).Message())
+	}
+}
+
 func TestConfigDeliveryGRPC_ListSessions(t *testing.T) {
 	backing := newCDTestService(t, &cdMockProfileResolver{}, nil)
 	svc := newCDGRPCService(t, backing)

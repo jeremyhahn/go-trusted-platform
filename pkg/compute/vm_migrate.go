@@ -16,6 +16,8 @@ package compute
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
 
 // =============================================================================
@@ -96,6 +98,10 @@ type MigrationSpec struct {
 
 	// Mode is the requested migration strategy.
 	Mode MigrateMode
+
+	// Arch is the source guest's architecture. The destination refuses a
+	// guest of another architecture; empty means x86_64 (qemu.Arch.OrDefault).
+	Arch qemu.Arch
 
 	// Config is the source VM's configuration (memory, cpus, disks, boot mode)
 	// the destination needs to launch an identical receiver.

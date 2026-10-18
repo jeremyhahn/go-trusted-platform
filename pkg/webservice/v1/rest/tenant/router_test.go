@@ -14,6 +14,7 @@
 package tenant
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,9 +23,12 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // passthroughAuthorization builds guards that admit everything, so the
@@ -34,8 +38,9 @@ import (
 func passthroughAuthorization() Authorization {
 	pass := func(next http.Handler) http.Handler { return next }
 	return Authorization{
-		RequireOwnTenantOrSystem: pass,
-		RequireSystemTenant:      pass,
+		RequireOwnTenantOrSystem:     pass,
+		RequireSystemTenant:          pass,
+		RequireOwnTenantNameOrSystem: pass,
 	}
 }
 
@@ -60,17 +65,63 @@ func TestNewTenantRouter_FailsClosedWithoutItsGuards(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	pass := func(next http.Handler) http.Handler { return next }
 
-	for name, authz := range map[string]Authorization{
-		"no own-or-system guard": {RequireSystemTenant: pass},
-		"no system guard":        {RequireOwnTenantOrSystem: pass},
-		"neither":                {},
+	for name, tc := range map[string]struct {
+		authz   Authorization
+		missing string
+	}{
+		"no own-or-system guard": {
+			Authorization{RequireSystemTenant: pass, RequireOwnTenantNameOrSystem: pass},
+			"RequireOwnTenantOrSystem"},
+		"no system guard": {
+			Authorization{RequireOwnTenantOrSystem: pass, RequireOwnTenantNameOrSystem: pass},
+			"RequireSystemTenant"},
+		"no by-name guard": {
+			Authorization{RequireOwnTenantOrSystem: pass, RequireSystemTenant: pass},
+			"RequireOwnTenantNameOrSystem"},
+		"none": {Authorization{}, "RequireOwnTenantOrSystem"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r, err := NewTenantRouter(logger, nil, w, authz)
-			assert.Error(t, err)
+			r, err := NewTenantRouter(logger, nil, w, tc.authz)
+			assert.Equal(t, ErrAuthorizationRequired{Guard: tc.missing}, err)
 			assert.Nil(t, r)
 		})
 	}
+}
+
+// oneTenantServer holds a single tenant, "acme" with id "tenant-a".
+type oneTenantServer struct {
+	platformv1.UnimplementedTenantServiceServer
+}
+
+func (oneTenantServer) GetTenantByName(
+	_ context.Context, req *platformv1.GetTenantByNameRequest) (*platformv1.GetTenantByNameResponse, error) {
+
+	if req.GetName() != "acme" {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	return &platformv1.GetTenantByNameResponse{
+		Tenant: &platformv1.Tenant{Id: "tenant-a", Name: "acme"},
+	}, nil
+}
+
+// resolveName runs NameResolver on a request whose {name} is name.
+func resolveName(name string) string {
+	var got string
+	router := mux.NewRouter()
+	router.HandleFunc("/by-name/{name}", func(_ http.ResponseWriter, r *http.Request) {
+		got = NameResolver(oneTenantServer{})(r)
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/by-name/"+name, nil))
+	return got
+}
+
+func TestNameResolver_ResolvesTheNameInThePath(t *testing.T) {
+	assert.Equal(t, "tenant-a", resolveName("acme"))
+}
+
+func TestNameResolver_AnUnknownNameResolvesToNothing(t *testing.T) {
+	// The guard refuses "" exactly like another tenant's id.
+	assert.Equal(t, "", resolveName("no-such-tenant"))
 }
 
 func TestTenantRouter_RoutesRegistered(t *testing.T) {

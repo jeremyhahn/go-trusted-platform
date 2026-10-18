@@ -15,10 +15,8 @@
 #
 # Build with: make pxeboot-container
 #
-# Usage:
-#   docker run --net=host \
-#     -v /path/to/data:/data \
-#     platform-pxeboot:latest
+# Deploy with `platformctl bootstrap run`, not a hand-written docker run line;
+# ports, volumes and boot-node mode are in README.md beside this file.
 #
 # The /data directory is exposed as the [boot] SMB share. Drop any
 # ISO into /data and it becomes available at smb://<host>/boot/<name>.
@@ -32,8 +30,10 @@ RUN apk add --no-cache samba-server samba-common-tools supervisor
 # PXE boot server binary
 COPY pxeboot /usr/local/bin/pxeboot
 
-# Entrypoint: validates env vars, prepares samba state dirs, execs supervisord
+# Entrypoint: validates env vars, prepares samba state dirs, execs supervisord.
+# pxeboot-env.sh, which it sources, sets the env defaults and pxeboot flags.
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY pxeboot-env.sh /usr/local/bin/pxeboot-env.sh
 
 # Samba: anonymous read-only [boot] share over /data
 COPY smb.conf /etc/samba/smb.conf

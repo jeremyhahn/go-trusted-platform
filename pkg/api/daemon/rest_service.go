@@ -60,6 +60,12 @@ var serviceStatusStringMap = map[platformv1.ServiceStatus]string{
 
 // serviceStatusToString converts an atomic int32 service status value to
 // a human-readable string using the protobuf ServiceStatus enum.
+// restServiceRefusalStatus answers ErrServiceNotControllable. The refusal is
+// FailedPrecondition, which the platform webservice REST mapper
+// (protorest.WriteError) sends as 400; this server matches it so both REST
+// surfaces answer the same refusal the same way.
+const restServiceRefusalStatus = http.StatusBadRequest
+
 func serviceStatusToString(rawStatus int32) string {
 	s, ok := serviceStatusStringMap[platformv1.ServiceStatus(rawStatus)]
 	if !ok {
@@ -421,13 +427,19 @@ func (s *RESTServer) SetDeviceHandlers(
 //
 // Without this wiring /api/v1/tenants/* would 404 even though the gRPC
 // TenantService is registered. Mirrors SetDeviceHandlers / SetCAHandlers.
-func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
+//
+// Every route runs behind guard and authorizes the caller it verified as the
+// tenant gRPC server does, with systemTenantID as the one tenant allowed to
+// act on every other (restapi.TenantHandlers). A nil guard answers 403.
+func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, guard *restapi.ScopeGuard, systemTenantID string) {
 	if manager == nil {
 		return
 	}
 	handlers := restapi.NewTenantHandlers(
 		restapi.WithTenantManager(manager),
 		restapi.WithTenantLogger(s.logger),
+		restapi.WithTenantGuard(guard),
+		restapi.WithTenantSystemTenant(systemTenantID),
 	)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")
@@ -707,7 +719,7 @@ func (s *RESTServer) handleListServices(w http.ResponseWriter, r *http.Request) 
 	services := make([]ServiceInfoResponse, 0, len(s.service.services))
 	for name, state := range s.service.services {
 		state.mu.RLock()
-		status := serviceStatusToString(state.status.Load())
+		status := serviceStatusToString(int32(state.observedStatus()))
 
 		var uptime string
 		if !state.startedAt.IsZero() {
@@ -749,7 +761,7 @@ func (s *RESTServer) handleGetService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state.mu.RLock()
-	status := serviceStatusToString(state.status.Load())
+	status := serviceStatusToString(int32(state.observedStatus()))
 
 	var uptime string
 	if !state.startedAt.IsZero() {
@@ -783,9 +795,13 @@ func (s *RESTServer) handleStartService(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, ErrServiceNotFound{ServiceName: serviceName})
 		return
 	}
+	if refusal, owned := processOwned(state.service); owned {
+		s.writeError(w, restServiceRefusalStatus, refusal)
+		return
+	}
 
 	state.mu.Lock()
-	if platformv1.ServiceStatus(state.status.Load()) == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		state.mu.Unlock()
 		s.writeError(w, http.StatusConflict, ErrServiceAlreadyRunning{ServiceName: serviceName})
 		return
@@ -828,9 +844,13 @@ func (s *RESTServer) handleStopService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, ErrServiceNotFound{ServiceName: serviceName})
 		return
 	}
+	if refusal, owned := processOwned(state.service); owned {
+		s.writeError(w, restServiceRefusalStatus, refusal)
+		return
+	}
 
 	state.mu.Lock()
-	if platformv1.ServiceStatus(state.status.Load()) == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
 		state.mu.Unlock()
 		s.writeError(w, http.StatusConflict, ErrServiceNotRunning{ServiceName: serviceName})
 		return
@@ -871,12 +891,16 @@ func (s *RESTServer) handleRestartService(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusNotFound, ErrServiceNotFound{ServiceName: serviceName})
 		return
 	}
+	if refusal, owned := processOwned(state.service); owned {
+		s.writeError(w, restServiceRefusalStatus, refusal)
+		return
+	}
 
 	ctx := r.Context()
 
 	state.mu.Lock()
 	// Stop if running
-	if platformv1.ServiceStatus(state.status.Load()) == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPING))
 		if err := state.service.Stop(ctx); err != nil {
 			state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_ERROR))

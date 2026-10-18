@@ -1747,6 +1747,56 @@ func TestUpdateQuotas_Success(t *testing.T) {
 	}
 }
 
+// TestUpdateQuotas_KeepsUsageCounters proves an update takes only limits
+// from the request: the stored usage counters survive, and a request
+// carrying usage cannot overwrite them.
+func TestUpdateQuotas_KeepsUsageCounters(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "usage-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
+	cached, ok := manager.cache.Load(created.ID)
+	if !ok {
+		t.Fatalf("tenant %s not cached", created.ID)
+	}
+	entity := cached.(*TenantEntity).Clone()
+	entity.ComputeQuota = ComputeQuota{MaxVMs: 10, MaxDiskGB: 500, UsedVMs: 3, UsedDiskGB: 120}
+	entity.NetworkQuota = NetworkQuota{MaxBridges: 4, UsedBridges: 2, UsedPorts: 7}
+	entity.StorageQuota = StorageQuota{MaxVolumesGB: 900, UsedVolumesGB: 250, UsedSnapshots: 5}
+	manager.cache.Store(created.ID, entity)
+
+	update := &TenantQuotas{
+		Compute: ComputeQuota{MaxVMs: 20, MaxDiskGB: 600, UsedVMs: 99, UsedDiskGB: 99},
+		Network: NetworkQuota{MaxBridges: 8, UsedBridges: 99},
+		Storage: StorageQuota{MaxVolumesGB: 1000, UsedVolumesGB: 99},
+	}
+	if err := manager.UpdateQuotas(ctx, created.ID, update); err != nil {
+		t.Fatalf("UpdateQuotas: %v", err)
+	}
+
+	got, err := manager.GetQuotas(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetQuotas: %v", err)
+	}
+
+	wantCompute := ComputeQuota{MaxVMs: 20, MaxDiskGB: 600, UsedVMs: 3, UsedDiskGB: 120}
+	if got.Compute != wantCompute {
+		t.Errorf("compute = %+v, want %+v", got.Compute, wantCompute)
+	}
+	wantNetwork := NetworkQuota{MaxBridges: 8, UsedBridges: 2, UsedPorts: 7}
+	if got.Network != wantNetwork {
+		t.Errorf("network = %+v, want %+v", got.Network, wantNetwork)
+	}
+	wantStorage := StorageQuota{MaxVolumesGB: 1000, UsedVolumesGB: 250, UsedSnapshots: 5}
+	if got.Storage != wantStorage {
+		t.Errorf("storage = %+v, want %+v", got.Storage, wantStorage)
+	}
+}
+
 func TestUpdateQuotas_NilQuotas(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()

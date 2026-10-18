@@ -58,6 +58,9 @@ const (
 	StatusInvalidArgument   byte = 0x09
 	StatusUnavailable       byte = 0x0A
 	StatusNotImplemented    byte = 0x0B
+	// StatusFailedPrecondition carries gRPC FailedPrecondition: the request
+	// is well formed but the system is not in a state that allows it.
+	StatusFailedPrecondition byte = 0x0C
 
 	// MaxPayloadSize limits payload to 16MB
 	MaxPayloadSize uint32 = 16 * 1024 * 1024
@@ -1060,18 +1063,19 @@ func TenantOpcodeToString(opcode byte) string {
 
 // statusNames maps each status code to its human-readable name.
 var statusNames = map[byte]string{
-	StatusOK:                "OK",
-	StatusInvalidRequest:    "InvalidRequest",
-	StatusNotFound:          "NotFound",
-	StatusUnauthorized:      "Unauthorized",
-	StatusInternalError:     "InternalError",
-	StatusTimeout:           "Timeout",
-	StatusAlreadyExists:     "AlreadyExists",
-	StatusPermissionDenied:  "PermissionDenied",
-	StatusResourceExhausted: "ResourceExhausted",
-	StatusInvalidArgument:   "InvalidArgument",
-	StatusUnavailable:       "Unavailable",
-	StatusNotImplemented:    "NotImplemented",
+	StatusOK:                 "OK",
+	StatusInvalidRequest:     "InvalidRequest",
+	StatusNotFound:           "NotFound",
+	StatusUnauthorized:       "Unauthorized",
+	StatusInternalError:      "InternalError",
+	StatusTimeout:            "Timeout",
+	StatusAlreadyExists:      "AlreadyExists",
+	StatusPermissionDenied:   "PermissionDenied",
+	StatusResourceExhausted:  "ResourceExhausted",
+	StatusInvalidArgument:    "InvalidArgument",
+	StatusUnavailable:        "Unavailable",
+	StatusNotImplemented:     "NotImplemented",
+	StatusFailedPrecondition: "FailedPrecondition",
 }
 
 // StatusToString returns a human-readable name for a status code

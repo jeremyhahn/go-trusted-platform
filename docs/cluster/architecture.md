@@ -284,13 +284,12 @@ Within this repo's half:
    `membershipManager.Join` rejects only the empty string. **There is no
    allow-list, no identity check and no attestation gate on a join address in
    this layer.**
-3. **Cluster lifecycle is scoped on gRPC and refused on MCP.** Both catalogs
+3. **Cluster lifecycle is scoped on gRPC and MCP.** Both catalogs
    are default-deny. The gRPC scope catalog
    (`pkg/api/grpc/method_permissions.go`) gives `GetStatus` and `ListNodes`
    `cluster:read`, and `Bootstrap`, `Join` and `Leave` `cluster:write`, so a
-   read-only token cannot change membership. The `platform_cluster_*` tools are
-   not in the MCP permission map (`pkg/api/mcp/authz.go`), so every caller is
-   refused with `AuthErrorToolNotClassified` until they are classified.
+   read-only token cannot change membership. The `platform_cluster_*` MCP
+   tools carry the same pairs (`pkg/api/mcp/authz.go`, #304).
    Recorded in [api.md](api.md) §7.
 4. **`ClusterStatus` and the node list are operational disclosure**: node ids,
    addresses, leader identity, term, quorum state. Not secret, but not

@@ -48,7 +48,7 @@ func (h *QUICServiceHandler) handleLDevIDCreate(ctx context.Context, subPayload 
 	resp, err := h.idevidService.CreateLDevID(ctx, req)
 	if err != nil {
 		h.logger.Error(err, "Failed to issue LDevID over QUIC")
-		return h.errorResponse(ldevidGRPCToQUICStatus(err),
+		return h.errorResponse(idevidGRPCToQUICStatus(err),
 			ErrQUICOperationFailed{Op: "create LDevID", Cause: err})
 	}
 

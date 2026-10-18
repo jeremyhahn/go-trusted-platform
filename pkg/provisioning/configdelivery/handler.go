@@ -328,13 +328,9 @@ func (h *handler) writeSessionError(w http.ResponseWriter, r *http.Request, err 
 	}
 
 	var expired ErrSessionExpired
-	if errors.As(err, &expired) {
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-
 	var fulfilled ErrSessionAlreadyFulfilled
-	if errors.As(err, &fulfilled) {
+	var profileIDRequired ErrProfileIDRequired
+	if errors.As(err, &expired) || errors.As(err, &fulfilled) || errors.As(err, &profileIDRequired) {
 		h.responseWriter.Error400(w, r, err)
 		return
 	}

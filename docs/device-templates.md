@@ -61,7 +61,8 @@ for the current production reference.
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 | Raspberry Pi | 4 Model B (`single-node/raspberrypi/rpi4`) | single-node | control-plane, gateway, compute | Factory SD-card image (`make image-rpi`, [factory-image/](factory-image/)); boots on the QEMU virt stand-in, hardware validation per its `user.md` |
-| Raspberry Pi | 4 Model B (`dedicated/raspberrypi/rpi4`) | dedicated | compute | Factory SD-card image (`platformctl diskimage create --target rpi --model rpi4 --role compute`); joins the x86 control plane and gateway. A one-port Pi cannot be the gateway and the control plane stays x86 — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
+| Raspberry Pi | 4 Model B (`dedicated/raspberrypi/rpi4`) | dedicated | control-plane, compute | Factory SD-card image (`platformctl diskimage create --target rpi --model rpi4 --role compute`, or `--role control-plane`); the compute node joins the x86 control plane and gateway, the control plane is standalone (QuicBaaS `file`, no Raft). A one-port Pi cannot be the gateway — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
+| Raspberry Pi | Compute Module 4 (`dedicated/raspberrypi/cm4`) | dedicated | control-plane | Factory SD-card image (`--model cm4 --role control-plane`), standalone; `cm4/desk-overrides.yaml` puts it on one static address with no gateway. No hardware run yet — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md#control-plane) |
 | Raspberry Pi | 5 (`dedicated/raspberrypi/rpi5`) | dedicated | compute | **Experimental** (`--model rpi5 --role compute`): the image builds and the template validates, but no Pi 5 has booted it; the TPM behind the RP1 I/O chip, the serial console and the RP1 Ethernet are unvalidated — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
 
 **Each profile directory carries a `README.md` recording what the hardware needs
@@ -105,6 +106,10 @@ platformctl iso create \
   --platform-config configs/platform/templates/dedicated/supermicro/x10/control-plane.yaml \
   --overrides /path/to/my-overrides.yaml
 ```
+
+The override is deep-merged onto the template by the rules in
+[Merge Rules](#merge-rules): a `null` deletes a template key and a list
+replaces the template's list unless its entries merge by name.
 
 ### Shared ISO with dynamic per-node config (multi-node bootstrap)
 
@@ -185,6 +190,70 @@ tpm:
   idevid:
     serial: MY-SERIAL-001
 ```
+
+### Merge Rules
+
+`platformctl diskimage create --overrides`, `platformctl iso create
+--overrides` and device-profile overrides all merge with `pkg/config`
+(`DeepMergeYAML`, `DeepMergeMaps`), which follows JSON Merge Patch
+(RFC 7386 §2) and adds keyed list merging:
+
+| Override value | Result |
+|---|---|
+| a key the override does not name | the template's value is kept |
+| a scalar | replaces the template's value |
+| a map | merges key by key into the template's map |
+| `null` (or `~`, or an empty value) | **deletes** the key, at any depth; a `null` for a key the template lacks changes nothing |
+| a list of maps that share `name`, `id` or `role` with the template's list | merges entry by entry: matching entries merge, new entries are appended, template entries the override does not name are kept |
+| any other list, including `[]` | **replaces** the template's list; `[]` empties it |
+
+To remove a template section, set it to `null`; to remove every VLAN or
+bond, set the list to `[]`. A keyed list cannot lose one entry by merge;
+give the whole file with `--platform-config` instead.
+
+### Example: Raspberry Pi 4 on a Flat DHCP Network
+
+The rpi4 compute template is a rack node: `eth0` is a trunk carrying the
+zone VLANs, with a platform VRF and a local dnsmasq forwarding to the
+control plane at `10.4.6.10`. On a flat network — an access port with a
+DHCP server, such as an office VLAN — the same template builds a DHCP node
+with this override:
+
+```yaml
+os:
+  hostname: pi4-01
+network:
+  role: null           # a compute role permits only static zone addresses
+  dns: null            # no resolv.conf is rendered: the DHCP client writes it
+  dnsmasq: null
+  platform-vrf: null
+  vlans: []
+  interfaces:
+    - name: eth0
+      type: dhcp
+```
+
+```bash
+platformctl diskimage create --target rpi --model rpi4 --role compute \
+  --overrides rpi4-flat-dhcp.yaml
+```
+
+The rendered `/etc/network/interfaces` has `iface eth0 inet dhcp` and no
+802.1Q or VRF device. The file is
+`pkg/cli/commands/diskimage/testdata/rpi4-flat-dhcp.yaml`, and
+`TestRPi4FlatDHCPOverridesRenderAnAccessPort` loads it through the
+host-network check platformd runs at startup, then renders it. It changes only
+`network:`; the template's other control-plane references (`dns.resolver`,
+`trust.bmc`, `ntp`, `acme`) still name the rack and need the site's values.
+
+`role: null` is required: with the template's `network.role` kept, platformd
+refuses a DHCP interface (`ErrDHCPNotPermitted`, `pkg/installer/network_role.go`).
+A host with no role also gets none of the role's hardening — no forward-drop
+nftables table and no forwarding sysctl — which the
+[Raspberry Pi README](../configs/platform/templates/dedicated/raspberrypi/README.md#a-pi-on-a-flat-dhcp-network)
+spells out. The CM4 control plane's desk override,
+`dedicated/raspberrypi/cm4/desk-overrides.yaml`, takes the same route to one
+static address outside the control-plane zones.
 
 ### Common Override Fields
 

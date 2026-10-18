@@ -190,6 +190,7 @@ func (o *QEMUOrchestrator) MigrateVM(ctx context.Context, instanceID, destinatio
 		InstanceID: instanceID,
 		VMName:     inst.instance.Name,
 		Mode:       mode,
+		Arch:       o.config.Arch.OrDefault(),
 		Config:     inst.instance.Config,
 	}
 	inst.mu.Unlock()

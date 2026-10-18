@@ -693,6 +693,13 @@ so the Jool packages arrive the way every other package does:
   but only beside the stock `linux-lts` kernel: `jool-modules-lts` depends on
   one exact `linux-lts` build, so a FIPS, kernel-less or non-lts ISO would
   otherwise drag `linux-lts` in beside the kernel it actually boots.
+- The prefetch and the install take the list from one function,
+  `PreFetchConfig.installedPackages` (`pkg/iso/prefetch.go`), under that one
+  kernel condition. Whenever the medium prefetches the Jool packages, the
+  `configs/installer.yaml` it bakes lists them in `os.packages`
+  (`applyInstallerOverrides`, `pkg/iso/customize.go`), once and after the
+  config's own entries. A gateway-role config that does not list them is
+  therefore still installed with them.
 - The init script (`renderGatewaydInitScript`, `pkg/firstboot/gatewayd.go`)
   gains `modprobe jool` in `start_pre` only when the rendered config has
   `gateway.nat64.enabled: true`, decided in Go when firstboot writes it. A

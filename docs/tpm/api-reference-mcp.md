@@ -15,16 +15,17 @@ caller.
 
 | Tools | Scope |
 |---|---|
-| `info`, `ek`, `ek_cert`, `srk`, `iak`, `pcrs`, `eventlog`, `random`, `nv_list`, `nv_read`, `make_credential`, `quote`, `verify_quote`, `certify` | `tpm:read` |
+| `info`, `capabilities`, `platform`, `ek`, `ek_cert`, `srk`, `iak`, `pcrs`, `eventlog`, `random`, `nv_list`, `nv_read`, `make_credential`, `quote`, `verify_quote`, `certify` | `tpm:read` |
 | `provision`, `ek_create`, `ek_import_cert`, `srk_create`, `iak_create`, `nv_write`, `activate_credential`, `seal`, `unseal`, `pcr_extend` | `tpm:write` |
 | `clear`, `nv_delete` | `tpm:delete` |
 | `ek_delete`, `srk_delete`, `iak_delete` | **refused** — they flush a persistent handle, which deletes nothing; gRPC `Delete*` does the same |
-| `capabilities`, `platform` | **refused** — no gRPC or REST twin to take a scope from |
 
 Names are `platform_tpm_<tool>`. `unseal` is the one tool stricter than its
 gRPC twin: an unseal tool never takes a read scope on MCP. `nv_list` takes the
 scope of gRPC `Info`, and `pcr_extend`, which has no gRPC twin, takes the scope
-of QUIC's `SubOpTPM2ExtendPCR`.
+of QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` have no gRPC
+method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
+(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`.
 
 ## Available Tools
 
@@ -35,7 +36,7 @@ of QUIC's `SubOpTPM2ExtendPCR`.
 | `platform_tpm_info` | Get TPM device information |
 | `platform_tpm_provision` | Provision TPM with owner authorization |
 | `platform_tpm_clear` | Clear TPM and reset owner authorization |
-| `platform_tpm_capabilities` | Get TPM fixed properties and capabilities |
+| `platform_tpm_capabilities` | Get TPM fixed properties |
 
 ### Endorsement Key Tools
 
@@ -88,6 +89,38 @@ of QUIC's `SubOpTPM2ExtendPCR`.
 |------|-------------|
 | `platform_tpm_idevid_csr` | Create Initial DevID Certificate Signing Request |
 | `platform_tpm_ldevid_csr` | Create Local DevID Certificate Signing Request |
+
+### IDevID and IAK Tools
+
+These tools call the daemon's `IDevIDGRPCService`, so each answers with its
+gRPC method's message and error class (`docs/tpm/api.md` §8). Each requires its
+gRPC twin's scope; the IAK tools use the `idevid` resource too.
+
+| Tool | gRPC method | Scope |
+|------|-------------|-------|
+| `idevid_info` | `GetIDevIDInfo` | `idevid:read` |
+| `idevid_exists` | `HasIDevID` | `idevid:read` |
+| `idevid_get_cert` | `GetIDevIDCertificate` | `idevid:read` |
+| `idevid_generate` | `GenerateIDevID` | `idevid:write` |
+| `idevid_csr` | `CreateIDevIDCSR` | `idevid:write` |
+| `idevid_install_cert` | `InstallIDevIDCertificate` | `idevid:write` |
+| `idevid_create_ldevid` | `CreateLDevID` | `idevid:write` |
+| `idevid_delete` | `DeleteIDevID` | `idevid:delete` |
+| `idevid_delete_cert` | `DeleteIDevIDCertificate` | `idevid:delete` |
+| `iak_info` | `GetIAKInfo` | `idevid:read` |
+| `iak_exists` | `HasIAK` | `idevid:read` |
+| `iak_get_cert` | `GetIAKCertificate` | `idevid:read` |
+| `iak_generate` | `GenerateIAK` | `idevid:write` |
+| `iak_csr` | `CreateIAKCSR` | `idevid:write` |
+| `iak_install_cert` | `InstallIAKCertificate` | `idevid:write` |
+| `iak_delete` | `DeleteIAK` | `idevid:delete` |
+| `iak_delete_cert` | `DeleteIAKCertificate` | `idevid:delete` |
+
+`idevid_delete` and `iak_delete` refuse with `FailedPrecondition` until the
+owner rules on eviction, and change nothing: the key stays in the TPM, as on
+every other transport (#304). Info, CSR and get-cert answer `NotFound` for
+a missing key or certificate, while exists answers `false`. An empty or
+malformed certificate PEM is `InvalidArgument`.
 
 ### NVRAM Tools
 
@@ -473,7 +506,9 @@ Retrieve the TPM event log (TCG PC Client format).
 
 ### platform_tpm_capabilities
 
-Get TPM fixed properties and capabilities (manufacturer, algorithms, key sizes).
+Get the TPM's fixed properties: manufacturer, model, family, revision, vendor
+ID, firmware version, FIPS 140-2 mode, lockout counter, maximum auth failures
+and maximum NV buffer size. Needs `tpm:read`.
 
 **Input Schema:**
 ```json

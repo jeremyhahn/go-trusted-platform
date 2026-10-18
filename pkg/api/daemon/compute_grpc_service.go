@@ -99,7 +99,7 @@ func (s *ComputeGRPCService) CreateVM(ctx context.Context, req *platformv1.Creat
 	instance, err := s.orchestrator.Create(ctx, profile)
 	if err != nil {
 		s.logger.Error(err, "Failed to create VM", "name", config.GetName())
-		return nil, status.Error(codes.Internal, "failed to create VM: "+err.Error())
+		return nil, vmLifecycleStatus("create", err)
 	}
 
 	return &platformv1.CreateVMResponse{
@@ -124,7 +124,7 @@ func (s *ComputeGRPCService) StartVM(ctx context.Context, req *platformv1.StartV
 
 	if err := s.orchestrator.Start(ctx, vmID); err != nil {
 		s.logger.Error(err, "Failed to start VM", "vm_id", vmID)
-		return nil, status.Error(codes.Internal, "failed to start VM: "+err.Error())
+		return nil, vmLifecycleStatus("start", err)
 	}
 
 	return &platformv1.StartVMResponse{
@@ -148,7 +148,7 @@ func (s *ComputeGRPCService) StopVM(ctx context.Context, req *platformv1.StopVMR
 
 	if err := s.orchestrator.Stop(ctx, vmID); err != nil {
 		s.logger.Error(err, "Failed to stop VM", "vm_id", vmID)
-		return nil, status.Error(codes.Internal, "failed to stop VM: "+err.Error())
+		return nil, vmLifecycleStatus("stop", err)
 	}
 
 	return &platformv1.StopVMResponse{
@@ -173,12 +173,12 @@ func (s *ComputeGRPCService) RebootVM(ctx context.Context, req *platformv1.Reboo
 	// Reboot by stopping then starting
 	if err := s.orchestrator.Stop(ctx, vmID); err != nil {
 		s.logger.Error(err, "Failed to stop VM for reboot", "vm_id", vmID)
-		return nil, status.Error(codes.Internal, "failed to reboot VM: "+err.Error())
+		return nil, vmLifecycleStatus("reboot", err)
 	}
 
 	if err := s.orchestrator.Start(ctx, vmID); err != nil {
 		s.logger.Error(err, "Failed to start VM after reboot stop", "vm_id", vmID)
-		return nil, status.Error(codes.Internal, "failed to reboot VM: "+err.Error())
+		return nil, vmLifecycleStatus("reboot", err)
 	}
 
 	return &platformv1.RebootVMResponse{
@@ -202,7 +202,7 @@ func (s *ComputeGRPCService) DeleteVM(ctx context.Context, req *platformv1.Delet
 
 	if err := s.orchestrator.Delete(ctx, vmID); err != nil {
 		s.logger.Error(err, "Failed to delete VM", "vm_id", vmID)
-		return nil, status.Error(codes.Internal, "failed to delete VM: "+err.Error())
+		return nil, vmLifecycleStatus("delete", err)
 	}
 
 	return &platformv1.DeleteVMResponse{
@@ -327,6 +327,13 @@ func vmOpsErrToStatus(err error) error {
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
+}
+
+// vmLifecycleStatus answers a failed create, start, stop, reboot or delete in
+// vmOpsErrToStatus's class, so an unknown VM is NotFound rather than
+// Internal, and keeps the "failed to <op> VM" message.
+func vmLifecycleStatus(op string, err error) error {
+	return status.Error(status.Code(vmOpsErrToStatus(err)), "failed to "+op+" VM: "+err.Error())
 }
 
 func vmMetricsToProto(m *compute.VMMetrics) *platformv1.VMMetrics {

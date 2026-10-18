@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -324,9 +325,11 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	// orchestrator requires. This is config-gated (default stays container, so
 	// nothing breaks) per the explicit-config rule.
 	if computeConfig.Provider.IsVM() {
-		computeConfig.ApplyLocalQEMUDefaults()
 		if a != nil && a.ComputeConfig != nil {
 			applyLocalQEMUSettings(computeConfig, a.ComputeConfig)
+		}
+		if err := computeConfig.ApplyLocalQEMUDefaults(); err != nil {
+			return nil, err
 		}
 
 		// Wire the inter-daemon VM migration seams for the local QEMU provider.
@@ -363,9 +366,12 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 }
 
 // applyLocalQEMUSettings copies the operator's `compute:` settings for the
-// local QEMU provider over dst, which already holds the defaults layer
-// (ApplyLocalQEMUDefaults). An unset field keeps its default.
+// local QEMU provider over dst. ApplyLocalQEMUDefaults runs after it, so an
+// unset field gets its default and the defaults follow the operator's arch.
 func applyLocalQEMUSettings(dst, src *compute.OrchestratorConfig) {
+	if src.Arch != "" {
+		dst.Arch = src.Arch
+	}
 	if src.QEMUBinary != "" {
 		dst.QEMUBinary = src.QEMUBinary
 	}
@@ -1050,6 +1056,18 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	}
 	logger.Info("Platform daemon started", "socket", platformDaemon.SocketPath())
 
+	// The web services, and the ACME server some of them carry, run here
+	// rather than in the daemon. Count the ones serving so the daemon's
+	// service status reports them as they are. A listener failure is fatal
+	// to the process, so a web service is serving for as long as Run blocks.
+	var webServing, acmeServing atomic.Int32
+	platformDaemon.SetSubsystemProbe(platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, func() bool {
+		return webServing.Load() > 0
+	})
+	platformDaemon.SetSubsystemProbe(platformv1.ServiceType_SERVICE_TYPE_ACME, func() bool {
+		return acmeServing.Load() > 0
+	})
+
 	var wg sync.WaitGroup
 	for _, wsConfig := range App.WebServices {
 		wg.Add(1)
@@ -1462,9 +1480,18 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// serves, and TLS breaks when the one it IS serving expires.
 		App.RegisterWebServiceCertInstaller(wsName, webserver.ReloadCertificate)
 
+		servesACME := acmeServerConfig != nil
+		webServing.Add(1)
+		if servesACME {
+			acmeServing.Add(1)
+		}
 		go func(ws *webservice.WebServerV1) {
 			defer wg.Done()
 			ws.Run()
+			webServing.Add(-1)
+			if servesACME {
+				acmeServing.Add(-1)
+			}
 		}(webserver)
 	}
 

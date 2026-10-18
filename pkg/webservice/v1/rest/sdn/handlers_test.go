@@ -32,6 +32,7 @@ import (
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
@@ -796,6 +797,40 @@ func TestRevokePortAuth_Success(t *testing.T) {
 	assert.Equal(t, "br0", got.BridgeId)
 	assert.Equal(t, "port0", got.PortId)
 	assert.Equal(t, SuccessResponse{Success: true, Message: "port authentication revoked"}, respWriter.lastPayload)
+}
+
+// The service refuses port authentication with FailedPrecondition while the
+// switch does not enforce it (#304); REST answers 400, the platform's status
+// for that class, not 500.
+func TestPortAuth_RefusalIsBadRequest(t *testing.T) {
+	mock := &mockSDNService{
+		authenticatePortFunc: func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
+			return nil, policy.ErrPortAuthNotEnforced{Operation: "AuthenticatePort"}
+		},
+		revokePortAuthFunc: func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
+			return nil, policy.ErrPortAuthNotEnforced{Operation: "RevokePortAuth"}
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+	body, err := json.Marshal(AuthenticatePortRequest{Certificate: []byte("self-signed"), Format: "PEM"})
+	require.NoError(t, err)
+
+	calls := map[string]func(http.ResponseWriter, *http.Request){
+		http.MethodPost:   handlers.AuthenticatePort,
+		http.MethodDelete: handlers.RevokePortAuth,
+	}
+	for method, handle := range calls {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/api/v1/sdn/bridges/br0/ports/port0/auth", bytes.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+
+			handle(httptest.NewRecorder(), req)
+
+			assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+			var refusal policy.ErrPortAuthNotEnforced
+			assert.ErrorAs(t, respWriter.lastError, &refusal)
+		})
+	}
 }
 
 func TestRevokePortAuth_MissingPathParam(t *testing.T) {

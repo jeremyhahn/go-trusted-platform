@@ -340,8 +340,14 @@ func (s *Service) CreateSession(ekSerial, mac string) *Session {
 	return session
 }
 
-// FulfillSession links a profile to a pending session.
+// FulfillSession links a profile to a pending session. A zero profileID
+// names no profile and is refused with ErrProfileIDRequired before the
+// session is looked up, so every transport answers it the same way.
 func (s *Service) FulfillSession(ctx context.Context, sessionID string, profileID uint64) error {
+	if profileID == 0 {
+		return ErrProfileIDRequired{}
+	}
+
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
 

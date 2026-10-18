@@ -1,6 +1,6 @@
 # REST Router Layer (`/api/v1`)
 
-> **Status: REFERENCE** · Last verified: 2026-10-13
+> **Status: REFERENCE** · Last verified: 2026-10-14
 > How the `pkg/webservice/v1` REST routers are wired, gated and added.
 
 This document describes how the platformd REST surface is wired together,
@@ -54,7 +54,7 @@ contract: protobuf request/response messages, decoded from JSON with
 | PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | `admin`; `POST /pxe/webhook/complete` is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false, so 404) and is then **unauthenticated** — it sits off the gate and checks no credential; #238 owns what a booting node presents |
 | SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | `admin` |
 | Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | `admin` |
-| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin`, plus a within-tenant boundary: `/{id}/**` requires the caller's own tenant **or** the system tenant; list/create/sync/by-name are system-tenant only (#234) |
+| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin`, plus a within-tenant boundary: `/{id}/**` requires the caller's own tenant **or** the system tenant; list/create/sync are system-tenant only (#234); by-name resolves the caller's own tenant's name, or any name for the system tenant (#304) |
 | TPM | `/api/v1/tpm` | `platformv1.TPMServiceServer` | `admin` |
 | vTPM | `/api/v1/vtpm` | `vtpm.VTPMService` | `admin` |
 
@@ -62,6 +62,42 @@ A router registers its routes only when the backing service is non-nil.
 Daemon configurations that omit a service simply leave the route absent;
 clients receive the standard `404` envelope (`message: "the requested API
 endpoint does not exist"`) instead of a misleading `501`.
+
+## Where SDK route claims are served
+
+The Go SDK's REST adapter has one route table
+(`sdk/go/transport/rest.RouteClaims()`) for both servers on `/api/v1`: this
+router and the daemon REST server, `pkg/api/daemon.RESTServer` (#232). These
+prefixes are served by the daemon alone; this router mounts nothing under
+them:
+
+| Prefix | Daemon setter |
+|---|---|
+| `/api/v1/bmc` | `SetBMCHandler` |
+| `/api/v1/ceremony` | `SetCeremonyService` |
+| `/api/v1/cluster` | `SetClusterService` |
+| `/api/v1/fido2` | `SetFIDO2Service` |
+| `/api/v1/luks` | `SetLUKSService` |
+| `/api/v1/piv` | `SetPIVService` |
+| `/api/v1/proxy` | `SetProxyService` |
+| `/api/v1/version` | `registerRoutes` |
+| `/api/v1/sdn/gateway/{nat64,overlay,perf}` | `SetGatewayIPAMService` (this router serves `/api/v1/sdn/gateway/ipam`) |
+
+The list is `DaemonOnlyPrefixes` in `pkg/testutil/routeclaims.go`. Two tests
+check every claim against a built table (#452):
+
+- `TestSDKRouteClaims` (`pkg/webservice/v1/route_coverage_test.go`) checks
+  every claim outside those prefixes against this router, and
+  `TestDaemonOnlyPrefixes_ThisRouterServesNone` fails if this router mounts
+  a route under one of them.
+- `TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes`
+  (`pkg/api/daemon/rest_route_claims_test.go`) checks every claim under a
+  prefix the daemon serves against the daemon's table, and requires the
+  matched route to have the claim's own shape. Prefixes both servers serve
+  differ in places — IDevID under `/tpm/idevid`, KMS keys in the body, CA
+  revoke as `POST .../revoke`. Each such claim sits in that test's
+  `daemonDivergentClaims` ledger with its reason until the choice of server
+  is made.
 
 ## Authorization
 

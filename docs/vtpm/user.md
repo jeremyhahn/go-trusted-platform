@@ -187,12 +187,10 @@ PCRs reset. Anything sealed to them needs the same measurements to be re-made.
 ## One thing to be aware of
 
 The MCP tool surface is duplicated: `vtpm_seal` and `vtpm_bundle_seal` name
-the same operation, but **only the short names work.** The nine `vtpm_bundle_*`
-tools are registered without a permission and no executor dispatches them, so
-the server refuses every call to them. If you drive vTPMs from an AI/MCP client,
-use the shorter names (`vtpm_seal`, `vtpm_unseal`, `vtpm_quote`, `vtpm_create`,
-`vtpm_delete`, `vtpm_list`, `vtpm_start`, `vtpm_stop`, `vtpm_extend_pcr`,
-`vtpm_read_pcr`). Recorded in [api.md](api.md) §5.
+the same operation. **Both names work, and they behave the same.** Each of the
+nine `vtpm_bundle_*` tools runs its short-named twin and needs the same scope.
+The two differ only in argument names: the bundle tools take `bundle_id`
+where the short names take `name`. The full mapping is in [api.md](api.md) §5.
 
 ---
 

@@ -92,6 +92,13 @@ func (n *NodeConfig) IsRaspberryPi() bool {
 	return n.Platform == PlatformRaspberryPi
 }
 
+// IsDiskless reports whether the node boots its root from the network
+// (NFS or NBD) rather than from local media.
+func (n *NodeConfig) IsDiskless() bool {
+	model := n.EffectiveBootModel()
+	return model == BootModelDiskless || model == BootModelDisklessNBD
+}
+
 // PiSerial parses the node's serial as the Raspberry Pi bootloader sends
 // it (up to eight hex digits); ok is false when none is configured.
 func (n *NodeConfig) PiSerial() (serial uint32, ok bool) {

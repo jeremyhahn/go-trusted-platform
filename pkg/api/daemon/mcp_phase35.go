@@ -359,52 +359,78 @@ func (p *MCPServiceProvider) PIVReset(ctx context.Context, device string) (inter
 // LUKS MCP delegations
 // =============================================================================
 
-// LUKSStatus implements mcp.Phase35Provider.
-func (p *MCPServiceProvider) LUKSStatus(ctx context.Context, device string) (interface{}, error) {
+// luksService returns the LUKS service, or the not-configured error a gRPC
+// caller would read.
+func (p *MCPServiceProvider) luksService() (*LUKSService, error) {
 	svc := p.phase35.snapshot().LUKS
 	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+		return nil, ErrLUKSOperation{Cause: ErrLUKSNotConfigured}
 	}
-	return svc.Status(ctx, device)
+	return svc, nil
+}
+
+// LUKSStatus implements mcp.Phase35Provider.
+func (p *MCPServiceProvider) LUKSStatus(ctx context.Context, device string) (interface{}, error) {
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
+	}
+	result, err := svc.Status(ctx, device)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSListSlots implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSListSlots(ctx context.Context, device string) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
-	return svc.ListSlots(ctx, device)
+	result, err := svc.ListSlots(ctx, device)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSInfo implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSInfo(ctx context.Context, device string) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
-	return svc.Info(ctx, device)
+	result, err := svc.Info(ctx, device)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSEnrollPassphrase implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSEnrollPassphrase(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
 	req := &LUKSEnrollPassphraseRequest{
 		Device:             mapGetString(args, "device"),
 		ExistingPassphrase: mapGetString(args, "existing_passphrase"),
 		NewPassphrase:      mapGetString(args, "new_passphrase"),
 	}
-	return svc.EnrollPassphrase(ctx, req)
+	result, err := svc.EnrollPassphrase(ctx, req)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSEnrollFIDO2 implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSEnrollFIDO2(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
 	req := &LUKSEnrollFIDO2Request{
 		Device:             mapGetString(args, "device"),
@@ -413,74 +439,76 @@ func (p *MCPServiceProvider) LUKSEnrollFIDO2(ctx context.Context, args map[strin
 		RequirePIN:         mapGetBool(args, "require_pin"),
 		RequireUV:          mapGetBool(args, "require_uv"),
 	}
-	return svc.EnrollFIDO2(ctx, req)
+	result, err := svc.EnrollFIDO2(ctx, req)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSEnrollTPM implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSEnrollTPM(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
 	req := &LUKSEnrollTPMRequest{
 		Device:             mapGetString(args, "device"),
 		ExistingPassphrase: mapGetString(args, "existing_passphrase"),
 		PCRs:               mapGetInt32Slice(args, "pcrs"),
 	}
-	return svc.EnrollTPM(ctx, req)
+	result, err := svc.EnrollTPM(ctx, req)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSEnrollRecovery implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSEnrollRecovery(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
 	req := &LUKSEnrollRecoveryRequest{
 		Device:             mapGetString(args, "device"),
 		ExistingPassphrase: mapGetString(args, "existing_passphrase"),
 	}
-	return svc.EnrollRecovery(ctx, req)
+	result, err := svc.EnrollRecovery(ctx, req)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return result, nil
 }
 
 // LUKSRemoveKey implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSRemoveKey(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
 	req := &LUKSRemoveKeyRequest{
 		Device: mapGetString(args, "device"),
 		Slot:   mapGetInt32(args, "slot"),
 	}
 	if err := svc.RemoveKey(ctx, req); err != nil {
-		return nil, err
+		return nil, ErrLUKSOperation{Cause: err}
 	}
 	return map[string]interface{}{"removed": true}, nil
 }
 
-// LUKSTestUnlock implements mcp.Phase35Provider.
-func (p *MCPServiceProvider) LUKSTestUnlock(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
-	}
-	req := &LUKSTestUnlockRequest{
-		Device: mapGetString(args, "device"),
-		Slot:   mapGetInt32(args, "slot"),
-	}
-	ok, err := svc.TestUnlock(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"unlocked": ok}, nil
+// LUKSTestUnlock implements mcp.Phase35Provider by refusing: the request
+// carries no key and the backend only checks that the keyslot exists, so
+// any "unlocked" answer would be unverified. It never reaches the backend.
+func (p *MCPServiceProvider) LUKSTestUnlock(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	return nil, ErrLUKSOperation{Cause: ErrLUKSTestUnlockUnverified}
 }
 
 // LUKSChangePassphrase implements mcp.Phase35Provider.
 func (p *MCPServiceProvider) LUKSChangePassphrase(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	svc := p.phase35.snapshot().LUKS
-	if svc == nil {
-		return nil, ErrLUKSNotConfigured
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
 	}
 	req := &LUKSChangePassphraseRequest{
 		Device:        mapGetString(args, "device"),
@@ -489,7 +517,7 @@ func (p *MCPServiceProvider) LUKSChangePassphrase(ctx context.Context, args map[
 		NewPassphrase: mapGetString(args, "new_passphrase"),
 	}
 	if err := svc.ChangePassphrase(ctx, req); err != nil {
-		return nil, err
+		return nil, ErrLUKSOperation{Cause: err}
 	}
 	return map[string]interface{}{"changed": true}, nil
 }

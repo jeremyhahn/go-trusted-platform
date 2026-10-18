@@ -150,8 +150,11 @@ directory holding an extracted ISO.**
 3. **DHCP validation is conditional.** `validateDHCP` runs only when
    `EnableDHCP`; it then requires an interface (falling back to
    `ServerConfig.Interface`), a parseable range start and end, and a positive
-   lease time, and parses `DHCPSubnetMask`, `DHCPGateway` and `DHCPDNS` when
-   non-empty.
+   lease time, and parses `DHCPSubnetMask` when non-empty. `DHCPGateway` and
+   every `DHCPDNS` entry go through `ParseDHCPv4`, which refuses anything that
+   is not IPv4 with `DHCPAddressError` (it matches `ErrInvalidConfig`):
+   `buildDHCPConfig` uses the same parse, so an IPv6 gateway is refused rather
+   than dropped from the offer as a nil `To4()`.
 4. **`Start` is not re-entrant.** A second `Start` on a running server returns
    *"server is already running"*; `running` is an `atomic.Bool` guarded by a
    mutex for the transition.
@@ -238,7 +241,8 @@ config-file loader and reads **no environment variables**. Callers construct it:
 | `DHCPInterface` | string | `""` → falls back to `Interface` |
 | `DHCPRangeStart` / `DHCPRangeEnd` | string | `""` (**required when `EnableDHCP`**) |
 | `DHCPSubnetMask` | string | `DefaultSubnetMask` = `255.255.255.0` |
-| `DHCPGateway`, `DHCPDNS` | string | `""` |
+| `DHCPGateway` | string | `""` (no router option) |
+| `DHCPDNS` | `[]string` | `nil` (no option 6) |
 | `DHCPLeaseTime` | `time.Duration` | `DefaultLeaseTime` = 1 h |
 | `DHCPServerIP` | string | `""` → auto-detected |
 | `DHCPRespondToAll` | bool | `false` |

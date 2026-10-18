@@ -145,23 +145,23 @@ MCP: eleven tools.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Status | `GET /api/v1/platform/status` | `GetStatus` | `MISSING — docs/13 G7` | `platform_daemon_status` | ✅ |
+| Status | `GET /api/v1/platform/status` | `GetStatus` | `OpDaemonStatus` (`0x89`) | `platform_daemon_status` | ✅ |
 | Health | `GET /api/v1/platform/health`; `GET /health` (status only) | `GetHealth` | `OpHealth` (`0x00`) | `platform_health` | ✅ |
 | Liveness | `GET /health/live` | `Liveness` | `OpLiveness` (`0x01`) | `platform_liveness` | ✅ |
 | Readiness | `GET /health/ready` | `Readiness` | `OpReadiness` (`0x02`) | `platform_readiness` | ✅ |
-| Version | `GET /api/v1/platform/version` | `GetVersion` | `MISSING — docs/13 G7` | `platform_daemon_version` | ✅ |
+| Version | `GET /api/v1/platform/version` | `GetVersion` | `OpDaemonVersion` (`0x8A`) | `platform_daemon_version` | ✅ |
 | System info | `GET /api/v1/platform/system` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | **Shutdown** | `MISSING — docs/13 G7` | `Shutdown` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Get config | `GET /api/v1/platform/config` | `GetConfig` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Update config | `MISSING — docs/13 G7` | `UpdateConfig` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Reload config | `POST /api/v1/platform/config/reload` | `ReloadConfig` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | **Validate config** | `POST /api/v1/platform/config/validate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| List services | `GET /api/v1/platform/services` | `ListServices` | `MISSING — docs/13 G7` | `platform_daemon_list_services` | ✅ |
-| Get service | `GET /api/v1/platform/services/{service}` | `GetServiceStatus` | `MISSING — docs/13 G7` | `platform_daemon_get_service` | ✅ |
-| Start service | `POST /api/v1/platform/services/{service}/start` | `StartService` | `MISSING — docs/13 G7` | `platform_daemon_start_service` | ✅ |
-| Stop service | `POST /api/v1/platform/services/{service}/stop` | `StopService` | `MISSING — docs/13 G7` | `platform_daemon_stop_service` | ✅ |
-| Restart service | `POST /api/v1/platform/services/{service}/restart` | `RestartService` | `MISSING — docs/13 G7` | `platform_daemon_restart_service` | ✅ |
-| List protocols | `GET /api/v1/platform/protocols` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `platform_daemon_list_protocols` | — |
+| List services | `GET /api/v1/platform/services` | `ListServices` | `OpDaemonListServices` (`0x8B`) | `platform_daemon_list_services` | ✅ |
+| Get service | `GET /api/v1/platform/services/{service}` | `GetServiceStatus` | `OpDaemonGetService` (`0x8C`) | `platform_daemon_get_service` | ✅ |
+| Start service | `POST /api/v1/platform/services/{service}/start` | `StartService` | `OpDaemonStartService` (`0x8D`) | `platform_daemon_start_service` | ✅ |
+| Stop service | `POST /api/v1/platform/services/{service}/stop` | `StopService` | `OpDaemonStopService` (`0x8E`) | `platform_daemon_stop_service` | ✅ |
+| Restart service | `POST /api/v1/platform/services/{service}/restart` | `RestartService` | `OpDaemonRestartService` (`0x8F`) | `platform_daemon_restart_service` | ✅ |
+| List protocols | `GET /api/v1/platform/protocols` | `MISSING — docs/13 G7` | `OpDaemonListProtocols` (`0x98`) | `platform_daemon_list_protocols`, refused (unclassified) | — |
 | Metrics | `GET /api/v1/platform/metrics` | `StreamMetrics` (stream) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Query logs | `GET /api/v1/platform/logs` | `StreamLogs` (stream) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | List log services | `GET /api/v1/platform/logs/services` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
@@ -170,9 +170,60 @@ MCP: eleven tools.
 | List entity types | `MISSING — docs/13 G7` | `ListEntityTypes` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Dump entity type | `MISSING — docs/13 G7` | `DumpEntityType` (stream) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 
-**QUIC carries only three daemon opcodes** — health, liveness and readiness at
-`0x00`–`0x02`. Everything else about running the daemon is REST, gRPC, MCP or
-embedded.
+**QUIC carries eleven daemon opcodes**: the probes at `0x00`–`0x02`, status,
+version, the service list, get, start, stop and restart at `0x89`–`0x8F`, and
+list protocols at `0x98`. Everything else about running the daemon is REST,
+gRPC, MCP or embedded.
+
+**Each operation needs the gRPC scope on every transport (#304, #317).** The
+reads (status, version, list and get service) need `platform:read`; start,
+stop and restart need `platform:write`. QUIC list protocols, which has no gRPC
+twin, needs `platform:read`. Before #317 the QUIC catalog filed these opcodes
+under a `daemon` resource no role grants. MCP refuses
+`platform_daemon_list_protocols` outright ([`docs/iam/api.md`](../iam/api.md)
+§8 has the full table; `TestDaemonProvisionScopeParity` pins it).
+
+### Service start, stop and restart are refused (#317)
+
+The service registry holds one entry for each service enabled under
+`services:` whose type is one of the seven below (`registerConfiguredServices`,
+`pkg/api/daemon/daemon.go`). `platformd serve` builds each of them once and
+owns it for the life of the process, and none can be stopped and started again
+without stopping the process, so every start, stop and restart of one is
+refused with `ErrServiceNotControllable` (`pkg/api/daemon/errors.go`) before
+anything changes:
+
+| Service | Why it is refused | Status reports |
+|---|---|---|
+| `tpm` | the TPM is opened once and shared by the keystores, CA, IDevID and attestation | running when the daemon holds a TPM |
+| `sdn` | the SDN service drives the host's Open vSwitch, which platformd does not run | running when an OVS client is wired |
+| `compute` | the orchestrator starts and stops instances, not itself, and closing it is final | running when the orchestrator is wired |
+| `dns` | platformd manages zones in-process and runs no DNS server | running when the zone service is wired |
+| `acme` | the ACME server is routes on the web services, with no lifecycle of its own | running while the web services serve with ACME routes |
+| `webservice` | the web services carry the REST API and cannot serve again once shut down | running while the web services serve |
+| `attestation` | attestation reporting is wired once at start-up and stopped once at exit | running when the reporter is wired |
+
+The refusal is the class `FailedPrecondition`, not `Unimplemented`: the RPC
+works, and the request is refused because of the state of the target it names,
+the same class as stopping a service that is not running. It reads
+`service <name> cannot be started or stopped at runtime: <reason>` on every
+transport:
+
+| Transport | Answer | Where |
+|---|---|---|
+| gRPC, Unix | `FailedPrecondition` | `ErrServiceNotControllable.GRPCStatus` (`errors.go`) |
+| REST, daemon server (`/api/v1/services/{service}/…`) | 400 | `restServiceRefusalStatus` (`rest_service.go`) |
+| REST, web services (`/api/v1/platform/services/{service}/…`) | 400 | `writeServiceError` (`pkg/webservice/v1/rest/platform/services.go`) through `protorest.WriteError` |
+| QUIC | `StatusInvalidRequest` | `grpcDelegateErrorToQUIC` (`quic_grpc_delegates.go`) |
+| MCP | `-32007` (`FailedPrecondition`) | `toolErrorCode` (`pkg/api/mcp/error_class.go`) |
+
+A refused verb changes nothing: the service's status, start and stop counts
+and last error are as they were, and a refused stop of a running service
+still reports `running`. Status is read from the subsystem, never from what
+the registry last recorded, so `list` and `get` say what is actually running.
+Auto-start and `Shutdown` leave these services alone. A service registered
+with a `ManagedService` that does own its lifecycle is still started, stopped
+and restarted for real.
 
 ---
 
@@ -319,7 +370,7 @@ All three catalogs **deny an unlisted entry** — MCP since #300, QUIC since
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **every registered RPC**, unary and streaming, across every `platform.v1` service, the four quicbaas KMS services and `grpc.health.v1.Health`; a contract test keeps it that way | **denied**: the OIDC interceptor answers `PermissionDenied` (`ErrMethodNotClassified`) before it reads a token, unless the method is on the documented pre-auth list |
-| MCP (`pkg/api/mcp/authz.go`) | **370 of 469 registered tools** (7 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 99 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| MCP (`pkg/api/mcp/authz.go`) | **446 of 469 registered tools** (11 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 23 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 Per-service scopes are listed in each feature folder. A new RPC must carry the
@@ -358,8 +409,12 @@ sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
 
 No credential, or one with no verifier configured, is 401; a caller without the
 scope is 403. A handler set built without a guard answers 403 on every route
-(default-deny). The guard is built by `newRESTScopeGuard`; it does not change
-the routes of the other REST handler sets.
+(default-deny). The guard is built by `newRESTScopeGuard`.
+
+The daemon REST tenant routes (`/api/v1/tenants/*`, #304) run behind the same
+guard with the `tenant` scopes. They then apply the `TenantService` tenant
+binding to the authenticated caller
+([`docs/tenant/api.md`](../tenant/api.md) §7).
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then
@@ -372,7 +427,12 @@ operation, whatever its `scp`. `HandleRequest` now runs
    exchange itself) pass with no credential, as do the diskless boot
    sub-operations `DeviceSubBootCertificate` and `DeviceSubBootDelivery`
    under `OpProvisioningCategory` (the node holds no token; the boot service
-   authenticates it against its own TLS channel). Each entry in
+   authenticates it against its own TLS channel) and the four device-side
+   config delivery sub-operations `ProvisioningSubGetNonce`,
+   `ProvisioningSubFetchConfig`, `ProvisioningSubSignDigest` and
+   `ProvisioningSubPollSession` (open on gRPC and MCP too; the service checks
+   the nonce, EAB HMAC and EK binding, and the session ID is the poll
+   capability). Each entry in
    `preAuthOpcodes` and `preAuthSubOpcodes` carries its reason; nothing else
    is exempt.
 2. **Authentication** of the token (`StatusUnauthorized` when missing or

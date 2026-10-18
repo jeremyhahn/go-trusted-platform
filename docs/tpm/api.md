@@ -405,7 +405,7 @@ REST base path `/api/v1/idevid`. QUIC uses **top-level** opcodes here, not the
 | Generate IDevID | `POST /api/v1/idevid/generate` | `GenerateIDevID` | `0x56` | `idevid_generate` | ✅ |
 | IDevID info | `GET /api/v1/idevid`, `GET /api/v1/idevid/info` | `GetIDevIDInfo` | `0x57` | `idevid_info` | ✅ |
 | IDevID exists | `GET /api/v1/idevid/exists` | `HasIDevID` | `0x78` | `idevid_exists` | ✅ |
-| Delete IDevID | `DELETE /api/v1/idevid` | `DeleteIDevID` | `0x58` | `idevid_delete` | ✅ |
+| Delete IDevID (refused, below) | `DELETE /api/v1/idevid`, `DELETE /api/v1/tpm/idevid` | `DeleteIDevID` | `0x58` | `idevid_delete` | ✅ |
 | IDevID CSR | `POST /api/v1/idevid/csr` | `CreateIDevIDCSR` | `0x59`, also `0x99` · `0x1C` | `idevid_csr` | ✅ |
 | Install IDevID certificate | `POST /api/v1/idevid/certificate` | `InstallIDevIDCertificate` | `0x5A` | `idevid_install_cert` | ✅ |
 | Get IDevID certificate | `GET /api/v1/idevid/certificate` | `GetIDevIDCertificate` | `0x5B` | `idevid_get_cert` | ✅ |
@@ -415,7 +415,7 @@ REST base path `/api/v1/idevid`. QUIC uses **top-level** opcodes here, not the
 | Generate IAK | `POST /api/v1/idevid/iak/generate` | `GenerateIAK` | `0x5C` | `iak_generate` | ✅ |
 | IAK info | `GET /api/v1/idevid/iak` | `GetIAKInfo` | `0x5D` | `iak_info` | ✅ |
 | IAK exists | `GET /api/v1/idevid/iak/exists` | `HasIAK` | `0x79` | `iak_exists` | ✅ |
-| Delete IAK | `DELETE /api/v1/idevid/iak` | `DeleteIAK` | `0x5E` | `iak_delete` | ✅ |
+| Delete IAK (refused, below) | `DELETE /api/v1/idevid/iak`, `DELETE /api/v1/tpm/iak` | `DeleteIAK` | `0x5E` | `iak_delete` | ✅ |
 | IAK CSR | `POST /api/v1/idevid/iak/csr` | `CreateIAKCSR` | `0x5F` | `iak_csr` | ✅ |
 | Install IAK certificate | `POST /api/v1/idevid/iak/certificate` | `InstallIAKCertificate` | `0x6B` | `iak_install_cert` | ✅ |
 | Get IAK certificate | `GET /api/v1/idevid/iak/certificate` | `GetIAKCertificate` | `0x6C` | `iak_get_cert` | ✅ |
@@ -430,12 +430,33 @@ way to reach it is HTTP.
 
 **The Go SDK's REST adapter maps every `IDevIDService` RPC to the web
 service's route above** (`sdk/go/transport/rest/adapter.go`; `CreateLDevID` in
-`ldevid.go`), so `platformv1.NewIDevIDServiceClient` over REST reaches the same
+`ldevid.go`) except `DeleteIDevID` and `DeleteIAK`, which go to the daemon
+listener's `DELETE /api/v1/tpm/idevid` / `/api/v1/tpm/iak` so the refusal
+below arrives as `412` and keeps its class. For every other RPC, `platformv1.NewIDevIDServiceClient` over
+REST reaches the same
 handlers a browser does (`TestSDKREST_*`,
 `pkg/webservice/v1/rest/idevid/ldevid_test.go`). Until #452 the table named
 seven RPCs that do not exist, and every real call except `CreateLDevID` fell
 through to a derived path that answered `404`. `POST /api/v1/idevid/ldevid` is served by both the
 web service and the daemon listener (`pkg/api/daemon/rest_idevid_ldevid.go`).
+
+**Delete IDevID and Delete IAK are refused until the owner rules on
+eviction.** No transport evicts the key, and none reports a deletion that did
+not happen. gRPC and Unix `DeleteIDevID` / `DeleteIAK`, QUIC `0x58` / `0x5E`,
+the MCP `idevid_delete` / `iak_delete` tools and REST
+`DELETE /api/v1/tpm/idevid` / `DELETE /api/v1/tpm/iak` all refuse with
+`FailedPrecondition` (`ErrDeviceIdentityKeyNotDeletable`) and change nothing —
+no key, no certificate, no state (#304). Both REST servers serve those two
+paths: the daemon listener and the web service, which also keeps its own
+`DELETE /api/v1/idevid` / `DELETE /api/v1/idevid/iak` on the same handlers,
+behind the admin role gate. On the wire the class is QUIC status `0x0C`
+(`StatusFailedPrecondition`) and HTTP `412` on both REST servers: the daemon
+listener's IDevID-family mapping, shared with LDevID, and on the web service
+the key-delete handlers' own mapping, because `protorest`'s shared `400`
+(#665) reaches the SDK as `InvalidArgument`, not the refusal. The SDK returns
+`*idevid.ErrIdentityKeyNotDeletable`, and `platformctl tpm idevid delete` /
+`platformctl tpm iak delete` exit `1` with the refusal. The certificate
+deletes are real on every transport.
 
 ---
 
@@ -454,10 +475,12 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 | MCP — `platform_tpm_nv_*` tools | **scoped** in `pkg/api/mcp/authz.go` on their gRPC twins' tiers: `tpm:read` for `nv_list` (`Info`) and `nv_read`, `tpm:write` for `nv_write`, `tpm:delete` for `nv_delete` |
 | MCP — `platform_tpm_pcr_extend` | **scoped `tpm:write`** in `pkg/api/mcp/authz.go`, the scope of QUIC's `SubOpTPM2ExtendPCR` (it has no gRPC twin) |
 | MCP — `platform_tpm_*` tools with a gRPC twin | **scoped** in `pkg/api/mcp/authz.go` on the gRPC tiers (#304), except `platform_tpm_unseal`, which needs `tpm:write`; the table is in [api-reference-mcp.md](api-reference-mcp.md) |
-| MCP — `platform_tpm_{ek,srk,iak}_delete`, `capabilities`, `platform` | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller. The deletes flush a persistent handle, which deletes nothing; the rest have no gRPC twin |
-| MCP — `idevid_*` / `iak_*` tools | **refused**, likewise |
-| QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID / LDevID CSRs and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete` |
-| QUIC device-identity opcodes | **scoped under `tpm:*`**, not `idevid:*` as on gRPC: `tpm:read` for info and get-cert, `tpm:write` for generate, CSR and install-cert, `tpm:delete` for the deletes ([engineering.md](engineering.md) §13) |
+| MCP — `platform_tpm_capabilities`, `platform_tpm_platform` | **scoped** `tpm:read` (#304): each answers a subset of gRPC `Info` (the fixed properties; the config and the EK/SRK/IAK attributes), and their QUIC twins `0x17` and `0x1E` are `tpm:read` |
+| MCP — `platform_tpm_{ek,srk,iak}_delete` | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller. The deletes flush a persistent handle, which deletes nothing |
+| MCP — `idevid_*` / `iak_*` tools | **scoped** in `pkg/api/mcp/authz.go` with their gRPC twins' scopes, IAK tools included: `idevid:read` for info, exists and get-cert; `idevid:write` for generate, CSR, install-cert and `idevid_create_ldevid`; `idevid:delete` for the deletes. The tools call the shared `IDevIDGRPCService`, so each answers with its gRPC message and error class (#304) |
+| MCP — `device_attributes`, `activate_credential` | **scoped** `idevid:read` and `idevid:write`, the scopes of gRPC `GetDeviceAttributes` and `IDevIDService/ActivateCredential` (#304). They make the same TPM calls as those methods but answer with the MCP provider's errors, not the gRPC status |
+| QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID CSR and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete`. The exception is `LDevIDCSR` (`0x1D`): the daemon serves it with `IDevIDService.CreateLDevID`, so it takes `idevid:write` |
+| QUIC device-identity opcodes | **scoped** with their gRPC `IDevIDService` twins' scopes (#304): `idevid:read` for info, has, get-cert and device attributes; `idevid:write` for generate, CSR, install-cert and activate-credential; `idevid:delete` for the deletes. One `idevid:*` grant covers the same operation on gRPC, QUIC and MCP |
 | REST — web service | route-level middleware only; no per-operation TPM scope (below) |
 | REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). The bearer token is checked by the shared platform-token validator: no token is `401` (`ErrTPMTokenRequired`), a token without the scope or no validator configured is `403` (`ErrTPMForbidden`) |
 | REST — daemon listener, `rest_idevid.go` | no per-operation scope; mTLS only |
@@ -465,7 +488,7 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
 needs `tpm:read`, and `DeleteIDevID` needs `idevid:delete`.** Note that
 `Unseal` sits in the read tier. On MCP `platform_tpm_unseal` needs `tpm:write`,
-and the device-identity tools cannot be called until they are classified. On QUIC, `SubOpTPM2Clear` needs
+and `idevid_delete` needs `idevid:delete` as on gRPC. On QUIC, `SubOpTPM2Clear` needs
 `tpm:delete` and `SubOpTPM2Unseal` `tpm:read`, matching gRPC.
 
 ### Web service REST is gated on the `admin` role (#165)

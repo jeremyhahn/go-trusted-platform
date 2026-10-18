@@ -41,7 +41,7 @@ a hardware-bound device identity for authentication and secure enrollment.
 Supported operations:
   - generate: Create a new IDevID key in the TPM
   - info: Retrieve information about the existing IDevID key
-  - delete: Remove the IDevID key from the TPM
+  - delete: Refused; the IDevID key is TPM-resident and is not evicted
 
 Examples:
   # Generate IDevID with default algorithm (ECDSA-P256)
@@ -57,10 +57,7 @@ Examples:
   platformctl tpm idevid info
 
   # Get IDevID info as JSON (for scripting)
-  platformctl tpm idevid info -o json
-
-  # Delete IDevID key
-  platformctl tpm idevid delete`,
+  platformctl tpm idevid info -o json`,
 	}
 
 	cmd.AddCommand(newIDevIDGenerateCommand(getFlags))
@@ -120,8 +117,12 @@ func newIDevIDInfoCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 func newIDevIDDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete",
-		Short: "Delete the IDevID key from the TPM",
-		Long:  "Delete the IDevID key from the TPM. This operation is irreversible.",
+		Short: "Delete the IDevID key (refused: the key is not evicted)",
+		Long: `Ask the daemon to delete the IDevID key.
+
+The daemon refuses on every transport until the owner rules on eviction:
+the key is TPM-resident and is not evicted, and nothing is changed. The
+command exits non-zero with the refusal.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runIDevIDDelete(flags)

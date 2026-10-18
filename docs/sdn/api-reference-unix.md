@@ -9,6 +9,10 @@ and messages). The server authenticates callers with Unix peer
 credentials (SO_PEERCRED); socket file permissions gate which
 users/groups may connect.
 
+`AuthenticatePort` and `RevokePortAuth` are refused here as on TCP, with
+`FAILED_PRECONDITION` (`policy.ErrPortAuthNotEnforced`); see
+[api.md](api.md) §4.
+
 ## CLI Usage
 
 `platformctl` uses the Unix socket for local IPC; force it explicitly

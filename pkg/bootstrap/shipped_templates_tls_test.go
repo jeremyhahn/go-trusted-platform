@@ -19,15 +19,18 @@ const controlPlaneIssuedChallenge = "device-attest-01"
 // shippedTemplateRoles classifies every file name under shippedTemplateRoot by
 // the bootstrap role it configures. The empty role marks a file that is not a
 // gateway or worker template: control-plane.yaml and the single-node
-// default.yaml are their own CA, and gatewayd.yaml configures gatewayd, not
-// platformd. A file name missing here fails the test, so a new role template
-// cannot ship unchecked.
+// default.yaml and standalone-cp.example.yaml are their own CA,
+// gatewayd.yaml configures gatewayd, not platformd, and desk-overrides.yaml
+// merges onto a control-plane template. A file name missing here fails the
+// test, so a new role template cannot ship unchecked.
 var shippedTemplateRoles = map[string]string{
-	"gateway.yaml":       RoleGateway,
-	"compute.yaml":       RoleWorker,
-	"control-plane.yaml": "",
-	"default.yaml":       "",
-	"gatewayd.yaml":      "",
+	"gateway.yaml":               RoleGateway,
+	"compute.yaml":               RoleWorker,
+	"control-plane.yaml":         "",
+	"default.yaml":               "",
+	"standalone-cp.example.yaml": "",
+	"gatewayd.yaml":              "",
+	"desk-overrides.yaml":        "",
 }
 
 type shippedNodeTemplate struct {

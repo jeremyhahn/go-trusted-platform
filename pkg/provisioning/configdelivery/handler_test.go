@@ -459,6 +459,32 @@ func TestHandler_FulfillSession_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandler_FulfillSession_ZeroProfileID(t *testing.T) {
+	h, svc := testHandlerWithDeps(t, &mockProfileResolver{}, &mockEABService{})
+
+	for name, body := range map[string]string{
+		"zero":    `{"profile_id": 0}`,
+		"missing": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/provision/sessions/"+session.ID+"/fulfill", strings.NewReader(body))
+			req.Header.Set("Accept", "application/json")
+			req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
+			w := httptest.NewRecorder()
+
+			h.FulfillSession(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected status 400, got %d", w.Code)
+			}
+			if !strings.Contains(w.Body.String(), ErrProfileIDRequired{}.Error()) {
+				t.Fatalf("body = %s, want the ErrProfileIDRequired text", w.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandler_FulfillSession_Expired(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	svc, err := NewService(ServiceParams{

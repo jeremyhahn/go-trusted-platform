@@ -717,7 +717,7 @@ func TestCoverage_Service_RegisterWebservice_PublicZone(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCoverage_Service_RegisterWebservice_FallbackToConfigIP(t *testing.T) {
+func TestCoverage_Service_RegisterWebservice_ConfigIP(t *testing.T) {
 	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
 	svc.params.Config.InternalServer = &InternalServer{
 		Zone: entities.Zone{Name: "internal.local."},
@@ -739,7 +739,7 @@ func TestCoverage_Service_RegisterWebservice_FallbackToConfigIP(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCoverage_Service_RegisterWebservice_PublicFallbackToConfigIP(t *testing.T) {
+func TestCoverage_Service_RegisterWebservice_PublicConfigIP(t *testing.T) {
 	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
 	svc.params.Config.InternalServer = nil
 	svc.params.Config.PublicServer = &PublicServer{
@@ -759,6 +759,79 @@ func TestCoverage_Service_RegisterWebservice_PublicFallbackToConfigIP(t *testing
 	ctx := context.Background()
 	err := svc.RegisterWebservice(ctx, "web.example.com")
 	require.NoError(t, err)
+}
+
+// TestRegisterWebservice_ConfiguredAddressWins pins the record a webservice
+// registers to the configured dns.private-ipv4 / dns.public-ipv4 when the host
+// also detected an address. A boot node detects its default-route address,
+// not the VLAN it serves; registering that beside the zone's static record
+// hands clients an address they cannot reach.
+func TestRegisterWebservice_ConfiguredAddressWins(t *testing.T) {
+	cases := []struct {
+		name      string
+		zoneName  string
+		cn        string
+		configure func(*Service)
+		want      string
+		notWant   string
+	}{
+		{
+			name:     "internal",
+			zoneName: "example.internal.",
+			cn:       "cp.example.internal",
+			configure: func(s *Service) {
+				s.params.Config.InternalServer = &InternalServer{Zone: entities.Zone{Name: "example.internal."}}
+				s.params.Config.PrivateIPv4 = "192.0.2.1"
+				s.params.PrivateIPv4 = net.ParseIP("192.0.2.60")
+			},
+			want:    "192.0.2.1",
+			notWant: "192.0.2.60",
+		},
+		{
+			name:     "public",
+			zoneName: "example.com.",
+			cn:       "cp.example.com",
+			configure: func(s *Service) {
+				s.params.Config.PublicServer = &PublicServer{Zone: entities.Zone{Name: "example.com."}}
+				s.params.Config.PublicIPv4 = "198.51.100.1"
+				s.params.PublicIPv4 = net.ParseIP("203.0.113.1")
+			},
+			want:    "198.51.100.1",
+			notWant: "203.0.113.1",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
+			tc.configure(svc)
+			mockDAO.AddZone(&entities.Zone{
+				ID:       util.NewID([]byte(tc.zoneName)),
+				Name:     tc.zoneName,
+				TenantID: "tenant-1",
+				TTL:      3600,
+			})
+
+			ctx := context.Background()
+			require.NoError(t, svc.RegisterWebservice(ctx, tc.cn))
+
+			zone, err := mockDAO.GetByName(ctx, tc.zoneName)
+			require.NoError(t, err)
+			var values []string
+			for _, rec := range zone.RecordSet.ARecords {
+				if rec.Name == "cp" {
+					values = append(values, rec.Value)
+				}
+			}
+			assert.Equal(t, []string{tc.want}, values,
+				"the record must carry the configured address, never the detected %s", tc.notWant)
+		})
+	}
+}
+
+func TestConfiguredOrDetected(t *testing.T) {
+	assert.Equal(t, "192.0.2.1", configuredOrDetected("192.0.2.1", net.ParseIP("192.0.2.60")))
+	assert.Equal(t, "192.0.2.60", configuredOrDetected("", net.ParseIP("192.0.2.60")))
+	assert.Equal(t, "", configuredOrDetected("", nil))
 }
 
 func TestCoverage_NewService_DNSSECEnabled_NoKeyStore(t *testing.T) {

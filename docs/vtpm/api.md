@@ -110,39 +110,48 @@ are **QUIC-only** — no gRPC, no REST, no MCP.
 
 ---
 
-## 5. The MCP surface is duplicated, and the two halves authorize differently
+## 5. The MCP surface is duplicated; each `vtpm_bundle_*` tool runs its `vtpm_*` twin
 
-Same pattern as DNS ([`docs/dns/api.md`](../dns/api.md) §3), and here it lands on
-key operations.
+Nine bundle operations have two MCP names. The `vtpm_bundle_*` name keeps its
+documented argument names, and the dispatcher renames them to the twin's
+(`vtpmBundleAliases`, `pkg/api/mcp/vtpm_tools_exec.go`). The call then runs the
+twin's executor against the same `vtpm.VTPMService` backend, and it carries
+the twin's scope in `toolPermissionCatalog` (`pkg/api/mcp/authz.go`):
 
-| Older family (in the authorization map) | Newer family (**not** in the map) |
-|---|---|
-| `vtpm_create` → `vtpm:write` | `vtpm_bundle_create` |
-| `vtpm_delete` → `vtpm:delete` | `vtpm_bundle_delete` |
-| `vtpm_list` → `vtpm:read` | `vtpm_bundle_list` |
-| `vtpm_quote` → `vtpm:read` | `vtpm_bundle_quote` |
-| `vtpm_seal` → `vtpm:write` | `vtpm_bundle_seal` |
-| `vtpm_unseal` → `vtpm:read` | `vtpm_bundle_unseal` |
-| `vtpm_extend_pcr` → `vtpm:write` | `vtpm_bundle_pcr_extend` |
-| `vtpm_read_pcr` → `vtpm:read` | `vtpm_bundle_pcr_read` |
-| `vtpm_start` → `vtpm:write`, `vtpm_stop` → `vtpm:write` | — |
+| `vtpm_bundle_*` tool | Twin | gRPC method | Scope | Arguments renamed for the twin |
+|---|---|---|---|---|
+| `vtpm_bundle_create` | `vtpm_create` | `CreateBundle` | `vtpm:write` | `hostname` → `name`, `ek_algorithm` → `algorithm` |
+| `vtpm_bundle_get` | `vtpm_get` | `GetBundle` | `vtpm:read` | `bundle_id` → `name` |
+| `vtpm_bundle_list` | `vtpm_list` | `ListBundles` | `vtpm:read` | none |
+| `vtpm_bundle_delete` | `vtpm_delete` | `DeleteBundle` | `vtpm:delete` | `bundle_id` → `name` |
+| `vtpm_bundle_quote` | `vtpm_quote` | `QuoteVTPM` | `vtpm:read` | `bundle_id` → `name` |
+| `vtpm_bundle_seal` | `vtpm_seal` | `SealVTPM` | `vtpm:write` | `bundle_id` → `name` |
+| `vtpm_bundle_unseal` | `vtpm_unseal` | `UnsealVTPM` | `vtpm:read` | `bundle_id` → `name`, `sealed_data` → `sealed` |
+| `vtpm_bundle_pcr_extend` | `vtpm_extend_pcr` | `ExtendVTPMPCR` | `vtpm:write` | `bundle_id` → `name`, `pcr_index` → `pcr` |
+| `vtpm_bundle_pcr_read` | `vtpm_read_pcr` | `ReadVTPMPCR` | `vtpm:read` | `bundle_id` → `name`, `pcr_index` → `pcr` |
 
-`AuthorizeTool` (`pkg/api/mcp/authz.go`) is default-deny (#300): a tool absent
-from the map is refused with `AuthErrorToolNotClassified` whatever scopes the
-token holds. **`vtpm_seal` requires `vtpm:write`; `vtpm_bundle_seal` is refused
-for every caller. `vtpm_unseal` requires `vtpm:read`; `vtpm_bundle_unseal` is
-refused likewise.** No executor dispatches the `vtpm_bundle_*` names either, so
-classifying them alone would not make them answer.
+`vtpm_start` and `vtpm_stop` (`vtpm:write`) have no `vtpm_bundle_*` twin.
 
-The newer names do not work over MCP until they are classified and dispatched.
-Which family is canonical is the same open question as DNS.
+The alias and its twin give the same result and the same error for the same
+request, because they run the same code. Only the documented name selects the
+bundle: a twin-named argument sent to an alias (`name` to `vtpm_bundle_get`)
+is dropped, not used. Bad input is `InvalidArgument` before the backend runs.
+That covers an unknown EK algorithm, an unknown list `mode`, a negative `limit`
+or `offset`, and a nonce, data or sealed blob that is not base64. An unknown
+bundle is the backend's `ErrBundleNotFound`. A daemon with no vTPM service
+answers `ErrServiceNotAvailable` (`Unavailable`), never success; gRPC leaves
+`VTPMService` unregistered then, so it answers `Unimplemented`.
+
+Both names take the options gRPC carries: `secure_boot_enabled` and `labels` on
+create, and `mode`, `labels`, `limit` and `offset` on list. Seal and unseal take
+`auth_value`. An absent `limit` lists every bundle, as gRPC does.
 
 The tools with no duplicate carry the scope of their gRPC method (#304), and
 fail with the same gRPC class as that method:
 
 | Tools | Scope |
 |---|---|
-| `vtpm_get`, `vtpm_validate`, `vtpm_export`, `vtpm_get_bundle_path`, `vtpm_get_tpm_socket_path`, `vtpm_get_nvram_path`, `vtpm_is_running`, `vtpm_template_get`, `vtpm_template_list` | `vtpm:read` |
+| `vtpm_validate`, `vtpm_export`, `vtpm_get_bundle_path`, `vtpm_get_tpm_socket_path`, `vtpm_get_nvram_path`, `vtpm_is_running`, `vtpm_template_get`, `vtpm_template_list` | `vtpm:read` |
 | `vtpm_import`, `vtpm_template_create`, `vtpm_template_clone` | `vtpm:write` |
 | `vtpm_template_delete` | `vtpm:delete` |
 
@@ -160,8 +169,8 @@ Both catalogs are **default-deny**
 **`VTPMService` is fully scoped on gRPC** with 23 methods mapped — resource
 `vtpm`, actions `read`/`write`/`delete`. `UnsealVTPM` sits in the read tier.
 
-On MCP, 23 vTPM tool names carry a permission; the nine `vtpm_bundle_*` names
-are refused. See §5.
+On MCP, all 32 vTPM tool names carry a permission. Each of the nine
+`vtpm_bundle_*` names carries the scope of its `vtpm_*` twin. See §5.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -222,5 +231,5 @@ export and import are streaming on gRPC.
 
 ## 8. Versioning
 
-REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. The
-duplicated MCP families in §5 await an owner ruling.
+REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. Both MCP
+families in §5 are served; which one is canonical awaits an owner ruling.

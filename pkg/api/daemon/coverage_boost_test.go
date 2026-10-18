@@ -1169,28 +1169,6 @@ func TestBoost_IAMServiceStub_CheckAccess_ReturnsError(t *testing.T) {
 // Managed Service Tests
 // =============================================================================
 
-func TestBoost_ConfigManagedService_IsRunning(t *testing.T) {
-	svc := newConfigManagedService("test", ServiceConfig{})
-
-	if svc.IsRunning() {
-		t.Fatal("expected not running initially")
-	}
-
-	if err := svc.Start(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !svc.IsRunning() {
-		t.Fatal("expected running after Start")
-	}
-
-	if err := svc.Stop(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if svc.IsRunning() {
-		t.Fatal("expected not running after Stop")
-	}
-}
-
 // =============================================================================
 // KMS Algorithm Conversion Helper Tests
 // =============================================================================

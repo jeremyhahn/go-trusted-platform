@@ -1101,6 +1101,22 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.TenantService/SuspendTenant": itemRoute("/api/v1/tenants/{id}/suspend", http.MethodPost, "{id}", "tenant_id"),
 	"/platform.v1.TenantService/ResumeTenant":  itemRoute("/api/v1/tenants/{id}/resume", http.MethodPost, "{id}", "tenant_id"),
 
+	// The name lookup, quotas and usage behind platformctl tenant show,
+	// quotas and usage (and every command that names a tenant). The server
+	// registers /by-name/{name} before /{id}, so the name never reads as an
+	// id. UpdateQuotas keeps compute, network and storage in the PUT body.
+	"/platform.v1.TenantService/GetTenantByName": itemRoute("/api/v1/tenants/by-name/{name}", http.MethodGet, "{name}", "name"),
+	"/platform.v1.TenantService/GetQuotas":       itemRoute("/api/v1/tenants/{id}/quotas", http.MethodGet, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/UpdateQuotas":    itemRoute("/api/v1/tenants/{id}/quotas", http.MethodPut, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/GetUsage":        itemRoute("/api/v1/tenants/{id}/usage", http.MethodGet, "{id}", "tenant_id"),
+
+	// The quota check and the DEK routes. CheckQuota keeps the prospective
+	// allocation (resource, amount) in the POST body, and RotateTenantDEK
+	// keeps background there.
+	"/platform.v1.TenantService/CheckQuota":         itemRoute("/api/v1/tenants/{id}/quota-check", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/RotateTenantDEK":    itemRoute("/api/v1/tenants/{id}/dek/rotate", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/GetTenantDEKStatus": itemRoute("/api/v1/tenants/{id}/dek", http.MethodGet, "{id}", "tenant_id"),
+
 	// GET /api/v1/iam/tenants/{tenant}/users/{id} --
 	// pkg/webservice/v1/rest/iam/router.go registerUserRoutes.
 	//
@@ -1358,10 +1374,17 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// IDevID Service — the routes are pkg/webservice/v1/rest/idevid/router.go's.
 	// CreateLDevID is mapped in ldevid.go.
+	//
+	// Key delete is refused on every transport. DeleteIDevID and DeleteIAK
+	// go to the daemon listener's DELETE /api/v1/tpm/idevid and /tpm/iak
+	// (pkg/api/daemon/rest_idevid.go), which answer 412, the HTTP status of
+	// the gRPC class FailedPrecondition. The web service's DELETE
+	// /api/v1/idevid and /idevid/iak write that class as 400.
+	platformv1.IDevIDService_DeleteIDevID_FullMethodName:  {"/api/v1/tpm/idevid", http.MethodDelete},
+	platformv1.IDevIDService_DeleteIAK_FullMethodName:     {"/api/v1/tpm/iak", http.MethodDelete},
 	"/platform.v1.IDevIDService/GenerateIDevID":           {"/api/v1/idevid/generate", http.MethodPost},
 	"/platform.v1.IDevIDService/GetIDevIDInfo":            {"/api/v1/idevid/info", http.MethodGet},
 	"/platform.v1.IDevIDService/HasIDevID":                {"/api/v1/idevid/exists", http.MethodGet},
-	"/platform.v1.IDevIDService/DeleteIDevID":             {"/api/v1/idevid", http.MethodDelete},
 	"/platform.v1.IDevIDService/CreateIDevIDCSR":          {"/api/v1/idevid/csr", http.MethodPost},
 	"/platform.v1.IDevIDService/InstallIDevIDCertificate": {"/api/v1/idevid/certificate", http.MethodPost},
 	"/platform.v1.IDevIDService/GetIDevIDCertificate":     {"/api/v1/idevid/certificate", http.MethodGet},
@@ -1369,7 +1392,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.IDevIDService/GenerateIAK":              {"/api/v1/idevid/iak/generate", http.MethodPost},
 	"/platform.v1.IDevIDService/GetIAKInfo":               {"/api/v1/idevid/iak", http.MethodGet},
 	"/platform.v1.IDevIDService/HasIAK":                   {"/api/v1/idevid/iak/exists", http.MethodGet},
-	"/platform.v1.IDevIDService/DeleteIAK":                {"/api/v1/idevid/iak", http.MethodDelete},
 	"/platform.v1.IDevIDService/CreateIAKCSR":             {"/api/v1/idevid/iak/csr", http.MethodPost},
 	"/platform.v1.IDevIDService/InstallIAKCertificate":    {"/api/v1/idevid/iak/certificate", http.MethodPost},
 	"/platform.v1.IDevIDService/GetIAKCertificate":        {"/api/v1/idevid/iak/certificate", http.MethodGet},
@@ -1381,6 +1403,7 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Tenant Service
 	"/platform.v1.TenantService/CreateTenant": {"/api/v1/tenants", http.MethodPost},
 	"/platform.v1.TenantService/ListTenants":  {"/api/v1/tenants", http.MethodGet},
+	"/platform.v1.TenantService/Sync":         {"/api/v1/tenants/sync", http.MethodPost},
 
 	// PXE Service
 	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
@@ -1568,6 +1591,7 @@ var httpStatusToGRPCMap = map[int]codes.Code{
 	http.StatusForbidden:           codes.PermissionDenied,
 	http.StatusNotFound:            codes.NotFound,
 	http.StatusConflict:            codes.AlreadyExists,
+	http.StatusPreconditionFailed:  codes.FailedPrecondition,
 	http.StatusTooManyRequests:     codes.ResourceExhausted,
 	http.StatusInternalServerError: codes.Internal,
 	http.StatusNotImplemented:      codes.Unimplemented,

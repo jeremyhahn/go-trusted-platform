@@ -1,0 +1,11 @@
+os:
+  hostname: pi4-01
+network:
+  role: null
+  dns: null
+  dnsmasq: null
+  platform-vrf: null
+  vlans: []
+  interfaces:
+    - name: eth0
+      type: dhcp

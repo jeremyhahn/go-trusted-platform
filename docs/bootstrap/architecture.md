@@ -108,7 +108,7 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | **Deleting `luks-key.bin` as soon as the seal is written** | The seal has not been *proved* until a clean reboot unseals with it. Deleting the key first leaves a machine with no fallback if the next boot's PCR policy does not match. The key is preserved pending a seal-confirmation handshake, and the cost — key plaintext inside an encrypted container — is accepted deliberately. |
 | **Returning success when sealing fell back to a plain-key unlock** | The machine boots, so it looks fine, and the daemon then fails at startup with a policy error nobody connects to the install. `ErrSealingFallbackUsed` makes the fallback a non-zero exit so the init service does not mark itself started and first boot re-runs. |
 | **Rebooting automatically to verify the PCR seal** | On hardware where a PCR differs between the installer and production initramfs, every verify-reboot fails, falls back, and fires another verify-reboot. Verification is deferred to the next operator-initiated reboot; the keyfile fallback covers the gap. |
-| **Tearing down the bootstrap container as soon as the last node installs** | The container is usually the only DHCP/DNS provider on the provisioning network. Teardown runs only after `controlPlaneHealthGate` confirms every control-plane node is serving; a failed gate skips teardown rather than stranding the fleet. |
+| **Tearing down the bootstrap container as soon as the last node installs** | The container is usually the only DHCP/DNS provider on the provisioning network. Teardown runs only after `controlPlaneHealthGate` confirms every control-plane node is serving; a failed gate skips teardown rather than stranding the fleet. A boot node (`deployer.boot_node`) is never torn down by a run. |
 | **Aborting the run when BMC enrollment fails** | Enrollment is a post-install ceremony, not a precondition for a working node. Failures are recorded per node in `BootstrapResult.BMCEnrollments` and logged as warnings; the operator retries with the BMC CLI. |
 | **One shared BMC TLS provider for the whole fleet** | Each BMC presents its own (usually self-signed, often expired) certificate, so one provider cannot carry every node's pin. A node that declares `bmc_spki_pin` or `bmc_trust` gets a node-scoped provider; nodes that declare neither share the run-scoped one. (The run-scoped provider was also meant to preserve TOFU pin continuity across re-contacted BMCs — that never worked, because tofu is a CA-bundle fetch rather than endpoint pinning, and it is no longer allowed for the bmc class; see #83 and go-xkms#139.) |
 
@@ -398,6 +398,18 @@ permissions.
 Every control-plane node must pass health within the gate timeout. Only then is
 the bootstrap container torn down, and a teardown failure is a warning, not a
 run failure.
+
+With `deployer.boot_node: true` the deployer host is the segment's long-running
+netboot server, so Phase 7 is skipped: no health gate, no teardown, the
+container keeps serving and `data_dir` stays on disk (`ContainerTornDown` is
+false). `platformctl bootstrap teardown` still removes the container and
+`data_dir`; the firmware cache volume beside `data_dir` is kept.
+
+A re-run keeps Phase 2's default, `redeploy_mode: if-stale`. Its staleness check
+compares the image, the volumes and the restart policy, not the container's
+`BOOTSTRAP_*` environment, so a changed DHCP setting (`bootstrap_no_router`,
+`proxy_dhcp`, the pool) reaches a running boot node only when the operator
+forces the replacement with `redeploy_mode: always`.
 
 ## Trust boundaries
 

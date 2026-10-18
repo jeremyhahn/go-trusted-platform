@@ -131,6 +131,26 @@ func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*Q
 	return o, nil
 }
 
+// qemuBase returns the qemu.Config fields every local VM shares: the guest
+// architecture, the QEMU binary, the UEFI firmware booted from pflash, and the
+// qcow2 disk the snapshot and migration paths need on every architecture.
+// Callers fill in the per-instance fields.
+func (c *OrchestratorConfig) qemuBase() *qemu.Config {
+	return &qemu.Config{
+		Arch:           c.Arch,
+		QEMUBinary:     c.QEMUBinary,
+		DiskFormat:     qemu.DiskFormatQCOW2,
+		Debug:          c.Debug,
+		OVMFCode:       c.OVMFCode,
+		OVMFCodeSecure: c.OVMFCodeSecure,
+		OVMFVars:       c.OVMFVars,
+		SerialConsole:  false,
+		NoGraphic:      true,
+		BootOrder:      "c",
+		BridgeName:     c.NetworkBridge,
+	}
+}
+
 // generateInstanceID generates a unique instance ID
 func generateInstanceID() string {
 	b := make([]byte, 16)
@@ -337,27 +357,17 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	}
 
 	// Create QEMU configuration
-	qemuConfig := &qemu.Config{
-		QEMUBinary:     o.config.QEMUBinary,
-		DiskPath:       instanceConfig.DiskPath,
-		DiskSize:       instanceConfig.DiskSize,
-		Memory:         instanceConfig.Memory,
-		CPUs:           instanceConfig.CPUs,
-		WorkDir:        instanceConfig.WorkDir,
-		SecureBoot:     instanceConfig.SecureBoot,
-		Debug:          o.config.Debug,
-		OVMFCode:       o.config.OVMFCode,
-		OVMFCodeSecure: o.config.OVMFCodeSecure,
-		OVMFVars:       o.config.OVMFVars,
-		EnableKVM:      instanceConfig.EnableKVM,
-		SerialConsole:  false,
-		NoGraphic:      true,
-		BootOrder:      "c",
-		NetworkMode:    instanceConfig.NetworkMode,
-		BridgeName:     o.config.NetworkBridge,
-		MACAddress:     instanceConfig.MACAddress,
-		TPMSocket:      tpmSocket,
-	}
+	qemuConfig := o.config.qemuBase()
+	qemuConfig.DiskPath = instanceConfig.DiskPath
+	qemuConfig.DiskSize = instanceConfig.DiskSize
+	qemuConfig.Memory = instanceConfig.Memory
+	qemuConfig.CPUs = instanceConfig.CPUs
+	qemuConfig.WorkDir = instanceConfig.WorkDir
+	qemuConfig.SecureBoot = instanceConfig.SecureBoot
+	qemuConfig.EnableKVM = instanceConfig.EnableKVM
+	qemuConfig.NetworkMode = instanceConfig.NetworkMode
+	qemuConfig.MACAddress = instanceConfig.MACAddress
+	qemuConfig.TPMSocket = tpmSocket
 
 	// Enable the serial transcript (GetVMLogs) and the interactive console
 	// socket (AttachVMConsole multi-viewer broker). Paths match

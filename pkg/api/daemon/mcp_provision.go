@@ -32,10 +32,11 @@ import (
 //
 // Authentication (single-use nonce + EAB HMAC and EK-certificate binding) is
 // enforced inside the backing service; this bridge only maps arguments and
-// returns the service's typed errors unchanged so the MCP error text carries
-// the same semantics the gRPC matcher tables encode as status codes
-// (invalid-argument, unauthenticated / permission-denied, not-found,
-// failed-precondition, unavailable).
+// wraps the service's typed errors in ErrConfigDeliveryClassified, carrying
+// the code the gRPC matcher tables give the same error. MCP therefore answers
+// the error class gRPC does (invalid-argument, unauthenticated /
+// permission-denied, not-found, failed-precondition, unavailable), and the
+// typed cause stays reachable through errors.As.
 
 // requireConfigDeliveryService returns a typed unavailable error when the
 // config delivery service is not wired into the provider.
@@ -55,7 +56,8 @@ func (p *MCPServiceProvider) ProvisionGetNonce(ctx context.Context) (interface{}
 	nonce, err := p.configDeliveryService.IssueNonce()
 	if err != nil {
 		p.logger.Error("mcp provision: failed to issue nonce", "error", err)
-		return nil, err
+		// gRPC GetNonce answers every nonce failure as Internal.
+		return nil, classifyConfigDeliveryError(err, nil)
 	}
 	return &configdelivery.NonceResponse{Nonce: nonce}, nil
 }
@@ -81,7 +83,7 @@ func (p *MCPServiceProvider) ProvisionFetchConfig(ctx context.Context, req *mcp.
 		Nonce:      req.Nonce,
 	})
 	if err != nil {
-		return nil, err
+		return nil, classifyConfigDeliveryError(err, fetchConfigErrorMatchers)
 	}
 	if pendingResp != nil {
 		return pendingResp, nil
@@ -111,7 +113,7 @@ func (p *MCPServiceProvider) ProvisionSignDigest(ctx context.Context, req *mcp.P
 		KeyRef:     req.KeyRef,
 	})
 	if err != nil {
-		return nil, err
+		return nil, classifyConfigDeliveryError(err, signDigestErrorMatchers)
 	}
 	return resp, nil
 }
@@ -126,7 +128,7 @@ func (p *MCPServiceProvider) ProvisionPollSession(ctx context.Context, sessionID
 
 	configResp, err := p.configDeliveryService.PollSession(ctx, sessionID)
 	if err != nil {
-		return nil, err
+		return nil, classifyConfigDeliveryError(err, sessionErrorMatchers)
 	}
 	if configResp == nil {
 		return &configdelivery.PollPendingResponse{Status: pollSessionPendingStatus}, nil
@@ -142,7 +144,7 @@ func (p *MCPServiceProvider) ProvisionFulfillSession(ctx context.Context, sessio
 	}
 
 	if err := p.configDeliveryService.FulfillSession(ctx, sessionID, profileID); err != nil {
-		return nil, err
+		return nil, classifyConfigDeliveryError(err, sessionErrorMatchers)
 	}
 
 	p.logger.Info("mcp provision: session fulfilled",
@@ -169,7 +171,7 @@ func (p *MCPServiceProvider) ProvisionGetSession(ctx context.Context, sessionID 
 
 	session, err := p.configDeliveryService.GetSession(sessionID)
 	if err != nil {
-		return nil, err
+		return nil, classifyConfigDeliveryError(err, sessionErrorMatchers)
 	}
 	return map[string]interface{}{"session": session}, nil
 }

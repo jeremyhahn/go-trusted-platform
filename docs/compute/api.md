@@ -89,13 +89,13 @@ streams (§5).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create VM | `POST /api/v1/compute/vms` | `CreateVM` | `OpVMCreate` (`0x60`) | `vm_create` (refused, §7) | ✅ |
-| List VMs | `GET /api/v1/compute/vms` | `ListVMs` | `OpVMList` (`0x65`) | `vm_list` (refused, §7) | ✅ |
-| Get VM | `GET /api/v1/compute/vms/{id}` | `GetVM` | `OpVMGet` (`0x64`) | `vm_get` (refused, §7) | ✅ |
-| Delete VM | `DELETE /api/v1/compute/vms/{id}` | `DeleteVM` | `OpVMDelete` (`0x61`) | `vm_delete` (refused, §7) | ✅ |
-| Start VM | `POST /api/v1/compute/vms/{id}/start` | `StartVM` | `OpVMStart` (`0x62`) | `vm_start` (refused, §7) | ✅ |
-| Stop VM | `POST /api/v1/compute/vms/{id}/stop` | `StopVM` | `OpVMStop` (`0x63`) | `vm_stop` (refused, §7) | ✅ |
-| Reboot VM | `POST /api/v1/compute/vms/{id}/reboot` | `RebootVM` | `OpVMRestart` (`0xB6`) | `vm_reboot` (refused, §7) | ✅ |
+| Create VM | `POST /api/v1/compute/vms` | `CreateVM` | `OpVMCreate` (`0x60`) | `vm_create` | ✅ |
+| List VMs | `GET /api/v1/compute/vms` | `ListVMs` | `OpVMList` (`0x65`) | `vm_list` | ✅ |
+| Get VM | `GET /api/v1/compute/vms/{id}` | `GetVM` | `OpVMGet` (`0x64`) | `vm_get` | ✅ |
+| Delete VM | `DELETE /api/v1/compute/vms/{id}` | `DeleteVM` | `OpVMDelete` (`0x61`) | `vm_delete` | ✅ |
+| Start VM | `POST /api/v1/compute/vms/{id}/start` | `StartVM` | `OpVMStart` (`0x62`) | `vm_start` | ✅ |
+| Stop VM | `POST /api/v1/compute/vms/{id}/stop` | `StopVM` | `OpVMStop` (`0x63`) | `vm_stop` | ✅ |
+| Reboot VM | `POST /api/v1/compute/vms/{id}/reboot` | `RebootVM` | `OpVMRestart` (`0xB6`) | `vm_reboot` | ✅ |
 | Suspend VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMSuspend` (`0xB7`) | `vm_suspend` (refused, §7) | — |
 | Resume VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMResume` (`0xB8`) | `vm_resume` (refused, §7) | — |
 | Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_update` (refused, §7) | — |
@@ -251,24 +251,34 @@ backend:
 | `container:read` | `container_get`, `container_list`, `container_logs`, `container_metrics`, `container_attest` |
 | `container:write` | `container_create`, `container_start`, `container_stop`, `container_exec` |
 | `container:delete` | `container_remove` |
-| `vm:read` | `vm_snapshot_list`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
-| `vm:write` | `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
-| `vm:delete` | `vm_snapshot_delete` |
+| `vm:read` | `vm_list`, `vm_get`, `vm_snapshot_list`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
+| `vm:write` | `vm_create`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
+| `vm:delete` | `vm_delete`, `vm_snapshot_delete` |
 
 `vm_disk_detach` is `vm:write`, not `vm:delete`, because `DetachDisk` is.
+
+The seven VM lifecycle tools answer through their RPC
+(`pkg/api/daemon/mcp_vm_lifecycle.go`): the daemon builds the RPC request,
+calls `ComputeService`, and returns its reply in the proto's field names.
+`vm_create` takes what `CreateVM` reads (`name`, `memory`, `cpus`,
+`tpm_enabled`, `secure_boot`); an omitted `memory` or `cpus` takes the RPC's
+default of 1024 MB and one core. `vm_list` takes no filter, because `ListVMs`
+applies none.
 
 A tool's failure carries the gRPC status class its twin RPC answers the same
 failure with: NotFound for an unknown VM, container, snapshot or disk,
 InvalidArgument for malformed input (including a PCR index outside 0-23),
 FailedPrecondition for a missing orchestrator or VM capability, and
-Unimplemented for a missing container capability.
+Unimplemented for a missing container capability. `CreateVM`, `StartVM`,
+`StopVM`, `RebootVM` and `DeleteVM` classify an orchestrator failure as the
+disk RPCs do, so an unknown VM is NotFound there too; any other failure
+stays Internal.
 
-**Eleven tools stay refused**, marked *(refused, §7)* in the tables above.
-`AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller. The ten
-VM lifecycle tools (`vm_create`, `vm_list`, `vm_get`, `vm_update`,
-`vm_delete`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_suspend`, `vm_resume`)
-have no executor behind them. `vm_snapshot_get` has no gRPC or REST twin whose
-scope it could take.
+**Four tools stay refused**, marked *(refused, §7)* in the tables above.
+`AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller.
+`vm_update`, `vm_suspend` and `vm_resume` have no gRPC twin to take a scope
+from and no executor behind them; `vm_snapshot_get` has no gRPC or REST twin
+whose scope it could take. Giving them routes is docs/13 G7 work.
 
 No transport scopes a VM or container to a tenant. `compute.Instance` has no
 tenant field, and neither `ComputeService` nor the MCP tools filter by tenant.

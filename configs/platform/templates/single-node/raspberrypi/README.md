@@ -7,17 +7,21 @@ rather than an installer ISO: `platformctl diskimage create --target rpi
 [docs/factory-image/](../../../../../docs/factory-image/); the hardware
 runbook is its [user.md](../../../../../docs/factory-image/user.md).
 A Pi as a compute node of the dedicated profile is built with `--role
-compute` from [`dedicated/raspberrypi/`](../../dedicated/raspberrypi/README.md);
-the hardware prerequisites below apply to it too (to the Pi 4 — the
+compute`, and a CM4 or Pi 4 as a standalone control plane with `--role
+control-plane`, from [`dedicated/raspberrypi/`](../../dedicated/raspberrypi/README.md);
+the hardware prerequisites below apply to them too (to the Pi 4 and CM4 — the
 experimental Pi 5 compute template lists what differs there).
 
 | Model directory | Board | Device tree | Status |
 |---|---|---|---|
 | `rpi4/` | Raspberry Pi 4 Model B | `bcm2711-rpi-4-b.dtb` | Image builds and boots on the QEMU virt stand-in; hardware validation per the runbook |
 
-Other boards the image builder knows (`--model rpi400`, `cm4`, `rpi3b+`,
-`rpi5`) fall back to `single-node/default.yaml` until they get a directory
-here (the Pi 5 has only the experimental dedicated compute template); copy `rpi4/default.yaml` and change `hardware-model` and `os.hostname`.
+Without `--role`, the other boards the image builder knows (`--model rpi400`,
+`cm4`, `rpi3b+`, `rpi5`) fall back to `single-node/default.yaml` until they
+get a directory here; copy `rpi4/default.yaml` and change `hardware-model` and
+`os.hostname`. With `--role` nothing falls back: `--model cm4 --role
+control-plane` builds the dedicated CM4 control plane, and the Pi 5 has only
+the experimental dedicated compute template.
 
 ## Hardware prerequisites
 

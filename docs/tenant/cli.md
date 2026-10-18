@@ -47,6 +47,15 @@ Every verb needs a reachable daemon. `--transport embedded` runs in-process.
 
 **Verbs take a tenant *name*, not an ID.** The REST and gRPC surfaces are
 ID-keyed with a separate `by-name` lookup; the CLI is name-keyed throughout.
+Every verb resolves the name first, so a tenant-bound caller can name its own
+tenant and no other: another tenant's name, and a name that does not exist,
+are both refused with `PermissionDenied`. The system tenant and the Unix-socket
+operator can name any tenant ([api.md](api.md) §7).
+
+Every verb runs on `unix`, `grpc`, `rest`, `quic`, `mcp` and `embedded`: the
+SDK REST transport carries the name lookup, quotas and usage on the routes in
+[api.md](api.md) §2–3, and the SDK MCP transport carries every method on the
+daemon's MCP tools ([api.md](api.md) §7).
 
 ```bash
 platformctl tenant create --name tenant-a --display-name "Tenant A"
@@ -93,6 +102,11 @@ allowed so retried calls do not fail.
 `cmd.Flags().Changed(...)` reports it was given, so an omitted flag leaves the
 existing limit alone. That matters because **`0` is a real value meaning "no
 capacity"** — without the `Changed` check, omitting a flag would zero the limit.
+The CLI sends only the sections whose flags were given; the server keeps the
+limits of every section left out, and never changes usage.
+
+**There is no disk flag.** The disk limit (`MaxDiskGB`) has no field on the
+gRPC wire, so `set` keeps it as it is; `get` does not show it.
 
 **Two unit hazards.** The CLI flag is `--max-memory-gb` while the underlying
 field is `MaxMemoryMB` — **megabytes**. And `--max-bridges`, `--max-ports`,
@@ -158,10 +172,10 @@ not a failure.
 
 | Capability | Reach it with |
 |---|---|
-| Rotate the tenant DEK | REST `POST /api/v1/tenants/{id}/dek/rotate`, gRPC `RotateTenantDEK`, MCP `tenant_rotate_dek` |
-| Tenant DEK status | REST `GET /api/v1/tenants/{id}/dek`, MCP `tenant_get_dek_status` |
-| Check quota for a prospective allocation | REST `POST .../quota-check`, gRPC `CheckQuota` |
-| Sync tenants | REST `POST /api/v1/tenants/sync`, gRPC `Sync` |
+| Rotate the tenant DEK | REST `POST /api/v1/tenants/{id}/dek/rotate`, gRPC/Unix `RotateTenantDEK`, QUIC `0xEA`, MCP `tenant_rotate_dek` |
+| Tenant DEK status | REST `GET /api/v1/tenants/{id}/dek`, gRPC/Unix `GetTenantDEKStatus`, QUIC `0xEB`, MCP `tenant_get_dek_status` |
+| Check quota for a prospective allocation | REST `POST .../quota-check`, gRPC/Unix `CheckQuota`, QUIC `0xE6`, MCP `tenant_check_quota` |
+| Sync tenants | REST `POST /api/v1/tenants/sync`, gRPC/Unix `Sync`, QUIC `0xE9`, MCP `tenant_sync` |
 | Get tenant by name over the API | gRPC `GetTenantByName`, REST `/by-name/{name}` |
 
 ---

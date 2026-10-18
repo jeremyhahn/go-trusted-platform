@@ -287,7 +287,7 @@ Six boundaries.
 - **It does not build ISOs.** It can *read* one — `ExtractBootFiles` pulls
   kernel, initrd, modloop and kernel args out of an ISO so a PXE test can boot
   the same image a CD would. Building is `pkg/iso`.
-- **It does not serve DNS.** `DHCPDNS` advertises a DNS server address; it does
+- **It does not serve DNS.** `DHCPDNS` advertises DNS server addresses; it does
   not run one.
 - **It has no CLI surface of its own.** `platformctl` has no `pxe` command
   group. `cmd/pxeboot` is a container entrypoint with flags, not an operator

@@ -450,6 +450,17 @@ no `rd.luks.*` or `rd.lvm.*`.
 
 5. **MAC uniqueness across the fleet.** Duplicate MACs are `ErrDuplicateMAC`;
    duplicate `bmc_address` values are rejected by `ErrInvalidBootstrapConfig`.
+   Addresses are unique too, but in the *merged* configs: `checkNodeConfigs`
+   resolves every node (with no hardware identity) and refuses an address two
+   nodes both assign, on an interface, bridge, bond, bond zone VLAN, VLAN or the
+   platform VRF (`ErrDuplicateNodeAddress`). The same pass refuses a diskless
+   node (`diskless` or `diskless-nbd`, not `skip_install`) whose merged config
+   keeps `install-target: image` (`ErrDisklessImageTarget`, also raised by
+   every resolve of that node). It runs first in `Run` and `Deploy` (phase
+   `discovery`, before any BMC or container is touched), at the end of the
+   dry-run, and after `ResolveNodeConfigs`, whichever nodes were asked for. A
+   node that fails to resolve for any other reason is skipped there and left to
+   per-MAC staging's fall-back.
 
 6. **`skip_install` nodes participate in everything except installation.** No
    discovery, no ISO staging, no power operations; still validated, still seeded,
@@ -756,6 +767,8 @@ Every error in this feature is a typed struct or a package sentinel;
 | `ErrInvalidNodeRole{Hostname, Role}` | Role is not `control-plane`/`gateway`/`worker` |
 | `ErrNodeMissingIdentity{Hostname}` | Neither `bmc_address` nor `macs` on an installing node |
 | `ErrDuplicateMAC{MAC, Hostnames}` | The same MAC on two nodes |
+| `ErrDuplicateNodeAddress{Address, Hostname, Where, OtherHostname, OtherWhere}` | Two nodes' merged configs assign the same address |
+| `ErrDisklessImageTarget{Hostname, BootModel}` | A diskless node's merged config keeps `install-target: image` |
 | `ErrInvalidControlPlaneCount{Count}` | Count is 0, 2, or even |
 | `ErrInvalidBootMethod{Hostname, Value}` | `boot_method` is neither `pxe` nor `virtual-media` |
 | `ErrVirtualMediaRequiresBMC{Hostname}` | `virtual-media` without `bmc_address` |
@@ -908,11 +921,14 @@ rather than silently ignored.
 | `deployer.bootstrap_http_port` | int | `8080` | Sets `BOOTSTRAP_HTTP_PORT`. The container's HTTP service — per-MAC config endpoint, install-log sink, `/health` — and the port the orchestrator builds its own URLs against (`installLogBaseURL`) |
 | `deployer.bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Sets `BOOTSTRAP_DEVICE_SCRIPT_PORT`. The container's second listener, `/boot/device/{mac}.ipxe` and `/boot/uki/{mac}.efi`. Set it when something else on the deployer already owns the derived port |
 | `deployer.bootstrap_dhcp_start` / `_end` | string | container defaults | `BOOTSTRAP_DHCP_START` / `BOOTSTRAP_DHCP_END` |
-| `deployer.bootstrap_gateway`, `deployer.bootstrap_dns` | string | container defaults | `BOOTSTRAP_GATEWAY`, `BOOTSTRAP_DNS` |
+| `deployer.bootstrap_gateway`, `deployer.bootstrap_dns` | string | container defaults (gateway `192.0.2.1`) | `BOOTSTRAP_GATEWAY`, `BOOTSTRAP_DNS` |
+| `deployer.bootstrap_no_router` | bool | `false` | `BOOTSTRAP_NO_ROUTER`: the container's DHCP offers and acks carry no router option (3), for an isolated provisioning VLAN whose boot server does not route. Set together with `bootstrap_gateway` it is `deployer.ErrNoRouterWithGateway` at load, and the entrypoint refuses the same pair with exit status 2 |
 | `deployer.bootstrap_apk_mirror` | string | public mirror | `BOOTSTRAP_APK_MIRROR`; required on networks with no outbound internet |
 | `deployer.netboot_media_dir` | string | — | A netboot media build (`container.NetbootMedia`: `netboot-media.yaml`, `SHA256SUMS`, `media/<set>/…`, the Pi TFTP tree, the db-signed arm64 iPXE, and optionally `http_boot`, the Pi's signed `boot.img`/`boot.sig`/`pubkey.bin`), relative to `bootstrap.yaml`. **Required** for a Linux deployer: the image carries no installer media. `validateNetbootMedia` checks, before anything deploys, that the build carries what each PXE-installed node boots — its architecture's default set, or for a Pi the `aarch64-rpi` set, the TFTP tree and the arm64 iPXE. The deployer copies it into `data_dir` as laid out, skipping the upload when the staged `SHA256SUMS` is the build's and still verifies, and removing what the build owns first otherwise |
 | `deployer.proxy_dhcp` | bool | `false` | `BOOTSTRAP_PROXY_DHCP`: the container answers PXE clients with boot options and no lease, for a segment with its own DHCP server |
-| `deployer.pxe_service_host` | string | gateway role | Which node hosts PXE after hand-off |
+| `deployer.boot_node` | bool | `false` | Boot-node mode: the container is the segment's long-running netboot server. `docker run` gets `--restart unless-stopped` and a second volume, `firmware_cache_dir` → `/var/cache/go-trusted-platform/firmware`; Phase 7 skips the health gate and teardown, so neither the container nor `data_dir` is removed by a run. A re-run replaces the container (`rm -f` of the container only) and keeps both volumes; under `if-stale` a running container without the restart policy or the cache mount counts as stale. `if-stale` stays the default here, and it compares the image, the volumes and the restart policy, not the `BOOTSTRAP_*` environment: after changing a setting such as `bootstrap_no_router` or `proxy_dhcp`, force the replacement with `redeploy_mode: always`. `platformctl bootstrap teardown` still removes the container and `data_dir` and leaves the cache. `data_dir` must be absolute, not `/`, and not under `/tmp`, `/run` or `/dev/shm` (`deployer.ErrInvalidBootNodeConfig` at load) |
+| `deployer.firmware_cache_dir` | string | `<data_dir>-firmware` | Boot-node only: the host directory holding pxeboot's iPXE firmware cache. Same path rules as `data_dir`, and must not overlap it, because teardown deletes `data_dir`. Set without `boot_node` it is `ErrInvalidBootNodeConfig` |
+| `deployer.pxe_service_host` | string | gateway role | Which node should host PXE after hand-off. Parsed only: no phase reads it today, so nothing hands PXE off and `boot_node` does not consult it |
 | `environment.id` | int | **required** | Environment number _E_ (2–40) |
 | `environment.base`, `environment.ula`, `environment.overrides` | | `10.0.0.0/8`, none, none | `netplan.Environment` |
 | `zones[]` | list | built-ins | `zone.ZoneConfig`: policy tuning and owner-defined zones |
@@ -939,7 +955,7 @@ rather than silently ignored.
 | `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
 | `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root); or, on a Pi only, `diskless-nbd` for a root exported by the boot server over NBD-over-TLS, whose device script adds `platform_boot_model=diskless-nbd` and `platform_nbd_server` (the export server's address; `ErrNBDServerAddress` when none is dialable) to the set's installer arguments |
 | `nodes[].interfaces` | list | — | Authoritative for `network.interfaces` |
-| `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
+| `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins; the per-node place for addresses (`network.platform-vrf.address`, `network.vlans`, `network.bonds`), which no two nodes may share |
 | `nodes[].switch_port` | string | — | Recorded for operator verification. There is no post-enrollment port move: a hypervisor trunk's native VLAN is provisioning |
 
 The container's two ports are configurable, and one setting moves both the
@@ -998,12 +1014,14 @@ sub-blocks.
 entrypoint consumes `BOOTSTRAP_INTERFACE`, `BOOTSTRAP_SERVER_IP`,
 `BOOTSTRAP_HTTP_PORT`, `BOOTSTRAP_DEVICE_SCRIPT_PORT`,
 `BOOTSTRAP_DHCP_START`, `BOOTSTRAP_DHCP_END`, `BOOTSTRAP_GATEWAY`,
-`BOOTSTRAP_DNS`, `BOOTSTRAP_APK_MIRROR`, the optional `BOOTSTRAP_BIND_HOST`,
-and — for a netboot media build — `BOOTSTRAP_TFTP_DIR`, `BOOTSTRAP_ARM64_IPXE`
-and `BOOTSTRAP_PROXY_DHCP`, all set from the deployer block (the optional four
-are assembled into one
+`BOOTSTRAP_NO_ROUTER`, `BOOTSTRAP_DNS`, `BOOTSTRAP_APK_MIRROR`, the optional
+`BOOTSTRAP_BIND_HOST`, and — for a netboot media build — `BOOTSTRAP_TFTP_DIR`,
+`BOOTSTRAP_ARM64_IPXE` and `BOOTSTRAP_PROXY_DHCP`, all set from the deployer
+block. The image's `pxeboot-env.sh`, sourced by the entrypoint, applies the
+defaults and assembles the gateway and the optional four into one
 `BOOTSTRAP_PXEBOOT_ARGS`, since an unset supervisord `%(ENV_*)s` would leave a
-bare flag). The NBD export server's `BOOTSTRAP_NBD_*` variables join
+bare flag; under `BOOTSTRAP_NO_ROUTER=true` it passes no `--dhcp-gateway`, and
+pxeboot then sends no router option. The NBD export server's `BOOTSTRAP_NBD_*` variables join
 `BOOTSTRAP_PXEBOOT_ARGS` the same way; the deployer does not set them yet
 (§2, *NBD export server*). An
 unset port is omitted from the `docker run` command entirely so the entrypoint's

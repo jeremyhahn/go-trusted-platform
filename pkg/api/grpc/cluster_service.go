@@ -312,6 +312,16 @@ func (s *ClusterGRPCService) mapError(operation string, err error) error {
 	}
 
 	s.logger.Error(err, "cluster operation failed", "operation", operation)
+	return ClusterErrorStatus(err)
+}
+
+// ClusterErrorStatus is the gRPC status error a ClusterService failure is
+// answered with. Every cluster transport classifies servicer errors through
+// it, so the same failure carries the same class on gRPC, Unix, REST and MCP.
+func ClusterErrorStatus(err error) error {
+	if err == nil {
+		return nil
+	}
 
 	// Check for specific cluster error types
 	switch e := err.(type) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,7 +172,8 @@ func TestBuildInstallerConfigAppliesInstallerOverrides(t *testing.T) {
 		Device:               "/dev/mmcblk0",
 		PartitionTable:       "mbr",
 		KernelPackage:        "linux-rpi",
-		ExtraPackages:        []string{"raspberrypi-bootloader"},
+		ExtraPackages:        []string{"raspberrypi-bootloader", "pcsc-lite", "pcsc-lite-openrc", "ccid", "opensc", "yubico-piv-tool-libs"},
+		ExtraServices:        []string{"pcscd"},
 		HardwareManufacturer: "Raspberry Pi",
 		HardwareModel:        "Raspberry Pi 4 Model B",
 	}
@@ -186,8 +188,11 @@ func TestBuildInstallerConfigAppliesInstallerOverrides(t *testing.T) {
 	if got.OS.Architecture != "aarch64" || got.OS.KernelPackage != "linux-rpi" {
 		t.Errorf("os arch/kernel = %q/%q", got.OS.Architecture, got.OS.KernelPackage)
 	}
-	if len(got.OS.Packages) != 1 || got.OS.Packages[0] != "raspberrypi-bootloader" {
-		t.Errorf("os packages = %v", got.OS.Packages)
+	if !slices.Equal(got.OS.Packages, cfg.Installer.ExtraPackages) {
+		t.Errorf("os packages = %v, want the bootloader and the token stack %v", got.OS.Packages, cfg.Installer.ExtraPackages)
+	}
+	if !slices.Equal(got.OS.Services, []string{"pcscd"}) {
+		t.Errorf("os services = %v, want [pcscd]", got.OS.Services)
 	}
 	if got.HardwareManufacturer != "Raspberry Pi" || got.HardwareModel != "Raspberry Pi 4 Model B" {
 		t.Errorf("hardware identity = %q / %q", got.HardwareManufacturer, got.HardwareModel)
@@ -201,7 +206,7 @@ func TestBuildInstallerConfigAppliesInstallerOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Disk.Device != "/dev/sda" || got.Disk.PartitionTable != installer.PartitionTableGPT ||
-		got.OS.Architecture != "x86_64" || got.OS.KernelPackage != "" || len(got.OS.Packages) != 0 ||
+		got.OS.Architecture != "x86_64" || got.OS.KernelPackage != "" || len(got.OS.Packages) != 0 || len(got.OS.Services) != 0 ||
 		got.HardwareManufacturer != "" || got.HardwareModel != "" {
 		t.Errorf("defaults changed: disk=%+v os=%+v hw=%q/%q", got.Disk, got.OS, got.HardwareManufacturer, got.HardwareModel)
 	}

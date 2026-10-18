@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
@@ -49,16 +50,22 @@ type OrchestratorConfig struct {
 	// OVSSocketPath is the path to the OVSDB socket
 	OVSSocketPath string `json:"ovs_socket_path" yaml:"ovs_socket_path"`
 
+	// Arch is the guest architecture of local QEMU VMs: x86_64 or aarch64
+	// (VMs only). Empty follows the host: amd64 runs x86_64 guests, arm64 runs
+	// aarch64 guests. It also selects the QEMU binary and firmware defaults.
+	Arch qemu.Arch `json:"arch,omitempty" yaml:"arch,omitempty"`
+
 	// QEMUBinary is the path to the QEMU binary (VMs only)
 	QEMUBinary string `json:"qemu_binary,omitempty" yaml:"qemu_binary,omitempty"`
 
-	// OVMFCode is the path to OVMF firmware code
+	// OVMFCode is the path to the UEFI firmware code: OVMF on x86_64, AAVMF
+	// on aarch64
 	OVMFCode string `json:"ovmf_code,omitempty" yaml:"ovmf_code,omitempty"`
 
-	// OVMFCodeSecure is the path to OVMF firmware with Secure Boot
+	// OVMFCodeSecure is the path to the UEFI firmware code with Secure Boot
 	OVMFCodeSecure string `json:"ovmf_code_secure,omitempty" yaml:"ovmf_code_secure,omitempty"`
 
-	// OVMFVars is the path to OVMF NVRAM template
+	// OVMFVars is the path to the UEFI NVRAM template
 	OVMFVars string `json:"ovmf_vars,omitempty" yaml:"ovmf_vars,omitempty"`
 
 	// AutoCleanup enables automatic cleanup of stopped instances
@@ -284,8 +291,51 @@ type AzureProviderConfig struct {
 // carries it.
 const DefaultMigrationListenAddress = "0.0.0.0:0"
 
-// DefaultOrchestratorConfig returns a configuration with sensible defaults
+// DefaultOrchestratorConfig returns a configuration with sensible defaults for
+// the architecture of the host it runs on
 func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig {
+	return defaultOrchestratorConfig(computeType, runtime.GOARCH)
+}
+
+// vmFirmware is the QEMU binary and UEFI firmware a guest architecture boots
+// with.
+type vmFirmware struct {
+	qemuBinary string
+	code       string
+	codeSecure string
+	vars       string
+}
+
+// hostGuestArch maps a Go host architecture to the guest architecture local
+// QEMU VMs run there, the one KVM can accelerate.
+var hostGuestArch = map[string]qemu.Arch{
+	"amd64": qemu.ArchX86_64,
+	"arm64": qemu.ArchAArch64,
+}
+
+// vmFirmwareDefaults holds the default QEMU binary and UEFI firmware per guest
+// architecture: OVMF on x86_64, AAVMF on aarch64. AAVMF has a single code
+// image, so it is also the Secure Boot code default.
+var vmFirmwareDefaults = map[qemu.Arch]vmFirmware{
+	qemu.ArchX86_64: {
+		qemuBinary: "qemu-system-x86_64",
+		code:       "/usr/share/OVMF/OVMF_CODE_4M.fd",
+		codeSecure: "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",
+		vars:       "/usr/share/OVMF/OVMF_VARS_4M.fd",
+	},
+	qemu.ArchAArch64: {
+		qemuBinary: "qemu-system-aarch64",
+		code:       "/usr/share/AAVMF/AAVMF_CODE.fd",
+		codeSecure: "/usr/share/AAVMF/AAVMF_CODE.fd",
+		vars:       "/usr/share/AAVMF/AAVMF_VARS.fd",
+	},
+}
+
+// defaultOrchestratorConfig returns the defaults for a host of the given Go
+// architecture. A VM config gets the guest architecture that host runs and its
+// firmware; a host with no guest mapping gets neither, so Validate rejects it
+// instead of assuming x86_64.
+func defaultOrchestratorConfig(computeType ComputeType, hostArch string) *OrchestratorConfig {
 	config := &OrchestratorConfig{
 		Type:            computeType,
 		WorkDir:         "/var/lib/trusted-platform/compute",
@@ -303,14 +353,37 @@ func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig {
 
 	// VM-specific defaults
 	if computeType == ComputeTypeVM {
-		config.QEMUBinary = "qemu-system-x86_64"
-		config.OVMFCode = "/usr/share/OVMF/OVMF_CODE_4M.fd"
-		config.OVMFCodeSecure = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
-		config.OVMFVars = "/usr/share/OVMF/OVMF_VARS_4M.fd"
 		config.MigrationListenAddress = DefaultMigrationListenAddress
+		if arch, ok := hostGuestArch[hostArch]; ok {
+			config.Arch = arch
+			config.fillVMFirmware(vmFirmwareDefaults[arch])
+		}
 	}
 
 	return config
+}
+
+// fillVMFirmware sets each empty QEMU binary and firmware path from fw,
+// keeping every value already configured.
+func (c *OrchestratorConfig) fillVMFirmware(fw vmFirmware) {
+	if c.QEMUBinary == "" {
+		c.QEMUBinary = fw.qemuBinary
+	}
+	if c.OVMFCode == "" {
+		c.OVMFCode = fw.code
+	}
+	if c.OVMFCodeSecure == "" {
+		c.OVMFCodeSecure = fw.codeSecure
+	}
+	if c.OVMFVars == "" {
+		c.OVMFVars = fw.vars
+	}
+}
+
+// unsupportedVMArchError reports a VM guest architecture with no QEMU binary
+// and firmware defaults.
+func unsupportedVMArchError(arch qemu.Arch) error {
+	return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: fmt.Sprintf("unsupported VM arch %q: use %s or %s", arch, qemu.ArchX86_64, qemu.ArchAArch64)}}
 }
 
 // Validate validates the orchestrator configuration
@@ -348,6 +421,9 @@ func (c *OrchestratorConfig) Validate() error {
 	// SDKs and do not require a local QEMU binary or OVMF firmware, so the
 	// firmware checks apply only to the local QEMU provider.
 	if c.Type == ComputeTypeVM && !c.Provider.isCloud() {
+		if _, ok := vmFirmwareDefaults[c.Arch]; !ok {
+			return unsupportedVMArchError(c.Arch)
+		}
 		if c.QEMUBinary == "" {
 			return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "QEMU binary path is required for VM orchestrator"}}
 		}

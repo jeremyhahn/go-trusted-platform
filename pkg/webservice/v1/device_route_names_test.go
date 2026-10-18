@@ -22,6 +22,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 const (
@@ -93,7 +95,7 @@ func dualNamedDeviceRoutes(routes []string) []string {
 // guessing which name worked for which operation.
 func TestDeviceRoutesHaveOneName(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
-	built := walkRoutes(t, router)
+	built := testutil.WalkRoutes(t, router)
 
 	// Vacuity guard: the device surface must have been wired at all, or
 	// an empty intersection proves nothing.
@@ -138,7 +140,7 @@ func TestDualNamedDeviceRoutes_ReportsAnAlias(t *testing.T) {
 	fixture.HandleFunc("/api/v1/devices/templates", ok).Methods(http.MethodGet)
 	fixture.HandleFunc("/api/v1/devices/{id:[0-9]+}", ok).Methods(http.MethodGet)
 
-	assert.Equal(t, []string{"/profiles", "/templates"}, dualNamedDeviceRoutes(walkRoutes(t, fixture)))
+	assert.Equal(t, []string{"/profiles", "/templates"}, dualNamedDeviceRoutes(testutil.WalkRoutes(t, fixture)))
 }
 
 // TestDualNamedDeviceRoutes_AllowsTheSplitAndTheSeeder is the control: records

@@ -8,10 +8,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
@@ -138,8 +140,8 @@ func TestTargetContract(t *testing.T) {
 	if tgt.Name() != "rpi" || tgt.Architecture() != uki.ArchAArch64 || tgt.KernelPackage() != "linux-rpi" || tgt.UBootBoard() != uboot.BoardRPiArm64 {
 		t.Errorf("contract = %s %s %s %s", tgt.Name(), tgt.Architecture(), tgt.KernelPackage(), tgt.UBootBoard())
 	}
-	if got := tgt.ExtraPackages(); len(got) != 2 || got[0] != "raspberrypi-bootloader" || got[1] != "raspberrypi-bootloader-common" {
-		t.Errorf("ExtraPackages = %v", got)
+	if got := tgt.ExtraPackages(); len(got) < 2 || got[0] != "raspberrypi-bootloader" || got[1] != "raspberrypi-bootloader-common" {
+		t.Errorf("ExtraPackages = %v, want the bootloader packages first", got)
 	}
 	if tgt.BuiltKernel() {
 		t.Error("the Pi boots the linux-rpi package, not a built kernel")
@@ -154,6 +156,40 @@ func TestTargetContract(t *testing.T) {
 	if ov.Device != "/dev/mmcblk0" || ov.PartitionTable != "mbr" || ov.KernelPackage != "linux-rpi" || ov.Target != "image" || ov.BootFirmware != "uboot" ||
 		ov.HardwareManufacturer != "Raspberry Pi" || ov.HardwareModel != "Raspberry Pi Compute Module 4" {
 		t.Errorf("InstallerOverrides = %+v", ov)
+	}
+}
+
+// TestTargetCarriesTheTokenStack: every Pi image installs the smart-card
+// stack a YubiKey or a Nitrokey HSM needs for PKCS#11, and the offline
+// repository the media is built from carries it, so the install does not
+// need upstream egress to find it.
+func TestTargetCarriesTheTokenStack(t *testing.T) {
+	tokenStack := []string{"pcsc-lite", "pcsc-lite-openrc", "ccid", "opensc", "yubico-piv-tool-libs"}
+	for _, model := range Models() {
+		t.Run(model, func(t *testing.T) {
+			tgt, err := New(model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append([]string{"raspberrypi-bootloader", "raspberrypi-bootloader-common"}, tokenStack...)
+			if got := tgt.ExtraPackages(); !slices.Equal(got, want) {
+				t.Errorf("ExtraPackages = %v, want %v", got, want)
+			}
+
+			ov := tgt.InstallerOverrides()
+			if !slices.Equal(ov.ExtraServices, []string{"pcscd"}) {
+				t.Errorf("ExtraServices = %v, want pcscd started at boot", ov.ExtraServices)
+			}
+			offline := iso.CollectRequiredPackages(&iso.PreFetchConfig{KernelPackage: ov.KernelPackage, ExtraPackages: ov.ExtraPackages})
+			for _, pkg := range tokenStack {
+				if !slices.Contains(ov.ExtraPackages, pkg) {
+					t.Errorf("installer overrides do not install %q: %v", pkg, ov.ExtraPackages)
+				}
+				if !slices.Contains(offline, pkg) {
+					t.Errorf("offline repository does not carry %q", pkg)
+				}
+			}
+		})
 	}
 }
 

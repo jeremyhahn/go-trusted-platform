@@ -364,7 +364,7 @@ All three are documented in [architecture.md](architecture.md) §6.
 **A token works on one transport and not another.**
 Each transport has its own scope catalog, and both the gRPC and MCP catalogs
 refuse anything uncatalogued. Every gRPC RPC carries a required scope, but only
-370 of 469 MCP tools are classified; an unclassified tool fails with
+446 of 469 MCP tools are classified; an unclassified tool fails with
 `AuthErrorToolNotClassified` whatever scopes the token holds. A tool that fails
 that way needs classifying, not a broader token. The catalogs are listed in
 [`docs/daemon/api.md`](../daemon/api.md) §5.

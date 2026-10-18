@@ -15,8 +15,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netlink"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
@@ -44,12 +43,11 @@ type SDNService struct {
 	mu             sync.RWMutex
 
 	// Track created resources for cleanup
-	bridges   map[string]*bridgeResource
-	ports     map[string]*portResource
-	taps      map[string]*tapResource
-	vlans     map[string]*vlanResource
-	portAuths map[string]*portAuthResource
-	policies  map[string]*policyResource
+	bridges  map[string]*bridgeResource
+	ports    map[string]*portResource
+	taps     map[string]*tapResource
+	vlans    map[string]*vlanResource
+	policies map[string]*policyResource
 }
 
 type bridgeResource struct {
@@ -80,16 +78,6 @@ type vlanResource struct {
 	name      string
 	ports     []string
 	createdAt time.Time
-}
-
-type portAuthResource struct {
-	portID          string
-	bridgeID        string
-	certificateCN   string
-	certificate     []byte
-	authenticatedAt time.Time
-	expiresAt       time.Time
-	authorizedVLANs []uint32
 }
 
 type policyResource struct {
@@ -129,7 +117,6 @@ func NewSDNService(ovsSocketPath string, opts ...SDNServiceOption) (*SDNService,
 		ports:          make(map[string]*portResource),
 		taps:           make(map[string]*tapResource),
 		vlans:          make(map[string]*vlanResource),
-		portAuths:      make(map[string]*portAuthResource),
 		policies:       make(map[string]*policyResource),
 	}
 
@@ -874,156 +861,17 @@ func (s *SDNService) ListVLANs(ctx context.Context, req *platformv1.ListVLANsReq
 	}, nil
 }
 
-// AuthenticatePort authenticates a port using x509 certificate
-func (s *SDNService) AuthenticatePort(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
-	if req.GetBridgeId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "bridge_id is required")
-	}
-	if req.GetPortId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "port_id is required")
-	}
-	if len(req.GetCertificate()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "certificate is required")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Find bridge name from ID
-	var bridgeName string
-	for name, res := range s.bridges {
-		if res.id == req.GetBridgeId() || name == req.GetBridgeId() {
-			bridgeName = name
-			break
-		}
-	}
-
-	if bridgeName == "" {
-		return nil, status.Error(codes.NotFound, "bridge not found")
-	}
-
-	// Find port name from ID
-	var portName string
-	for name, res := range s.ports {
-		if res.id == req.GetPortId() || name == req.GetPortId() {
-			portName = name
-			break
-		}
-	}
-
-	if portName == "" {
-		return nil, status.Error(codes.NotFound, "port not found")
-	}
-
-	// Parse the certificate to extract CN and expiration
-	var cert *x509.Certificate
-	var err error
-	certData := req.GetCertificate()
-
-	if req.GetFormat() == "DER" {
-		cert, err = x509.ParseCertificate(certData)
-	} else {
-		// Default to PEM format
-		block, _ := pem.Decode(certData)
-		if block == nil {
-			return nil, status.Error(codes.InvalidArgument, "failed to decode PEM certificate")
-		}
-		cert, err = x509.ParseCertificate(block.Bytes)
-	}
-
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("failed to parse certificate: %v", err))
-	}
-
-	// Check certificate validity
-	now := time.Now()
-	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-		return nil, status.Error(codes.InvalidArgument, "certificate is not valid at current time")
-	}
-
-	// Track the authentication
-	authKey := fmt.Sprintf("%s:%s", bridgeName, portName)
-	s.portAuths[authKey] = &portAuthResource{
-		portID:          req.GetPortId(),
-		bridgeID:        req.GetBridgeId(),
-		certificateCN:   cert.Subject.CommonName,
-		certificate:     certData,
-		authenticatedAt: now,
-		expiresAt:       cert.NotAfter,
-		authorizedVLANs: []uint32{}, // Could be extracted from certificate extensions
-	}
-
-	auth := &platformv1.PortAuth{
-		Authenticated:   true,
-		CertificateCn:   cert.Subject.CommonName,
-		Certificate:     certData,
-		AuthenticatedAt: timestamppb.New(now),
-		ExpiresAt:       timestamppb.New(cert.NotAfter),
-		AuthorizedVlans: []uint32{},
-	}
-
-	return &platformv1.AuthenticatePortResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "port authenticated successfully",
-		},
-		Auth: auth,
-	}, nil
+// AuthenticatePort refuses with policy.ErrPortAuthNotEnforced
+// (FailedPrecondition): the switch does not enforce port authentication, so
+// no certificate is checked and nothing is recorded (#304).
+func (s *SDNService) AuthenticatePort(_ context.Context, _ *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
+	return nil, policy.ErrPortAuthNotEnforced{Operation: "AuthenticatePort"}
 }
 
-// RevokePortAuth revokes port authentication
-func (s *SDNService) RevokePortAuth(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
-	if req.GetBridgeId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "bridge_id is required")
-	}
-	if req.GetPortId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "port_id is required")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Find bridge name from ID
-	var bridgeName string
-	for name, res := range s.bridges {
-		if res.id == req.GetBridgeId() || name == req.GetBridgeId() {
-			bridgeName = name
-			break
-		}
-	}
-
-	if bridgeName == "" {
-		return nil, status.Error(codes.NotFound, "bridge not found")
-	}
-
-	// Find port name from ID
-	var portName string
-	for name, res := range s.ports {
-		if res.id == req.GetPortId() || name == req.GetPortId() {
-			portName = name
-			break
-		}
-	}
-
-	if portName == "" {
-		return nil, status.Error(codes.NotFound, "port not found")
-	}
-
-	// Check if port is authenticated
-	authKey := fmt.Sprintf("%s:%s", bridgeName, portName)
-	if _, exists := s.portAuths[authKey]; !exists {
-		return nil, status.Error(codes.NotFound, "port authentication not found")
-	}
-
-	// Remove from tracking
-	delete(s.portAuths, authKey)
-
-	return &platformv1.RevokePortAuthResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "port authentication revoked successfully",
-		},
-	}, nil
+// RevokePortAuth refuses with policy.ErrPortAuthNotEnforced
+// (FailedPrecondition), for the same reason as AuthenticatePort.
+func (s *SDNService) RevokePortAuth(_ context.Context, _ *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
+	return nil, policy.ErrPortAuthNotEnforced{Operation: "RevokePortAuth"}
 }
 
 // GetPortStats retrieves port statistics

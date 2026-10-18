@@ -61,8 +61,30 @@ func luksErrorToGRPC(err error) error {
 		errors.Is(err, ErrLUKSCredentialIDRequired),
 		errors.Is(err, ErrLUKSSlotRequired):
 		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, ErrLUKSTestUnlockUnverified):
+		return status.Error(codes.Unimplemented, err.Error())
 	}
 	return status.Error(codes.Internal, err.Error())
+}
+
+// ErrLUKSOperation carries a LUKS service error out of the MCP provider
+// with the class luksErrorToGRPC gives it, so an MCP caller reads the same
+// class a gRPC caller does while errors.Is still reaches the sentinel.
+type ErrLUKSOperation struct {
+	Cause error
+}
+
+func (e ErrLUKSOperation) Error() string {
+	return e.Cause.Error()
+}
+
+func (e ErrLUKSOperation) Unwrap() error {
+	return e.Cause
+}
+
+// GRPCStatus classifies the cause the way the gRPC LUKSService does.
+func (e ErrLUKSOperation) GRPCStatus() *status.Status {
+	return status.Convert(luksErrorToGRPC(e.Cause))
 }
 
 func luksKeyslotToProto(k LUKSKeyslot) *platformv1.LUKSKeyslot {

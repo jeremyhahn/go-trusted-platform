@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -922,7 +923,8 @@ func (ai *alpineInstaller) SetRootPassword(ctx context.Context, rootPath, passwo
 	return nil
 }
 
-// EnableServices adds the installed openRCServices to their runlevels.
+// EnableServices adds the installed openRCServices, and the configured
+// OSConfig.Services, to their runlevels.
 func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) error {
 	ai.logger.Info("[ALPINE] Enabling essential OpenRC services")
 
@@ -937,7 +939,7 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 		ai.logger.Warn("[ALPINE] Failed to configure kernel modules", "error", err)
 	}
 
-	for _, svc := range installedServices(rootPath) {
+	for _, svc := range installedServices(rootPath, ai.config.Services) {
 		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", svc.name, svc.runlevel)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			ai.logger.Warn("[ALPINE] Failed to enable service",
@@ -987,11 +989,15 @@ var openRCServices = []openRCService{
 	{name: "charon", runlevel: "default"},
 }
 
-// installedServices returns the openRCServices whose init scripts are
-// installed under rootPath.
-func installedServices(rootPath string) []openRCService {
+// installedServices returns the openRCServices, then the extra services in
+// the default runlevel, whose init scripts are installed under rootPath.
+func installedServices(rootPath string, extra []string) []openRCService {
+	services := slices.Clone(openRCServices)
+	for _, name := range extra {
+		services = append(services, openRCService{name: name, runlevel: "default"})
+	}
 	var installed []openRCService
-	for _, svc := range openRCServices {
+	for _, svc := range services {
 		if _, err := os.Stat(filepath.Join(rootPath, "etc", "init.d", svc.name)); err != nil {
 			continue
 		}

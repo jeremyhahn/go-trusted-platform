@@ -150,6 +150,17 @@ func (e ErrUnknownGatewayModes) Error() string {
 	return fmt.Sprintf("gateway mode bitmask %#x names an unknown mode (overlay=1, edge=2, transit=4)", e.Modes)
 }
 
+// ErrUnknownTenantState indicates a tenant tool result naming a state the
+// adapter cannot map onto platformv1.TenantState.
+type ErrUnknownTenantState struct {
+	State string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownTenantState) Error() string {
+	return fmt.Sprintf("tenant tool result names an unknown tenant state %q", e.State)
+}
+
 // ErrFieldNotSupported indicates a request field the MCP tool has no
 // argument for. The adapter refuses it rather than dropping it.
 type ErrFieldNotSupported struct {

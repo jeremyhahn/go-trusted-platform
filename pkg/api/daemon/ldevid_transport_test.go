@@ -130,7 +130,7 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
-	t.Run("no proven IDevID maps to invalid argument", func(t *testing.T) {
+	t.Run("no proven IDevID maps to failed precondition", func(t *testing.T) {
 		svc := newLDevIDTestService(t)
 		svc.SetTPM2Service(&ldevidMockTPM{idevidCert: nil, pks: &ldevidMockPKS{}})
 		svc.SetCAService(&ldevidMockCA{})
@@ -140,7 +140,7 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 		payload, err := quicwire.EncodePayload(&platformv1.CreateLDevIDRequest{})
 		require.NoError(t, err)
 		resp := h.handleLDevIDCreate(ctx, payload)
-		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 	})
 }
 

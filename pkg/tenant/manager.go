@@ -740,9 +740,11 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 		slog.String("tenant_id", tenantID),
 	)
 
-	entity.ComputeQuota = quotas.Compute
-	entity.NetworkQuota = quotas.Network
-	entity.StorageQuota = quotas.Storage
+	// Only limits come from the request; the usage counters are the
+	// tenant's own and survive every update.
+	entity.ComputeQuota.SetLimits(quotas.Compute)
+	entity.NetworkQuota.SetLimits(quotas.Network)
+	entity.StorageQuota.SetLimits(quotas.Storage)
 	entity.UpdatedAt = time.Now()
 
 	// Update cache

@@ -256,7 +256,13 @@ func (h *Handlers) RotateTenantDEK(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
-	resp, err := h.server.RotateTenantDEK(r.Context(), &platformv1.RotateTenantDEKRequest{TenantId: mux.Vars(r)["id"]})
+	req := &platformv1.RotateTenantDEKRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.TenantId = mux.Vars(r)["id"]
+	resp, err := h.server.RotateTenantDEK(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

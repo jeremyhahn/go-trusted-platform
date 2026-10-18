@@ -83,12 +83,6 @@ type IDevIDCertificateQUIC struct {
 // IDevIDDeleteRequest represents an IDevID deletion request.
 type IDevIDDeleteRequest struct{}
 
-// IDevIDDeleteResponse represents an IDevID deletion response.
-type IDevIDDeleteResponse struct {
-	Deleted   bool  `codec:"deleted"`
-	Timestamp int64 `codec:"timestamp"`
-}
-
 // IDevIDCSRRequest represents an IDevID CSR generation request.
 type IDevIDCSRRequest struct {
 	CommonName         string   `codec:"common_name"`
@@ -200,12 +194,6 @@ type IAKInfoResponse struct {
 // IAKDeleteRequest represents an IAK deletion request.
 type IAKDeleteRequest struct{}
 
-// IAKDeleteResponse represents an IAK deletion response.
-type IAKDeleteResponse struct {
-	Deleted   bool  `codec:"deleted"`
-	Timestamp int64 `codec:"timestamp"`
-}
-
 // IAKCSRRequest represents an IAK CSR generation request.
 type IAKCSRRequest struct {
 	CommonName         string   `codec:"common_name"`
@@ -283,6 +271,14 @@ type ActivateCredentialQUICResponse struct {
 
 // handleIDevIDOperation routes IDevID/IAK opcodes to their respective handlers.
 func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	// Key deletes are refused whatever the TPM state, as on gRPC.
+	switch req.Opcode {
+	case quicwire.OpIDevIDDelete:
+		return h.handleIDevIDDelete(ctx, req)
+	case quicwire.OpIAKDelete:
+		return h.handleIAKDelete(ctx, req)
+	}
+
 	if h.tpm2Service == nil {
 		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tpm2"})
 	}
@@ -292,8 +288,6 @@ func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *qui
 		return h.handleIDevIDGenerate(ctx, req)
 	case quicwire.OpIDevIDInfo:
 		return h.handleIDevIDInfo(ctx, req)
-	case quicwire.OpIDevIDDelete:
-		return h.handleIDevIDDelete(ctx, req)
 	case quicwire.OpIDevIDCSR:
 		return h.handleIDevIDCSR(ctx, req)
 	case quicwire.OpIDevIDInstallCert:
@@ -304,8 +298,6 @@ func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *qui
 		return h.handleIAKGenerate(ctx, req)
 	case quicwire.OpIAKInfo:
 		return h.handleIAKInfo(ctx, req)
-	case quicwire.OpIAKDelete:
-		return h.handleIAKDelete(ctx, req)
 	case quicwire.OpIAKCSR:
 		return h.handleIAKCSR(ctx, req)
 	case quicwire.OpIAKInstallCert:
@@ -437,33 +429,12 @@ func (h *QUICServiceHandler) handleIDevIDInfo(ctx context.Context, req *quicwire
 	}
 }
 
-// handleIDevIDDelete deletes the IDevID key.
+// handleIDevIDDelete refuses the IDevID key delete. The persistent key is not
+// evicted, so it answers as the gRPC service does and touches nothing; the
+// certificate has OpIDevIDDeleteCert.
 func (h *QUICServiceHandler) handleIDevIDDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	// Delete the IDevID certificate first
-	if err := h.tpm2Service.DeleteIDevIDCertificate(); err != nil {
-		// Log but continue - certificate might not exist
-		h.logger.Debug("IDevID certificate deletion skipped", "error", err)
-	}
-
-	// Note: TPM2 doesn't have a direct DeleteIDevID - keys are typically persistent
-	// This would require evicting the key from the TPM
-
-	resp := &IDevIDDeleteResponse{
-		Deleted:   true,
-		Timestamp: time.Now().UnixMilli(),
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	h.logger.Info("IDevID key deleted")
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}
+	return h.errorResponse(idevidGRPCToQUICStatus(refused), refused)
 }
 
 // handleIDevIDCSR generates a CSR for the IDevID key.
@@ -801,29 +772,12 @@ func (h *QUICServiceHandler) handleIAKInfo(ctx context.Context, req *quicwire.Re
 	}
 }
 
-// handleIAKDelete deletes the IAK key.
+// handleIAKDelete refuses the IAK key delete. The persistent key is not
+// evicted, so it answers as the gRPC service does and touches nothing; the
+// certificate has OpIAKDeleteCert.
 func (h *QUICServiceHandler) handleIAKDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	// Delete the IAK certificate first
-	if err := h.tpm2Service.DeleteIAKCertificate(); err != nil {
-		h.logger.Debug("IAK certificate deletion skipped", "error", err)
-	}
-
-	resp := &IAKDeleteResponse{
-		Deleted:   true,
-		Timestamp: time.Now().UnixMilli(),
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	h.logger.Info("IAK key deleted")
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
+	return h.errorResponse(idevidGRPCToQUICStatus(refused), refused)
 }
 
 // handleIAKCSR generates a CSR for the IAK key.

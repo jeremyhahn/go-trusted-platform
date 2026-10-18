@@ -47,11 +47,18 @@ var validDiskCacheModes = map[string]struct{}{
 
 type Config struct {
 	// Arch is the guest architecture: x86_64 (default, q35 + OVMF) or
-	// aarch64 (virt + U-Boot as -bios). It selects the archProfile.
+	// aarch64 (virt + U-Boot as -bios, or AAVMF from pflash). It selects
+	// the archProfile.
 	Arch Arch `yaml:"arch" json:"arch" mapstructure:"arch"`
 
+	// HostArch is the GOARCH of the machine QEMU runs on; it decides
+	// whether KVM can accelerate the guest. Empty means runtime.GOARCH.
+	HostArch string `yaml:"-" json:"-" mapstructure:"-"`
+
 	// Firmware is the firmware image for architectures that take one as
-	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead.
+	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead,
+	// and so does aarch64 when Firmware is empty and OVMFCode is set: it
+	// then boots UEFI (AAVMF) from pflash.
 	Firmware string `yaml:"firmware" json:"firmware" mapstructure:"firmware"`
 
 	// DiskFormat is the disk image format: qcow2 (x86_64 default) or raw
@@ -493,7 +500,7 @@ func (c *Config) Validate() error {
 	if _, ok := validDiskFormats[c.diskFormat(p)]; !ok {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "disk format must be qcow2 or raw, got " + c.DiskFormat}}
 	}
-	if !p.nvram {
+	if !p.nvram(c) {
 		// A -bios firmware: present or not, nothing else to check.
 		_, err := p.firmware(c)
 		return err

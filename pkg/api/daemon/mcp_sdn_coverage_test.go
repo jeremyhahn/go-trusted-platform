@@ -30,11 +30,10 @@ import (
 // for testing methods that require an existing bridge.
 func createTestSDNServiceWithBridge(bridgeName string) *SDNService {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 	// Add a test bridge
 	svc.bridges[bridgeName] = &bridgeResource{

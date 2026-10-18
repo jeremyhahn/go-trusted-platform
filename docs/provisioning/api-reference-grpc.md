@@ -95,6 +95,7 @@ Typed service errors map to gRPC status codes via ordered matcher tables in
 | EAB validation failure (SignDigest), EK cert required/mismatch | `PermissionDenied` |
 | Unknown session or profile | `NotFound` |
 | Expired or already-fulfilled session | `InvalidArgument` |
+| `FulfillSession` with `profile_id` missing or 0 (`configdelivery.ErrProfileIDRequired`) | `InvalidArgument` |
 | Profile not provisioned for remote signing | `FailedPrecondition` |
 | Session fulfilled without a resolved profile (PollSession) | `Internal` |
 | No DB key signer / no profile service | `Unavailable` |

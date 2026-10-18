@@ -323,7 +323,7 @@ func TestMCPServiceProvider_VTPMOperations_NilService(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
 	t.Run("VTPMCreate returns error", func(t *testing.T) {
-		_, err := provider.VTPMCreate(ctx, "test", "RSA")
+		_, err := provider.VTPMCreate(ctx, "test", "RSA", false, nil)
 		if err == nil {
 			t.Error("expected error")
 		}
@@ -340,7 +340,7 @@ func TestMCPServiceProvider_VTPMOperations_NilService(t *testing.T) {
 	})
 
 	t.Run("VTPMList returns error", func(t *testing.T) {
-		_, err := provider.VTPMList(ctx)
+		_, err := provider.VTPMList(ctx, nil)
 		if err == nil {
 			t.Error("expected error")
 		}

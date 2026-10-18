@@ -280,12 +280,18 @@ Start, stop and inspect the daemon's services.
 `<service-type>` is one of `tpm`, `sdn`, `compute`, `dns`, `acme`,
 `webservice` (alias `web`), `attestation`.
 
+`start`, `stop` and `restart` are refused for every one of them (#317): the
+process owns each service, so the daemon answers `service <name> cannot be
+started or stopped at runtime: <reason>`, changes nothing, and the command
+exits 1. `--force` does not override the refusal. Restart `platformd` instead
+([api.md](api.md) §2).
+
 - **Exit:** 0; 1 on a wrong argument count, an unknown type, an unreachable
   daemon or a failed operation.
 
 ```bash
 platformctl service list
-platformctl service restart dns --timeout 60
+platformctl service status dns
 ```
 
 ### 4.5 `config`

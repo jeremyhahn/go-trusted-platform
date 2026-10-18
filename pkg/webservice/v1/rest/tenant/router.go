@@ -54,11 +54,17 @@ type Authorization struct {
 	RequireOwnTenantOrSystem func(http.Handler) http.Handler
 
 	// RequireSystemTenant gates the routes that are inherently cross-tenant —
-	// listing every tenant, creating one, syncing, and looking one up by
-	// name. A tenant administrator holds "admin" inside their own tenant and
-	// must not enumerate or create tenants with it, exactly as #159 decided
-	// for /api/v1/iam/tenants.
+	// listing every tenant, creating one, and syncing. A tenant
+	// administrator holds "admin" inside their own tenant and must not
+	// enumerate or create tenants with it, exactly as #159 decided for
+	// /api/v1/iam/tenants.
 	RequireSystemTenant func(http.Handler) http.Handler
+
+	// RequireOwnTenantNameOrSystem gates the lookup by name: admitted for
+	// the caller's own tenant's name, or for the system tenant resolving
+	// any. It applies tenant.AuthorizeNameLookup, the rule gRPC, QUIC, MCP
+	// and Unix apply, to the session's tenant claim (#304).
+	RequireOwnTenantNameOrSystem func(http.Handler) http.Handler
 }
 
 // NewTenantRouter constructs a tenant REST router.
@@ -79,10 +85,29 @@ func NewTenantRouter(
 	if authz.RequireSystemTenant == nil {
 		return nil, ErrAuthorizationRequired{Guard: "RequireSystemTenant"}
 	}
+	if authz.RequireOwnTenantNameOrSystem == nil {
+		return nil, ErrAuthorizationRequired{Guard: "RequireOwnTenantNameOrSystem"}
+	}
 	return &TenantRouter{
 		handlers: NewHandlers(logger, server, respWriter),
 		authz:    authz,
 	}, nil
+}
+
+// NameResolver returns the resolver RequireOwnTenantNameOrSystem needs: the
+// id of the tenant the request's {name} names, or "" when the lookup fails.
+// A failed lookup is not an error the caller sees here — the guard refuses
+// it exactly like another tenant's name, so only the system tenant learns
+// that a name does not exist.
+func NameResolver(server platformv1.TenantServiceServer) func(*http.Request) string {
+	return func(r *http.Request) string {
+		resp, err := server.GetTenantByName(r.Context(),
+			&platformv1.GetTenantByNameRequest{Name: mux.Vars(r)["name"]})
+		if err != nil {
+			return ""
+		}
+		return resp.GetTenant().GetId()
+	}
 }
 
 // tenantScoped wraps a handler whose target tenant comes from {id}.
@@ -93,6 +118,11 @@ func (r *TenantRouter) tenantScoped(h http.HandlerFunc) http.Handler {
 // systemOnly wraps a handler that acts across tenants.
 func (r *TenantRouter) systemOnly(h http.HandlerFunc) http.Handler {
 	return r.authz.RequireSystemTenant(h)
+}
+
+// ownNameOrSystem wraps a handler whose target tenant comes from {name}.
+func (r *TenantRouter) ownNameOrSystem(h http.HandlerFunc) http.Handler {
+	return r.authz.RequireOwnTenantNameOrSystem(h)
 }
 
 // RegisterRoutes mounts tenant routes on the parent router.
@@ -122,12 +152,13 @@ func (r *TenantRouter) RegisterRoutes(parent *mux.Router) {
 	sr.Handle("", r.systemOnly(r.handlers.ListTenants)).Methods("GET")
 	sr.Handle("", r.systemOnly(r.handlers.CreateTenant)).Methods("POST")
 	sr.Handle("/sync", r.systemOnly(r.handlers.Sync)).Methods("POST")
-	// by-name is a DISCOVERY lookup across tenants, and it could not take the
-	// {id} guard even in principle: tenant ids are UUIDs
-	// (pkg/tenant/manager.go generates uuid.New()), so comparing the NAME in
-	// the path against the session's tenant id would deny every caller,
-	// including a tenant looking up its own.
-	sr.Handle("/by-name/{name}", r.systemOnly(r.handlers.GetTenantByName)).Methods("GET")
+	// by-name cannot take the {id} guard: tenant ids are UUIDs
+	// (pkg/tenant/manager.go generates uuid.New()), so the NAME in the path
+	// never equals the session's tenant id. Its guard resolves the name and
+	// applies tenant.AuthorizeNameLookup to the session's tenant claim: a
+	// tenant resolves its own name, the system tenant any, and a foreign
+	// name is refused exactly like an unknown one.
+	sr.Handle("/by-name/{name}", r.ownNameOrSystem(r.handlers.GetTenantByName)).Methods("GET")
 	sr.Handle("/{id}", r.tenantScoped(r.handlers.GetTenant)).Methods("GET")
 	sr.Handle("/{id}", r.tenantScoped(r.handlers.UpdateTenant)).Methods("PUT")
 	sr.Handle("/{id}", r.tenantScoped(r.handlers.DeleteTenant)).Methods("DELETE")

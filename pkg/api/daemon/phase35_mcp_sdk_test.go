@@ -59,6 +59,13 @@ func serveMCPProvider(t *testing.T, provider *MCPServiceProvider) *sdkmcp.Adapte
 	t.Helper()
 	config := mcp.DefaultConfig()
 	config.AuthorizationService = tokenGrantAuthz{}
+	return serveMCPConfig(t, provider, config)
+}
+
+// serveMCPConfig serves provider through an MCP server built from config and
+// connects the SDK's MCP adapter to it with phase35MCPToken.
+func serveMCPConfig(t *testing.T, provider *MCPServiceProvider, config *mcp.Config) *sdkmcp.Adapter {
+	t.Helper()
 
 	// The daemon serves MCP over TLS 1.3 only, and the SDK sends a bearer
 	// token over https:// only.

@@ -417,8 +417,17 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 		o.logger.Debug("bootstrap: skipping bmc-enroll phase (no nodes with bmc_enroll: true)")
 	}
 
-	// Phase 7: Auto-teardown bootstrap container (non-fatal).
-	if o.deployer != nil {
+	// Phase 7: Auto-teardown bootstrap container (non-fatal). A boot node
+	// is the segment's long-running netboot server, so it keeps serving:
+	// neither the container nor data_dir is removed, and only an explicit
+	// Teardown takes it down.
+	switch {
+	case o.deployer == nil:
+	case o.config.Deployer.BootNode:
+		o.logger.Info("bootstrap: boot-node mode, keeping the bootstrap container serving",
+			slog.String("host", o.config.Deployer.Host),
+			slog.String("data_dir", o.config.Deployer.EffectiveDataDir()))
+	default:
 		// Health gate: verify all control-plane nodes are serving before
 		// tearing down the bootstrap container. The container typically
 		// provides DHCP/DNS -- removing it before the control-plane takes
@@ -473,8 +482,12 @@ func (o *Orchestrator) Teardown(ctx context.Context) error {
 // configuration, and the bootstrap container — deployed when there is a
 // deployer, otherwise verified as the one the operator runs.
 func (o *Orchestrator) bringUpContainer(ctx context.Context, result *BootstrapResult) error {
-	// Phase 0: Discovery.
+	// Phase 0: Discovery. A node config the network cannot take is
+	// refused before anything is touched.
 	result.Phase = phaseDiscovery
+	if err := o.checkNodeConfigs(); err != nil {
+		return ErrBootstrapFailed{Phase: phaseDiscovery, Cause: err}
+	}
 	discovered, err := o.discover(ctx)
 	if err != nil {
 		return ErrBootstrapFailed{Phase: phaseDiscovery, Cause: err}

@@ -319,7 +319,7 @@ func TestToolRegistry_VTPMTools(t *testing.T) {
 
 	t.Run("vtpm_create error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string) (interface{}, error) {
+		svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)

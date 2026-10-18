@@ -1245,7 +1245,7 @@ func (h *QUICServiceHandler) handleDaemonStartService(ctx context.Context, req *
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStartService", Cause: err})
+		return h.grpcDelegateErrorToQUIC("DaemonStartService", err)
 	}
 
 	resp := &QUICDaemonServiceActionResponse{
@@ -1282,7 +1282,7 @@ func (h *QUICServiceHandler) handleDaemonStopService(ctx context.Context, req *q
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStopService", Cause: err})
+		return h.grpcDelegateErrorToQUIC("DaemonStopService", err)
 	}
 
 	resp := &QUICDaemonServiceActionResponse{
@@ -1319,7 +1319,7 @@ func (h *QUICServiceHandler) handleDaemonRestartService(ctx context.Context, req
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonRestartService", Cause: err})
+		return h.grpcDelegateErrorToQUIC("DaemonRestartService", err)
 	}
 
 	resp := &QUICDaemonServiceActionResponse{

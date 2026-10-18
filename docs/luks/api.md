@@ -1,6 +1,6 @@
 # LUKS Key-Slot Management — API
 
-> **Status: NORMATIVE** · Scope: LUKS routes on every transport · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: LUKS routes on every transport · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -40,7 +40,7 @@ or *root required* today ([engineering.md](engineering.md) §6).
 | Enroll TPM | `POST /api/v1/luks/enroll/tpm` | `EnrollTPM` | `0x06` | `platform_luks_enroll_tpm` | `MISSING — docs/13 G7` |
 | Enroll recovery key | `POST /api/v1/luks/enroll/recovery` | `EnrollRecovery` | `0x07` | `platform_luks_enroll_recovery` | `MISSING — docs/13 G7` |
 | Remove keyslot | `POST /api/v1/luks/keys/remove` | `RemoveKey` | `0x08` | `platform_luks_remove_key` | `MISSING — docs/13 G7` |
-| Test keyslot | `POST /api/v1/luks/keys/test-unlock` | `TestUnlock` | `0x09` | `platform_luks_test_unlock` | `MISSING — docs/13 G7` |
+| Test keyslot | `POST /api/v1/luks/keys/test-unlock` | `TestUnlock` | `0x09` | `platform_luks_test_unlock` (refused, §5) | `MISSING — docs/13 G7` |
 | Change passphrase | `POST /api/v1/luks/passphrase/change` | `ChangePassphrase` | `0x0A` | `platform_luks_change_passphrase` | `MISSING — docs/13 G7` |
 
 ### SDK client paths
@@ -99,10 +99,17 @@ decodes as `0`.
 | `ErrLUKS{Device,Passphrase,NewPassphrase,CredentialID,Slot}Required` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | any other error | 500 | `Internal` | `StatusInternalError` |
 | `ErrLUKSMalformedBody` (REST body that is not valid JSON) | 400 | — | — |
+| `ErrLUKSTestUnlockUnverified` (MCP test-unlock only) | — | `Unimplemented` | — |
 
 REST errors are `{"error":"<message>"}`. A malformed REST body answers the fixed
 message `luks: malformed request body`, never the JSON decoder's error, which
-can quote a passphrase. MCP returns the service error message to the caller.
+can quote a passphrase.
+
+MCP returns the service error message with the gRPC code of the same error, so
+an MCP caller reads the class a gRPC caller reads. The provider wraps every
+service error in `ErrLUKSOperation` (`pkg/api/daemon/luks_grpc_service.go`),
+which `errors.Is` still unwraps to the sentinel; the MCP server maps the code
+to its wire class.
 
 On every SDK transport a refusal reaches the caller as the operation's typed
 error (`sdk/go/services/luks/errors.go`, for example `*ErrStatusFailed`) whose
@@ -116,12 +123,25 @@ message. The SDK REST transport takes that message from the `error` key.
 | Transport | Requirement |
 |---|---|
 | REST | mTLS client certificate (the daemon REST server authenticates by mTLS only). No per-route scope. |
-| gRPC TCP | a platform token. `LUKSService` is not in the gRPC method-permission catalog, so no `scp` scope is required beyond a valid token. |
-| QUIC | a platform token. `0x9C` has no opcode permission entry, so no `scp` scope is required beyond a valid token. |
-| MCP | **refused.** The `platform_luks_*` tools have no permission mapping and are listed as unclassified, so `AuthorizeTool` denies every call. |
+| gRPC TCP | a platform token carrying the method's `luks:*` scope (`pkg/api/grpc/method_permissions.go`). |
+| QUIC | a platform token carrying the sub-opcode's `luks:*` scope (`pkg/api/quic/opcode_permissions.go`). |
+| MCP | a platform token carrying the tool's `luks:*` scope (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`). `platform_luks_test_unlock` is **refused**: it is unclassified, so `AuthorizeTool` denies it, and the provider itself refuses with `ErrLUKSTestUnlockUnverified`. |
 | Unix | gRPC over the local socket; see [`docs/daemon/api.md`](../daemon/api.md). |
 
+| Operation | gRPC, QUIC and MCP scope |
+|---|---|
+| Status, ListSlots, Info | `luks:read` |
+| TestUnlock | `luks:read` on gRPC and QUIC; unclassified on MCP |
+| EnrollPassphrase, EnrollFIDO2, EnrollTPM, EnrollRecovery, ChangePassphrase | `luks:write` |
+| RemoveKey | `luks:delete` |
+
+Test-unlock is refused over MCP because it proves nothing: the request carries
+no key, and the backend only checks that the keyslot exists
+(`pkg/app/backends/luks.go`), so `unlocked: true` would claim a key works
+without trying one. gRPC, REST and QUIC still answer it that way.
+
+LUKS has no tenancy. A request names only a device path, and neither
+`LUKSService` nor its transports read a tenant.
+
 Beyond transport authorization, mutating operations require platformd to run as
-root ([architecture.md](architecture.md) §4). No `luks:*` scope is defined;
-mutating operations that can wipe a keyslot are gated only by authentication and
-the root check.
+root ([architecture.md](architecture.md) §4).

@@ -394,7 +394,7 @@ func TestTestEnv_ServerConfigGeneration(t *testing.T) {
 	assert.Equal(t, "/custom/path", serverCfg.LocalFilesDir)
 	assert.True(t, serverCfg.EnableDHCP)
 	assert.Equal(t, cfg.BridgeName, serverCfg.DHCPInterface)
-	assert.Equal(t, "1.1.1.1", serverCfg.DHCPDNS)
+	assert.Equal(t, []string{"1.1.1.1"}, serverCfg.DHCPDNS)
 	assert.Equal(t, "ipxe.efi", serverCfg.BootFilename)
 	assert.Contains(t, serverCfg.IPXEScript, "boot.ipxe")
 	assert.Contains(t, serverCfg.ExternalURL, cfg.ServerIP.String())

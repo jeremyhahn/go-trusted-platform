@@ -620,7 +620,7 @@ carry, laid down by the installer and firstboot (#66):
 |---|---|---|
 | `/usr/bin/gatewayd`, `/usr/sbin/gatewayd` → symlink | installer (`installGatewaydBinary`, from the ISO's `platformd-bin/`) | the edge daemon |
 | `/etc/init.d/gatewayd` | firstboot (`installGatewaydService`) | OpenRC service, default runlevel, after `platformd`; `start_pre` runs `modprobe jool` only when the config has `gateway.nat64.enabled: true` |
-| apk `jool-modules-lts`, `jool-tools`, `jool-tools-openrc` | installer (`InstallPackages`, from the gateway template's `os.packages`) | the NAT64 translator gatewayd's `nat64:` section drives |
+| apk `jool-modules-lts`, `jool-tools`, `jool-tools-openrc` | installer (`InstallPackages`, from `os.packages`: the gateway templates list them, and a gateway-role medium on the stock kernel adds them to its baked `configs/installer.yaml`) | the NAT64 translator gatewayd's `nat64:` section drives |
 | `/etc/gatewayd/config.yaml` (0600) | firstboot (`renderGatewaydConfig`) | the `gateway:`, `proxy:`, `trust:`, `sdn:`, `control-plane:` sections of the platform config |
 | `/etc/gatewayd/{client.pem,client-key.pem,cp-ca.pem}` | **operator** (not produced by the repo yet — #149, #431) | control-plane reporter mTLS identity; absent ⇒ reporter rendered disabled |
 
@@ -628,6 +628,13 @@ The Jool package list is `tpconfig.GatewaydPackages` (`pkg/config/gateway_role.g
 #603); the shipped gateway templates carry it and a gateway-role ISO
 prefetches it beside the stock `linux-lts` kernel (not in a FIPS, kernel-less
 or non-lts ISO, where `jool-modules-lts` would pull in a second kernel).
+The prefetch and the install take the list from one function,
+`PreFetchConfig.installedPackages` (`pkg/iso/prefetch.go`), under that one
+kernel condition: whenever the medium prefetches the Jool packages, the
+`configs/installer.yaml` it bakes lists them in `os.packages`
+(`applyInstallerOverrides`, `pkg/iso/customize.go`), once, after the
+template's own entries. A gateway template on any other kernel still lists
+them itself; the medium adds nothing then.
 `jool-modules-lts` is built for one exact `linux-lts` release: upgrade the two
 together. A kernel that outruns the module leaves `jool` unloadable, the init
 script warns, and gatewayd refuses its `nat64:` section
@@ -640,6 +647,24 @@ so on these nodes `xkms-p11-kit` and `charon` join the default runlevel and the
 VICI socket exists after every boot. Both generated platformd scripts start
 `after charon`, and platformd runs as root, the socket's default owner
 ([sdn engineering](../sdn/engineering.md) §9.6).
+
+`os.services` (`OSConfig.Services`) names more services for the default
+runlevel. They are appended after that list, under the same init-script rule.
+The factory-image target sets it from `InstallerOverrides.ExtraServices`; the
+Raspberry Pi target sets `pcscd`
+([factory-image engineering](../factory-image/engineering.md)).
+
+A medium that bundles a platform config (ISO, factory image, netboot set)
+installs from the copy it bakes as `configs/installer.yaml`, through
+`os.packages` and `os.services`. Staging appends to those lists what the medium carries for the
+installed system: `PreFetchConfig.installedPackages` (`pkg/iso/prefetch.go`)
+— the IPsec packages of `--platform-apk-dir`, a gateway's Jool packages and
+`InstallerOverrides.ExtraPackages` — and `InstallerOverrides.ExtraServices`.
+The template's own entries come first and keep their order, and nothing is
+listed twice (`applyInstallerOverrides`, `pkg/iso/customize.go`). The
+prefetch reads the same function, so what is fetched is what is installed.
+A dynamic-config medium bakes no platform config: it installs the lists of
+the config it fetches, and nothing is appended to them.
 
 ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 `pkg/firstboot/strategy.go`):

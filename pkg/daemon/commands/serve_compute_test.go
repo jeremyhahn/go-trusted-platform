@@ -17,21 +17,26 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
 
-// localQEMUDefaults is the defaults layer newComputeOrchestrator starts from.
-func localQEMUDefaults() *compute.OrchestratorConfig {
+// localQEMUConfig layers the operator's settings and then the defaults, in the
+// order newComputeOrchestrator applies them.
+func localQEMUConfig(t *testing.T, operator *compute.OrchestratorConfig) *compute.OrchestratorConfig {
+	t.Helper()
 	cfg := &compute.OrchestratorConfig{WorkDir: "/var/lib/platformd/compute", DefaultMemory: 512, DefaultCPUs: 1}
-	cfg.ApplyLocalQEMUDefaults()
+	applyLocalQEMUSettings(cfg, operator)
+	require.NoError(t, cfg.ApplyLocalQEMUDefaults())
 	return cfg
 }
 
 func TestApplyLocalQEMUSettings_ConfiguredValuesWin(t *testing.T) {
 	shared := &compute.SharedStorageConfig{Enabled: true, Backend: "nfs", MountPath: "/vms"}
-	dst := localQEMUDefaults()
-	applyLocalQEMUSettings(dst, &compute.OrchestratorConfig{
+	dst := localQEMUConfig(t, &compute.OrchestratorConfig{
+		Arch:                   qemu.ArchX86_64,
 		QEMUBinary:             "/opt/qemu/bin/qemu-system-x86_64",
 		WorkDir:                "/srv/compute",
 		NetworkBridge:          "br-vm",
@@ -42,6 +47,7 @@ func TestApplyLocalQEMUSettings_ConfiguredValuesWin(t *testing.T) {
 		SharedStorage:          shared,
 	})
 
+	assert.Equal(t, qemu.ArchX86_64, dst.Arch)
 	assert.Equal(t, "/opt/qemu/bin/qemu-system-x86_64", dst.QEMUBinary)
 	assert.Equal(t, "/srv/compute", dst.WorkDir)
 	assert.Equal(t, "br-vm", dst.NetworkBridge)
@@ -54,11 +60,22 @@ func TestApplyLocalQEMUSettings_ConfiguredValuesWin(t *testing.T) {
 }
 
 func TestApplyLocalQEMUSettings_UnsetValuesKeepTheDefaults(t *testing.T) {
-	want := localQEMUDefaults()
-	dst := localQEMUDefaults()
-	applyLocalQEMUSettings(dst, &compute.OrchestratorConfig{})
+	want := &compute.OrchestratorConfig{WorkDir: "/var/lib/platformd/compute", DefaultMemory: 512, DefaultCPUs: 1}
+	require.NoError(t, want.ApplyLocalQEMUDefaults())
+
+	dst := localQEMUConfig(t, &compute.OrchestratorConfig{})
 
 	assert.Equal(t, want, dst)
+	assert.NotEmpty(t, dst.Arch, "the arch follows the host")
 	assert.Equal(t, compute.DefaultMigrationListenAddress, dst.MigrationListenAddress)
 	assert.False(t, dst.SharedStorageEnabled(), "live migration stays off without a shared_storage section")
+}
+
+func TestApplyLocalQEMUSettings_ConfiguredArchPicksItsFirmwareDefaults(t *testing.T) {
+	dst := localQEMUConfig(t, &compute.OrchestratorConfig{Arch: qemu.ArchAArch64})
+
+	assert.Equal(t, qemu.ArchAArch64, dst.Arch)
+	assert.Equal(t, "qemu-system-aarch64", dst.QEMUBinary)
+	assert.Equal(t, "/usr/share/AAVMF/AAVMF_CODE.fd", dst.OVMFCode)
+	assert.Equal(t, "/usr/share/AAVMF/AAVMF_VARS.fd", dst.OVMFVars)
 }

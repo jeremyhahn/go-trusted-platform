@@ -137,8 +137,8 @@ spellings.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `AuthenticatePort` | `MISSING — docs/13 G7` | `sdn_authenticate_port` (refused) | ✅ |
-| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `RevokePortAuth` | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` (refused) | ✅ |
+| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `400`) | `AuthenticatePort` (refused) | `MISSING — docs/13 G7` | `sdn_authenticate_port` (refused) | refused |
+| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `400`) | `RevokePortAuth` (refused) | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` (refused) | refused |
 | Apply policy | `POST /api/v1/sdn/policies` | `ApplyPolicy` | `OpSDNApplyPolicy` (`0x47`) | `sdn_apply_policy` | ✅ |
 | List policies | `GET /api/v1/sdn/policies` | `ListPolicies` | `OpSDNListPolicies` (`0x49`) | `sdn_list_policies` | ✅ |
 | Get policy | `GET /api/v1/sdn/policies/{id}` | `GetPolicy` | `OpSDNGetPolicy` (`0x48`) | `sdn_get_policy` | ✅ |
@@ -175,12 +175,10 @@ daemon's standalone REST server.** `POST` and `DELETE` on
 `/api/v1/sdn/bridges/{name}/ports/{port}/auth` call `SDNService.AuthenticatePort`
 and `RevokePortAuth` behind the webservice's admin gate. Authenticate takes
 `{"certificate": <base64 PEM or DER>, "format": "DER"}` (`format` defaults to
-PEM) and answers the port's authentication state; a missing bridge, port or
-certificate, or a certificate that does not parse or is not valid now, is `400`; an unknown bridge or port, or a
-revoke on a port that is not authenticated, is `404`. Given that port
-authentication is the SDN feature's security core — see
-[engineering.md](engineering.md) §2 — the missing QUIC route is the most
-consequential hole left in the matrix.
+PEM); a missing bridge, port or certificate is `400` before the service is
+called. The service then refuses both calls (below). The SDK's QUIC and MCP
+transports map neither call and answer `Unimplemented` without sending
+anything.
 
 **The SDK's REST transport puts every bridge and port ID in the path.**
 `DeleteBridge`, `AddPort`, `DeletePort`, `AuthenticatePort` and
@@ -195,15 +193,36 @@ routes no server registers. `ApplyPolicy` still claims
 **This is IDevID-certificate authentication, not EAP/RADIUS.** `AuthenticatePort`
 validates a device certificate; there is no RADIUS exchange behind it.
 
-**Port authentication enforces nothing today.** `SDNService.AuthenticatePort`
-parses the certificate and checks only its validity window — it does not verify
-the chain to the platform anchor or that the certificate is an IDevID, so a
-self-signed certificate passes — and records the port in a map no other code
-reads; the switch never admits or blocks the port. REST and gRPC still answer
-it. MCP refuses both tools: they carry no scope mapping, so the server refuses
-them before they run (`AuthErrorToolNotClassified`), and the handlers
-themselves return `ErrPortAuthNotEnforced` (`FailedPrecondition`) without
-calling the service (#304). Until #304 the MCP tools answered success.
+**Port authentication is refused on every transport until the switch enforces
+it (#304).** `SDNService.AuthenticatePort` and `RevokePortAuth` return
+`policy.ErrPortAuthNotEnforced` (`pkg/sdn/policy/errors.go`), class
+`FailedPrecondition`, before reading the request, and record nothing. The
+service keeps no port-authentication state. Two pieces are missing before the
+policy engine (`pkg/sdn/policy.Engine`) can enforce it:
+
+- **The engine is not reachable from the API's SDN service.** The daemon builds
+  it for quarantine and enrollment only (`initSDNPolicy`,
+  `pkg/daemon/commands/quarantine_init.go`).
+- **No certificate validator checks the platform anchor or the IDevID.** The
+  engine has no `CertificateValidator`, so `Engine.AuthenticatePort` would admit
+  any certificate. `DefaultCertificateValidator` checks a chain to the roots it
+  is given, but nothing hands it the platform anchor (`pkg/trust`), and it does
+  not check that the certificate is an IDevID.
+
+What each transport answers:
+
+| Transport | Answer |
+|---|---|
+| gRPC, Unix, Embedded | `FailedPrecondition` |
+| REST (webservice) | `400`, the platform's status for `FailedPrecondition`; the SDK's REST transport reads it as `InvalidArgument` and keeps the message |
+| MCP tools | JSON-RPC error with the `FailedPrecondition` code, for a caller holding `sdn:write`; without it, `PermissionDenied` |
+| QUIC | no opcode; the SDK answers `Unimplemented` |
+
+Until #304, REST, gRPC, Unix and Embedded answered success for any
+certificate inside its validity window, a self-signed one included, and
+recorded the port in a map no other code read; the switch never admitted or
+blocked the port. The MCP tools carried no scope and were refused as
+unclassified.
 
 ---
 
@@ -366,10 +385,10 @@ absent from it is refused with `PermissionDenied`.
 
 **`SDNService` and `OverlayService` are fully scoped** under resource `sdn`,
 actions `read`, `write`, `delete`. `SwitchService` is scoped under its own
-resource, `switch` ([`docs/switch/api.md`](../switch/api.md) §7). On MCP, the bridge, port-state and policy
-`sdn_*` tools carry `sdn:*` permissions. The flow, VLAN, port-stats and
-port-auth `sdn_*` tools, and every `overlay_*` and `switch_*` tool, are not
-classified, so `AuthorizeTool` refuses them for every caller. QUIC classifies
+resource, `switch` ([`docs/switch/api.md`](../switch/api.md) §7). On MCP, every `sdn_*` and `overlay_*`
+tool carries the `sdn:*` permission of its gRPC twin, and every `switch_*` tool
+a `switch:*` one (`pkg/api/mcp/authz.go`). The port-auth tools take
+`sdn:write` and then refuse with `FailedPrecondition` (§4). QUIC classifies
 every operation (#767) in `pkg/api/quic/opcode_permissions.go`: overlay
 sub-opcodes need `sdn:*` and switch sub-opcodes `switch:read` / `switch:write`.
 

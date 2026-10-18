@@ -226,14 +226,20 @@ const repoRoot = "../../../.."
 func TestBuildConfigRoleBuildsTheDedicatedTemplate(t *testing.T) {
 	t.Chdir(repoRoot)
 	// rpi5 is experimental but builds through the same path as rpi4.
-	for _, model := range []string{"rpi4", "rpi5"} {
-		t.Run(model, func(t *testing.T) {
-			flags := &createFlags{target: "rpi", model: model, role: "compute", binariesDir: rpiBinaries(t)}
+	builds := []struct{ model, role string }{
+		{"rpi4", "compute"},
+		{"rpi5", "compute"},
+		{"cm4", "control-plane"},
+		{"rpi4", "control-plane"},
+	}
+	for _, b := range builds {
+		t.Run(b.model+"/"+b.role, func(t *testing.T) {
+			flags := &createFlags{target: "rpi", model: b.model, role: b.role, binariesDir: rpiBinaries(t)}
 			cfg, err := buildConfig(flags)
 			if err != nil {
 				t.Fatalf("buildConfig: %v", err)
 			}
-			want := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", model, "compute.yaml")
+			want := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", b.model, b.role+".yaml")
 			if cfg.PlatformConfigFile != want {
 				t.Errorf("platform config = %q, want %q", cfg.PlatformConfigFile, want)
 			}
@@ -255,8 +261,9 @@ func TestBuildConfigWithoutRoleBuildsSingleNode(t *testing.T) {
 }
 
 // A role the builder cannot build is refused rather than built as
-// single-node: no template for it, a target other than rpi, or a
-// --platform-config that already chose the template.
+// single-node: no template for it, a name that is not a host role, a
+// target other than rpi, or a --platform-config that already chose the
+// template.
 func TestBuildConfigRefusesRoleItCannotBuild(t *testing.T) {
 	t.Chdir(repoRoot)
 	bins := rpiBinaries(t)
@@ -266,6 +273,9 @@ func TestBuildConfigRefusesRoleItCannotBuild(t *testing.T) {
 		"unknown model":   {target: "rpi", model: "rpi2", role: "compute", binariesDir: bins},
 		"model as a path": {target: "rpi", model: "../supermicro/x10", role: "compute", binariesDir: bins},
 		"rpi5 gateway":    {target: "rpi", model: "rpi5", role: "gateway", binariesDir: bins},
+		"rpi5 cp":         {target: "rpi", model: "rpi5", role: "control-plane", binariesDir: bins},
+		"overrides":       {target: "rpi", model: "cm4", role: "desk-overrides", binariesDir: bins},
+		"role as a path":  {target: "rpi", model: "rpi4", role: "../cm4/control-plane", binariesDir: bins},
 		"qemu-virt":       {target: "qemu-virt", role: "compute", binariesDir: bins},
 		"platform-config": {target: "rpi", role: "compute", binariesDir: bins, mediaFlags: mediaFlags{platformConfig: "node.yaml"}},
 	}

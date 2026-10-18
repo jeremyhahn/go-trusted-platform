@@ -76,6 +76,56 @@ another feature.
 | `auto_cleanup` | Reap stopped instances |
 | `debug` | Verbose backend logging |
 
+**Guest architecture and firmware (local QEMU):**
+
+| Key | Meaning |
+|---|---|
+| `arch` | Guest architecture: `x86_64` or `aarch64` |
+| `qemu_binary` | QEMU system emulator |
+| `ovmf_code` | UEFI firmware code: OVMF on x86_64, AAVMF on aarch64 |
+| `ovmf_code_secure` | UEFI firmware code for a Secure Boot VM |
+| `ovmf_vars` | UEFI vars template, copied once per instance |
+
+An unset `arch` follows the host: `amd64` runs `x86_64` guests and `arm64` runs
+`aarch64` guests. On any other host, `ApplyLocalQEMUDefaults` returns
+`ErrUnsupportedHostArch` at config load unless `arch` is set. `Validate` refuses
+a local VM config without a known `arch` (`ErrInvalidConfiguration`). Nothing
+falls back to x86_64.
+
+The other four keys default per `arch`. An unset key takes the default; a set
+key is never replaced. A configured `arch` picks its own defaults, so
+`arch: aarch64` on an amd64 host gets AAVMF and runs without KVM.
+
+| Key | `x86_64` default | `aarch64` default |
+|---|---|---|
+| `qemu_binary` | `qemu-system-x86_64` | `qemu-system-aarch64` |
+| `ovmf_code` | `/usr/share/OVMF/OVMF_CODE_4M.fd` | `/usr/share/AAVMF/AAVMF_CODE.fd` |
+| `ovmf_code_secure` | `/usr/share/OVMF/OVMF_CODE_4M.secboot.fd` | `/usr/share/AAVMF/AAVMF_CODE.fd` |
+| `ovmf_vars` | `/usr/share/OVMF/OVMF_VARS_4M.fd` | `/usr/share/AAVMF/AAVMF_VARS.fd` |
+
+The aarch64 defaults are the Alpine `aavmf` package's paths. AAVMF ships one
+code image, so it is also the Secure Boot code default.
+
+Every compute VM boots UEFI from pflash on both architectures:
+
+- unit 0 is the code, read-only;
+- unit 1 is the instance's own vars copy at `<work_dir>/<instance>/nvram/OVMF_VARS.fd`.
+
+The disk is qcow2 on both, because snapshots and migration need it.
+
+| | `x86_64` | `aarch64` |
+|---|---|---|
+| Machine | `q35` (`q35,smm=on` with Secure Boot) | `virt,gic-version=host` under KVM (the host's GIC: GICv2 on a Raspberry Pi 4), `virt,gic-version=3` without |
+| CPU | `host` | `host` under KVM, `cortex-a72` without |
+| KVM | on an amd64 host | on an arm64 host |
+| vTPM device | `tpm-tis` | `tpm-tis-device` |
+| Secure Boot pflash | `cfi.pflash01` `secure=on` global | none: `virt` has no SMM |
+
+`pkg/qemu` builds the command line (`arch.go`). `qemu.Config.HostArch` injects
+the host for tests; empty means the build host. An aarch64 `qemu.Config` with a
+`Firmware` image instead boots U-Boot with `-bios`. That is the
+`pkg/diskimage/qemuvirt` path, and compute never takes it.
+
 **Networking:**
 
 | Key | Meaning |

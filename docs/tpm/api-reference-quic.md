@@ -112,6 +112,21 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 |-------|------|-------------|
 | `0x1E` | PlatformAttrs | Get platform attributes |
 
+## Device Identity Key Delete
+
+The IDevID service has top-level opcodes of its own. Two of them are refused
+until the owner rules on eviction:
+
+| Opcode | Name | Answer |
+|--------|------|--------|
+| `0x58` | IDevIDDelete | `0x0C` FailedPrecondition; nothing is changed |
+| `0x5E` | IAKDelete | `0x0C` FailedPrecondition; nothing is changed |
+
+The key is TPM-resident and is not evicted; the refusal deletes no key, no
+certificate and no state, as on every other transport (#304). The
+certificates have their own opcodes, `0x7A` IDevIDDeleteCert and `0x7B`
+IAKDeleteCert, which do delete.
+
 ## Status Codes
 
 | Code | Name | Description |
@@ -120,6 +135,7 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 | `0x01` | InvalidRequest | Invalid request format |
 | `0x02` | NotFound | Resource not found |
 | `0x04` | InternalError | Server error |
+| `0x0C` | FailedPrecondition | The gRPC class `FailedPrecondition`: the operation is refused in the current state |
 
 ## Payload Encoding
 

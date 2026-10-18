@@ -295,18 +295,36 @@ QEMU Command Structure:
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+That is the x86_64 guest. An aarch64 guest, the default on an arm64 host such
+as the Raspberry Pi 4, runs `qemu-system-aarch64` with:
+
+- `-machine virt,gic-version=host` under KVM, so the guest gets the host's
+  own GIC (the Raspberry Pi 4's GIC-400 is GICv2 only), and
+  `virt,gic-version=3` without;
+- `-cpu host` under KVM, `cortex-a72` without;
+- the same two pflash drives, carrying AAVMF;
+- `-device tpm-tis-device` for the vTPM.
+
+The arch keys and their defaults are in
+[engineering.md §4](engineering.md#4-configuration).
+
 ### UEFI Boot
 
-OVMF firmware provides UEFI boot with optional Secure Boot:
+OVMF (x86_64) and AAVMF (aarch64) firmware provide UEFI boot with optional
+Secure Boot. Each instance gets its own copy of the vars template.
 
 ```
-Standard Boot:
+x86_64 standard boot:
   OVMF_CODE_4M.fd - UEFI firmware
   OVMF_VARS_4M.fd - NVRAM template
 
-Secure Boot:
+x86_64 Secure Boot:
   OVMF_CODE_4M.secboot.fd - Secure Boot firmware
   OVMF_VARS_4M.fd - NVRAM with secure keys
+
+aarch64 (standard and Secure Boot):
+  /usr/share/AAVMF/AAVMF_CODE.fd - UEFI firmware
+  /usr/share/AAVMF/AAVMF_VARS.fd - NVRAM template
 ```
 
 ## swtpm Integration

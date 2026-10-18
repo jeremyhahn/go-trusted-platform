@@ -943,7 +943,7 @@ func (v1Router *Router) tenantRoutes() {
 	// cannot say they administer the tenant they named, and every route under
 	// /{id} takes its target tenant from the URL — so a tenant-scoped admin
 	// would reach any other tenant's quotas, DEK and barrier by changing a
-	// path segment (#234). These two guards close that.
+	// path segment (#234). These guards close that.
 	_, guard, err := v1Router.authorization()
 	if err != nil {
 		v1Router.logger.Error(err,
@@ -965,11 +965,17 @@ func (v1Router *Router) tenantRoutes() {
 			RequireOwnTenantOrSystem: guard.RequireOwnTenantOrSystem(
 				v1Router.restHandlerRegistry.TenantID(),
 				func(r *http.Request) string { return mux.Vars(r)["id"] }),
-			// Listing, creating, syncing and by-name lookup are inherently
-			// cross-tenant; a tenant admin must not enumerate or create
-			// tenants with the role they hold inside their own.
+			// Listing, creating and syncing are inherently cross-tenant; a
+			// tenant admin must not enumerate or create tenants with the
+			// role they hold inside their own.
 			RequireSystemTenant: guard.RequireTenant(
 				v1Router.restHandlerRegistry.TenantID()),
+			// The lookup by name applies the rule every other transport
+			// applies (#304): the session's tenant resolves its own name,
+			// the system tenant any.
+			RequireOwnTenantNameOrSystem: guard.RequireOwnTenantNameOrSystem(
+				v1Router.restHandlerRegistry.TenantID(),
+				resttenant.NameResolver(server)),
 		})
 	if err != nil {
 		v1Router.logger.Error(err, "Tenant routes not registered")

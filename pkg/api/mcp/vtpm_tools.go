@@ -175,8 +175,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
-					"description": "Maximum number of bundles to return",
-					"default":     50,
+					"description": "Maximum number of bundles to return (omit for all)",
 				},
 				"offset": map[string]interface{}{
 					"type":        "integer",

@@ -16,6 +16,8 @@ package compute
 import (
 	"runtime"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
 
 func TestDefaultOrchestratorConfig(t *testing.T) {
@@ -183,6 +185,7 @@ func TestOrchestratorConfig_Validate(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",
@@ -199,6 +202,7 @@ func TestOrchestratorConfig_Validate(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "",
 				OVMFVars:        "/path/to/vars",
@@ -215,6 +219,7 @@ func TestOrchestratorConfig_Validate(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "",
@@ -251,6 +256,7 @@ func TestOrchestratorConfig_Fields(t *testing.T) {
 		EnableKVM:       true,
 		NetworkBridge:   "br0",
 		OVSSocketPath:   "/var/run/ovs/db.sock",
+		Arch:            qemu.ArchX86_64,
 		QEMUBinary:      "/usr/bin/qemu-system-x86_64",
 		OVMFCode:        "/usr/share/ovmf/code.fd",
 		OVMFCodeSecure:  "/usr/share/ovmf/code-secure.fd",

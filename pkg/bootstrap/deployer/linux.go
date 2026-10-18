@@ -95,11 +95,7 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 		slog.String("host", config.Host),
 		slog.Int("port", config.Port))
 
-	// Create remote data directory. configs/ is for per-MAC YAML overrides
-	// (autoinstall.sh fetches /config/mac/<mac>/hostname etc.); the parent
-	// holds manifest.yaml and the netboot media build.
-	mkdirCmd := fmt.Sprintf("mkdir -p %s/configs", shellQuote(config.DataDir))
-	if _, err := client.Run(ctx, mkdirCmd); err != nil {
+	if _, err := client.Run(ctx, GeneratePrepareCommand(config)); err != nil {
 		return nil, err
 	}
 
@@ -117,13 +113,10 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 		return nil, err
 	}
 
-	// Tear down any pre-existing container of the same name. Idempotent:
-	// returns successfully when no container exists. The orchestrator's
-	// RedeployMode gate already decided we should land here; once we do,
-	// the named container is replaced unconditionally.
-	teardownCmd := fmt.Sprintf("%s rm -f %s 2>/dev/null || true",
-		shellQuote(config.ContainerRuntime), shellQuote(config.ContainerName))
-	if _, err := client.Run(ctx, teardownCmd); err != nil {
+	// Replace any pre-existing container of the same name. The
+	// orchestrator's RedeployMode gate already decided we should land
+	// here; once we do, the named container is replaced unconditionally.
+	if _, err := client.Run(ctx, GenerateReplaceCommand(config)); err != nil {
 		// "|| true" makes errors here unexpected, but log and continue —
 		// the docker run below will surface the real failure if the old
 		// container is somehow still present.
@@ -330,23 +323,102 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// parseVerifyInspect parses a tab-separated `inspect --format` line with
-// four fields: running, image tag, image ID, and the /data bind source.
+// verifyInspectFormat is the single `inspect --format` template Verify
+// runs, so the probe costs one SSH round-trip. Fields are tab-separated
+// so they parse without quoting: running, image tag, image ID, the /data
+// bind source, the restart policy, and the firmware cache bind source.
+var verifyInspectFormat = strings.Join([]string{
+	"{{.State.Running}}",
+	"{{.Config.Image}}",
+	"{{.Image}}",
+	mountSourceFormat("/data"),
+	"{{.HostConfig.RestartPolicy.Name}}",
+	mountSourceFormat(ContainerFirmwareCacheDir),
+}, "\t")
+
+// verifyInspectFields is the number of fields verifyInspectFormat emits.
+const verifyInspectFields = 6
+
+// mountSourceFormat returns the inspect template that prints the host
+// source of the mount whose container destination is dest, or nothing
+// when no such mount exists.
+func mountSourceFormat(dest string) string {
+	return `{{range .Mounts}}{{if eq .Destination "` + dest + `"}}{{.Source}}{{end}}{{end}}`
+}
+
+// inspectState is the container state Verify reads back from inspect.
+type inspectState struct {
+	Running       string
+	Image         string
+	ImageID       string
+	DataBind      string
+	RestartPolicy string
+	FirmwareBind  string
+}
+
+// parseVerifyInspect parses one line of verifyInspectFormat output.
 // Leading/trailing CR/LF on the whole line and surrounding whitespace on
-// each field are trimmed. ok is false when fewer than four fields are
+// each field are trimmed. ok is false when fewer than six fields are
 // present (e.g. the container does not exist and inspect emitted nothing
 // parseable).
-func parseVerifyInspect(output string) (running, imageTag, imageID, bind string, ok bool) {
+func parseVerifyInspect(output string) (inspectState, bool) {
 	line := strings.Trim(output, "\r\n")
-	parts := strings.SplitN(line, "\t", 4)
-	if len(parts) < 4 {
-		return "", "", "", "", false
+	parts := strings.SplitN(line, "\t", verifyInspectFields)
+	if len(parts) < verifyInspectFields {
+		return inspectState{}, false
 	}
-	return strings.TrimSpace(parts[0]),
-		strings.TrimSpace(parts[1]),
-		strings.TrimSpace(parts[2]),
-		strings.TrimSpace(parts[3]),
-		true
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return inspectState{
+		Running:       parts[0],
+		Image:         parts[1],
+		ImageID:       parts[2],
+		DataBind:      parts[3],
+		RestartPolicy: parts[4],
+		FirmwareBind:  parts[5],
+	}, true
+}
+
+// stateCheck is one inspected field compared against its configured value.
+type stateCheck struct {
+	field string
+	want  string
+	got   string
+}
+
+// checkContainerState compares the inspected state with config. It
+// returns ErrContainerNotRunning for a stopped container and
+// ErrContainerStateMismatch naming the first field that differs. The
+// restart policy and the firmware cache mount are checked only in
+// boot-node mode, so switching boot_node on makes a running default-mode
+// container stale and the if-stale redeploy replaces it.
+func checkContainerState(config *DeployConfig, got inspectState) error {
+	if got.Running != "true" {
+		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
+	}
+	checks := []stateCheck{
+		{"image", config.ContainerImage, got.Image},
+		{"bind-mount", config.DataDir, got.DataBind},
+	}
+	if config.BootNode {
+		checks = append(checks,
+			stateCheck{"restart-policy", bootNodeRestartPolicy, got.RestartPolicy},
+			stateCheck{"firmware-cache", config.FirmwareCacheDir, got.FirmwareBind},
+		)
+	}
+	for _, c := range checks {
+		if c.want != c.got {
+			return ErrContainerStateMismatch{
+				ContainerID: config.ContainerName,
+				Host:        config.Host,
+				Field:       c.field,
+				Want:        c.want,
+				Got:         c.got,
+			}
+		}
+	}
+	return nil
 }
 
 // imageStale reports whether a running container's image is stale relative
@@ -398,44 +470,21 @@ func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error 
 		return err
 	}
 
-	// Single inspect call returning Running + image tag + image ID + bind
-	// source so we don't pay multiple SSH round-trips for what should be a
-	// fast probe. Tab-separated so we can parse without quoting each field.
-	const fmtRunningImageBind = `{{.State.Running}}	{{.Config.Image}}	{{.Image}}	{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}`
 	inspectCmd := fmt.Sprintf("%s inspect --format %s %s",
 		shellQuote(config.ContainerRuntime),
-		shellQuote(fmtRunningImageBind),
+		shellQuote(verifyInspectFormat),
 		shellQuote(config.ContainerName))
 	output, err := client.Run(ctx, inspectCmd)
 	if err != nil {
 		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
 	}
 
-	running, gotImage, gotImageID, gotBind, ok := parseVerifyInspect(output)
+	got, ok := parseVerifyInspect(output)
 	if !ok {
 		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
 	}
-
-	if running != "true" {
-		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
-	}
-	if gotImage != config.ContainerImage {
-		return ErrContainerStateMismatch{
-			ContainerID: config.ContainerName,
-			Host:        config.Host,
-			Field:       "image",
-			Want:        config.ContainerImage,
-			Got:         gotImage,
-		}
-	}
-	if gotBind != config.DataDir {
-		return ErrContainerStateMismatch{
-			ContainerID: config.ContainerName,
-			Host:        config.Host,
-			Field:       "bind-mount",
-			Want:        config.DataDir,
-			Got:         gotBind,
-		}
+	if err := checkContainerState(config, got); err != nil {
+		return err
 	}
 
 	// Digest staleness: compare the running container's image ID against
@@ -443,13 +492,13 @@ func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error 
 	// local image yields localID="" → imageStale is false → preserve the
 	// tag-only behaviour for registry-based deploys.
 	localID := d.localImageID(ctx, config.ContainerRuntime, config.ContainerImage)
-	if imageStale(localID, gotImageID) {
+	if imageStale(localID, got.ImageID) {
 		return ErrContainerStateMismatch{
 			ContainerID: config.ContainerName,
 			Host:        config.Host,
 			Field:       "image-digest",
 			Want:        localID,
-			Got:         gotImageID,
+			Got:         got.ImageID,
 		}
 	}
 
@@ -496,16 +545,60 @@ func (d *LinuxDeployer) Teardown(ctx context.Context, config *DeployConfig) erro
 // config (DataDir and ContainerName default-filled by ApplyDefaults;
 // the Bootstrap* fields are optional and fall through to the image
 // entrypoint's defaults when empty).
+// GeneratePrepareCommand builds the command that creates the remote host
+// directories the container mounts. configs/ under DataDir holds per-MAC
+// YAML overrides (autoinstall.sh fetches /config/mac/<mac>/hostname etc.);
+// DataDir itself holds manifest.yaml and the netboot media build. In
+// boot-node mode the firmware cache directory is created too, because
+// podman refuses a bind mount whose source does not exist. mkdir -p never
+// removes anything, so a re-deploy keeps both volumes' contents.
+func GeneratePrepareCommand(config *DeployConfig) string {
+	cmd := "mkdir -p " + shellQuote(config.DataDir+"/configs")
+	if config.BootNode {
+		cmd += " " + shellQuote(config.FirmwareCacheDir)
+	}
+	return cmd
+}
+
+// GenerateReplaceCommand builds the command Deploy runs before starting
+// the container: it removes any container of the same name and nothing
+// else, so the host volumes survive a re-deploy. Idempotent: it succeeds
+// when no container exists.
+func GenerateReplaceCommand(config *DeployConfig) string {
+	return fmt.Sprintf("%s rm -f %s 2>/dev/null || true",
+		shellQuote(config.ContainerRuntime), shellQuote(config.ContainerName))
+}
+
 func GenerateRunCommand(config *DeployConfig) string {
 	envFlags := bootstrapEnvFlags(config)
 	return fmt.Sprintf(
-		"%s run -d --name %s --net=host%s -v %s:/data %s",
+		"%s run -d --name %s%s --net=host%s -v %s:/data%s %s",
 		shellQuote(config.ContainerRuntime),
 		shellQuote(config.ContainerName),
+		bootNodeRestartFlag(config),
 		envFlags,
 		shellQuote(config.DataDir),
+		bootNodeVolumeFlag(config),
 		shellQuote(config.ContainerImage),
 	)
+}
+
+// bootNodeRestartFlag is the run flag that brings a boot node's container
+// back after a crash or a host reboot; empty outside boot-node mode.
+func bootNodeRestartFlag(config *DeployConfig) string {
+	if !config.BootNode {
+		return ""
+	}
+	return " --restart " + bootNodeRestartPolicy
+}
+
+// bootNodeVolumeFlag mounts a boot node's firmware cache from the host so
+// it outlives the container; empty outside boot-node mode.
+func bootNodeVolumeFlag(config *DeployConfig) string {
+	if !config.BootNode {
+		return ""
+	}
+	return " -v " + shellQuote(config.FirmwareCacheDir) + ":" + ContainerFirmwareCacheDir
 }
 
 // bootstrapEnvFlags renders the -e VAR=val arguments for every set
@@ -544,6 +637,7 @@ func bootstrapEnvFlags(config *DeployConfig) string {
 		{"BOOTSTRAP_DHCP_START", config.BootstrapDHCPStart},
 		{"BOOTSTRAP_DHCP_END", config.BootstrapDHCPEnd},
 		{"BOOTSTRAP_GATEWAY", config.BootstrapGateway},
+		{"BOOTSTRAP_NO_ROUTER", boolEnvValue(config.BootstrapNoRouter)},
 		{"BOOTSTRAP_DNS", config.BootstrapDNS},
 		{"BOOTSTRAP_APK_MIRROR", config.BootstrapAPKMirror},
 		{"BOOTSTRAP_TFTP_DIR", config.netboot.tftpDir},

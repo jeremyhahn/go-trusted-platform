@@ -44,6 +44,34 @@ func (p *computeRecordingProvider) VMSnapshotGet(context.Context, string, string
 	return p.record("VMSnapshotGet"), nil
 }
 
+func (p *computeRecordingProvider) VMCreate(context.Context, VMCreateSpec) (interface{}, error) {
+	return p.record("VMCreate"), nil
+}
+
+func (p *computeRecordingProvider) VMList(context.Context) (interface{}, error) {
+	return p.record("VMList"), nil
+}
+
+func (p *computeRecordingProvider) VMGet(context.Context, string) (interface{}, error) {
+	return p.record("VMGet"), nil
+}
+
+func (p *computeRecordingProvider) VMDelete(context.Context, string) (interface{}, error) {
+	return p.record("VMDelete"), nil
+}
+
+func (p *computeRecordingProvider) VMStart(context.Context, string) (interface{}, error) {
+	return p.record("VMStart"), nil
+}
+
+func (p *computeRecordingProvider) VMStop(context.Context, string) (interface{}, error) {
+	return p.record("VMStop"), nil
+}
+
+func (p *computeRecordingProvider) VMReboot(context.Context, string) (interface{}, error) {
+	return p.record("VMReboot"), nil
+}
+
 func (p *computeRecordingProvider) VMSnapshotList(context.Context, string) (interface{}, error) {
 	return p.record("VMSnapshotList"), nil
 }
@@ -154,6 +182,13 @@ type computeToolCase struct {
 }
 
 var computeToolCases = []computeToolCase{
+	{"vm_create", "vm", "write", map[string]interface{}{"name": "vm-1"}, "VMCreate"},
+	{"vm_list", "vm", "read", map[string]interface{}{}, "VMList"},
+	{"vm_get", "vm", "read", map[string]interface{}{"id": "vm-1"}, "VMGet"},
+	{"vm_delete", "vm", "delete", map[string]interface{}{"id": "vm-1"}, "VMDelete"},
+	{"vm_start", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMStart"},
+	{"vm_stop", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMStop"},
+	{"vm_reboot", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMReboot"},
 	{"vm_snapshot_create", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "name": "snap-1"}, "VMSnapshotCreate"},
 	{"vm_snapshot_list", "vm", "read", map[string]interface{}{"vm_id": "vm-1"}, "VMSnapshotList"},
 	{"vm_snapshot_restore", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotRestore"},
@@ -249,16 +284,14 @@ func TestComputeToolsRefuseWithoutTheirScope(t *testing.T) {
 	}
 }
 
-// TestComputeLifecycleToolsStayRefused: the VM lifecycle tools have no
-// executor and vm_snapshot_get has no gRPC or REST twin, so each is refused
-// as unclassified even by a backend that grants everything.
+// TestComputeLifecycleToolsStayRefused: vm_update, vm_suspend, vm_resume and
+// vm_snapshot_get have no gRPC twin, so each is refused as unclassified even
+// by a backend that grants everything.
 func TestComputeLifecycleToolsStayRefused(t *testing.T) {
 	checker := NewAuthorizationChecker(allowAllAuthService{}, nil)
 
 	for _, tool := range []string{
-		"vm_create", "vm_get", "vm_list", "vm_update", "vm_delete",
-		"vm_start", "vm_stop", "vm_reboot", "vm_suspend", "vm_resume",
-		"vm_snapshot_get",
+		"vm_update", "vm_suspend", "vm_resume", "vm_snapshot_get",
 	} {
 		_, err := checker.AuthorizeTool(context.Background(), tool, "any-token")
 		require.NotNil(t, err, "%s must stay refused", tool)

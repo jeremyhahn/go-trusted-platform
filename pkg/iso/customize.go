@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v2"
@@ -5552,12 +5553,17 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 	if hostname == "" {
 		hostname = "trusted-platform"
 	}
+	prefetch, err := c.preFetchConfig()
+	if err != nil {
+		return nil, err
+	}
 	config.OS = &installer.OSConfig{
 		OS:                 installer.OSAlpine,
 		Version:            c.config.Alpine.Version,
 		Architecture:       string(c.config.architecture()),
 		KernelPackage:      c.config.Installer.KernelPackage,
-		Packages:           c.config.Installer.installPackages(),
+		Packages:           prefetch.installedPackages(),
+		Services:           append([]string(nil), c.config.Installer.ExtraServices...),
 		Hostname:           hostname,
 		Mirror:             c.config.Alpine.Mirror,
 		FilesystemType:     config.Disk.RootFilesystem,
@@ -5732,6 +5738,18 @@ func (c *Customizer) applyInstallerOverrides(data []byte) ([]byte, error) {
 	osSection := section("os")
 	osSection["architecture"] = string(c.config.architecture())
 	ov := c.config.Installer
+	// The installer installs os.packages and enables os.services; what the
+	// media prefetches for the installed system goes there too.
+	prefetch, err := c.preFetchConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := appendMissing(osSection, "packages", prefetch.installedPackages()); err != nil {
+		return nil, err
+	}
+	if err := appendMissing(osSection, "services", ov.ExtraServices); err != nil {
+		return nil, err
+	}
 	if ov.KernelPackage != "" {
 		osSection["kernel-package"] = ov.KernelPackage
 	}
@@ -5765,6 +5783,28 @@ func (c *Customizer) applyInstallerOverrides(data []byte) ([]byte, error) {
 		return nil, &WrappedError{Msg: "failed to marshal modified config", Err: err}
 	}
 	return modified, nil
+}
+
+// appendMissing appends to the list under key each name it does not already
+// hold, after the entries the template lists, so the template's order is
+// kept and nothing is listed twice. A list nothing is added to is left as it
+// was, absent included.
+func appendMissing(section map[interface{}]interface{}, key string, names []string) error {
+	list, ok := section[key].([]interface{})
+	if section[key] != nil && !ok {
+		return &InstallerListError{Key: key}
+	}
+	added := false
+	for _, name := range names {
+		if !slices.Contains(list, interface{}(name)) {
+			list = append(list, name)
+			added = true
+		}
+	}
+	if added {
+		section[key] = list
+	}
+	return nil
 }
 
 // targetQuirk resolves the hardware quirk whose kernel command line the

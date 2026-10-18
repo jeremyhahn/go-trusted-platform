@@ -97,10 +97,13 @@ The healthy boot line is `certificate renewal scheduled`.
 
 ## What the sweep verifies against
 
-A webservice target's `Current` dials loopback but sets `ServerName` to the
-service's configured DNS identity — certificates are issued for that name, never
-for `127.0.0.1`, so an unset `ServerName` fails hostname verification before
-`NotAfter` is read and the target is recorded failed forever.
+A webservice target's `Current` dials the webservice's `bind-host`, or loopback
+when it binds every interface (an empty or unspecified `bind-host`): a webservice
+pinned to one interface does not listen on `127.0.0.1`, so a loopback dial there
+would fail every read and nothing would renew it. The dial sets `ServerName` to
+the service's configured DNS identity — certificates are issued for that name,
+never for the dialed address, so an unset `ServerName` fails hostname
+verification before `NotAfter` is read and the target is recorded failed forever.
 
 The verification roots follow the **issuance mode**. A webservice that opts in to
 a public ACME directory serves a certificate signed by that public CA, so the

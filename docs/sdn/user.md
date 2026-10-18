@@ -19,6 +19,15 @@ provisioning-only path, or a quarantine VLAN, or nothing.
 
 This is not 802.1X. There is no RADIUS server in the picture.
 
+**Authenticating a port through the API is refused today.** `AuthenticatePort`
+and `RevokePortAuth` fail on every transport with `FailedPrecondition` ("port
+authentication is not enforced on the switch"; REST answers `400`) and change
+nothing. The policy engine is not yet wired to the API, and no validator yet
+checks a certificate's chain to the platform anchor and that it is an IDevID
+([api.md](api.md) §4). Until #304 these calls answered success for any
+certificate, a self-signed one included, while the switch never admitted or
+blocked the port.
+
 ---
 
 ## Prerequisites

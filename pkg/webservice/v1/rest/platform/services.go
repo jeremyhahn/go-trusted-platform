@@ -19,7 +19,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -124,7 +127,7 @@ func (h *PlatformHandlers) StartService(w http.ResponseWriter, r *http.Request) 
 	})
 	if err != nil {
 		// Check for specific error types
-		h.respWriter.Error500(w, r, ErrServiceStartFailed{ServiceName: serviceName, Reason: err.Error()})
+		h.writeServiceError(w, r, err, ErrServiceStartFailed{ServiceName: serviceName, Reason: err.Error()})
 		return
 	}
 
@@ -153,7 +156,7 @@ func (h *PlatformHandlers) StopService(w http.ResponseWriter, r *http.Request) {
 		Service: svcType,
 	})
 	if err != nil {
-		h.respWriter.Error500(w, r, ErrServiceStopFailed{ServiceName: serviceName, Reason: err.Error()})
+		h.writeServiceError(w, r, err, ErrServiceStopFailed{ServiceName: serviceName, Reason: err.Error()})
 		return
 	}
 
@@ -187,7 +190,7 @@ func (h *PlatformHandlers) RestartService(w http.ResponseWriter, r *http.Request
 		TimeoutSeconds: 30,
 	})
 	if err != nil {
-		h.respWriter.Error500(w, r, ErrServiceStartFailed{ServiceName: serviceName, Reason: err.Error()})
+		h.writeServiceError(w, r, err, ErrServiceStartFailed{ServiceName: serviceName, Reason: err.Error()})
 		return
 	}
 
@@ -197,6 +200,20 @@ func (h *PlatformHandlers) RestartService(w http.ResponseWriter, r *http.Request
 		Success: true,
 		Message: "service restarted successfully",
 	})
+}
+
+// writeServiceError answers a failed start, stop or restart. A classified
+// gRPC status (a refused process-owned service, an unknown service, one
+// already running or not running) goes through the shared protorest mapper,
+// so REST answers it with the same class as every other transport. Anything
+// unclassified is a failure of the verb itself and stays a 500.
+func (h *PlatformHandlers) writeServiceError(w http.ResponseWriter, r *http.Request, err error, failure error) {
+	switch status.Code(err) {
+	case codes.Unknown, codes.Internal:
+		h.respWriter.Error500(w, r, failure)
+	default:
+		protorest.WriteError(w, r, h.respWriter, err)
+	}
 }
 
 // serviceStatusToString converts a protobuf ServiceStatus to string

@@ -19,7 +19,6 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -801,79 +800,6 @@ func TestCoverageFinalEncodePublicKeyPEM(t *testing.T) {
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
 	}
-}
-
-// =============================================================================
-// formatKeyAttributesMap / formatX509CertificateInfo
-// =============================================================================
-
-func TestCoverageFinalFormatKeyAttributesMap(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		result := formatKeyAttributesMap(nil)
-		if len(result) != 0 {
-			t.Errorf("expected empty map for nil, got %d entries", len(result))
-		}
-	})
-
-	t.Run("with_algorithm", func(t *testing.T) {
-		t.Parallel()
-		attrs := &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.ECDSA,
-		}
-		result := formatKeyAttributesMap(attrs)
-		if _, ok := result["algorithm"]; !ok {
-			t.Error("expected algorithm key")
-		}
-		if _, ok := result["created_at"]; !ok {
-			t.Error("expected created_at key")
-		}
-	})
-}
-
-func TestCoverageFinalFormatX509CertificateInfo(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		result := formatX509CertificateInfo(nil)
-		if len(result) != 0 {
-			t.Errorf("expected empty map for nil, got %d entries", len(result))
-		}
-	})
-
-	t.Run("valid_cert", func(t *testing.T) {
-		t.Parallel()
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		template := &x509.Certificate{
-			SerialNumber: big.NewInt(42),
-			Subject:      pkix.Name{CommonName: "test-cn"},
-			Issuer:       pkix.Name{CommonName: "test-issuer"},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(time.Hour),
-		}
-		certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cert, err := x509.ParseCertificate(certDER)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		result := formatX509CertificateInfo(cert)
-		if result["subject_cn"] != "test-cn" {
-			t.Errorf("subject_cn = %v", result["subject_cn"])
-		}
-		if result["fingerprint"] == "" {
-			t.Error("fingerprint should not be empty")
-		}
-	})
 }
 
 // =============================================================================

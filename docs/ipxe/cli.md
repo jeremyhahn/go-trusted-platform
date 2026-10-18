@@ -53,8 +53,8 @@ short forms and no subcommands.
 | `--http-port` | int | `8080` | no | HTTP server port |
 | `--device-script-port` | int | `0` | no | Per-device boot script server port (`/boot/device/{mac}.ipxe`), a second listener. Zero derives `--http-port` + 1 |
 | `--tftp-port` | int | `69` | no | TFTP server port |
-| `--dhcp-gateway` | string | `""` | no | Gateway to advertise |
-| `--dhcp-dns` | string | `""` | no | Comma-separated DNS servers to advertise |
+| `--dhcp-gateway` | string | `""` | no | IPv4 gateway advertised as the router (option 3); empty advertises no router |
+| `--dhcp-dns` | string | `""` | no | Comma-separated IPv4 DNS servers, all advertised in option 6 in the order given |
 | `--apk-mirror` | string | `""` | no | Install-time APK mirror base; empty uses `container.DefaultAPKMirror` (the public Alpine mirror) |
 | `--alpine-version` | string | `""` | no | Alpine version of the staged kernel/initramfs; empty uses `container.DefaultAlpineVersion` (`3.22.2`) |
 | `--data-dir` | string | `/data` | no | Directory served at `/data/`; `--media-dir` must be inside it |
@@ -101,6 +101,15 @@ pxeboot \
   --apk-mirror http://mirror.example.com:8080 \
   --alpine-version 3.22.2
 ```
+
+**`--dhcp-gateway` and `--dhcp-dns` are checked before anything starts.**
+DHCPv4 options 3 and 6 carry IPv4 addresses only, so a value that is not one —
+a hostname, an IPv6 address, an empty entry such as `192.0.2.1,,1.1.1.1` or a
+trailing comma — is refused with a `FlagError` naming the flag and wrapping
+`ipxe.DHCPAddressError`, and pxeboot exits 1. Spaces around a DNS entry are
+dropped. With no `--dhcp-gateway` the offers and acks carry no router option,
+which is how the bootstrap image's `BOOTSTRAP_NO_ROUTER=true` reaches the
+server ([bootstrap README](../../build/docker/bootstrap/README.md)).
 
 **Missing required flags produce one message naming all of them** —
 *"required flags not set: --manifest, --media-dir, …"* — then `flag.Usage()` and

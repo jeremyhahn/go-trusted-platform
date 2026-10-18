@@ -139,12 +139,20 @@ func (r *ToolRegistry) vmProvider() VMProvider {
 	return nil
 }
 
-// vmToolHandler is the executor signature for VM snapshot/attestation tools.
+// vmToolHandler is the executor signature for VM lifecycle, snapshot and
+// attestation tools.
 type vmToolHandler func(*ToolRegistry, context.Context, map[string]interface{}) (interface{}, error)
 
-// vmToolDispatch maps VM snapshot/attestation tool names to executors for
-// O(1) routing per project conventions.
+// vmToolDispatch maps VM lifecycle, snapshot and attestation tool names to
+// executors for O(1) routing per project conventions.
 var vmToolDispatch = map[string]vmToolHandler{
+	"vm_create":           (*ToolRegistry).executeVMCreate,
+	"vm_list":             (*ToolRegistry).executeVMList,
+	"vm_get":              (*ToolRegistry).executeVMGet,
+	"vm_delete":           (*ToolRegistry).executeVMDelete,
+	"vm_start":            (*ToolRegistry).executeVMStart,
+	"vm_stop":             (*ToolRegistry).executeVMStop,
+	"vm_reboot":           (*ToolRegistry).executeVMReboot,
 	"vm_snapshot_create":  (*ToolRegistry).executeVMSnapshotCreate,
 	"vm_snapshot_get":     (*ToolRegistry).executeVMSnapshotGet,
 	"vm_snapshot_list":    (*ToolRegistry).executeVMSnapshotList,
