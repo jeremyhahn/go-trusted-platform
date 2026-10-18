@@ -480,11 +480,14 @@ func (m *MCPAdapter) Get(ctx context.Context, name string) (*GetResult, error) {
 	}, nil
 }
 
-// List calls secret_list. The tool takes a limit only; it has no cursor.
+// List calls secret_list with the page size and the cursor.
 func (m *MCPAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
 	args := map[string]interface{}{}
 	if opts.Limit > 0 {
 		args["limit"] = opts.Limit
+	}
+	if opts.Cursor != "" {
+		args["cursor"] = opts.Cursor
 	}
 
 	var resp baasservice.ListSecretsResponse

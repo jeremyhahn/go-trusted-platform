@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 )
 
 // maxBatchSize is the maximum number of items allowed in a batch operation.
@@ -612,9 +613,9 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 		return nil, status.Error(codes.InvalidArgument, "data is required")
 	}
 
-	// Convert protobuf data to SDK format
-	data := make(map[string]interface{})
-	data["_raw"] = req.GetData()
+	// The bytes go under the key REST uses too, so a secret stored over one
+	// transport reads back over every other (docs/kms/api.md §4).
+	data := map[string]interface{}{restkms.SecretValueKey: req.GetData()}
 
 	sdkReq := &quicbaas.StoreSecretRequest{
 		Path:     req.GetSecretId(),
@@ -652,10 +653,12 @@ func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretR
 		return nil, status.Errorf(codes.NotFound, "secret not found: %v", err)
 	}
 
-	// Extract raw data if available
-	var data []byte
-	if rawData, ok := secret.Data["_raw"].([]byte); ok {
-		data = rawData
+	// The backend JSON-encodes the data map, so the stored bytes read back
+	// as base64 text; a value that does not decode was not stored by the
+	// platform and is never handed back as the caller's bytes.
+	data, err := restkms.DecodeStoredSecretValue(req.GetSecretId(), secret.Data[restkms.SecretValueKey])
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get secret failed: %v", err)
 	}
 
 	return &pb.GetSecretResponse{
@@ -672,21 +675,31 @@ func (a *SecretsServerAdapter) ListSecrets(ctx context.Context, req *pb.ListSecr
 		return nil, err
 	}
 
+	if req.GetLimit() < 0 {
+		return nil, status.Error(codes.InvalidArgument, (&restkms.ErrInvalidRequest{Field: "limit", Reason: "must not be negative"}).Error())
+	}
+
 	// ListSecretsRequest doesn't have a prefix field, use empty string
 	resp, err := a.client.List(ctx, "")
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list secrets failed: %v", err)
 	}
 
-	secrets := make([]*pb.Secret, 0, len(resp.Paths))
-	for _, path := range resp.Paths {
+	// Paged the same way as REST: sorted paths after the cursor, at most
+	// limit of them; a limit of 0 (unset) answers every path.
+	page, next := restkms.PageSecretPaths(resp.Paths, req.GetCursor(), int(req.GetLimit()))
+	secrets := make([]*pb.Secret, 0, len(page))
+	for _, path := range page {
 		secrets = append(secrets, &pb.Secret{
 			SecretId: path,
 		})
 	}
 
 	return &pb.ListSecretsResponse{
-		Secrets: secrets,
+		Secrets:    secrets,
+		NextCursor: next,
+		HasMore:    next != "",
+		TotalCount: int32(len(resp.Paths)),
 	}, nil
 }
 

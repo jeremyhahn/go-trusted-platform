@@ -321,8 +321,98 @@ func TestHandlePacket_UnknownPayloadType(t *testing.T) {
 	pkt := make([]byte, 20)
 	pkt[0] = 0x06 // rmcpVersion
 	pkt[3] = 0x07 // rmcpClassIPMI
+	pkt[4] = bmc.AuthTypeRMCPPlus
 	pkt[5] = 0x20 // unknown payload type (not IPMI/0x00, not RAKP/0x10..0x15)
 	sendRawAndExpectSilence(t, sim, pkt)
+}
+
+// sessionlessRequest builds the IPMI 1.5 unauthenticated packet a console
+// sends before RMCP+ session setup, carrying netfn/cmd with data.
+func sessionlessRequest(netfn, cmd byte, data ...byte) []byte {
+	msg := []byte{0x20, netfn << 2, 0x00, 0x81, 0x04, cmd}
+	msg[2] = bmc.IPMIChecksum(msg[0:2])
+	msg = append(msg, data...)
+	msg = append(msg, bmc.IPMIChecksum(msg[3:]))
+
+	packet := []byte{bmc.RMCPVersion, 0x00, 0xff, bmc.RMCPClassIPMI, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, byte(len(msg))}
+	return append(packet, msg...)
+}
+
+func startTestSim(t *testing.T) *rmcpsim.Simulator {
+	t.Helper()
+	sim, err := rmcpsim.New(rmcpsim.Options{Addr: "127.0.0.1:0", Username: "admin", Password: "password"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := sim.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { sim.Stop() })
+	return sim
+}
+
+// The simulator answers Get Channel Authentication Capabilities as a BMC does
+// (IPMI v2.0 §22.13), advertising IPMI v2.0, so a console's session open does
+// not wait out its read timeout.
+func TestHandlePacket_SessionlessGetAuthCapabilities(t *testing.T) {
+	sim := startTestSim(t)
+	conn, err := net.DialUDP("udp", nil, sim.LocalAddr())
+	if err != nil {
+		t.Fatalf("dial sim: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write(sessionlessRequest(bmc.NetFnApp, bmc.CmdGetAuthCapabilities, 0x8e, 0x04)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	resp := buf[:n]
+
+	if n < 14 || resp[4] != 0x00 || int(resp[13]) != n-14 {
+		t.Fatalf("response %x is not an IPMI 1.5 unauthenticated packet", resp)
+	}
+	msg := resp[14:]
+	if msg[0] != 0x81 || msg[1] != (bmc.NetFnApp+1)<<2 || msg[3] != 0x20 || msg[4] != 0x04 {
+		t.Errorf("response header %x does not answer the request", msg[:5])
+	}
+	if msg[2] != bmc.IPMIChecksum(msg[0:2]) || msg[len(msg)-1] != bmc.IPMIChecksum(msg[3:len(msg)-1]) {
+		t.Errorf("response %x has a bad checksum", msg)
+	}
+	if msg[5] != bmc.CmdGetAuthCapabilities || msg[6] != 0x00 {
+		t.Fatalf("cmd/completion code = %#x/%#x, want %#x/0x00", msg[5], msg[6], bmc.CmdGetAuthCapabilities)
+	}
+	data := msg[7 : len(msg)-1]
+	if len(data) != 8 || data[1]&0x80 == 0 || data[3]&0x02 == 0 {
+		t.Errorf("capabilities %x, want 8 bytes advertising IPMI v2.0", data)
+	}
+}
+
+// Outside RMCP+ the simulator answers only Get Channel Authentication
+// Capabilities, and only a well-formed request.
+func TestHandlePacket_SessionlessDropsOtherPackets(t *testing.T) {
+	sim := startTestSim(t)
+
+	otherCmd := sessionlessRequest(bmc.NetFnApp, bmc.CmdGetDeviceID)
+	sendRawAndExpectSilence(t, sim, otherCmd)
+
+	badChecksum := sessionlessRequest(bmc.NetFnApp, bmc.CmdGetAuthCapabilities, 0x8e, 0x04)
+	badChecksum[len(badChecksum)-1]++
+	sendRawAndExpectSilence(t, sim, badChecksum)
+
+	truncated := sessionlessRequest(bmc.NetFnApp, bmc.CmdGetAuthCapabilities, 0x8e, 0x04)
+	truncated[13] = 0x40
+	sendRawAndExpectSilence(t, sim, truncated)
+
+	authenticated := sessionlessRequest(bmc.NetFnApp, bmc.CmdGetAuthCapabilities, 0x8e, 0x04)
+	authenticated[4] = 0x02 // IPMI 1.5 MD5 auth type
+	sendRawAndExpectSilence(t, sim, authenticated)
 }
 
 // TestHandlePacket_ShortPacket ensures packets below the 16-byte
@@ -364,6 +454,7 @@ func TestHandlePacket_MalformedOpenSession(t *testing.T) {
 	pkt := make([]byte, 20)
 	pkt[0] = 0x06
 	pkt[3] = 0x07
+	pkt[4] = bmc.AuthTypeRMCPPlus
 	pkt[5] = bmc.PayloadTypeOpenSessionReq
 	sendRawAndExpectSilence(t, sim, pkt)
 }
@@ -390,6 +481,7 @@ func TestHandleIPMI_MalformedPayloadLength(t *testing.T) {
 	pkt := make([]byte, 20)
 	pkt[0] = 0x06
 	pkt[3] = 0x07
+	pkt[4] = bmc.AuthTypeRMCPPlus
 	pkt[5] = bmc.PayloadTypeIPMI
 	// payload length bytes at [14:16] -- declare 1000, which exceeds
 	// the actual payload area (4 bytes).
@@ -481,6 +573,7 @@ func TestHandleIPMI_UnknownSession(t *testing.T) {
 	pkt := make([]byte, 24)
 	pkt[0] = 0x06 // RMCP version
 	pkt[3] = 0x07 // RMCP class IPMI
+	pkt[4] = bmc.AuthTypeRMCPPlus
 	pkt[5] = bmc.PayloadTypeIPMI
 	pkt[6] = 0xEF // session ID byte 0 (little-endian 0xDEADBEEF)
 	pkt[7] = 0xBE
@@ -522,6 +615,7 @@ func TestHandleIPMI_ShortPayload(t *testing.T) {
 	pkt := make([]byte, 20)
 	pkt[0] = 0x06
 	pkt[3] = 0x07
+	pkt[4] = bmc.AuthTypeRMCPPlus
 	pkt[5] = bmc.PayloadTypeIPMI
 	pkt[14] = 0x04
 	pkt[15] = 0x00

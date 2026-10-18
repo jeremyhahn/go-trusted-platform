@@ -367,7 +367,7 @@ func TestRegistryPushPullRoundTrip(t *testing.T) {
 
 	const ref = "myrepo/myimage:v1"
 	layer := Layer{
-		Digest:    "sha256:" + repeat64("a"),
+		Digest:    sha256Digest([]byte("hello world")),
 		MediaType: "application/vnd.oci.image.layer.v1.tar",
 		Size:      11,
 		Content:   []byte("hello world"),
@@ -378,7 +378,7 @@ func TestRegistryPushPullRoundTrip(t *testing.T) {
 		MediaType:     "application/vnd.oci.image.manifest.v1+json",
 		Config: Descriptor{
 			MediaType: "application/vnd.oci.image.config.v1+json",
-			Digest:    "sha256:" + repeat64("b"),
+			Digest:    sha256Digest(configBlob),
 			Size:      int64(len(configBlob)),
 		},
 		Layers: []Descriptor{{
@@ -504,14 +504,14 @@ func TestRegistry_EncryptedRoundTrip(t *testing.T) {
 
 	ctx := context.Background()
 	plaintext := []byte("secret payload that must survive a round trip")
-	digest := "sha256:" + repeat64("f")
+	digest := sha256Digest(plaintext)
 	image := &Image{
 		Manifest: &ImageManifest{
 			SchemaVersion: 2,
 			MediaType:     "application/vnd.oci.image.manifest.v1+json",
 			Config: Descriptor{
 				MediaType: "application/vnd.oci.image.config.v1+json",
-				Digest:    "sha256:" + repeat64("0"),
+				Digest:    sha256Digest([]byte("cfg!")),
 				Size:      4,
 			},
 			Layers: []Descriptor{{
@@ -591,7 +591,7 @@ func TestRegistry_DeleteGCsOrphanBlobs(t *testing.T) {
 				SchemaVersion: 2,
 				MediaType:     "application/vnd.oci.image.manifest.v1+json",
 				Config: Descriptor{
-					Digest: "sha256:" + repeat64("c"),
+					Digest: sha256Digest([]byte("cfg!")),
 					Size:   4,
 				},
 				Layers: []Descriptor{{
@@ -610,8 +610,8 @@ func TestRegistry_DeleteGCsOrphanBlobs(t *testing.T) {
 		}
 	}
 
-	uniqueLayer := "sha256:" + repeat64("d")
-	sharedLayer := "sha256:" + repeat64("e")
+	uniqueLayer := sha256Digest([]byte("helloA"))
+	sharedLayer := sha256Digest([]byte("helloshared"))
 
 	// Image A: unique layer only.
 	if err := reg.Push(ctx, "img-a:v1", mkImage(uniqueLayer, "A"), PushOptions{}); err != nil {

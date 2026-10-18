@@ -43,6 +43,10 @@ func (t *TestRMCPSession) Close() error {
 	return t.inner.Close()
 }
 
+func (t *TestRMCPSession) Send(netfn, cmd byte, data []byte) ([]byte, error) {
+	return t.inner.Send(netfn, cmd, data)
+}
+
 // SIK returns the derived Session Integrity Key, or nil pre-handshake.
 func (t *TestRMCPSession) SIK() []byte { return t.inner.sik }
 

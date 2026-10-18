@@ -589,11 +589,14 @@ func (r *ToolRegistry) executeSecretGet(ctx context.Context, args map[string]int
 
 func (r *ToolRegistry) executeSecretList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	limit := getInt(args, "limit")
-	if limit <= 0 {
+	if limit < 0 {
+		return nil, ErrInvalidArgument{Msg: "limit must not be negative"}
+	}
+	if limit == 0 {
 		limit = 50
 	}
 
-	result, err := r.service.SecretList(ctx, limit)
+	result, err := r.service.SecretList(ctx, limit, getString(args, "cursor"))
 	if err != nil {
 		return nil, err
 	}

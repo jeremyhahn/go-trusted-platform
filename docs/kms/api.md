@@ -211,17 +211,27 @@ REST wire in both directions, and a plain-string `value` on store reads back as
 the same string. A stored `value` that is not base64 was not written by the
 platform; REST answers 500 (`ErrSecretValueMalformed`) instead of returning it
 as the caller's bytes. The CLI follows the same convention ([cli.md](cli.md)
-§7.2). The gRPC / Unix / QUIC adapter (`pkg/api/daemon/kms_service.go`) keeps
-its bytes under `_raw` and reads them back as `[]byte`. After the backend's JSON
-round trip the type assertion fails and the adapter returns empty data. That is
-an open #949 defect on that adapter.
+§7.2). gRPC, Unix and QUIC (`pkg/api/daemon/kms_service.go`) store under the
+same `value` key and decode it the same way, so a secret stored over any
+transport reads back over every other; a malformed `value` is gRPC `Internal`.
+MCP `secret_store` / `secret_get` carry the bytes as base64 JSON through the
+quicbaas secrets service.
 
 **REST `GET /kms/secrets` pages by path.** `limit` is the page size; it must be
 a positive integer (400 otherwise), and when it is absent every path comes back.
 Paths come back sorted. When more follow, the response carries `next_cursor`,
 the last path on the page; pass it back as `cursor` to read the next page.
-`prefix` narrows the list before paging. gRPC `ListSecrets` returns every path
-in one response.
+`prefix` narrows the list before paging.
+
+gRPC, Unix, QUIC and MCP page the same way: sorted, at most `limit` after
+`cursor`, with `next_cursor` when more follow. gRPC and Unix also set `has_more`
+and `total_count`, and an unset `limit` answers every path. QUIC sub `0x03` and
+MCP `secret_list` default an unset `limit` to 50, and QUIC caps it at 1000.
+A negative `limit` is InvalidArgument on gRPC and Unix,
+`StatusInvalidRequest` on QUIC and an invalid-argument tool error on MCP. The
+quicbaas secrets service MCP reads (`ListSecrets`, go-quicbaas v0.12.0-alpha
+`pkg/service/secrets.go:429`) answers only an unsorted first page and ignores
+`cursor`, so the MCP provider reads the whole list and pages it itself.
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on

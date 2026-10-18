@@ -1447,6 +1447,8 @@ func (h *TenantHandlers) writeTenantError(w http.ResponseWriter, operation strin
 		status = http.StatusInternalServerError
 	case tenant.ErrBarrierNotSupported:
 		status = http.StatusNotImplemented
+	case tenant.ErrTenantFieldNotPersisted:
+		status = http.StatusNotImplemented
 	default:
 		status = http.StatusInternalServerError
 	}

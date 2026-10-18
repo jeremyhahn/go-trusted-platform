@@ -23,6 +23,8 @@ const (
 	RMCPVersion   = rmcpVersion
 	RMCPClassIPMI = rmcpClassIPMI
 
+	AuthTypeRMCPPlus = authTypeRMCPPlus
+
 	PayloadTypeIPMI            = payloadTypeIPMI
 	PayloadTypeOpenSessionReq  = payloadTypeOpenSessionReq
 	PayloadTypeOpenSessionResp = payloadTypeOpenSessionResp
@@ -48,6 +50,7 @@ const (
 	NetFnStorage = netFnStorage
 
 	CmdGetDeviceID          = cmdGetDeviceID
+	CmdGetAuthCapabilities  = cmdGetAuthCapabilities
 	CmdSetSessionPrivilege  = cmdSetSessionPrivilege
 	CmdCloseSession         = cmdCloseSession
 	CmdChassisStatus        = cmdChassisStatus

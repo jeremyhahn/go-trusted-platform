@@ -44,6 +44,15 @@ func newMockIAMClientForServer() *mockIAMClientForServer {
 	}
 }
 
+// suspend marks a tenant suspended in IAM, the one state other than active a
+// reload rebuilds (docs/tenant/engineering.md §6). The manager cannot store a
+// suspension itself, so a test that needs a suspended tenant starts here.
+func (m *mockIAMClientForServer) suspend(tenantID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tenants[tenantID].Status = sdkiam.TenantStatusSuspended
+}
+
 // Reconcile satisfies tenant.RoleReconciler; these tests do not inspect roles.
 func (m *mockIAMClientForServer) Reconcile(_ context.Context, tenantID string) (*sdkiam.ReconcileRolesResponse, error) {
 	return &sdkiam.ReconcileRolesResponse{TenantID: tenantID}, nil
@@ -121,11 +130,17 @@ func (m *mockIAMClientForServer) Delete(ctx context.Context, tenantID string) er
 // =============================================================================
 
 func createTestTenantManagerForServer(t *testing.T) *tenant.Manager {
+	return createTestTenantManagerOnIAM(t, newMockIAMClientForServer())
+}
+
+// createTestTenantManagerOnIAM builds the test manager over iamClient, for a
+// test that sets IAM state the manager itself cannot store.
+func createTestTenantManagerOnIAM(t *testing.T, iamClient *mockIAMClientForServer) *tenant.Manager {
 	cfg := tenant.DefaultConfig()
 	cfg.EnableDEKIsolation = false // Disable for testing
 
 	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
-		IAMTenantClient: newMockIAMClientForServer(),
+		IAMTenantClient: iamClient,
 		IAMRoleClient:   newMockIAMClientForServer(),
 		Config:          cfg,
 		Logger:          nil,
@@ -441,8 +456,7 @@ func TestTenantGRPCServer_GetTenant_Success(t *testing.T) {
 
 	// Create a tenant
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
-		Name:        "get-test",
-		DisplayName: "Get Test Tenant",
+		Name: "get-test",
 	})
 	require.NoError(t, err)
 
@@ -497,8 +511,7 @@ func TestTenantGRPCServer_GetTenantByName_Success(t *testing.T) {
 
 	// Create a tenant
 	_, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
-		Name:        "getbyname-test",
-		DisplayName: "Get By Name Test",
+		Name: "getbyname-test",
 	})
 	require.NoError(t, err)
 
@@ -552,22 +565,39 @@ func TestTenantGRPCServer_UpdateTenant_Success(t *testing.T) {
 
 	// Create a tenant
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
-		Name:        "update-test",
-		DisplayName: "Original Name",
+		Name: "update-test",
 	})
 	require.NoError(t, err)
 
-	// Update the tenant
+	// An update restating what the pinned SDK stores succeeds.
 	resp, err := server.UpdateTenant(ctx, &platformv1.UpdateTenantRequest{
 		TenantId:    createResp.Tenant.Id,
-		DisplayName: "Updated Name",
-		Labels:      map[string]string{"env": "test"},
+		DisplayName: "update-test",
 	})
 
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.True(t, resp.Status.Success)
 	assert.Equal(t, "tenant updated successfully", resp.Status.Message)
+}
+
+func TestTenantGRPCServer_UpdateTenant_UnstorableFieldsAreUnimplemented(t *testing.T) {
+	ctx := context.Background()
+	server := createTestTenantGRPCServer(t)
+
+	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+		Name: "update-gap-test",
+	})
+	require.NoError(t, err)
+
+	_, err = server.UpdateTenant(ctx, &platformv1.UpdateTenantRequest{
+		TenantId:    createResp.Tenant.Id,
+		DisplayName: "Updated Name",
+		Labels:      map[string]string{"env": "test"},
+	})
+
+	require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+	assert.Contains(t, status.Convert(err).Message(), "display_name, labels cannot be stored")
 }
 
 func TestTenantGRPCServer_UpdateTenant_InvalidArgument(t *testing.T) {
@@ -660,7 +690,7 @@ func TestTenantGRPCServer_DeleteTenant_NotFound(t *testing.T) {
 // SuspendTenant Tests - Currently at 70% coverage
 // =============================================================================
 
-func TestTenantGRPCServer_SuspendTenant_Success(t *testing.T) {
+func TestTenantGRPCServer_SuspendTenant_IsUnimplemented(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
@@ -670,13 +700,35 @@ func TestTenantGRPCServer_SuspendTenant_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Suspend the tenant
+	// The pinned SDK cannot store the suspension.
+	_, err = server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{
+		TenantId: createResp.Tenant.Id,
+	})
+
+	require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+	assert.Contains(t, status.Convert(err).Message(), "state cannot be stored")
+}
+
+func TestTenantGRPCServer_SuspendTenant_AlreadySuspendedInIAM(t *testing.T) {
+	ctx := context.Background()
+	iamClient := newMockIAMClientForServer()
+	mgr := createTestTenantManagerOnIAM(t, iamClient)
+	server := NewTenantGRPCServer(WithTenantLogger(slog.Default()))
+	server.SetManager(mgr)
+
+	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+		Name: "suspended-test",
+	})
+	require.NoError(t, err)
+	iamClient.suspend(createResp.Tenant.Id)
+	mgr.InvalidateCache(createResp.Tenant.Id)
+
+	// Suspending a tenant IAM already holds suspended stores nothing new.
 	resp, err := server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{
 		TenantId: createResp.Tenant.Id,
 	})
 
 	require.NoError(t, err)
-	assert.NotNil(t, resp)
 	assert.True(t, resp.Status.Success)
 }
 
@@ -714,33 +766,33 @@ func TestTenantGRPCServer_SuspendTenant_NotFound(t *testing.T) {
 // ResumeTenant Tests - Currently at 20% coverage
 // =============================================================================
 
-func TestTenantGRPCServer_ResumeTenant_Success(t *testing.T) {
+func TestTenantGRPCServer_ResumeTenant_IsUnimplemented(t *testing.T) {
 	ctx := context.Background()
-	server := createTestTenantGRPCServer(t)
+	iamClient := newMockIAMClientForServer()
+	mgr := createTestTenantManagerOnIAM(t, iamClient)
+	server := NewTenantGRPCServer(WithTenantLogger(slog.Default()))
+	server.SetManager(mgr)
 
-	// Create a tenant first
+	// Create a tenant first, suspended in IAM
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
-		Name:        "resume-test",
-		DisplayName: "Resume Test Tenant",
+		Name: "resume-test",
 	})
 	require.NoError(t, err)
 	tenantID := createResp.Tenant.Id
+	iamClient.suspend(tenantID)
+	mgr.InvalidateCache(tenantID)
 
-	// Suspend the tenant
-	_, err = server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{
-		TenantId: tenantID,
-	})
-	require.NoError(t, err)
-
-	// Resume the tenant
-	resp, err := server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{
+	// The pinned SDK cannot store the resumption.
+	_, err = server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{
 		TenantId: tenantID,
 	})
 
+	require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+	assert.Contains(t, status.Convert(err).Message(), "state cannot be stored")
+
+	got, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: tenantID})
 	require.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Status.Success)
-	assert.Equal(t, "tenant resumed successfully", resp.Status.Message)
+	assert.Equal(t, platformv1.TenantState_TENANT_STATE_SUSPENDED, got.Tenant.State)
 }
 
 func TestTenantGRPCServer_ResumeTenant_InvalidArgument(t *testing.T) {
@@ -804,24 +856,8 @@ func TestTenantGRPCServer_GetQuotas_Success(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
-	// Create a tenant with custom quotas
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
 		Name: "quota-test",
-		ComputeQuota: &platformv1.ComputeQuota{
-			MaxVms:        15,
-			MaxContainers: 75,
-			MaxVcpus:      64,
-			MaxMemoryMb:   65536,
-		},
-		NetworkQuota: &platformv1.NetworkQuota{
-			MaxBridges:       8,
-			MaxPorts:         200,
-			MaxBandwidthMbps: 5000,
-		},
-		StorageQuota: &platformv1.StorageQuota{
-			MaxVolumesGb: 2048,
-			MaxSnapshots: 100,
-		},
 	})
 	require.NoError(t, err)
 
@@ -832,11 +868,29 @@ func TestTenantGRPCServer_GetQuotas_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
+	defaults := tenant.DefaultConfig()
 	assert.Equal(t, createResp.Tenant.Id, resp.TenantId)
-	assert.Equal(t, int64(15), resp.Compute.MaxVms)
-	assert.Equal(t, int64(75), resp.Compute.MaxContainers)
-	assert.Equal(t, int64(8), resp.Network.MaxBridges)
-	assert.Equal(t, int64(2048), resp.Storage.MaxVolumesGb)
+	assert.Equal(t, defaults.DefaultComputeQuota.MaxVMs, resp.Compute.MaxVms)
+	assert.Equal(t, defaults.DefaultComputeQuota.MaxContainers, resp.Compute.MaxContainers)
+	assert.Equal(t, defaults.DefaultNetworkQuota.MaxBridges, resp.Network.MaxBridges)
+	assert.Equal(t, defaults.DefaultStorageQuota.MaxVolumesGB, resp.Storage.MaxVolumesGb)
+}
+
+func TestTenantGRPCServer_CreateTenant_CustomQuotasAreUnimplemented(t *testing.T) {
+	ctx := context.Background()
+	server := createTestTenantGRPCServer(t)
+
+	_, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+		Name:         "custom-quota-test",
+		ComputeQuota: &platformv1.ComputeQuota{MaxVms: 15},
+	})
+
+	require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+	assert.Contains(t, status.Convert(err).Message(), "compute_quota cannot be stored")
+
+	// The create rolled back: no tenant was left behind under the name.
+	_, err = server.GetTenantByName(ctx, &platformv1.GetTenantByNameRequest{Name: "custom-quota-test"})
+	assert.Equal(t, codes.NotFound, status.Code(err), "%v", err)
 }
 
 func TestTenantGRPCServer_GetQuotas_InvalidArgument(t *testing.T) {
@@ -873,7 +927,7 @@ func TestTenantGRPCServer_GetQuotas_NotFound(t *testing.T) {
 // UpdateQuotas Tests - Currently at 11.8% coverage
 // =============================================================================
 
-func TestTenantGRPCServer_UpdateQuotas_Success(t *testing.T) {
+func TestTenantGRPCServer_UpdateQuotas_IsUnimplemented(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
@@ -883,8 +937,8 @@ func TestTenantGRPCServer_UpdateQuotas_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Update quotas
-	resp, err := server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
+	// The pinned SDK cannot store new limits.
+	_, err = server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
 		TenantId: createResp.Tenant.Id,
 		Compute: &platformv1.ComputeQuota{
 			MaxVms:        30,
@@ -903,18 +957,19 @@ func TestTenantGRPCServer_UpdateQuotas_Success(t *testing.T) {
 		},
 	})
 
-	require.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Status.Success)
+	require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+	assert.Contains(t, status.Convert(err).Message(),
+		"compute_quota, network_quota, storage_quota cannot be stored")
 
-	// Verify quotas were updated
+	// Verify the quotas were not changed
 	quotasResp, err := server.GetQuotas(ctx, &platformv1.GetQuotasRequest{
 		TenantId: createResp.Tenant.Id,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(30), quotasResp.Compute.MaxVms)
-	assert.Equal(t, int64(15), quotasResp.Network.MaxBridges)
-	assert.Equal(t, int64(4096), quotasResp.Storage.MaxVolumesGb)
+	defaults := tenant.DefaultConfig()
+	assert.Equal(t, defaults.DefaultComputeQuota.MaxVMs, quotasResp.Compute.MaxVms)
+	assert.Equal(t, defaults.DefaultNetworkQuota.MaxBridges, quotasResp.Network.MaxBridges)
+	assert.Equal(t, defaults.DefaultStorageQuota.MaxVolumesGB, quotasResp.Storage.MaxVolumesGb)
 }
 
 func TestTenantGRPCServer_UpdateQuotas_PartialUpdate(t *testing.T) {
@@ -926,24 +981,21 @@ func TestTenantGRPCServer_UpdateQuotas_PartialUpdate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	id := createResp.Tenant.Id
+	want, err := server.manager.GetQuotas(ctx, id)
+	require.NoError(t, err)
 
-	// MaxDiskGB has no wire field, so seed it, and the other sections,
-	// through the manager.
-	seed := &tenant.TenantQuotas{
-		Compute: tenant.ComputeQuota{MaxVMs: 10, MaxContainers: 40, MaxVCPUs: 64, MaxMemoryMB: 8192, MaxDiskGB: 500},
-		Network: tenant.NetworkQuota{MaxBridges: 4, MaxPorts: 100, MaxBandwidthMbps: 1000},
-		Storage: tenant.StorageQuota{MaxVolumesGB: 900, MaxSnapshots: 20},
-	}
-	require.NoError(t, server.manager.UpdateQuotas(ctx, id, seed))
-
-	// Change one limit, as `platformctl tenant quotas set --max-vms` does.
+	// A compute section that restates the stored limits, as `platformctl
+	// tenant quotas set` sends, keeps MaxDiskGB (no wire field) and the
+	// absent sections. Zeroing any of them would be a change the pinned SDK
+	// cannot store (docs/tenant/engineering.md §6).
+	compute := want.Compute
 	resp, err := server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
 		TenantId: id,
 		Compute: &platformv1.ComputeQuota{
-			MaxVms:        25,
-			MaxContainers: 40,
-			MaxVcpus:      64,
-			MaxMemoryMb:   8192,
+			MaxVms:        compute.MaxVMs,
+			MaxContainers: compute.MaxContainers,
+			MaxVcpus:      compute.MaxVCPUs,
+			MaxMemoryMb:   compute.MaxMemoryMB,
 		},
 	})
 	require.NoError(t, err)
@@ -951,9 +1003,20 @@ func TestTenantGRPCServer_UpdateQuotas_PartialUpdate(t *testing.T) {
 
 	got, err := server.manager.GetQuotas(ctx, id)
 	require.NoError(t, err)
-	want := *seed
-	want.Compute.MaxVMs = 25
-	assert.Equal(t, want, *got, "only MaxVMs may change; MaxDiskGB and the absent sections are kept")
+	assert.Equal(t, *want, *got, "MaxDiskGB and the absent sections are kept")
+
+	// Changing one limit names only the compute section.
+	_, err = server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
+		TenantId: id,
+		Compute: &platformv1.ComputeQuota{
+			MaxVms:        compute.MaxVMs + 1,
+			MaxContainers: compute.MaxContainers,
+			MaxVcpus:      compute.MaxVCPUs,
+			MaxMemoryMb:   compute.MaxMemoryMB,
+		},
+	})
+	require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+	assert.Contains(t, status.Convert(err).Message(), ": compute_quota cannot be stored")
 }
 
 func TestTenantGRPCServer_UpdateQuotas_InvalidArgument(t *testing.T) {
@@ -1048,11 +1111,9 @@ func TestTenantGRPCServer_CheckQuota_ExecutesWithMissingEnforcer(t *testing.T) {
 	// Create a tenant
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
 		Name: "check-quota-test",
-		ComputeQuota: &platformv1.ComputeQuota{
-			MaxVms: 10,
-		},
 	})
 	require.NoError(t, err)
+	require.Equal(t, int64(10), tenant.DefaultConfig().DefaultComputeQuota.MaxVMs)
 
 	// Without a quota enforcer the check runs against the tenant's own limits.
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{

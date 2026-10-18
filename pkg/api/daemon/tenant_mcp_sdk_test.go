@@ -91,6 +91,11 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 		req    func(h *tenantParityHarness) proto.Message
 		resp   proto.Message
 		check  func(t *testing.T, h *tenantParityHarness, resp proto.Message)
+		// gap names the fields the pinned go-quicbaas SDK cannot store
+		// (docs/tenant/engineering.md §6): the call must be refused
+		// Unimplemented naming exactly them, which proves the MCP
+		// transport carried every one of them to the server.
+		gap string
 	}{
 		{
 			name:   "CreateTenant carries the quotas it sets",
@@ -104,12 +109,20 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 				}
 			},
 			resp: &platformv1.CreateTenantResponse{},
+			gap:  "display_name, compute_quota",
+		},
+		{
+			name:   "CreateTenant",
+			caller: paritySystemTenant,
+			method: platformv1.TenantService_CreateTenant_FullMethodName,
+			req: func(*tenantParityHarness) proto.Message {
+				return &platformv1.CreateTenantRequest{Name: parityNewTenant}
+			},
+			resp: &platformv1.CreateTenantResponse{},
 			check: func(t *testing.T, _ *tenantParityHarness, resp proto.Message) {
 				r := resp.(*platformv1.CreateTenantResponse)
 				require.True(t, r.GetStatus().GetSuccess(), r.GetStatus().GetMessage())
 				require.Equal(t, parityNewTenant, r.GetTenant().GetName())
-				require.Equal(t, "Tenant C", r.GetTenant().GetDisplayName())
-				require.Equal(t, int64(4), r.GetTenant().GetComputeQuota().GetMaxVms())
 				require.NotEqual(t, platformv1.TenantState_TENANT_STATE_UNSPECIFIED, r.GetTenant().GetState())
 			},
 		},
@@ -164,11 +177,7 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 				return &platformv1.UpdateTenantRequest{TenantId: h.id(parityTenantA), DisplayName: "Renamed"}
 			},
 			resp: &platformv1.UpdateTenantResponse{},
-			check: func(t *testing.T, _ *tenantParityHarness, resp proto.Message) {
-				r := resp.(*platformv1.UpdateTenantResponse)
-				require.True(t, r.GetStatus().GetSuccess(), r.GetStatus().GetMessage())
-				require.Equal(t, "Renamed", r.GetTenant().GetDisplayName())
-			},
+			gap:  "display_name",
 		},
 		{
 			name:   "SuspendTenant",
@@ -177,23 +186,23 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 			req: func(h *tenantParityHarness) proto.Message {
 				return &platformv1.SuspendTenantRequest{TenantId: h.id(parityTenantA)}
 			},
-			resp:  &platformv1.SuspendTenantResponse{},
-			check: requireTenantStatusSuccess,
+			resp: &platformv1.SuspendTenantResponse{},
+			gap:  "state",
 		},
 		{
 			name:   "ResumeTenant",
 			caller: paritySystemTenant,
-			setup: func(t *testing.T, h *tenantParityHarness) {
-				require.NoError(t, invokeTenantServer(h, h.id(paritySystemTenant),
-					platformv1.TenantService_SuspendTenant_FullMethodName,
-					&platformv1.SuspendTenantRequest{TenantId: h.id(parityTenantA)}))
+			setup: func(_ *testing.T, h *tenantParityHarness) {
+				// The manager cannot store a suspension, so IAM holds it.
+				h.iam.suspend(h.id(parityTenantA))
+				h.manager.InvalidateCache(h.id(parityTenantA))
 			},
 			method: platformv1.TenantService_ResumeTenant_FullMethodName,
 			req: func(h *tenantParityHarness) proto.Message {
 				return &platformv1.ResumeTenantRequest{TenantId: h.id(parityTenantA)}
 			},
-			resp:  &platformv1.ResumeTenantResponse{},
-			check: requireTenantStatusSuccess,
+			resp: &platformv1.ResumeTenantResponse{},
+			gap:  "state",
 		},
 		{
 			name:   "DeleteTenant",
@@ -233,14 +242,7 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 				}
 			},
 			resp: &platformv1.UpdateQuotasResponse{},
-			check: func(t *testing.T, h *tenantParityHarness, resp proto.Message) {
-				requireTenantStatusSuccess(t, h, resp)
-				quotas, err := h.server.GetQuotas(tokenCallerContext(h.id(paritySystemTenant)),
-					&platformv1.GetQuotasRequest{TenantId: h.id(parityTenantA)})
-				require.NoError(t, err)
-				require.Equal(t, int64(7), quotas.GetCompute().GetMaxVms())
-				require.Equal(t, int64(9), quotas.GetStorage().GetMaxSnapshots())
-			},
+			gap:  "compute_quota, storage_quota",
 		},
 		{
 			name:   "GetUsage",
@@ -385,7 +387,13 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 				tc.setup(t, h)
 			}
 			conn := connectTenantMCP(t, h, tc.caller)
-			require.NoError(t, conn.Invoke(context.Background(), tc.method, tc.req(h), tc.resp))
+			err := conn.Invoke(context.Background(), tc.method, tc.req(h), tc.resp)
+			if tc.gap != "" {
+				require.Equal(t, codes.Unimplemented, status.Code(err), "%v", err)
+				require.Contains(t, status.Convert(err).Message(), ": "+tc.gap+" cannot be stored")
+				return
+			}
+			require.NoError(t, err)
 			tc.check(t, h, tc.resp)
 		})
 	}

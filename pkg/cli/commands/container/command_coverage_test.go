@@ -333,21 +333,17 @@ func TestNewGetCommand_ValidateArgs(t *testing.T) {
 func TestParseFilters_ImageFilter(t *testing.T) {
 	filters := []string{"image=nginx:latest"}
 
-	selector, states, err := parseFilters(filters)
+	got, err := parseFilters(filters)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(states) != 0 {
-		t.Errorf("expected no states, got %d", len(states))
+	if len(got.states) != 0 {
+		t.Errorf("expected no states, got %d", len(got.states))
 	}
 
-	if selector == nil {
-		t.Fatal("expected selector, got nil")
-	}
-
-	if val, ok := selector["image"]; !ok || val != "nginx:latest" {
-		t.Errorf("expected image=nginx:latest in labels, got %v", selector)
+	if val, ok := got.labels["image"]; !ok || val != "nginx:latest" {
+		t.Errorf("expected image=nginx:latest in labels, got %v", got.labels)
 	}
 }
 
@@ -355,16 +351,12 @@ func TestParseFilters_ImageFilter(t *testing.T) {
 func TestParseFilters_LabelKeyOnly(t *testing.T) {
 	filters := []string{"label=environment"}
 
-	selector, _, err := parseFilters(filters)
+	got, err := parseFilters(filters)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if selector == nil {
-		t.Fatal("expected selector, got nil")
-	}
-
-	if val, ok := selector["environment"]; !ok || val != "" {
+	if val, ok := got.labels["environment"]; !ok || val != "" {
 		t.Errorf("expected empty value for environment, got %q", val)
 	}
 }

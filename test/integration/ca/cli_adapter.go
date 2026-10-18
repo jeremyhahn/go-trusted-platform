@@ -143,6 +143,11 @@ func (c *CLIAdapter) createTestConfig() error {
 
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
+	// The kms verbs the CA suite runs (`kms key csr`) open the CLI's
+	// quicbaas client, which a local context dials at /run/quicbaas.sock.
+	// The devcontainer runs no quicbaasd: platformd embeds quicbaas and
+	// serves the quicbaas.kms.v1 services on its own Unix listener, so the
+	// quicbaas address is platformd's socket (docs/kms/cli.md §3).
 	configContent := fmt.Sprintf(`current_context: integration-test
 contexts:
   - name: integration-test
@@ -150,7 +155,9 @@ contexts:
     local:
       socket_path: %s
       grpc_addr: %s
-`, c.socketPath, c.grpcEndpoint)
+      quicbaas_addr: %s
+      quicbaas_transport: unix
+`, c.socketPath, c.grpcEndpoint, c.socketPath)
 
 	if writeErr := os.WriteFile(configPath, []byte(configContent), 0600); writeErr != nil {
 		return ErrCLIConfigCreationFailed{Cause: writeErr}
@@ -832,6 +839,10 @@ func (c *CLIAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 			Reason:         parseRevocationReasonString(entry.Reason),
 			RevocationTime: entry.RevocationTime,
 		})
+	}
+
+	if err := result.setIssuerFromData("CLI"); err != nil {
+		return nil, err
 	}
 
 	return result, nil

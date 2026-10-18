@@ -381,6 +381,24 @@ func (e ErrDigestMismatch) Error() string {
 	return fmt.Sprintf("registry: digest mismatch: expected %s, got %s", e.Expected, e.Actual)
 }
 
+// ErrBlobConflict is returned when a push would overwrite a stored blob with
+// different bytes. Blobs are content addressed; the stored blob is kept.
+type ErrBlobConflict struct {
+	Digest string
+	Cause  error
+}
+
+func (e ErrBlobConflict) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("registry: blob %s already holds different content: %v", e.Digest, e.Cause)
+	}
+	return fmt.Sprintf("registry: blob %s already holds different content", e.Digest)
+}
+
+func (e ErrBlobConflict) Unwrap() error {
+	return e.Cause
+}
+
 // ErrNilClient is returned when a required client is nil.
 type ErrNilClient struct {
 	Client string

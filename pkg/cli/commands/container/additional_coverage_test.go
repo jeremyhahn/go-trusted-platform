@@ -99,13 +99,13 @@ func TestPrintContainerList_MultipleContainersWithPorts(t *testing.T) {
 func TestParseFilters_MultipleStates(t *testing.T) {
 	filters := []string{"state=running", "state=stopped"}
 
-	_, states, err := parseFilters(filters)
+	got, err := parseFilters(filters)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(states) != 2 {
-		t.Errorf("expected 2 states, got %d", len(states))
+	if len(got.states) != 2 {
+		t.Errorf("expected 2 states, got %d", len(got.states))
 	}
 }
 
@@ -117,22 +117,22 @@ func TestParseFilters_MixedFilters(t *testing.T) {
 		"image=nginx",
 	}
 
-	selector, states, err := parseFilters(filters)
+	got, err := parseFilters(filters)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(states) != 1 {
-		t.Errorf("expected 1 state, got %d", len(states))
+	if len(got.states) != 1 {
+		t.Errorf("expected 1 state, got %d", len(got.states))
 	}
 
-	if selector == nil {
-		t.Fatal("expected selector, got nil")
+	// label and image are label matches; name is the name prefix.
+	if len(got.labels) != 2 {
+		t.Errorf("expected 2 labels, got %v", got.labels)
 	}
 
-	// Should have label, name, and image in MatchLabels
-	if len(selector) != 3 {
-		t.Errorf("expected 3 labels, got %d", len(selector))
+	if got.namePrefix != "my-container" {
+		t.Errorf("expected name prefix my-container, got %q", got.namePrefix)
 	}
 }
 

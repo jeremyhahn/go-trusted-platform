@@ -14,6 +14,8 @@
 package container
 
 import (
+	"errors"
+
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"testing"
 	"time"
@@ -81,6 +83,9 @@ func TestNewCreateCommand_Flags(t *testing.T) {
 		{"workdir", "w", ""},
 		{"tpm-access", "", "false"},
 		{"start", "", "false"},
+		{"user", "u", ""},
+		{"restart", "", ""},
+		{"attest", "", "false"},
 	}
 
 	for _, tt := range tests {
@@ -119,6 +124,94 @@ func TestNewCreateCommand_RequiredFlags(t *testing.T) {
 	imageFlag := cmd.Flags().Lookup("image")
 	if imageFlag == nil {
 		t.Error("--image flag not found")
+	}
+}
+
+func TestBuildCreateParams_MapsEveryFlag(t *testing.T) {
+	opts := &createOptions{
+		name:        "api",
+		image:       "docker.io/library/alpine:latest",
+		env:         []string{"LOG_LEVEL=info"},
+		label:       []string{"test=true"},
+		networkMode: "bridge",
+		memory:      "1g",
+		cpu:         "2",
+		command:     []string{"sleep", "3600"},
+		workDir:     "/srv",
+		user:        "1000:1000",
+		restart:     "on-failure",
+		attest:      true,
+		start:       true,
+	}
+
+	params, err := buildCreateParams(opts)
+	if err != nil {
+		t.Fatalf("buildCreateParams: %v", err)
+	}
+
+	if params.Name != "api" || params.Image != "docker.io/library/alpine:latest" {
+		t.Errorf("name/image: got %q/%q", params.Name, params.Image)
+	}
+	if params.User != "1000:1000" {
+		t.Errorf("User: got %q", params.User)
+	}
+	if params.RestartPolicy != computesvc.RestartPolicyOnFailure {
+		t.Errorf("RestartPolicy: got %q", params.RestartPolicy)
+	}
+	if !params.AttestOnCreate {
+		t.Error("AttestOnCreate: got false")
+	}
+	if params.Labels["test"] != "true" {
+		t.Errorf("Labels: got %v", params.Labels)
+	}
+	if len(params.Command) != 2 || params.Command[0] != "sleep" {
+		t.Errorf("Command: got %v", params.Command)
+	}
+	if params.Resources == nil || params.Resources.MaxMemoryMB != 1024 || params.Resources.MaxCPUs != 2 {
+		t.Errorf("Resources: got %+v", params.Resources)
+	}
+}
+
+func TestBuildCreateParams_DefaultsLeaveOptionalFieldsUnset(t *testing.T) {
+	params, err := buildCreateParams(&createOptions{name: "api", image: "nginx:latest"})
+	if err != nil {
+		t.Fatalf("buildCreateParams: %v", err)
+	}
+	if params.RestartPolicy != "" || params.User != "" || params.AttestOnCreate || params.Resources != nil {
+		t.Errorf("optional fields set: %+v", params)
+	}
+}
+
+func TestBuildCreateParams_RejectsInvalidOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		opts  createOptions
+		field string
+	}{
+		{"missing name", createOptions{image: "nginx:latest"}, "name"},
+		{"missing image", createOptions{name: "api"}, "image"},
+		{"unknown restart policy", createOptions{name: "api", image: "nginx:latest", restart: "sometimes"}, "restart"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildCreateParams(&tt.opts)
+			var cfgErr ErrInvalidContainerConfig
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("expected ErrInvalidContainerConfig, got %v", err)
+			}
+			if cfgErr.Field != tt.field {
+				t.Errorf("Field: got %q, want %q", cfgErr.Field, tt.field)
+			}
+		})
+	}
+}
+
+func TestBuildCreateParams_RejectsBadMemory(t *testing.T) {
+	_, err := buildCreateParams(&createOptions{name: "api", image: "nginx:latest", memory: "lots"})
+	var memErr ErrInvalidMemorySpec
+	if !errors.As(err, &memErr) {
+		t.Fatalf("expected ErrInvalidMemorySpec, got %v", err)
 	}
 }
 

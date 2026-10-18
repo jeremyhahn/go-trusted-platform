@@ -50,6 +50,7 @@ List images in the registry.
 |---|---|---|---|---|
 | `--repository` | `-r` | string | `""` | Filter by repository name |
 | `--prefix` | `-p` | string | `""` | Filter by repository or tag prefix |
+| `--limit` | `-l` | int32 | `50` | Maximum number of images to return |
 | `--cursor` | | string | `""` | Pagination cursor for the next page |
 | `--sort-by` | | string | `name` | Sort field: `name`, `size`, `created`, `pushed` |
 | `--sort-desc` | | bool | `false` | Reverse sort order |
@@ -58,6 +59,18 @@ List images in the registry.
 ```bash
 platformctl registry list --repository library/alpine --sort-by pushed --sort-desc
 ```
+
+`--repository` names one repository exactly and is applied by the registry.
+`--prefix` and `--show-encrypted` are applied client-side to the page the
+registry returned, because the list request on the wire has no field for them:
+`--prefix` matches the start of the reference, or of the tag when
+`--repository` is set, and `--show-encrypted=false` drops images whose manifest
+carries `org.letstrust.registry.encrypted: "true"`. `Total Count` drops by the
+number of images filtered out of the page. `ENCRYPTED` and `SIGNED` are read
+from the stored manifest's `org.letstrust.registry.encrypted` and
+`org.letstrust.registry.signature` annotations. Each image's `DIGEST` is the
+SHA-256 of the manifest bytes `GET /v2/<name>/manifests/<tag>` serves, the same
+digest on every transport.
 
 ---
 
@@ -121,7 +134,9 @@ provenance matters, pass it — or pull through tooling that always does.
 
 The registry verifies the signature of every signed manifest on every pull,
 with or without `--verify` (§3), so a signed image that reaches the client has
-a signature that matched. `--verify` adds the other half: it refuses an image
+a signature that matched. Every pull also rehashes each layer and the config
+against the digests the manifest names, so blob bytes replaced in storage fail
+the pull with `ErrDigestMismatch`. `--verify` adds the other half: it refuses an image
 whose pulled manifest carries no `org.letstrust.registry.signature`
 annotation, failing with `ErrImageNotSigned` before any image byte is written.
 The check is made client-side because the pull request on the wire
@@ -167,6 +182,10 @@ platformctl registry delete registry.example.com/apps/api:1.4.1 --force --keep-u
 
 Run `--dry-run` first on anything shared. `--keep-untagged` is the safe form:
 it detaches the tag and leaves the manifest addressable by digest.
+
+There is no flag for layers: every delete reclaims the layer and config blobs
+that no surviving manifest references, and keeps the ones another image still
+uses.
 
 ---
 

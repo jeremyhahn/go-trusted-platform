@@ -333,14 +333,7 @@ func (app *App) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Conf
 	// Wire DNS registration when enabled and zone is available.
 	if effective.DNSRegister && internalZone != "" && app.DNSService != nil {
 		core.dnsRegister = func(ctx context.Context, hostname, address, zoneName string) (string, error) {
-			fqdn := hostname + "-bmc." + zoneName
-			if !strings.HasSuffix(fqdn, ".") {
-				fqdn += "."
-			}
-			if _, err := app.DNSService.Register(ctx, fqdn, address); err != nil {
-				return "", err
-			}
-			return fqdn, nil
+			return registerBMCRecord(ctx, app.DNSService, hostname, address, zoneName)
 		}
 	}
 
@@ -548,7 +541,7 @@ func runEnrollCore(
 				OK:     false,
 				Detail: regErr.Error(),
 			})
-			return result, ErrBMCEnrollCredStore{DeviceID: deviceID, Cause: regErr}
+			return result, ErrBMCEnrollDNSRegister{DeviceID: deviceID, Cause: regErr}
 		}
 		result.DNSName = dnsName
 		result.Steps = append(result.Steps, BMCEnrollStep{

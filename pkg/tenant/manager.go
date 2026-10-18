@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -568,13 +569,14 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 		slog.String("name", entity.Name),
 	)
 
-	// Step 1: Set state to deleting
-	if err := entity.SetState(StateDeleting); err != nil {
+	// Step 1: Set state to deleting. The state is transient and not stored:
+	// the IAM delete in step 4 is what persists the deletion, and a failed
+	// delete restores the cached entity as it was.
+	deleting := entity.Clone()
+	if err := deleting.SetState(StateDeleting); err != nil {
 		return err
 	}
-	if err := m.store(ctx, "DeleteTenant", entity); err != nil {
-		return err
-	}
+	m.cache.Store(id, deleting)
 
 	// Step 2: Delete DEK
 	if m.config.EnableDEKIsolation && entity.DEKPath != "" {
@@ -618,6 +620,7 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 			slog.String("tenant_id", id),
 			slog.Any("error", err),
 		)
+		m.cache.Store(id, entity)
 		return ErrStorageFailed{Operation: "DeleteTenant", Err: err}
 	}
 
@@ -1297,41 +1300,75 @@ func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Ten
 	return tenants, resp.Pagination.TotalCount, nil
 }
 
-func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
-	metadata, err := entity.platformMetadata()
+// unstoredFields names the platform record fields of entity that differ from
+// reloaded, compared by limits only: usage counters are not part of the check.
+func unstoredFields(entity, reloaded *TenantEntity) []string {
+	var fields []string
+	if entity.DisplayName != reloaded.DisplayName {
+		fields = append(fields, "display_name")
+	}
+	if entity.State != reloaded.State {
+		fields = append(fields, "state")
+	}
+	var compute, reloadedCompute ComputeQuota
+	compute.SetLimits(entity.ComputeQuota)
+	reloadedCompute.SetLimits(reloaded.ComputeQuota)
+	if compute != reloadedCompute {
+		fields = append(fields, "compute_quota")
+	}
+	var network, reloadedNetwork NetworkQuota
+	network.SetLimits(entity.NetworkQuota)
+	reloadedNetwork.SetLimits(reloaded.NetworkQuota)
+	if network != reloadedNetwork {
+		fields = append(fields, "network_quota")
+	}
+	var storage, reloadedStorage StorageQuota
+	storage.SetLimits(entity.StorageQuota)
+	reloadedStorage.SetLimits(reloaded.StorageQuota)
+	if storage != reloadedStorage {
+		fields = append(fields, "storage_quota")
+	}
+	if !maps.Equal(entity.Labels, reloaded.Labels) {
+		fields = append(fields, "labels")
+	}
+	if !maps.Equal(entity.Annotations, reloaded.Annotations) {
+		fields = append(fields, "annotations")
+	}
+	return fields
+}
+
+// store caches entity once it is what a reload rebuilds from IAM, so the
+// cache never holds a tenant state a restarted daemon would not read back
+// (docs/tenant/engineering.md §6). The pinned go-quicbaas embedded
+// handleIAMTenantUpdate (sdk/go/transport/embedded/handlers_iam.go:204-208)
+// keeps neither Metadata nor Status and writes DisplayName into the tenant's
+// canonical name, so no field of the platform record can be written: an
+// entity that differs from the reload is the declared gap
+// ErrTenantFieldNotPersisted, never a success.
+func (m *Manager) store(ctx context.Context, operation string, entity *TenantEntity) error {
+	stored, err := m.getFromIAM(ctx, entity.ID)
+	if err != nil {
+		return ErrStorageFailed{Operation: operation, Err: err}
+	}
+	reloaded, err := m.entityFromIAM(operation, stored)
 	if err != nil {
 		return err
 	}
-
-	// The display name travels in the platform record, never as IAM's
-	// DisplayName: the pinned go-quicbaas embedded handleIAMTenantUpdate
-	// (sdk/go/transport/embedded/handlers_iam.go:204-208) writes that field
-	// into the tenant's canonical name, so sending it renames the tenant.
-	req := &iam.UpdateTenantRequest{
-		Metadata: metadata,
-		Status:   entity.iamStatus(),
-	}
-
-	_, err = m.iamTenantClient.Update(ctx, entity.ID, req)
-	return err
-}
-
-// store persists the entity's platform record in IAM, then caches it, so the
-// cache never holds a tenant state IAM has not accepted and a restarted
-// daemon reads back what it last served (docs/tenant/engineering.md §6).
-func (m *Manager) store(ctx context.Context, operation string, entity *TenantEntity) error {
-	if err := m.updateInIAM(ctx, entity); err != nil {
-		return ErrStorageFailed{Operation: operation, Err: err}
+	if fields := unstoredFields(entity, reloaded); len(fields) > 0 {
+		return ErrTenantFieldNotPersisted{TenantID: entity.ID, Fields: fields}
 	}
 	m.cache.Store(entity.ID, entity)
 	return nil
 }
 
 // entityFromIAM builds the entity an IAM tenant persists: the identity fields
-// FromIAM maps, the platform record the tenant manager stored in its metadata,
-// and the DEK path.
+// FromIAM maps, the configured default quotas, the platform record a
+// transport stored in its metadata, and the DEK path.
 func (m *Manager) entityFromIAM(operation string, t *iam.Tenant) (*TenantEntity, error) {
 	entity := FromIAM(t)
+	entity.ComputeQuota = m.config.DefaultComputeQuota
+	entity.NetworkQuota = m.config.DefaultNetworkQuota
+	entity.StorageQuota = m.config.DefaultStorageQuota
 	if err := entity.restorePlatformRecord(t); err != nil {
 		return nil, ErrStorageFailed{Operation: operation, Err: err}
 	}

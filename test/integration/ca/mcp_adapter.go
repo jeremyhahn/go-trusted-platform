@@ -435,6 +435,7 @@ type mcpCACRLResp struct {
 			RevocationTime *protoTimestamp `json:"revocation_time"`
 			Reason         int32           `json:"reason"`
 		} `json:"revoked_certs"`
+		Data []byte `json:"data"`
 	} `json:"crl"`
 }
 
@@ -831,6 +832,7 @@ func (m *MCPAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 	crlResult := &GetCRLResult{}
 
 	if resp.CRL != nil {
+		crlResult.Data = resp.CRL.Data
 		crlResult.RevokedCount = resp.CRL.RevokedCount
 		if resp.CRL.LastUpdate != nil {
 			crlResult.ThisUpdate = resp.CRL.LastUpdate.toTime()
@@ -849,6 +851,10 @@ func (m *MCPAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 			}
 			crlResult.RevokedCerts = append(crlResult.RevokedCerts, rce)
 		}
+	}
+
+	if err := crlResult.setIssuerFromData("MCP"); err != nil {
+		return nil, err
 	}
 
 	return crlResult, nil

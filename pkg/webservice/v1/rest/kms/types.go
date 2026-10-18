@@ -483,6 +483,11 @@ type StoreSecretRequest struct {
 // preserve the original wire format on responses.
 type SecretValue []byte
 
+// SecretValueKey is the data-map key every platform transport stores a
+// secret's bytes under, so a secret stored over one transport reads back
+// over any other (docs/kms/api.md §4).
+const SecretValueKey = "value"
+
 // UnmarshalJSON implements json.Unmarshaler. The standard library's
 // []byte decoder requires base64; this override falls back to
 // interpreting any decode failure as a plain string so the WebUI's

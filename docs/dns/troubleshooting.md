@@ -278,8 +278,8 @@ dig _acme-challenge.example.com TXT
 # 4. Check DNSSEC on challenge record
 dig @localhost -p 8053 _acme-challenge.example.com TXT +dnssec
 
-# 5. Verify ACME configuration
-platformctl acme config show
+# 5. Verify ACME configuration: the acme.client section of the platformd
+#    config file (platformctl acme has no config verb: docs/ca/cli.md §3)
 ```
 
 ### Query Security Violations

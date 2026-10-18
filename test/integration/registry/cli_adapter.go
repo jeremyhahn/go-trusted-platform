@@ -239,7 +239,7 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, e
 	}
 
 	if opts.TagPrefix != "" {
-		args = append(args, "--tag-prefix", opts.TagPrefix)
+		args = append(args, "--prefix", opts.TagPrefix)
 	}
 
 	if opts.Limit > 0 {
@@ -251,7 +251,7 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, e
 	}
 
 	if opts.IncludeEncrypted {
-		args = append(args, "--include-encrypted")
+		args = append(args, "--show-encrypted")
 	}
 
 	if opts.SortBy != "" {
@@ -288,9 +288,8 @@ func (c *CLIAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions)
 		args = append(args, "--force")
 	}
 
-	if opts.DeleteLayers {
-		args = append(args, "--delete-layers")
-	}
+	// DeleteLayers has no flag: every delete reclaims the layer and config
+	// blobs no surviving manifest references (docs/registry/cli.md §6).
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {

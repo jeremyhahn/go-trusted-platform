@@ -244,7 +244,7 @@ whatever `configuration.md` shows.
 | `replace-certificate` | `ReplaceCertificate` | `true` | Deploy a platform-issued certificate |
 | `backup` | `Backup` | `true` | Capture the factory certificate before replacing it |
 | `rotate-password` | `RotatePassword` | `false` | Disruptive; opt in explicitly |
-| `dns-register` | `DNSRegister` | `true` | A record `<hostname>-bmc.<zone>` |
+| `dns-register` | `DNSRegister` | `true` | A record `<hostname>-bmc.<zone>` in the internal zone, pointing at the BMC's IPv4 address; written directly, so `dns.allow-registration` does not gate it; re-enrolling updates the record (`ErrBMCEnrollDNSRegister` on failure) |
 | `dane-publish` | `DANEPublish` | `true` | TLSA records; needs the previous two |
 
 `Config.effectiveEnrollment()` returns `Enrollment` when non-nil, else

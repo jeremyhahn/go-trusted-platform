@@ -14,10 +14,12 @@
 package registry
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 func TestNewListCommand(t *testing.T) {
@@ -485,5 +487,62 @@ func TestBuildReference_BothEmpty(t *testing.T) {
 
 	if ref != "" {
 		t.Errorf("expected empty string, got %q", ref)
+	}
+}
+
+func TestConvertListDomainResponse_ReadsEncryptedAndSignedAnnotations(t *testing.T) {
+	resp := &regsvc.ListArtifactsResult{Artifacts: []*regsvc.Artifact{
+		{Repository: "apps/web", Tag: "v1", Annotations: map[string]string{
+			regsvc.ManifestAnnotationEncrypted: "true",
+			regsvc.ManifestAnnotationSignature: "c2ln",
+		}},
+		{Repository: "apps/web", Tag: "v2"},
+	}}
+
+	result := convertListDomainResponse(resp)
+
+	if !result.Images[0].Encrypted || !result.Images[0].Signed {
+		t.Errorf("v1 encrypted=%v signed=%v, want both true", result.Images[0].Encrypted, result.Images[0].Signed)
+	}
+	if result.Images[1].Encrypted || result.Images[1].Signed {
+		t.Errorf("v2 encrypted=%v signed=%v, want both false", result.Images[1].Encrypted, result.Images[1].Signed)
+	}
+}
+
+func TestFilterListResult(t *testing.T) {
+	tests := []struct {
+		name          string
+		repository    string
+		prefix        string
+		showEncrypted bool
+		want          []string
+	}{
+		{"no filter", "", "", true, []string{"apps/web:latest", "apps/web:v1", "other/image:v1"}},
+		{"hide encrypted", "", "", false, []string{"apps/web:latest", "other/image:v1"}},
+		{"repository prefix", "", "apps/", true, []string{"apps/web:latest", "apps/web:v1"}},
+		{"tag prefix within a repository", "apps/web", "v", true, []string{"apps/web:v1"}},
+		{"prefix matching nothing", "", "missing", true, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &ListResult{TotalCount: 3, Images: []*ImageListItem{
+				{Reference: "apps/web:latest"},
+				{Reference: "apps/web:v1", Encrypted: true},
+				{Reference: "other/image:v1"},
+			}}
+
+			filterListResult(result, tt.repository, tt.prefix, tt.showEncrypted)
+
+			got := make([]string, 0, len(result.Images))
+			for _, img := range result.Images {
+				got = append(got, img.Reference)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("images = %v, want %v", got, tt.want)
+			}
+			if result.TotalCount != len(tt.want) {
+				t.Errorf("TotalCount = %d, want %d", result.TotalCount, len(tt.want))
+			}
+		})
 	}
 }

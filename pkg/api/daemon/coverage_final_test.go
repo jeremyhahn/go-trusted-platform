@@ -86,9 +86,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrIAKCertificateNotFound", ErrIAKCertificateNotFound{}, "IAK certificate not installed"},
 		{"ErrTPM2OperationFailed", ErrTPM2OperationFailed{Operation: "read", Cause: sentinel}, "TPM2 operation read failed"},
 
-		// KMS errors
-		{"ErrKMSOperationNotImplemented", ErrKMSOperationNotImplemented{Operation: "ImportKey"}, "KMS operation not implemented: ImportKey"},
-
 		// Service unavailable
 		{"ErrServiceUnavailable", ErrServiceUnavailable{Service: "ca"}, "service unavailable: ca"},
 

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
+	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -89,8 +90,9 @@ type SecretsListRequest struct {
 
 // SecretsListResponse represents a secrets listing response.
 type SecretsListResponse struct {
-	SecretIDs []string `codec:"secret_ids"`
-	Timestamp int64    `codec:"timestamp"`
+	SecretIDs  []string `codec:"secret_ids"`
+	NextCursor string   `codec:"next_cursor"`
+	Timestamp  int64    `codec:"timestamp"`
 }
 
 // SecretsDeleteRequest represents a secret deletion request.
@@ -258,7 +260,10 @@ func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []by
 	}
 
 	limit := listReq.Limit
-	if limit <= 0 {
+	if limit < 0 {
+		return h.errorResponse(quicwire.StatusInvalidRequest, &restkms.ErrInvalidRequest{Field: "limit", Reason: "must not be negative"})
+	}
+	if limit == 0 {
 		limit = kmsDefaultLimit
 	}
 	if limit > kmsMaxLimit {
@@ -280,8 +285,9 @@ func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []by
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsListResponse{
-		SecretIDs: secretIDs,
-		Timestamp: time.Now().Unix(),
+		SecretIDs:  secretIDs,
+		NextCursor: pbResp.GetNextCursor(),
+		Timestamp:  time.Now().Unix(),
 	})
 }
 

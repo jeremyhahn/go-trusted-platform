@@ -282,6 +282,28 @@ func (e ErrCLIOutputParseFailed) Error() string {
 	return fmt.Sprintf("failed to parse CLI output for %s: %v (output: %s)", e.Operation, e.Err, e.Output)
 }
 
+// ErrCLIVerbNotDocumented is returned when an adapter operation has no
+// platformctl verb: the acme command tree is register, renew, download and
+// rotate-key (docs/ca/cli.md §3).
+type ErrCLIVerbNotDocumented struct {
+	Operation string
+}
+
+func (e ErrCLIVerbNotDocumented) Error() string {
+	return fmt.Sprintf("platformctl acme has no verb for %s: the CLI covers register, renew, download and rotate-key (docs/ca/cli.md §3)", e.Operation)
+}
+
+// ErrCLIFlagNotDocumented is returned when an adapter option has no flag on
+// the documented platformctl verb.
+type ErrCLIFlagNotDocumented struct {
+	Verb   string
+	Option string
+}
+
+func (e ErrCLIFlagNotDocumented) Error() string {
+	return fmt.Sprintf("platformctl acme %s has no flag for %s (docs/ca/cli.md §3)", e.Verb, e.Option)
+}
+
 // ErrAccountNotFound indicates an ACME account was not found.
 type ErrAccountNotFound struct {
 	AccountID string

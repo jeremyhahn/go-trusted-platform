@@ -38,6 +38,9 @@ type createOptions struct {
 	workDir     string
 	tpmAccess   bool
 	start       bool
+	user        string
+	restart     string
+	attest      bool
 }
 
 // newCreateCommand creates the container create subcommand
@@ -100,6 +103,9 @@ Examples:
 	cmd.Flags().StringVarP(&opts.workDir, "workdir", "w", "", "working directory inside container")
 	cmd.Flags().BoolVar(&opts.tpmAccess, "tpm-access", false, "mount host TPM device into container")
 	cmd.Flags().BoolVar(&opts.start, "start", false, "start container immediately after creation")
+	cmd.Flags().StringVarP(&opts.user, "user", "u", "", "user to run as inside container (name or uid[:gid])")
+	cmd.Flags().StringVar(&opts.restart, "restart", "", "restart policy (no, on-failure, always, unless-stopped)")
+	cmd.Flags().BoolVar(&opts.attest, "attest", false, "TPM-attest the container after creation")
 
 	// Mark required flags
 	cli.MarkFlagsRequired(cmd, "name", "image")
@@ -109,12 +115,9 @@ Examples:
 
 // runCreate executes the container create command
 func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
-	// Validate options
-	if opts.name == "" {
-		return ErrInvalidContainerConfig{Field: "name", Reason: "name is required"}
-	}
-	if opts.image == "" {
-		return ErrInvalidContainerConfig{Field: "image", Reason: "image is required"}
+	params, err := buildCreateParams(opts)
+	if err != nil {
+		return err
 	}
 
 	base, err := cli.NewBaseCommand(flags)
@@ -129,65 +132,6 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 	}
 
 	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
-
-	// Parse environment variables
-	envVars, err := parseEnvVars(opts.env)
-	if err != nil {
-		return err
-	}
-
-	// Parse labels
-	labels, err := parseLabels(opts.label)
-	if err != nil {
-		return err
-	}
-
-	// Parse port mappings
-	ports, err := parsePortMappings(opts.port)
-	if err != nil {
-		return err
-	}
-
-	// Parse volume mounts
-	volumes, err := parseMountSpecs(opts.mount)
-	if err != nil {
-		return err
-	}
-
-	// Parse resource limits
-	memoryMB, err := parseMemory(opts.memory)
-	if err != nil {
-		return err
-	}
-
-	cpuLimit, err := parseCPUCount(opts.cpu)
-	if err != nil {
-		return err
-	}
-
-	// Build create params
-	params := &computesvc.CreateContainerParams{
-		Name:       opts.name,
-		Image:      opts.image,
-		Env:        envVars,
-		Labels:     labels,
-		Ports:      ports,
-		Volumes:    volumes,
-		Privileged: opts.privileged,
-		Network:    opts.networkMode,
-		Command:    opts.command,
-		WorkingDir: opts.workDir,
-		TpmAccess:  opts.tpmAccess,
-		Start:      opts.start,
-	}
-
-	// Set resource limits if specified
-	if memoryMB > 0 || cpuLimit > 0 {
-		params.Resources = &computesvc.ResourceLimits{
-			MaxMemoryMB: memoryMB,
-			MaxCPUs:     cpuLimit,
-		}
-	}
 
 	ctx := base.Context()
 	container, err := sdkClient.CreateContainerDomain(ctx, params)
@@ -210,6 +154,89 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
+}
+
+// buildCreateParams validates the create flags and turns them into the SDK
+// create request.
+func buildCreateParams(opts *createOptions) (*computesvc.CreateContainerParams, error) {
+	// Validate options
+	if opts.name == "" {
+		return nil, ErrInvalidContainerConfig{Field: "name", Reason: "name is required"}
+	}
+	if opts.image == "" {
+		return nil, ErrInvalidContainerConfig{Field: "image", Reason: "image is required"}
+	}
+
+	// Parse environment variables
+	envVars, err := parseEnvVars(opts.env)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse labels
+	labels, err := parseLabels(opts.label)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse port mappings
+	ports, err := parsePortMappings(opts.port)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse volume mounts
+	volumes, err := parseMountSpecs(opts.mount)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse resource limits
+	memoryMB, err := parseMemory(opts.memory)
+	if err != nil {
+		return nil, err
+	}
+
+	cpuLimit, err := parseCPUCount(opts.cpu)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build create params
+	params := &computesvc.CreateContainerParams{
+		Name:           opts.name,
+		Image:          opts.image,
+		Env:            envVars,
+		Labels:         labels,
+		Ports:          ports,
+		Volumes:        volumes,
+		Privileged:     opts.privileged,
+		Network:        opts.networkMode,
+		Command:        opts.command,
+		WorkingDir:     opts.workDir,
+		TpmAccess:      opts.tpmAccess,
+		Start:          opts.start,
+		User:           opts.user,
+		AttestOnCreate: opts.attest,
+	}
+
+	if opts.restart != "" {
+		policy, ok := computesvc.ParseRestartPolicy(opts.restart)
+		if !ok {
+			return nil, ErrInvalidContainerConfig{Field: "restart", Reason: "restart policy must be no, on-failure, always or unless-stopped"}
+		}
+		params.RestartPolicy = policy
+	}
+
+	// Set resource limits if specified
+	if memoryMB > 0 || cpuLimit > 0 {
+		params.Resources = &computesvc.ResourceLimits{
+			MaxMemoryMB: memoryMB,
+			MaxCPUs:     cpuLimit,
+		}
+	}
+
+	return params, nil
 }
 
 // printContainerDetails prints container details in a formatted way

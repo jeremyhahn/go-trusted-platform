@@ -421,6 +421,10 @@ func (u *UnixAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 		}
 	}
 
+	if err := result.setIssuerFromData("Unix"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 

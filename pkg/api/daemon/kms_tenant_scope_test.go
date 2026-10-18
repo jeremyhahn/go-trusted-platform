@@ -210,7 +210,7 @@ func mcpSecretsCalls(provider *MCPServiceProvider) map[string]func(context.Conte
 			return err
 		},
 		"SecretList": func(ctx context.Context) error {
-			_, err := provider.SecretList(ctx, 10)
+			_, err := provider.SecretList(ctx, 10, "")
 			return err
 		},
 		"SecretDelete": func(ctx context.Context) error {

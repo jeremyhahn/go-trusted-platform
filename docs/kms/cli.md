@@ -88,10 +88,25 @@ and exits 0.
 | `--no-color` | | `false` | `NO_COLOR` |
 
 `--transport` takes `unix`, `grpc`, `rest`, `quic`, `mcp` or `embedded`. Every
-implemented verb opens an SDK client on that transport and fails with exit 1
-when no daemon is reachable — including `crypto hash` and `crypto random`, which
-run server-side. No implemented verb works offline. The not-implemented verbs
-never open a client.
+implemented verb opens an SDK client and fails with exit 1 when no daemon is
+reachable — including `crypto hash` and `crypto random`, which run server-side.
+No implemented verb works offline. The not-implemented verbs never open a
+client.
+
+**Two connections.** Most verbs call platformd's `KeyManagementService` on the
+`--transport` connection (`Client.KMS()`). The verbs that platform service has
+no RPC for open the CLI's quicbaas client (`Client.QuicBaaS()`) instead: `kms
+status`, `key status`, `key algorithms`, `key csr` (its public key; the
+signature goes through platformd), `key policy`, `key metadata`, `key revoke`,
+and every `dek` and `secrets` verb. `--transport` does not select that
+connection. Its address and transport follow the rules in
+[barrier cli.md §2](../barrier/cli.md#2-where-the-verbs-go): a local context
+dials `/run/quicbaas.sock` unless `quicbaas_addr` or `PLATFORMCTL_QUICBAAS_ADDR`
+says otherwise. Under embedded quicbaas (the daemon default) there is no
+quicbaasd and nothing serves that socket; platformd serves the
+`quicbaas.kms.v1` services on its own TCP and Unix listeners
+([api.md §1](api.md#1-the-six-transports)), so point `quicbaas_addr` at
+platformd's socket with `quicbaas_transport: unix`.
 
 **Output format.** `--output` selects `table`, `json` or `yaml`. Verbs that
 declare their own `-o, --output` (an output *file*) shadow it: on `crypto
@@ -538,7 +553,7 @@ platformctl kms crypto batch encrypt --key-id tenant-a-kek --input items.json -o
 ### 7.1 `kms dek`
 
 Every `dek` verb calls the go-quicbaas SDK DEK client
-(`Security().DEK()`), so it works on every transport the CLI dials. An SDK
+(`Security().DEK()`) on the quicbaas connection (§3). An SDK
 error exits 1 with `ErrDEKOperationFailed` naming the verb and path; a success
 that carries no DEK exits 1 with `ErrDEKEmptyResponse`. Output follows the
 global `-o` format; timestamps are Unix seconds, and an unset one is `0` or,
@@ -572,7 +587,7 @@ platformctl kms dek list --prefix /tenant/app --recursive -o json
 ### 7.2 `kms secrets`
 
 Every `secrets` verb calls the go-quicbaas SDK secrets client
-(`Security().Secrets()`), so it works on every transport the CLI dials. An SDK
+(`Security().Secrets()`) on the quicbaas connection (§3). An SDK
 error exits 1 with `ErrSecretsOperationFailed` naming the verb and secret; a
 success that carries no secret exits 1 with `ErrSecretsEmptyResponse`. Bad
 input — a missing `--value`, invalid `--base64` data, a version that is not a

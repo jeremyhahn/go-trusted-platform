@@ -196,7 +196,7 @@ status vocabulary and the other transports map onto the same set:
 | `0x06` | `StatusAlreadyExists` | 409 | `ErrImageExists` |
 | `0x07` | `StatusPermissionDenied` | 403 | `ErrAccessDenied`, `ErrPCRMismatch`, `ErrAIKNotAllowed` |
 | `0x08` | `StatusResourceExhausted` | 429 | Concurrency limits exceeded |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDigest` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDigest`; a push whose layer or config bytes do not hash to the declared digest (`ErrDigestMismatch`) |
 | `0x0A` | `StatusUnavailable` | 503 | Registry service not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | — |
 

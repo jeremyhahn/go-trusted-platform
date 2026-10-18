@@ -15,6 +15,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
@@ -129,6 +130,11 @@ func (o *QEMUOrchestrator) changeRunState(
 	}
 
 	runControl, err := vmRunControlFor(ctx, inst)
+	if errors.Is(err, qemu.ErrVMNotRunning) {
+		// The QEMU process exited on its own: the lifecycle still says
+		// running or suspended (recordExit), but there is no VM to command.
+		return &SentinelCauseError{Sentinel: ErrInstanceNotRunning, Cause: err}
+	}
 	if err != nil {
 		return err
 	}

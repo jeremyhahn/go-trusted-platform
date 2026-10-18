@@ -384,8 +384,9 @@ dig TXT _acme-challenge.example.com @localhost -p 8053 +dnssec
 # Check zone is loaded
 platformctl dns zone show example.com.
 
-# View challenge status
-platformctl acme challenge status --domain example.com
+# View the challenge record the DNS provider wrote (platformctl acme has no
+# challenge verb: docs/ca/cli.md §3)
+platformctl dns record list example.com
 
 # Check DNS propagation externally
 dig TXT _acme-challenge.example.com @8.8.8.8

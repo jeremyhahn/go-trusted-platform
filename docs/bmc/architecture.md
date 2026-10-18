@@ -163,7 +163,8 @@ platformctl ──gRPC──▶ BMCService.EnrollBMC ──▶ App.EnrollBMC(dev
   step "replace-certificate" issueBMCCertificateCore: fresh ECDSA key → CSR →
                              ACME dns-01 (or local CA) → AutoCertManager
                              .ReplaceWebCertificate → BMC restarts its web server
-  step "dns-register"        A record  <hostname>-bmc.<zone>
+  step "dns-register"        A record  <hostname>-bmc.<zone> written into the
+                             internal zone (not dns.allow-registration gated)
   step "dane-publish"        TLSA records for the deployed leaf (and CA)
   step "device-stamp"        Device.BMCEnrollment persisted
 ```

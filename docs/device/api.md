@@ -867,6 +867,13 @@ profile, which is an absence verdict), or a verification abandoned by a
 cancelled or expired request (`ErrAttestationFailed`, which wraps the context
 error so `errors.Is(err, context.Canceled)` still matches).
 
+Unusable evidence is the caller's to correct, so it is a client error on every
+transport: `ErrInvalidAttestationEvidence` (evidence that is not JSON, or has
+no quote, signature, nonce or PCR values, or no channel binding where one is
+required) is `INVALID_ARGUMENT` on gRPC and Unix, QUIC `0x09`, MCP `InvalidParams`
+and `400` on REST: the error reports its own class (`GRPCStatus`), so MCP,
+which classifies the typed error it is handed, agrees. Until #949 it fell through to `Internal` / `500`.
+
 Request body — `evidence` is the JSON-encoded `DeviceQuoteEvidence`
 (base64 in JSON), identical on every transport so the wire contract does not
 fork. `pcrs` are the values the device **read** for the quoted selection; the
@@ -1490,7 +1497,7 @@ On MCP, all 20 device-related tool names carry a permission — see §6.
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |
 | `0x06` | `StatusAlreadyExists` | 409 | `ErrDeviceSerialExists` — creating a device with a serial another device carries (§2). `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned: creating a second template with an existing name succeeds. |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct`, `ErrInvalidAttestationEvidence` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | None from a device operation. `attest` answered it until #226 wired the live QUIC dispatcher to the shared verifier; `deactivate`, `get_metrics` and `attributes` until #317 retired the first two and left `0x6D` to IDevID (§2) |
 

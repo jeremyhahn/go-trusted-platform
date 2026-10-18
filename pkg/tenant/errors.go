@@ -17,6 +17,7 @@ package tenant
 
 import (
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -176,6 +177,33 @@ type ErrBarrierNotSupported struct {
 
 func (e ErrBarrierNotSupported) Error() string {
 	return fmt.Sprintf("barrier operation not supported: %s", e.Operation)
+}
+
+// ErrTenantFieldNotPersisted is the declared gap for the tenant fields the
+// pinned go-quicbaas SDK cannot store: its embedded handleIAMTenantUpdate
+// keeps neither Metadata nor Status, and tenantToSDK returns neither
+// (docs/tenant/engineering.md §6). The display name is no exception: the
+// same handler writes DisplayName into the tenant's name, and tenantToSDK
+// never returns a display name. A write that would leave any of Fields
+// different from what a reload rebuilds from the IAM tenant alone is
+// refused with this error, so no caller is told a value was saved when it
+// would be gone after a restart. Fields name the platform record fields
+// (display_name, state, compute_quota, network_quota, storage_quota,
+// labels, annotations).
+type ErrTenantFieldNotPersisted struct {
+	TenantID string
+	Fields   []string
+}
+
+func (e ErrTenantFieldNotPersisted) Error() string {
+	return fmt.Sprintf("tenant %s: %s cannot be stored: declared gap, the pinned go-quicbaas IAM tenant update persists neither metadata nor status",
+		e.TenantID, strings.Join(e.Fields, ", "))
+}
+
+// GRPCStatus classifies the declared gap as Unimplemented, so gRPC, Unix,
+// QUIC and MCP answer it as REST's 501.
+func (e ErrTenantFieldNotPersisted) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
 }
 
 // ErrNameLookupDenied is returned when a caller other than the system tenant

@@ -96,6 +96,59 @@ func TestRMCPSession_FullHandshake(t *testing.T) {
 	}
 }
 
+func TestRMCPSession_CloseSendsCloseSession(t *testing.T) {
+	sim := startSim(t, "admin", simPassword)
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: simPassword,
+		Protocol: bmc.ProtocolIPMI,
+	}
+
+	session := bmc.NewTestRMCPSession(config, slog.Default())
+	if err := session.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	if got := sim.OpenSessions(); got != 1 {
+		t.Fatalf("OpenSessions() after Open = %d, want 1", got)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+	if got := sim.OpenSessions(); got != 0 {
+		t.Errorf("OpenSessions() after Close = %d, want 0: Close Session never reached the BMC", got)
+	}
+}
+
+func TestRMCPSession_SendAfterCloseIsRefused(t *testing.T) {
+	sim := startSim(t, "admin", simPassword)
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: simPassword,
+		Protocol: bmc.ProtocolIPMI,
+	}
+
+	session := bmc.NewTestRMCPSession(config, slog.Default())
+	if err := session.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Errorf("second Close() error: %v, want nil", err)
+	}
+	if _, err := session.Send(bmc.NetFnApp, bmc.CmdCloseSession, nil); !errors.As(err, &bmc.ErrSessionClosed{}) {
+		t.Errorf("Send() after Close error = %v, want ErrSessionClosed", err)
+	}
+}
+
 func TestRMCPSession_FullHandshake_BadPassword(t *testing.T) {
 	sim := startSim(t, "admin", "correct_password")
 
@@ -446,4 +499,34 @@ func TestIPMIClient_SetBootDevice_Persistent_Simulator(t *testing.T) {
 	if err := client.SetBootDevice(context.Background(), bmc.BootDeviceDisk, true); err != nil {
 		t.Fatalf("SetBootDevice(persistent=true): %v", err)
 	}
+}
+
+// ListUsers walks every slot the BMC reports and returns the populated ones;
+// the simulator's admin account is among them.
+func TestIPMIUserManager_ListUsers_Simulator(t *testing.T) {
+	sim := startSim(t, "admin", simPassword)
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: simPassword,
+		Protocol: bmc.ProtocolIPMI,
+	}
+	mgr, err := bmc.NewUserManager(context.Background(), config, slog.Default())
+	if err != nil {
+		t.Fatalf("NewUserManager: %v", err)
+	}
+	t.Cleanup(func() { mgr.Close() })
+
+	users, err := mgr.ListUsers(context.Background())
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	for _, u := range users {
+		if u.Username == "admin" {
+			return
+		}
+	}
+	t.Fatalf("ListUsers = %+v, want the admin account", users)
 }

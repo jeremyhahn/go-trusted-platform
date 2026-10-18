@@ -138,8 +138,8 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // =============================================================================
 
 // Create creates a new container via CLI.
-// Supported options: name, image, command, environment, labels, workdir, user,
-// privileged, network mode, memory, cpus, restart policy, and attestation.
+// Every CreateOptions field maps to a documented `container create` flag
+// (docs/compute/cli.md).
 func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
 	if opts.Name == "" {
 		return nil, ErrCommandFailed{Command: "container create", Output: "container name is required", Err: fmt.Errorf("empty name")}
@@ -148,10 +148,10 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 		return nil, ErrCommandFailed{Command: "container create", Output: "container image is required", Err: fmt.Errorf("empty image")}
 	}
 
-	args := []string{"container", "create", opts.Name, "--image", opts.Image}
+	args := []string{"container", "create", "--name", opts.Name, "--image", opts.Image}
 
-	if len(opts.Command) > 0 {
-		args = append(args, "--command", strings.Join(opts.Command, " "))
+	for _, arg := range opts.Command {
+		args = append(args, "--cmd", arg)
 	}
 
 	for k, v := range opts.Environment {
@@ -160,6 +160,22 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 
 	for k, v := range opts.Labels {
 		args = append(args, "--label", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	for _, m := range opts.Mounts {
+		mount := m.Source + ":" + m.Target
+		if m.ReadOnly {
+			mount += ":ro"
+		}
+		args = append(args, "--mount", mount)
+	}
+
+	for _, p := range opts.ExposedPorts {
+		port := fmt.Sprintf("%d:%d", p.HostPort, p.ContainerPort)
+		if p.Protocol != "" {
+			port += "/" + p.Protocol
+		}
+		args = append(args, "--port", port)
 	}
 
 	if opts.WorkingDir != "" {
@@ -175,15 +191,16 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 	}
 
 	if opts.NetworkMode != "" {
-		args = append(args, "--network", opts.NetworkMode)
+		args = append(args, "--network-mode", opts.NetworkMode)
 	}
 
+	// Memory is in bytes; the CLI takes a size with a unit suffix.
 	if opts.Memory > 0 {
-		args = append(args, "--memory", strconv.FormatInt(opts.Memory, 10))
+		args = append(args, "--memory", strconv.FormatInt(opts.Memory, 10)+"b")
 	}
 
 	if opts.CPUs > 0 {
-		args = append(args, "--cpus", strconv.FormatFloat(opts.CPUs, 'f', 2, 64))
+		args = append(args, "--cpu", strconv.FormatFloat(opts.CPUs, 'f', -1, 64))
 	}
 
 	if opts.RestartPolicy != "" {
@@ -286,15 +303,15 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, 
 	}
 
 	if opts.StateFilter != "" {
-		args = append(args, "--state", string(opts.StateFilter))
+		args = append(args, "--filter", "state="+string(opts.StateFilter))
 	}
 
 	if opts.NameFilter != "" {
-		args = append(args, "--name", opts.NameFilter)
+		args = append(args, "--filter", "name="+opts.NameFilter)
 	}
 
 	for k, v := range opts.Filters {
-		args = append(args, "--filter", fmt.Sprintf("%s=%s", k, v))
+		args = append(args, "--filter", fmt.Sprintf("label=%s=%s", k, v))
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -337,11 +354,11 @@ func (c *CLIAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]st
 	}
 
 	if !opts.Stdout && opts.Stderr {
-		args = append(args, "--stderr-only")
+		args = append(args, "--stdout=false")
 	}
 
 	if opts.Stdout && !opts.Stderr {
-		args = append(args, "--stdout-only")
+		args = append(args, "--stderr=false")
 	}
 
 	output, err := c.runCommand(ctx, args...)

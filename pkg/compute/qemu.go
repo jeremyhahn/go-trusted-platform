@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -678,8 +679,25 @@ func (o *QEMUOrchestrator) StopWithOptions(ctx context.Context, instanceID strin
 	qemuInst.instance.State = StateStopping
 	qemuInst.instance.UpdatedAt = time.Now()
 
-	// Stop VM
-	if err := stopVMProcess(qemuInst, opts); err != nil {
+	// Stop VM. A process that already exited on its own leaves nothing to
+	// stop: Start's wait goroutine has returned, so the stop is recorded
+	// here instead of by recordExit.
+	err = stopVMProcess(qemuInst, opts)
+	if errors.Is(err, qemu.ErrVMNotRunning) {
+		if qemuInst.cancelFunc != nil {
+			qemuInst.cancelFunc()
+		}
+		qemuInst.mu.Unlock()
+		qemuInst.waitGroup.Wait()
+		// A process that exited between the state check and the stop was
+		// recorded by the wait goroutine already.
+		if state, stateErr := o.lifecycle.GetState(instanceID); stateErr == nil && state == StateStopping {
+			o.recordExit(instanceID, qemuInst)
+		}
+		o.logger.Infof("Stopped VM instance %s; its QEMU process had already exited", instanceID)
+		return nil
+	}
+	if err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()

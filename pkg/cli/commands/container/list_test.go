@@ -116,6 +116,7 @@ func TestParseFilters(t *testing.T) {
 		expectErr   bool
 		expectState bool
 		expectLabel bool
+		expectName  string
 	}{
 		{
 			name:        "empty filters",
@@ -143,7 +144,8 @@ func TestParseFilters(t *testing.T) {
 			filters:     []string{"name=mycontainer"},
 			expectErr:   false,
 			expectState: false,
-			expectLabel: true,
+			expectLabel: false,
+			expectName:  "mycontainer",
 		},
 		{
 			name:        "invalid filter format",
@@ -170,7 +172,7 @@ func TestParseFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			selector, states, err := parseFilters(tt.filters)
+			got, err := parseFilters(tt.filters)
 
 			if tt.expectErr {
 				if err == nil {
@@ -183,12 +185,16 @@ func TestParseFilters(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if tt.expectState && len(states) == 0 {
-				t.Error("expected states, got none")
+			if tt.expectState != (len(got.states) > 0) {
+				t.Errorf("states: got %v, expectState %v", got.states, tt.expectState)
 			}
 
-			if tt.expectLabel && selector == nil {
-				t.Error("expected selector, got nil")
+			if tt.expectLabel != (len(got.labels) > 0) {
+				t.Errorf("labels: got %v, expectLabel %v", got.labels, tt.expectLabel)
+			}
+
+			if got.namePrefix != tt.expectName {
+				t.Errorf("namePrefix: got %q, want %q", got.namePrefix, tt.expectName)
 			}
 		})
 	}
@@ -197,21 +203,22 @@ func TestParseFilters(t *testing.T) {
 func TestParseFilters_MultipleFilters(t *testing.T) {
 	filters := []string{"state=running", "label=app=myapp", "name=test"}
 
-	selector, states, err := parseFilters(filters)
+	got, err := parseFilters(filters)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(states) != 1 {
-		t.Errorf("expected 1 state, got %d", len(states))
+	if len(got.states) != 1 {
+		t.Errorf("expected 1 state, got %d", len(got.states))
 	}
 
-	if selector == nil {
-		t.Fatal("expected selector, got nil")
+	// name selects by name prefix, not by label.
+	if len(got.labels) != 1 || got.labels["app"] != "myapp" {
+		t.Errorf("expected only app=myapp in labels, got %v", got.labels)
 	}
 
-	if len(selector) != 2 {
-		t.Errorf("expected 2 labels in selector, got %d", len(selector))
+	if got.namePrefix != "test" {
+		t.Errorf("expected name prefix test, got %q", got.namePrefix)
 	}
 }
 
