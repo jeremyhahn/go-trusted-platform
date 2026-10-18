@@ -15,17 +15,20 @@ package daemon
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // newIPAMToolsWithPool returns IPAM tools over an in-memory allocator that
@@ -60,13 +63,12 @@ func TestGatewayIPAMTools_PoolCreate(t *testing.T) {
 	t.Run("refuses a malformed cidr or gateway", func(t *testing.T) {
 		tools, _ := newIPAMToolsWithPool(t)
 		ctx := context.Background()
-		var wrapped *WrappedError
 
 		_, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "x", CIDR: "not-a-cidr"})
-		assert.True(t, errors.As(err, &wrapped), "got %T: %v", err, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "got %T: %v", err, err)
 
 		_, err = tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "x", CIDR: "10.8.0.0/24", Gateway: "nope"})
-		assert.True(t, errors.As(err, &wrapped), "got %T: %v", err, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "got %T: %v", err, err)
 	})
 }
 
@@ -128,9 +130,8 @@ func TestGatewayIPAMTools_PoolUpdate(t *testing.T) {
 		_, err := tools.GatewayIPAMPoolUpdate(ctx, "missing", &mcp.IPAMPoolUpdateRequest{Name: "x"})
 		assert.Error(t, err)
 
-		var wrapped *WrappedError
 		_, err = tools.GatewayIPAMPoolUpdate(ctx, pool.ID, &mcp.IPAMPoolUpdateRequest{Gateway: "nope"})
-		assert.True(t, errors.As(err, &wrapped), "got %T: %v", err, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "got %T: %v", err, err)
 	})
 }
 
@@ -152,17 +153,54 @@ func TestGatewayIPAMTools_AllocateReleaseAllocations(t *testing.T) {
 		assert.Equal(t, alloc.IP, allocs[0].(*ipam.Allocation).IP)
 
 		require.NoError(t, tools.GatewayIPAMRelease(ctx, alloc.IP.String()))
+
+		// The memory backend keeps the released allocation for audit; the
+		// list must not, as GatewayService.ListAllocations does not (#949).
+		allocs, err = tools.GatewayIPAMAllocations(ctx, pool.ID)
+		require.NoError(t, err)
+		assert.Empty(t, allocs, "a released address is not listed")
+	})
+
+	t.Run("lists every pool when no pool is given", func(t *testing.T) {
+		tools, pool := newIPAMToolsWithPool(t)
+		other, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{
+			Name: "other",
+			CIDR: "10.8.0.0/24",
+		})
+		require.NoError(t, err)
+
+		_, err = tools.GatewayIPAMAllocate(ctx, pool.ID, "dev-1", "")
+		require.NoError(t, err)
+		_, err = tools.GatewayIPAMAllocate(ctx, other.(*ipam.Pool).ID, "dev-2", "")
+		require.NoError(t, err)
+
+		allocs, err := tools.GatewayIPAMAllocations(ctx, "")
+		require.NoError(t, err)
+		devices := make([]string, 0, len(allocs))
+		for _, a := range allocs {
+			devices = append(devices, a.(*ipam.Allocation).DeviceID)
+		}
+		assert.ElementsMatch(t, []string{"dev-1", "dev-2"}, devices)
 	})
 
 	t.Run("refuses an unknown pool and a malformed address", func(t *testing.T) {
 		tools, _ := newIPAMToolsWithPool(t)
 
 		_, err := tools.GatewayIPAMAllocate(ctx, "missing", "dev-1", "")
-		assert.Error(t, err)
+		assert.Equal(t, codes.NotFound, status.Code(err), "got %T: %v", err, err)
 
-		var wrapped *WrappedError
 		err = tools.GatewayIPAMRelease(ctx, "not-an-ip")
-		assert.True(t, errors.As(err, &wrapped), "got %T: %v", err, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "got %T: %v", err, err)
+	})
+
+	t.Run("answers NotFound as gRPC does, not Internal", func(t *testing.T) {
+		tools, _ := newIPAMToolsWithPool(t)
+
+		_, err := tools.GatewayIPAMAllocations(ctx, "missing")
+		assert.Equal(t, codes.NotFound, status.Code(err), "unknown pool: %v", err)
+
+		err = tools.GatewayIPAMRelease(ctx, "10.9.0.200")
+		assert.Equal(t, codes.NotFound, status.Code(err), "unallocated address: %v", err)
 	})
 }
 
@@ -180,4 +218,214 @@ func TestGatewayIPAMTools_PoolDelete(t *testing.T) {
 		tools, _ := newIPAMToolsWithPool(t)
 		assert.Error(t, tools.GatewayIPAMPoolDelete(ctx, "missing"))
 	})
+}
+
+// TestGatewayIPAMTools_ErrorsMatchGRPC drives each MCP IPAM tool and the
+// gRPC method it mirrors against the same allocator, and asserts both answer
+// the same class. MCP's toolErrorCode reads that class from the gRPC status,
+// so a plain IPAM error here would be -32603 on MCP (#949).
+func TestGatewayIPAMTools_ErrorsMatchGRPC(t *testing.T) {
+	ctx := context.Background()
+
+	// exhaust narrows the pool's dynamic range to two addresses and
+	// allocates until IPAM refuses, so the next allocation meets an
+	// exhausted pool.
+	exhaust := func(t *testing.T, tools gatewayIPAMTools, poolID string) {
+		t.Helper()
+		start, end := "10.9.0.10", "10.9.0.11"
+		_, err := tools.GatewayIPAMPoolUpdate(ctx, poolID, &mcp.IPAMPoolUpdateRequest{RangeStart: &start, RangeEnd: &end})
+		require.NoError(t, err)
+		for i := 0; i < 4; i++ {
+			if _, err := tools.GatewayIPAMAllocate(ctx, poolID, fmt.Sprintf("fill-%d", i), ""); err != nil {
+				return
+			}
+		}
+		t.Fatalf("pool %s never exhausted", poolID)
+	}
+
+	cases := []struct {
+		name  string
+		want  codes.Code
+		setup func(t *testing.T, tools gatewayIPAMTools, pool *ipam.Pool)
+		mcp   func(tools gatewayIPAMTools, pool *ipam.Pool) error
+		grpc  func(svc *GatewayService, pool *ipam.Pool) error
+	}{
+		{
+			name: "pool get of an unknown pool",
+			want: codes.NotFound,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolGet(ctx, "missing")
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.GetIPAMPool(ctx, &platformv1.GetIPAMPoolRequest{Id: "missing"})
+				return err
+			},
+		},
+		{
+			name: "allocate from an unknown pool",
+			want: codes.NotFound,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMAllocate(ctx, "missing", "dev-1", "")
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.AllocateIP(ctx, &platformv1.AllocateIPRequest{PoolId: "missing", DeviceId: "dev-1"})
+				return err
+			},
+		},
+		{
+			name: "allocate from an exhausted pool",
+			want: codes.ResourceExhausted,
+			setup: func(t *testing.T, tools gatewayIPAMTools, pool *ipam.Pool) {
+				exhaust(t, tools, pool.ID)
+			},
+			mcp: func(tools gatewayIPAMTools, pool *ipam.Pool) error {
+				_, err := tools.GatewayIPAMAllocate(ctx, pool.ID, "dev-mcp", "")
+				return err
+			},
+			grpc: func(svc *GatewayService, pool *ipam.Pool) error {
+				_, err := svc.AllocateIP(ctx, &platformv1.AllocateIPRequest{PoolId: pool.ID, DeviceId: "dev-grpc"})
+				return err
+			},
+		},
+		{
+			name: "release of a malformed address",
+			want: codes.InvalidArgument,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				return tools.GatewayIPAMRelease(ctx, "not-an-ip")
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.ReleaseIP(ctx, &platformv1.ReleaseIPRequest{Ip: "not-an-ip"})
+				return err
+			},
+		},
+		{
+			name: "pool create with a malformed cidr",
+			want: codes.InvalidArgument,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "x", CIDR: "not-a-cidr"})
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{Name: "x", Cidr: "not-a-cidr"})
+				return err
+			},
+		},
+		{
+			name: "pool create with a malformed gateway",
+			want: codes.InvalidArgument,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "x", CIDR: "10.8.0.0/24", Gateway: "nope"})
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{Name: "x", Cidr: "10.8.0.0/24", Gateway: "nope"})
+				return err
+			},
+		},
+		{
+			name: "pool create with a reserved entry that is not a prefix",
+			want: codes.InvalidArgument,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "x", CIDR: "10.8.0.0/24", Reserved: []string{"nope"}})
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{Name: "x", Cidr: "10.8.0.0/24", Reserved: []string{"nope"}})
+				return err
+			},
+		},
+		{
+			name: "pool create of a pool that clashes with an existing one",
+			want: codes.AlreadyExists,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "lab", CIDR: "10.9.0.0/24"})
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{Name: "lab", Cidr: "10.9.0.0/24"})
+				return err
+			},
+		},
+		{
+			name: "pool update of an unknown pool",
+			want: codes.NotFound,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolUpdate(ctx, "missing", &mcp.IPAMPoolUpdateRequest{Name: "x"})
+				return err
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.UpdateIPAMPool(ctx, &platformv1.UpdateIPAMPoolRequest{Id: "missing", Name: "x"})
+				return err
+			},
+		},
+		{
+			name: "pool update with a malformed gateway",
+			want: codes.InvalidArgument,
+			mcp: func(tools gatewayIPAMTools, pool *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolUpdate(ctx, pool.ID, &mcp.IPAMPoolUpdateRequest{Gateway: "nope"})
+				return err
+			},
+			grpc: func(svc *GatewayService, pool *ipam.Pool) error {
+				_, err := svc.UpdateIPAMPool(ctx, &platformv1.UpdateIPAMPoolRequest{Id: pool.ID, Gateway: "nope"})
+				return err
+			},
+		},
+		{
+			name: "pool update with a reserved entry that is not a prefix",
+			want: codes.InvalidArgument,
+			mcp: func(tools gatewayIPAMTools, pool *ipam.Pool) error {
+				_, err := tools.GatewayIPAMPoolUpdate(ctx, pool.ID, &mcp.IPAMPoolUpdateRequest{Reserved: []string{"nope"}})
+				return err
+			},
+			grpc: func(svc *GatewayService, pool *ipam.Pool) error {
+				_, err := svc.UpdateIPAMPool(ctx, &platformv1.UpdateIPAMPoolRequest{Id: pool.ID, UpdateWindow: true, Reserved: []string{"nope"}})
+				return err
+			},
+		},
+		{
+			name: "pool delete of an unknown pool",
+			want: codes.NotFound,
+			mcp: func(tools gatewayIPAMTools, _ *ipam.Pool) error {
+				return tools.GatewayIPAMPoolDelete(ctx, "missing")
+			},
+			grpc: func(svc *GatewayService, _ *ipam.Pool) error {
+				_, err := svc.DeleteIPAMPool(ctx, &platformv1.DeleteIPAMPoolRequest{Id: "missing"})
+				return err
+			},
+		},
+		{
+			name: "pool delete of a pool that holds allocations",
+			want: codes.FailedPrecondition,
+			setup: func(t *testing.T, tools gatewayIPAMTools, pool *ipam.Pool) {
+				_, err := tools.GatewayIPAMAllocate(ctx, pool.ID, "dev-1", "")
+				require.NoError(t, err)
+			},
+			mcp: func(tools gatewayIPAMTools, pool *ipam.Pool) error {
+				return tools.GatewayIPAMPoolDelete(ctx, pool.ID)
+			},
+			grpc: func(svc *GatewayService, pool *ipam.Pool) error {
+				_, err := svc.DeleteIPAMPool(ctx, &platformv1.DeleteIPAMPoolRequest{Id: pool.ID})
+				return err
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tools, pool := newIPAMToolsWithPool(t)
+			if tc.setup != nil {
+				tc.setup(t, tools, pool)
+			}
+			svc := NewGatewayService()
+			svc.SetIPAMAllocator(tools.ipam)
+
+			grpcErr := tc.grpc(svc, pool)
+			require.Equal(t, tc.want, status.Code(grpcErr), "gRPC reference: %v", grpcErr)
+
+			mcpErr := tc.mcp(tools, pool)
+			assert.Equal(t, tc.want, status.Code(mcpErr), "MCP: %v", mcpErr)
+		})
+	}
 }

@@ -274,7 +274,11 @@ the same status and persists the same device on either listener (#484):
 
 **The serial is required.** It is the key enrollment and `RecordHeartbeat`
 match a TPM against (`pkg/device/service.go`), so a device created without one
-could never be claimed. The webservice used to synthesise `dev-<id>` for an
+could never be claimed. `DeviceService.Create` refuses it too, with the same
+`ErrDeviceSerialRequired`, so a create without a serial is refused on every
+transport, not only those whose decoder checks it: gRPC and Unix answer
+`InvalidArgument`, QUIC `OpDeviceRegister` answers `StatusInvalidArgument`
+(#949). The webservice used to synthesise `dev-<id>` for an
 empty serial, which made `{}` a `201` there and a `400` on the daemon; that
 fallback is gone. The console's register form requires the serial, and the JS
 SDK's `CreateDeviceRequest` and the console's `RegisterDeviceInput` type it as

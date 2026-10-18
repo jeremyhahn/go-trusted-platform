@@ -387,6 +387,21 @@ func TestDeviceGRPCService_CreateDevice_WithoutAnID(t *testing.T) {
 	assert.Equal(t, "SN-NO-ID", got.Device.Serial)
 }
 
+// A create without a serial is InvalidArgument on gRPC, as it is a 400 on
+// REST and on MCP. The real device service refuses it; Unix and QUIC reach
+// this same RPC.
+func TestDeviceGRPCService_CreateDevice_WithoutASerial(t *testing.T) {
+	svc := NewDeviceGRPCService(newRealDeviceService(t), newMockProfileService(), nil)
+
+	resp, err := svc.CreateDevice(context.Background(), &platformv1.CreateDeviceRequest{
+		Device: &platformv1.Device{Model: "no-serial"},
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), device.ErrDeviceSerialRequired{}.Error())
+}
+
 // TestDeviceGRPCService_CreateDevice_TwoCreatesGetDistinctIDs guards the
 // other half: assigned identity must be unique, or the second create
 // silently replaces the first.

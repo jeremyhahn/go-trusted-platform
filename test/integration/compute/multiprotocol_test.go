@@ -126,7 +126,7 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
 		t.Fatalf("CreateVM failed: %v", err)
@@ -244,7 +244,7 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 		TPM:        true,
 	})
 	if err != nil {

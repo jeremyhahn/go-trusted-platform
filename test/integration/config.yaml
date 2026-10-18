@@ -249,10 +249,15 @@ dns:
 # the rendered file itself, with -x: chronyd never adjusts the system clock,
 # which the container shares with the CI host.
 #
-# The one upstream is the loopback, where nothing serves NTP (a consume-only
-# node renders port 0), so no source ever becomes reachable: a step is always
-# the documented refusal, never a clock change. No startup gate: there is
-# nothing to wait for.
+# The one upstream is the loopback, where run-integration-tests.sh serves a
+# second chronyd as a local stratum-8 reference (start_ntp_reference; a
+# consume-only node renders port 0, so the two never share a port). The
+# runner waits for the daemon's chronyd to synchronise to it: an
+# unsynchronised clock is the degraded `ntp` health component, and a degraded
+# component makes every transport's aggregate health not-healthy
+# (docs/health/api.md §4), which fails quic TestQUICHealth and sdn /health.
+# Both chronyds run with -x, so a step never changes the clock. No startup
+# gate: the runner does the waiting.
 ntp:
   enabled: true
   mode: consume

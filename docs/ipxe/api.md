@@ -337,6 +337,15 @@ scope from the gRPC catalog (`pkg/webservice/v1/rest/pxe/router.go`), so the two
 cannot drift. Under the legacy JWT handler, which carries roles and no scopes,
 the role gate alone applies.
 
+**The daemon REST listener serves the same routes.** Without a `webservices:`
+section platformd mounts this router on its own REST listener
+(`RESTServer.SetPXEHandlers`, `pkg/api/daemon/rest_pxe.go`), the
+`/api/v1/provisioning/devices/{mac}/*` gateway reports with it, each route
+behind the listener's scope guard (bearer token or verified client
+certificate) with the scope below. platformd's PXE servicer has no backend, so
+there every route answers `503 SERVICE_NOT_CONFIGURED`, as gRPC, QUIC and MCP
+do. The install-completion webhook is not mounted there.
+
 | Route | RPC | Scope |
 |---|---|---|
 | `GET /api/v1/pxe/status` | `GetStatus` | `pxe:read` |

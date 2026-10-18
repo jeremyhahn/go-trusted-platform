@@ -430,8 +430,12 @@ func (c *platformClient) initQuicBaaSClient(opts *Options) {
 		return
 	}
 	qOpts, err := quicbaasTransportOptions(opts.QuicBaaSAddr, opts.QuicBaaSTransport)
+	if err == nil && opts.QuicBaaSTLSConfig == nil {
+		err = ErrQuicBaaSTLSNotConfigured{}
+	}
 	var sdk quicbaassdk.Client
 	if err == nil {
+		qOpts = append(qOpts, quicbaassdk.WithTLSConfig(opts.QuicBaaSTLSConfig))
 		sdk, err = quicbaassdk.NewClient(opts.QuicBaaSAddr, qOpts...)
 	}
 	if err != nil {

@@ -68,7 +68,7 @@ return `{"status": {"success": true, "message": "..."}}`. `vm_create` returns
 |-------|------|
 | `name` | string (required by the service) |
 | `description` | string |
-| `firmware` | `FIRMWARE_TYPE_UNSPECIFIED`, `FIRMWARE_TYPE_BIOS`, `FIRMWARE_TYPE_UEFI`, `FIRMWARE_TYPE_UEFI_SECURE_BOOT` |
+| `firmware` | `FIRMWARE_TYPE_UNSPECIFIED` (boots UEFI), `FIRMWARE_TYPE_UEFI`, `FIRMWARE_TYPE_UEFI_SECURE_BOOT`; `FIRMWARE_TYPE_BIOS` is refused |
 | `boot_device` | `BOOT_DEVICE_UNSPECIFIED`, `BOOT_DEVICE_DISK`, `BOOT_DEVICE_CDROM`, `BOOT_DEVICE_NETWORK` |
 | `cpu` | `{"cores", "sockets", "threads", "model", "features": [string]}` |
 | `memory` | `{"size_mb", "hugepages", "shared"}` |
@@ -231,6 +231,13 @@ any transport.
 | `container_exec` | `id`, `command` | `env` (object), `working_dir`, `tty` (false) |
 | `container_metrics` | `id` | — |
 | `container_attest` | `id` | — |
+
+The SDK's MCP transport sends `CreateContainer` as these flat arguments, not
+the request's nested `config`: `env` becomes an object of name to value,
+`volumes` become `mounts` (`destination` is `target`), and `resources`
+`max_cpus` and `max_memory_mb` become `cpu_limit` and `memory_limit`
+(`"<n>M"`). `network` and `attest_on_create` have no `container_create`
+argument, so MCP does not carry them.
 
 ## Error Handling
 

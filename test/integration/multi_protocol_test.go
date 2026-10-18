@@ -1528,7 +1528,7 @@ func testKMSCreateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-key-%d", time.Now().UnixNano())
 	result, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt", Name: "Matrix Test Key",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt", Name: "Matrix Test Key",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1543,7 +1543,7 @@ func testKMSGetKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-getkey-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1576,7 +1576,7 @@ func testKMSSign(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-sign-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
+		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1600,7 +1600,7 @@ func testKMSVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-verify-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
+		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1634,7 +1634,7 @@ func testKMSEncrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-encrypt-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1658,7 +1658,7 @@ func testKMSDecrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-decrypt-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1690,7 +1690,7 @@ func testKMSRotateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-rotate-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1712,7 +1712,7 @@ func testKMSDeleteKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-delkey-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
