@@ -124,6 +124,18 @@ downgrade is invisible in every downstream artefact.
    `App.TPM` only when nil. It always runs the platform-PCR check afterwards.
 2. **`InitTPM` is idempotent.** It calls `OpenTPM` first and only provisions
    when the TPM is not already provisioned.
+   - **The Shared SRK exists after every non-diskless start.** Only a full
+     `Provision` creates it, and a TPM whose EK is already resident (the
+     `swtpm_setup` state, or a node without `tpm.iak` + `tpm.idevid`) never
+     runs one. So `InitTPM` probes `tpm.ssrk.handle` (`0x81000001`) and, when
+     the TPM answers `TPM_RC_HANDLE`/`TPM_RC_VALUE`, creates the key there from
+     the TCG SRK template of `tpm.ssrk`'s algorithm (`ensureSSRK`,
+     `pkg/app/tpm_ssrk.go`). The key is created under the owner auth item 5 reads from
+     the TPM: empty on a first start, before ownership is taken, and the SO PIN
+     after that. Without it, operator seal/unseal, `SRKInfo` and
+     vTPM bundle sealing all fail with `TPM_RC_HANDLE`. A key already at the handle is
+     left alone. Any other read failure is `SSRKProbeError`, and a failed create is
+     `SSRKCreateError`; either one stops the start before ownership is taken.
 3. **The platform PCR is re-extended on every boot.** `IsPlatformPCRExtended`
    → `CreatePlatformPolicy`. PCRs are volatile; without this, every
    platform-sealed secret is unreachable after a power cycle. The failure path
