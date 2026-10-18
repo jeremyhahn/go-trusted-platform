@@ -37,6 +37,7 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
@@ -59,6 +60,9 @@ type mockCAService struct {
 	issuedCerts        map[string]*x509.Certificate
 	issueErr           error
 	revokeErr          error
+	revokeCalls        int
+	supersedeErr       error
+	supersededAttrs    *xkmssdk.KeyAttributes
 	bundleErr          error
 	parseErr           error
 	bundle             []byte
@@ -138,8 +142,20 @@ func (m *mockCAService) SignCSR(ctx context.Context, csrPEM []byte, opts *quicba
 }
 
 func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+	m.revokeCalls++
 	if m.revokeErr != nil {
 		return m.revokeErr
+	}
+	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+	delete(m.issuedCerts, serial)
+	delete(m.certStore.certs, serial)
+	return nil
+}
+
+func (m *mockCAService) SupersedeForRenewal(_ context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+	m.supersededAttrs = keyAttrs
+	if m.supersedeErr != nil {
+		return m.supersedeErr
 	}
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 	delete(m.issuedCerts, serial)
@@ -877,6 +893,53 @@ func TestCAHandlers_RenewCertificate_Success(t *testing.T) {
 	assert.NotNil(t, resp.OldCertificate)
 	assert.NotNil(t, resp.NewCertificate)
 	assert.NotEqual(t, resp.OldCertificate.Serial, resp.NewCertificate.Serial)
+
+	// The old certificate is superseded through the shared rotate-first step,
+	// never through Revoke, whose DeleteKeys removed the key the renewal reuses.
+	require.NotNil(t, ca.supersededAttrs)
+	assert.Equal(t, "renew.test.com", ca.supersededAttrs.CN)
+	assert.Zero(t, ca.revokeCalls)
+}
+
+// renewRequest posts a 180-day renewal of a stored renew.test.com
+// certificate and returns the recorded response.
+func renewRequest(t *testing.T, ca *mockCAService) *httptest.ResponseRecorder {
+	t.Helper()
+	cert := generateTestCertificate("renew.test.com", false, nil, nil)
+	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+	ca.certStore.certs[serial] = cert
+
+	_, router := setupCAHandlers(ca)
+	body, err := json.Marshal(CertificateRenewRequest{ValidDays: 180})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestCAHandlers_RenewCertificate_RefusalIsPreconditionFailed(t *testing.T) {
+	ca := newMockCAService()
+	ca.supersedeErr = &issuance.RenewCAOwnCertificateError{CommonName: "renew.test.com"}
+
+	rr := renewRequest(t, ca)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Contains(t, rr.Body.String(), "renew.test.com")
+}
+
+func TestCAHandlers_RenewCertificate_SupersedeFailureStopsTheRenewal(t *testing.T) {
+	ca := newMockCAService()
+	ca.supersedeErr = &issuance.RenewKeyRotationError{CommonName: "renew.test.com", Err: errors.New("rotate failed")}
+
+	rr := renewRequest(t, ca)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Contains(t, rr.Body.String(), "rotate failed")
+	assert.Empty(t, ca.issuedCerts, "no certificate is issued after a failed supersede")
 }
 
 func TestCAHandlers_RenewCertificate_PreserveSANs(t *testing.T) {

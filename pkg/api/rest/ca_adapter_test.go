@@ -15,14 +15,19 @@ package rest
 
 import (
 	"context"
+	"crypto"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"testing"
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,6 +62,7 @@ type fakeProdCA struct {
 	parseBundle     []*x509.Certificate
 	parseBundleErr  error
 	certStore       xkmssdk.CertStore
+	keyStore        xkmsbackend.Backend
 	signed          *x509.Certificate
 	signErr         error
 	signedCSR       []byte
@@ -90,6 +96,38 @@ func (f *fakeProdCA) ParseBundle(data []byte) ([]*x509.Certificate, error) {
 	return f.parseBundle, f.parseBundleErr
 }
 func (f *fakeProdCA) CertStore() xkmssdk.CertStore { return f.certStore }
+func (f *fakeProdCA) KeyStore() xkmsbackend.Backend { return f.keyStore }
+
+// renewalKeyStore holds one key for every CN. Generating a key is not
+// implemented: the embedded nil Backend panics if renewal reaches for one.
+type renewalKeyStore struct {
+	xkmsbackend.Backend
+	rotateErr error
+	rotated   []string
+}
+
+func (k *renewalKeyStore) Signer(_ context.Context, _ *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+	return nil, nil
+}
+
+func (k *renewalKeyStore) RotateKey(_ context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+	if k.rotateErr != nil {
+		return nil, k.rotateErr
+	}
+	k.rotated = append(k.rotated, attrs.CN)
+	return nil, nil
+}
+
+// renewalCertStore records the certificates renewal removes.
+type renewalCertStore struct {
+	xkmssdk.CertStore
+	deleted []string
+}
+
+func (s *renewalCertStore) DeleteCertificate(id string) error {
+	s.deleted = append(s.deleted, id)
+	return nil
+}
 
 // =============================================================================
 // Tests
@@ -226,6 +264,55 @@ func TestCAAuthorityAdapter_Revoke_PropagatesError(t *testing.T) {
 	err := a.Revoke(context.Background(), &x509.Certificate{}, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, prodErr)
+}
+
+// TestCAAuthorityAdapter_SupersedeForRenewal_RotatesAndKeepsTheKey is the
+// #949 renew regression: the old certificate is revoked without deleting its
+// key, so the renewal reuses the rotated key instead of generating one under
+// a name the KMS still holds.
+func TestCAAuthorityAdapter_SupersedeForRenewal_RotatesAndKeepsTheKey(t *testing.T) {
+	keyStore := &renewalKeyStore{}
+	certStore := &renewalCertStore{}
+	prod := &fakeProdCA{
+		rootCert:  &x509.Certificate{Raw: []byte("root")},
+		keyStore:  keyStore,
+		certStore: certStore,
+	}
+	leaf := &x509.Certificate{Raw: []byte("leaf"), Subject: pkix.Name{CommonName: "renew.example.com"}}
+	a := NewCAAuthorityAdapter(prod)
+
+	err := a.SupersedeForRenewal(context.Background(), leaf, &xkmssdk.KeyAttributes{CN: "renew.example.com"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"renew.example.com"}, keyStore.rotated)
+	assert.Same(t, leaf, prod.revokeCert)
+	assert.False(t, prod.revokeOpts.DeleteKeys, "renewal must keep the rotated key")
+	assert.Equal(t, []string{"renew.example.com"}, certStore.deleted)
+}
+
+func TestCAAuthorityAdapter_SupersedeForRenewal_RefusesTheCAOwnCertificate(t *testing.T) {
+	root := &x509.Certificate{Raw: []byte("root"), Subject: pkix.Name{CommonName: "root-ca"}}
+	prod := &fakeProdCA{rootCert: root, keyStore: &renewalKeyStore{}, certStore: &renewalCertStore{}}
+	a := NewCAAuthorityAdapter(prod)
+
+	err := a.SupersedeForRenewal(context.Background(), root, &xkmssdk.KeyAttributes{CN: "root-ca"})
+	require.Error(t, err)
+	assert.True(t, issuance.IsRenewalRefused(err))
+	assert.Nil(t, prod.revokeCert, "a refused renewal must not revoke")
+}
+
+func TestCAAuthorityAdapter_SupersedeForRenewal_RotationFailureLeavesTheCertificate(t *testing.T) {
+	rotateErr := errors.New("rotate failed")
+	certStore := &renewalCertStore{}
+	prod := &fakeProdCA{keyStore: &renewalKeyStore{rotateErr: rotateErr}, certStore: certStore}
+	leaf := &x509.Certificate{Raw: []byte("leaf"), Subject: pkix.Name{CommonName: "renew.example.com"}}
+	a := NewCAAuthorityAdapter(prod)
+
+	err := a.SupersedeForRenewal(context.Background(), leaf, &xkmssdk.KeyAttributes{CN: "renew.example.com"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, rotateErr)
+	assert.False(t, issuance.IsRenewalRefused(err))
+	assert.Nil(t, prod.revokeCert)
+	assert.Empty(t, certStore.deleted)
 }
 
 func TestCAAuthorityAdapter_CABundle_NoFilters_UsesUnfiltered(t *testing.T) {
