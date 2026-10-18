@@ -18,6 +18,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -473,9 +474,7 @@ func TestGetSignerError(t *testing.T) {
 
 // TestCloseWhenNotInitialized tests Close on uninitialized manager
 func TestCloseWhenNotInitialized(t *testing.T) {
-	km := &XKMSManager{
-		initialized: false,
-	}
+	km := &XKMSManager{}
 
 	err := km.Close()
 	assert.NoError(t, err)
@@ -497,7 +496,7 @@ func TestCloseError(t *testing.T) {
 	// Close should work fine
 	err = km.Close()
 	assert.NoError(t, err)
-	assert.False(t, km.initialized)
+	assert.Nil(t, km.backend)
 
 	// Second close should also work (already closed)
 	err = km.Close()
@@ -514,17 +513,108 @@ func TestInitializeServiceReinitialization(t *testing.T) {
 		ExportKeys: true,
 	}
 
-	// First initialization
+	// Two managers in sequence each own a working backend
 	km1, err := NewXKMSManager(config, nil)
 	require.NoError(t, err)
-	assert.True(t, km1.initialized)
-	km1.Close()
+	assert.NotNil(t, km1.backend)
+	require.NoError(t, km1.Close())
 
-	// Second initialization (service was reset)
 	km2, err := NewXKMSManager(config, nil)
 	require.NoError(t, err)
-	assert.True(t, km2.initialized)
-	km2.Close()
+	assert.NotNil(t, km2.backend)
+	require.NoError(t, km2.Close())
+}
+
+// TestManagerLeavesProcessServiceUntouched is the regression test for #949:
+// the daemon registers its own KMS backends in the process-wide go-xkms
+// service, and a Secure Boot key build (vTPM CreateBundle with Secure Boot)
+// used to reset and close that registry, so the daemon's CA signer answered
+// "keystore: not initialized" for every later bundle.
+func TestManagerLeavesProcessServiceUntouched(t *testing.T) {
+	ctx := context.Background()
+	resetProcessService(t)
+	t.Cleanup(func() { resetProcessService(t) })
+
+	daemonBackend := newDaemonBackend(t)
+	require.NoError(t, xkmssdk.ServiceInitialize(&xkmssdk.ServiceConfig{
+		Backends:       map[string]xkmssdk.ServiceBackend{string(xkmssdk.StoreSoftware): daemonBackend},
+		DefaultBackend: string(xkmssdk.StoreSoftware),
+	}))
+
+	daemonKey := &xkmssdk.KeyAttributes{
+		CN:            "daemon-ca",
+		KeyAlgorithm:  x509.RSA,
+		KeyType:       xkmssdk.KeyTypeSigning,
+		StoreType:     xkmssdk.StoreSoftware,
+		RSAAttributes: &xkmssdk.RSAAttributes{KeySize: 2048},
+	}
+	_, err := xkmssdk.ServiceGenerateKey(ctx, daemonKey)
+	require.NoError(t, err)
+
+	// A Secure Boot build: generate, sign, close
+	km, err := NewXKMSManager(&XKMSConfig{KeysDir: t.TempDir(), Backend: BackendFile, ExportKeys: true}, nil)
+	require.NoError(t, err)
+	require.NoError(t, km.GenerateAll(ctx))
+	signer, err := km.GetSigner(ctx, KeyTypeDB)
+	require.NoError(t, err)
+	assert.NotNil(t, signer.Public())
+	require.NoError(t, km.Close())
+
+	// The daemon's key is still reachable and still signs
+	require.True(t, xkmssdk.ServiceIsInitialized())
+	key, err := xkmssdk.ServiceKey(ctx, daemonKey)
+	require.NoError(t, err)
+	daemonSigner, ok := key.(crypto.Signer)
+	require.True(t, ok)
+	digest := sha256.Sum256([]byte("ek certificate tbs"))
+	_, err = daemonSigner.Sign(rand.Reader, digest[:], crypto.SHA256)
+	require.NoError(t, err)
+
+	// The Secure Boot key never entered the daemon's backend
+	_, err = daemonBackend.GetKey(ctx, &xkmssdk.KeyAttributes{
+		CN:            "secureboot-db",
+		KeyAlgorithm:  x509.RSA,
+		KeyType:       xkmssdk.KeyTypeSigning,
+		StoreType:     xkmssdk.StoreSoftware,
+		RSAAttributes: &xkmssdk.RSAAttributes{KeySize: 2048},
+	})
+	assert.Error(t, err)
+}
+
+// TestGetSignerAfterClose ensures a closed manager answers a typed error
+// instead of reaching for a backend it no longer owns.
+func TestGetSignerAfterClose(t *testing.T) {
+	km, err := NewXKMSManager(&XKMSConfig{KeysDir: t.TempDir(), Backend: BackendFile, ExportKeys: true}, nil)
+	require.NoError(t, err)
+	require.NoError(t, km.Close())
+
+	_, err = km.GetSigner(context.Background(), KeyTypePK)
+	assert.ErrorIs(t, err, ErrManagerClosed)
+	assert.ErrorIs(t, km.GenerateAll(context.Background()), ErrManagerClosed)
+}
+
+// newDaemonBackend builds a software backend standing in for the daemon's KMS.
+func newDaemonBackend(t *testing.T) xkmssdk.ServiceBackend {
+	t.Helper()
+	dir := t.TempDir()
+	keyStorage, err := xkmssdk.NewFileStorageBackend(filepath.Join(dir, "keys"))
+	require.NoError(t, err)
+	certStorage, err := xkmssdk.NewFileStorageBackend(filepath.Join(dir, "certs"))
+	require.NoError(t, err)
+	software, err := xkmssdk.NewSoftwareBackend(&xkmssdk.SoftwareBackendConfig{KeyStorage: keyStorage})
+	require.NoError(t, err)
+	backend, err := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{Backend: software, CertStorage: certStorage})
+	require.NoError(t, err)
+	return backend
+}
+
+// resetProcessService clears the process-wide go-xkms service registry.
+func resetProcessService(t *testing.T) {
+	t.Helper()
+	if xkmssdk.ServiceIsInitialized() {
+		require.NoError(t, xkmssdk.ServiceClose())
+		xkmssdk.ServiceReset()
+	}
 }
 
 // TestCreateXKMSBackendUnsupported tests unsupported backend types
@@ -542,12 +632,6 @@ func TestCreateXKMSBackendUnsupported(t *testing.T) {
 
 	for _, backend := range unsupportedBackends {
 		t.Run(string(backend), func(t *testing.T) {
-			// Reset XKMS service for each test
-			if xkmssdk.ServiceIsInitialized() {
-				xkmssdk.ServiceClose()
-				xkmssdk.ServiceReset()
-			}
-
 			config := &XKMSConfig{
 				KeysDir: tmpDir,
 				Backend: backend,
@@ -773,9 +857,8 @@ func TestCreateXKMSBackendErrors(t *testing.T) {
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      nil,
-		backendName: "test",
+		config: config,
+		logger: nil,
 	}
 
 	_, err = km.createXKMSBackend()
@@ -798,20 +881,10 @@ func TestInitializeServiceError(t *testing.T) {
 		Backend: BackendFile,
 	}
 
-	// Reset XKMS service
-	if xkmssdk.ServiceIsInitialized() {
-		xkmssdk.ServiceClose()
-		xkmssdk.ServiceReset()
-	}
-
-	km := &XKMSManager{
-		config:      config,
-		logger:      logging.DefaultLogger(),
-		backendName: "test",
-	}
-
-	err = km.initializeService()
-	assert.Error(t, err)
+	km, err := NewXKMSManager(config, logging.DefaultLogger())
+	assert.Nil(t, km)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create XKMS backend")
 }
 
 // TestGetSignerNonSigner tests error when key doesn't implement crypto.Signer
@@ -871,7 +944,7 @@ func TestCloseWithError(t *testing.T) {
 	// Normal close
 	err = km.Close()
 	assert.NoError(t, err)
-	assert.False(t, km.initialized)
+	assert.Nil(t, km.backend)
 
 	// Try to close again (should return no error)
 	err = km.Close()
@@ -908,31 +981,23 @@ func TestGenerateKeyWithExistingKey(t *testing.T) {
 
 // TestInitializeServiceAlreadyInitialized tests the service reset path
 func TestInitializeServiceAlreadyInitialized(t *testing.T) {
-	tmpDir := t.TempDir()
+	ctx := context.Background()
 
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	// First manager initializes the service
-	km1, err := NewXKMSManager(config, nil)
+	// Two managers open at once: creating and closing the second must not
+	// disturb the first, which used to share one process-wide registry.
+	km1, err := NewXKMSManager(&XKMSConfig{KeysDir: t.TempDir(), Backend: BackendFile, ExportKeys: true}, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, km1.Close()) })
 
-	// Don't close km1 yet - service is still initialized
-	assert.True(t, xkmssdk.ServiceIsInitialized())
-
-	// Now close it
-	err = km1.Close()
+	km2, err := NewXKMSManager(&XKMSConfig{KeysDir: t.TempDir(), Backend: BackendFile, ExportKeys: true}, nil)
 	require.NoError(t, err)
-	assert.False(t, xkmssdk.ServiceIsInitialized())
+	require.NoError(t, km2.GenerateAll(ctx))
+	require.NoError(t, km2.Close())
 
-	// Create another manager - should reset and reinitialize
-	km2, err := NewXKMSManager(config, nil)
+	require.NoError(t, km1.GenerateAll(ctx))
+	signer, err := km1.GetSigner(ctx, KeyTypePK)
 	require.NoError(t, err)
-	assert.True(t, km2.initialized)
-	km2.Close()
+	assert.NotNil(t, signer.Public())
 }
 
 // TestGenerateCertificateWithAllFields tests certificate generation with all optional fields
@@ -1258,9 +1323,8 @@ func TestCreateBackendDefaultCase(t *testing.T) {
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      logging.DefaultLogger(),
-		backendName: "test",
+		config: config,
+		logger: logging.DefaultLogger(),
 	}
 
 	_, err := km.createXKMSBackend()
@@ -1431,9 +1495,8 @@ func TestCreateXKMSBackendCertStorageError(t *testing.T) {
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      logging.DefaultLogger(),
-		backendName: "test",
+		config: config,
+		logger: logging.DefaultLogger(),
 	}
 
 	_, err = km.createXKMSBackend()
@@ -1696,12 +1759,6 @@ func TestGenerateAllMkdirError(t *testing.T) {
 		KeysDir:    keysDir,
 		Backend:    BackendFile,
 		ExportKeys: true,
-	}
-
-	// Reset XKMS first
-	if xkmssdk.ServiceIsInitialized() {
-		xkmssdk.ServiceClose()
-		xkmssdk.ServiceReset()
 	}
 
 	// This will fail during NewXKMSManager because the path is invalid

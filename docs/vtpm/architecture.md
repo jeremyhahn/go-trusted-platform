@@ -462,6 +462,10 @@ qemu-system-x86_64 \
 - Secure Boot private keys are stored unencrypted on disk
 - Access should be restricted via filesystem permissions
 - Consider HSM storage for production deployments
+- Each bundle's Secure Boot keys are generated in a go-xkms backend private to
+  that build. The build never resets or closes the process-wide go-xkms service
+  that holds platformd's KMS keys, so the CA can still sign EK certificates
+  after any number of Secure Boot bundles, failed builds included (#949)
 
 ### EK Certificate Trust
 

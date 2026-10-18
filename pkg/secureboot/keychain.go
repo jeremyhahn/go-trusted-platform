@@ -53,9 +53,6 @@ const (
 	BackendVault BackendType = "vault"
 )
 
-// Default backend name for Secure Boot operations
-const defaultBackendName = "secureboot"
-
 // String returns the string representation of BackendType
 func (b BackendType) String() string {
 	return string(b)
@@ -106,12 +103,17 @@ type XKMSConfig struct {
 	ResignMode string
 }
 
-// XKMSManager manages Secure Boot keys using go-xkms service
+// XKMSManager manages Secure Boot keys through its own go-xkms backend.
+//
+// The backend is private to the manager: it is never registered in the
+// process-wide go-xkms service registry. The daemon keeps its own KMS
+// backends in that registry, and a Secure Boot key build (a vTPM bundle,
+// an ISO build) that reset or closed it would leave the daemon's CA
+// signer with a closed keystore.
 type XKMSManager struct {
-	config      *XKMSConfig
-	logger      *logging.Logger
-	backendName string
-	initialized bool
+	config  *XKMSConfig
+	logger  *logging.Logger
+	backend xkmssdk.ServiceBackend
 	// rawBackend is the underlying software backend for direct key access
 	// DEFERRED: Remove once remote go-xkms server is available. Blocked by: remote XKMS deployment.
 	rawBackend *xkmssdk.SoftwareBackend
@@ -163,53 +165,17 @@ func NewXKMSManager(config *XKMSConfig, logger *logging.Logger) (*XKMSManager, e
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      logger,
-		backendName: defaultBackendName,
+		config: config,
+		logger: logger,
 	}
 
-	// Initialize the XKMS service with our backend
-	if err := km.initializeService(); err != nil {
-		return nil, err
+	backend, err := km.createXKMSBackend()
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to create XKMS backend", Err: err}
 	}
+	km.backend = backend
 
 	return km, nil
-}
-
-// initializeService initializes the go-xkms service with the configured backend
-func (km *XKMSManager) initializeService() error {
-	// Reset any previous service state (for testing/re-initialization)
-	if xkmssdk.ServiceIsInitialized() {
-		xkmssdk.ServiceReset()
-	}
-
-	// Create the backend based on configuration
-	ks, err := km.createXKMSBackend()
-	if err != nil {
-		return &WrappedError{Msg: "failed to create XKMS backend", Err: err}
-	}
-
-	// Get the StoreType name for this backend - this is what BackendFor() uses to find backends
-	storeType := backendToStoreType(km.config.Backend)
-	storeTypeName := string(storeType)
-
-	// Initialize the XKMS service
-	// Register the backend with both the StoreType name (for BackendFor lookups)
-	// and the logical name (for backward compatibility)
-	serviceConfig := &xkmssdk.ServiceConfig{
-		Backends: map[string]xkmssdk.ServiceBackend{
-			storeTypeName:  ks, // Required: for BackendFor(attrs) to find by StoreType
-			km.backendName: ks, // Optional: for backward compatibility
-		},
-		DefaultBackend: storeTypeName,
-	}
-
-	if err := xkmssdk.ServiceInitialize(serviceConfig); err != nil {
-		return &WrappedError{Msg: "failed to initialize XKMS service", Err: err}
-	}
-
-	km.initialized = true
-	return nil
 }
 
 // createXKMSBackend creates a go-xkms backend based on the config
@@ -345,6 +311,10 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 	default:
 	}
 
+	if km.backend == nil {
+		return ErrManagerClosed
+	}
+
 	km.logger.Info("Generating key via go-xkms service",
 		"type", keyType,
 		"description", description,
@@ -366,10 +336,9 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 	}
 
 	// Check if key already exists and delete it if so (for fresh generation)
-	// Use service-level function to check
-	if existingKey, err := xkmssdk.ServiceKey(ctx, attrs); err == nil && existingKey != nil {
+	if existingKey, err := km.backend.GetKey(ctx, attrs); err == nil && existingKey != nil {
 		km.logger.Debug("Deleting existing key before regeneration", "type", keyType)
-		if err := xkmssdk.ServiceDeleteKey(ctx, attrs); err != nil {
+		if err := km.backend.DeleteKey(ctx, attrs); err != nil {
 			km.logger.Warn("Failed to delete existing key", "type", keyType, "error", err)
 			// Continue anyway - generation might still work
 		}
@@ -386,10 +355,10 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate key via raw backend: %v", genErr)}}
 		}
 	} else {
-		// Fallback to service (returns opaque key - export won't work)
-		privateKey, genErr = xkmssdk.ServiceGenerateKey(ctx, attrs)
+		// Fallback to the service backend (returns opaque key - export won't work)
+		privateKey, genErr = km.backend.GenerateRSA(ctx, attrs)
 		if genErr != nil {
-			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate key via XKMS service: %v", genErr)}}
+			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate key via XKMS backend: %v", genErr)}}
 		}
 	}
 
@@ -416,8 +385,8 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 		return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate certificate: %v", err)}}
 	}
 
-	// Save certificate via go-xkms service using the key attributes
-	if err := xkmssdk.ServiceSaveCertificate(ctx, attrs, cert); err != nil {
+	// Save certificate in the backend's certificate storage
+	if err := km.backend.SaveCert(ctx, attrs.CertificateID(), cert); err != nil {
 		return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to save certificate: %v", err)}}
 	}
 
@@ -520,6 +489,10 @@ func (km *XKMSManager) GetKeyPaths() KeyPaths {
 // hash-signing: Sign round-trips only the digest to the KMS and the private key
 // never leaves the server.
 func (km *XKMSManager) GetSigner(ctx context.Context, keyType KeyType) (crypto.Signer, error) {
+	if km.backend == nil {
+		return nil, ErrManagerClosed
+	}
+
 	// Build KeyAttributes to retrieve the key by its CN (Common Name)
 	storeType := backendToStoreType(km.config.Backend)
 	attrs := &xkmssdk.KeyAttributes{
@@ -533,7 +506,7 @@ func (km *XKMSManager) GetSigner(ctx context.Context, keyType KeyType) (crypto.S
 	}
 
 	// Get the key using KeyAttributes
-	key, err := xkmssdk.ServiceKey(ctx, attrs)
+	key, err := km.backend.GetKey(ctx, attrs)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to get key", Err: err}
 	}
@@ -547,16 +520,16 @@ func (km *XKMSManager) GetSigner(ctx context.Context, keyType KeyType) (crypto.S
 	return signer, nil
 }
 
-// Close releases resources held by the XKMS service
+// Close releases the manager's own backend. It never touches the
+// process-wide go-xkms service registry, so closing one manager leaves the
+// daemon's KMS backends, and every other manager, untouched.
 func (km *XKMSManager) Close() error {
-	if km.initialized {
-		if err := xkmssdk.ServiceClose(); err != nil {
-			return err
-		}
-		xkmssdk.ServiceReset()
-		km.initialized = false
+	if km.backend == nil {
+		return nil
 	}
-	return nil
+	backend := km.backend
+	km.backend = nil
+	return backend.Close()
 }
 
 // writeKey writes a private key to file in PEM format
