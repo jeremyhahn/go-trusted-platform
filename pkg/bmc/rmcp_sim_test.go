@@ -447,3 +447,33 @@ func TestIPMIClient_SetBootDevice_Persistent_Simulator(t *testing.T) {
 		t.Fatalf("SetBootDevice(persistent=true): %v", err)
 	}
 }
+
+// ListUsers walks every slot the BMC reports and returns the populated ones;
+// the simulator's admin account is among them.
+func TestIPMIUserManager_ListUsers_Simulator(t *testing.T) {
+	sim := startSim(t, "admin", simPassword)
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: simPassword,
+		Protocol: bmc.ProtocolIPMI,
+	}
+	mgr, err := bmc.NewUserManager(context.Background(), config, slog.Default())
+	if err != nil {
+		t.Fatalf("NewUserManager: %v", err)
+	}
+	t.Cleanup(func() { mgr.Close() })
+
+	users, err := mgr.ListUsers(context.Background())
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	for _, u := range users {
+		if u.Username == "admin" {
+			return
+		}
+	}
+	t.Fatalf("ListUsers = %+v, want the admin account", users)
+}

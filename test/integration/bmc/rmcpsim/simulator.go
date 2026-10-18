@@ -13,8 +13,10 @@
 
 // Package rmcpsim implements a minimal IPMI 2.0 RMCP+ BMC simulator.
 //
-// The simulator handles the RAKP handshake (HMAC-SHA1 / HMAC-SHA256),
-// AES-CBC-128 confidentiality, and responds to a small set of IPMI
+// The simulator answers the IPMI 1.5 session-less Get Channel
+// Authentication Capabilities request a console sends first, handles the
+// RAKP handshake (HMAC-SHA1 / HMAC-SHA256), AES-CBC-128 confidentiality,
+// and responds to a small set of IPMI
 // commands sufficient to exercise power control, boot option, device
 // ID, and session management flows. It is used both by pkg/bmc unit
 // tests and by the devcontainer vBMC image to provide a real UDP IPMI
@@ -64,6 +66,10 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 )
+
+// authTypeNone is the IPMI 1.5 session header's auth type for an
+// unauthenticated, session-less message (IPMI v2.0 §13.6).
+const authTypeNone = 0x00
 
 // Options controls simulator construction.
 type Options struct {
@@ -310,6 +316,9 @@ func (s *Simulator) handlePacket(packet []byte) []byte {
 	if packet[0] != bmc.RMCPVersion || packet[3] != bmc.RMCPClassIPMI {
 		return nil
 	}
+	if packet[4] != bmc.AuthTypeRMCPPlus {
+		return s.handleSessionless(packet)
+	}
 
 	payloadType := packet[5] & 0x3F
 	isEncrypted := packet[5]&0x80 != 0
@@ -328,6 +337,61 @@ func (s *Simulator) handlePacket(packet []byte) []byte {
 		s.logger.Debug("rmcpsim: unknown payload type", "type", payloadType)
 		return nil
 	}
+}
+
+// handleSessionless answers the IPMI 1.5 session-less Get Channel
+// Authentication Capabilities request (IPMI v2.0 §22.13) a console sends
+// before it opens an RMCP+ session. A BMC answers it, so a console does not
+// wait out its read timeout on every session open. Any other packet outside
+// the RMCP+ format is dropped.
+func (s *Simulator) handleSessionless(packet []byte) []byte {
+	// IPMI 1.5 session header (IPMI v2.0 §13.6): auth type, sequence (4),
+	// session ID (4), message length; only the unauthenticated form carries
+	// no auth code.
+	if packet[4] != authTypeNone {
+		return nil
+	}
+	msgLen := int(packet[13])
+	if msgLen < 7 || len(packet) < 14+msgLen {
+		return nil
+	}
+	msg := packet[14 : 14+msgLen]
+	if msg[2] != bmc.IPMIChecksum(msg[0:2]) || msg[msgLen-1] != bmc.IPMIChecksum(msg[3:msgLen-1]) {
+		return nil
+	}
+	netfn := msg[1] >> 2
+	cmd := msg[5]
+	if netfn != bmc.NetFnApp || cmd != bmc.CmdGetAuthCapabilities {
+		s.logger.Debug("rmcpsim: unhandled session-less command", "netfn", netfn, "cmd", cmd)
+		return nil
+	}
+
+	respData := []byte{
+		0x01,             // channel number
+		0x80,             // IPMI v2.0 extended capabilities available
+		0x04,             // non-null usernames enabled
+		0x02,             // channel supports IPMI v2.0 connections
+		0x00, 0x00, 0x00, // OEM ID
+		0x00, // OEM auxiliary data
+	}
+	ipmiResp := make([]byte, 8+len(respData))
+	ipmiResp[0] = msg[3] // rqAddr
+	ipmiResp[1] = (netfn + 1) << 2
+	ipmiResp[2] = bmc.IPMIChecksum(ipmiResp[0:2])
+	ipmiResp[3] = msg[0] // rsAddr
+	ipmiResp[4] = msg[4] // rqSeq
+	ipmiResp[5] = cmd
+	ipmiResp[6] = 0x00 // completion code
+	copy(ipmiResp[7:], respData)
+	ipmiResp[len(ipmiResp)-1] = bmc.IPMIChecksum(ipmiResp[3 : len(ipmiResp)-1])
+
+	resp := make([]byte, 0, 14+len(ipmiResp))
+	resp = append(resp, packet[0:4]...)         // RMCP header
+	resp = append(resp, authTypeNone)           // auth type
+	resp = append(resp, 0x00, 0x00, 0x00, 0x00) // sequence
+	resp = append(resp, 0x00, 0x00, 0x00, 0x00) // session ID
+	resp = append(resp, byte(len(ipmiResp)))
+	return append(resp, ipmiResp...)
 }
 
 // handleOpenSession handles Open Session Request and returns Open
