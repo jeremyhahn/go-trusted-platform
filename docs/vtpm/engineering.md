@@ -72,6 +72,12 @@ otherwise surface as an unreadable open error. The type-check happens first.
 `ErrSecureBootEnrollmentFailed`, `ErrGenerationFailed`,
 `ErrSWTPMOperationFailed`.
 
+**A bundle that fails to build is removed.** `CreateBundle` deletes the partial
+bundle directory before it returns the build error. If the directory cannot be
+deleted, it returns `ErrBundleCleanupFailed` instead. That error names the
+leftover path and unwraps to both the build error and the removal error, so the
+caller sees why the bundle was refused and why its directory is still on disk.
+
 **EK certificate injection is a distinct step from EK generation.** A bundle can
 have an EK and no certificate, which is a bundle that will fail attestation for
 a reason that has nothing to do with its keys.

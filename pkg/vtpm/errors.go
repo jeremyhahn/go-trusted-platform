@@ -209,6 +209,25 @@ func (e ErrSWTPMOperationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrBundleCleanupFailed indicates a bundle failed to build and its partial
+// directory could not be removed afterwards. Both errors are kept: BuildErr is
+// why the bundle was refused, Cause is why the leftover directory remains.
+type ErrBundleCleanupFailed struct {
+	BundleID string
+	Path     string
+	BuildErr error
+	Cause    error
+}
+
+func (e ErrBundleCleanupFailed) Error() string {
+	return fmt.Sprintf("vtpm: bundle %s failed to build (%v) and removing %s failed: %v",
+		e.BundleID, e.BuildErr, e.Path, e.Cause)
+}
+
+func (e ErrBundleCleanupFailed) Unwrap() []error {
+	return []error{e.BuildErr, e.Cause}
+}
+
 // ErrNVRAMWriteFailed indicates writing to TPM NV RAM failed.
 type ErrNVRAMWriteFailed struct {
 	NVIndex uint32
