@@ -205,7 +205,8 @@ Seam: go-quicbaas #1540, embedded Secrets `GetVersion`, `ListVersions`,
 embedded daemon answers the others with `embedded: unknown method:
 quicbaas.Secrets/<method>`; its service also refuses a `deleted` status. Every
 transport that reaches those methods fails the same way on an embedded daemon.
-`test/integration/secrets` asserts that error as the declared gap on each
+`test/integration/secrets` and the `SecretsManagement` subtests of
+`test/integration/kms` assert that error as the declared gap on each
 transport that serves the operation, and the typed refusal (`ErrNoSurface` or
 `Unimplemented`) on each `MISSING` cell; the pin bump that carries the fix
 flips the gap checks to the success path.
