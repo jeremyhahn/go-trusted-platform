@@ -487,10 +487,12 @@ issuer + serial against its keyring.
     returns a typed error when neither the `file://` nor the remote branch
     resolves, and the caller aborts the swap.
 16. **Concurrency:** none of these types are documented or built as
-    concurrency-safe. `XKMSManager.initializeService` calls
-    `xkmssdk.ServiceReset()` on a **process-global** XKMS service — constructing
-    two managers in one process resets the first. Treat one manager per process,
-    and do not enroll from two goroutines.
+    concurrency-safe. Each `XKMSManager` owns a private go-xkms backend and
+    never registers it in, resets or closes the **process-global** XKMS
+    service; that registry holds platformd's KMS backends, the ones its CA
+    signs with (#949). Separate managers in one process are independent, but do
+    not share one manager between goroutines, and do not enroll from two
+    goroutines. A closed manager answers `ErrManagerClosed`.
 
 ---
 

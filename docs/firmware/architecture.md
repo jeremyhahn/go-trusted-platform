@@ -113,6 +113,12 @@ vocabulary — `StoreSoftware`, `StorePKCS11`, `StoreTPM2`, `StoreAWSKMS`,
 `StoreAzureKV`, `StoreGCPKMS`, `StoreVault` — is go-xkms's, reached through the
 go-quicbaas SDK.
 
+The `XKMSManager` backend is private to the manager. It is never registered in
+the process-wide go-xkms service, and the manager never resets or closes that
+service: platformd keeps its KMS backends there, and its CA signs EK
+certificates through them. A vTPM Secure Boot bundle build therefore leaves
+the daemon's keystore usable (#949).
+
 One honest exception, marked `DEFERRED` in the code: `XKMSManager` keeps a
 `rawBackend *xkmssdk.SoftwareBackend` so it can export an RSA private key to
 `<keys-dir>/DB.key` when `ExportKeys` is set. That exists because the installer's
