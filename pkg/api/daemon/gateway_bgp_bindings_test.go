@@ -16,7 +16,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -736,8 +735,6 @@ func TestGatewayBGP_TransportParityNotConfigured(t *testing.T) {
 		for name, call := range calls {
 			err := call()
 			assert.Equal(t, codes.Unavailable, grpcstatus.Code(err), name)
-			var notImplemented ErrGatewayOperationNotImplemented
-			assert.False(t, errors.As(err, &notImplemented), "%s must not answer not implemented", name)
 		}
 	})
 }

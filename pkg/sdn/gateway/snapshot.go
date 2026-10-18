@@ -76,6 +76,7 @@ func (g *Gateway) Snapshot() *gwstate.Snapshot {
 	snap.NAT = g.collectNAT()
 	snap.Pipeline = g.collectPipeline()
 	snap.Overlay = g.collectOverlay(ctx)
+	g.collectSupervisedDatapath(ctx, snap)
 	snap.VPN = g.collectVPN(ctx)
 	snap.PXE.Status = serviceStatus(g.hasActiveService(ServicePXE))
 	snap.DHCP.Status = serviceStatus(g.hasActiveService(ServiceDHCP))
@@ -212,6 +213,65 @@ func (g *Gateway) supervisedHandler(name string) bool {
 	g.mu.RUnlock()
 	_, supervised := handler.(*supervisedServiceHandler)
 	return supervised
+}
+
+// datapathSections copies the snapshot sections a datapath service owns from
+// the snapshot of the child that runs it. The load balancer and NAT64 own no
+// section of their own; they are listed because the child running them holds
+// the OVS runtime, and with it the pipeline section.
+var datapathSections = map[string]func(dst, src *gwstate.Snapshot){
+	ServiceTunnels: func(dst, src *gwstate.Snapshot) {
+		dst.Tunnels, dst.Uplinks = src.Tunnels, src.Uplinks
+	},
+	ServiceHostFW:       func(dst, src *gwstate.Snapshot) { dst.HostFirewall = src.HostFirewall },
+	ServiceFirewall:     func(dst, src *gwstate.Snapshot) { dst.Firewall = src.Firewall },
+	ServiceNAT:          func(dst, src *gwstate.Snapshot) { dst.NAT = src.NAT },
+	ServiceOverlay:      func(dst, src *gwstate.Snapshot) { dst.Overlay = src.Overlay },
+	ServiceLoadBalancer: func(dst, src *gwstate.Snapshot) {},
+	ServiceNAT64:        func(dst, src *gwstate.Snapshot) {},
+}
+
+// collectSupervisedDatapath fills the datapath sections whose services run in
+// a supervised child from that child's own snapshot (#557): this process
+// holds neither their backends nor the OVS runtime. A child's snapshot lists
+// every service it hosts, so each child is read once however many sections
+// it owns. An unreadable child leaves its sections empty; the failure is
+// logged, and Services already reports its services unhealthy.
+func (g *Gateway) collectSupervisedDatapath(ctx context.Context, snap *gwstate.Snapshot) {
+	read := make(map[string]*gwstate.Snapshot, len(datapathSections))
+	for service, copySection := range datapathSections {
+		if !g.supervisedHandler(service) {
+			continue
+		}
+		child, ok := read[service]
+		if !ok {
+			child = g.readSupervisedSnapshot(ctx, service)
+			read[service] = child
+			if child != nil {
+				for _, hosted := range child.Services {
+					read[hosted.Name] = child
+				}
+			}
+		}
+		if child == nil {
+			continue
+		}
+		copySection(snap, child)
+		if snap.Pipeline == nil {
+			snap.Pipeline = child.Pipeline
+		}
+	}
+}
+
+// readSupervisedSnapshot reads the snapshot of the child that runs service,
+// or logs why it cannot and returns nil.
+func (g *Gateway) readSupervisedSnapshot(ctx context.Context, service string) *gwstate.Snapshot {
+	child, err := g.config.Supervisor.ServiceSnapshot(ctx, service)
+	if err != nil {
+		g.logSnapshot("datapath state unavailable for the snapshot", &ErrSupervisedSnapshot{Service: service, Cause: err})
+		return nil
+	}
+	return child
 }
 
 // peerState maps one speaker peer onto its snapshot entry.

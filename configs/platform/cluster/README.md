@@ -51,6 +51,27 @@ High-availability deployment configuration for go-trusted-platform.
 | client2 | 10.0.2.2 | Application | - |
 | client3 | 10.0.2.3 | Application | - |
 
+Every node resolves names through dnsmasq on 127.0.0.1:53
+(`network.dnsmasq`). The servers forward to their own internal DNS on port
+9053; the clients and gateways forward to server1's (`10.0.1.1:9053`).
+
+## Secrets
+
+No example carries a literal secret. Every password and SRK authorization
+value is a `kms://` reference in the shipped-template form, for example
+`kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64`. The
+`secrets:` section (`enabled: true`, `local-kms: true`) has platformd
+resolve them through the node's embedded quicbaas SecretsService before
+anything uses them; `ensure=true` generates the value on the first start.
+
+gatewayd reads only the `gateway:` section of `gateway1` and `gateway2`. The
+platformd sections those files also carry, secrets included, are never read
+when gatewayd runs them.
+
+`TestShippedExamples_LoadOnTheCurrentSchema` (`pkg/app/example_configs_test.go`)
+loads every file here, and in `../standalone/`, the way platformd does and
+refuses a literal secret.
+
 ## Deployment Order
 
 Deploy nodes in this order to ensure proper cluster formation:

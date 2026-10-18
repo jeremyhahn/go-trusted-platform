@@ -290,7 +290,7 @@ certificate-authority:
       keystores:
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: ECDSA
@@ -299,7 +299,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA384
           hash: SHA-384
           store: tpm2
-          password: "123456"
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
       valid: 20
       subject:
@@ -319,7 +319,7 @@ certificate-authority:
           library: /usr/lib/softhsm/libsofthsm2.so
           slot: 0
           label: TLS-CA-Key
-          pin: "123456"
+          pin: "kms://ca/tls/pkcs11/pin"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -328,7 +328,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: pkcs11
-          password: "123456"
+          password: "kms://ca/tls/keys/0/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
       valid: 10
       subject:
@@ -346,7 +346,7 @@ certificate-authority:
       keystores:
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/device/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: ECDSA
@@ -355,7 +355,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: "123456"
+          password: "kms://ca/device/keys/0/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
       valid: 10
       subject:

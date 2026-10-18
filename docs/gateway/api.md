@@ -66,6 +66,11 @@ above (daemon REST stack only), QUIC translates to and from the
 messages, with `verdict_at` as Unix seconds), and REST and MCP wrap the bare
 single-VTEP record into `GetGatewayAdmittedVTEPResponse.vtep`.
 
+When the daemon has no snapshot reader wired, the snapshot and admitted-VTEP
+reads answer "not configured", never "not implemented": `StatusUnavailable`
+on QUIC, 503 on the two admitted-VTEP REST routes, and "service not
+available: gateway" from MCP, which carries the `Unavailable` class (#65).
+
 **Every transport answers status and mode from the one gateway gRPC service
 (#65).** QUIC, MCP and the `/api/v1/sdn/gateway/{status,mode}` REST routes
 bind to it in `pkg/api/daemon/gateway_status_bindings.go`; gRPC, Unix and the

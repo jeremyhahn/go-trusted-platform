@@ -35,11 +35,19 @@ import (
 const ovsConnectTimeout = 30 * time.Second
 
 // runs reports whether this gatewayd runs service: the shared configuration
-// enables it (on) and this process hosts it. Every decision to open OVSDB or
-// OpenFlow, or to dial platformd, for a service goes through it, so a
-// supervised child never touches what another process hosts.
+// enables it (on), this process hosts it, and no supervised child runs it
+// instead. Every decision to open OVSDB or OpenFlow, or to dial platformd,
+// for a service goes through it, so a supervised child never touches what
+// another process hosts and a supervisor never touches what its children
+// host.
 func runs(gwCfg *gateway.GatewayConfig, on bool, service string) bool {
-	return on && gwCfg.Hosts(service)
+	return on && gwCfg.Hosts(service) && !supervised(gwCfg, service)
+}
+
+// supervised reports whether a supervised child of this gatewayd runs
+// service, so this process only relays to it.
+func supervised(gwCfg *gateway.GatewayConfig, service string) bool {
+	return gwCfg.Supervisor != nil && gwCfg.Supervisor.Supervises(service)
 }
 
 // runsOverlay reports whether this gatewayd runs the overlay service.

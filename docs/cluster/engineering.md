@@ -186,9 +186,12 @@ refuses, with typed errors, what go-quicbaas would otherwise accept silently:
 
 The TLS check is presence only; go-quicbaas reads the files at start and fails
 with `RaftMTLSLoadError`. TPM-held Raft keys are out of scope until the issuer
-of peer certificates is ruled on. `TestShippedClusterExamples_*`
-(`pkg/app/templates_network_test.go`) load every `configs/platform/cluster`
-example through platformd's loader and `Validate`.
+of peer certificates is ruled on. `TestShippedExamples_LoadOnTheCurrentSchema`
+(`pkg/app/example_configs_test.go`) loads every `configs/platform/cluster` and
+`configs/platform/standalone` example through platformd's strict key check and
+full decode, `Validate`, and the host-network and web-service checks, and
+refuses a literal secret in any of them. `TestShippedClusterExamples_*`
+(`pkg/app/templates_network_test.go`) prove the three servers form one cluster.
 
 **`startup-timeout` is deliberately separate from `request-timeout`** (#270).
 `request-timeout` bounds ONE DAO operation; startup constructs the data-plane

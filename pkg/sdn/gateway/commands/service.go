@@ -149,6 +149,9 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	defer closeGatewayRuntime(gw, logger)
 
 	server := ipc.NewServer(gw, servicePolicy(def, opts))
+	// Hardened already, so the kernel-class child holds no CAP_CHOWN and is
+	// not in the socket group: its socket takes the group from the
+	// supervisor's setgid runtime directory, and Listen only verifies it.
 	if err := server.Listen(opts.socket, serviceSocketMode, opts.socketGroup); err != nil {
 		return err
 	}

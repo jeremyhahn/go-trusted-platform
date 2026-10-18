@@ -19,14 +19,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,6 +40,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
 // The supervised-process proof for #557: a real `gatewayd serve` with the
@@ -69,7 +73,10 @@ const (
 
 // supervisedConfig is the gatewayd configuration the suite runs. The proxy
 // listener and the BGP port are fixed rather than ephemeral because a
-// relaunched child must bind the same address its predecessor held.
+// relaunched child must bind the same address its predecessor held. The load
+// balancer is the datapath service: of the datapath services it alone needs
+// no zone networks, and its config VIP gives the bridge flows and a group the
+// suite can compare across a kill.
 const supervisedConfig = `gateway:
   enabled: true
   id: gw-supervised
@@ -78,6 +85,19 @@ const supervisedConfig = `gateway:
     router-id: 192.0.2.1
     listen-port: %s
     listen-addresses: [%s]
+  load-balancer:
+    enabled: true
+    algorithm: hash
+    health-check-interval: 1h
+    health-check-timeout: 1s
+    max-backends: 8
+    vips:
+      - address: 10.100.0.20
+        port: 80
+        protocol: tcp
+        backends:
+          - address: 10.0.1.7
+            port: 8080
 proxy:
   enabled: true
   tls:
@@ -106,14 +126,26 @@ process:
   stop-timeout: 10s
   restart-budget: 5
   restart-window: 5m
+sdn:
+  enabled: true
+  environment:
+    id: 4
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: %s
 `
+
+// supervisedBridge is the OVS bridge the datapath child programs; the suite
+// creates it, so nothing but that child writes to it.
+const supervisedBridge = "br-gwsup"
 
 // probes says how the suite tells each supervised child is serving again.
 // A child the assembly starts that has no probe here fails the test, so a
 // class added later cannot go unproven.
 var probes = map[string]func(gw *supervisedGatewayd) bool{
-	"proxy":   (*supervisedGatewayd).proxyServes,
-	"routing": (*supervisedGatewayd).bgpListens,
+	"datapath": (*supervisedGatewayd).datapathReconciled,
+	"proxy":    (*supervisedGatewayd).proxyServes,
+	"routing":  (*supervisedGatewayd).bgpListens,
 }
 
 // supervisedGatewayd is one running `gatewayd serve`.
@@ -126,6 +158,10 @@ type supervisedGatewayd struct {
 	bgpAddress   string
 	cgroupParent string
 	client       *http.Client
+
+	// programmed is the bridge as the datapath child left it before the
+	// current kill; datapathReconciled compares the successor against it.
+	programmed bridgeState
 }
 
 func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
@@ -139,8 +175,8 @@ func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if strings.Join(names, ",") != "proxy,routing" {
-		t.Fatalf("supervised children = %v, want the proxy and routing processes", started)
+	if strings.Join(names, ",") != "datapath,proxy,routing" {
+		t.Fatalf("supervised children = %v, want the datapath, proxy and routing processes", started)
 	}
 
 	for _, name := range names {
@@ -151,6 +187,7 @@ func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
 			}
 			before := gw.children(t)
 			failedBefore := load.failed.Load()
+			gw.programmed = gw.bridge(t)
 
 			killedAt := time.Now()
 			if err := syscall.Kill(before[name], syscall.SIGKILL); err != nil {
@@ -158,6 +195,20 @@ func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
 			}
 			after := gw.awaitRelaunch(t, name, before, probe)
 			t.Logf("%s: pid %d killed, pid %d serving %v later", name, before[name], after[name], time.Since(killedAt).Round(time.Millisecond))
+
+			// The successor reconciles the flows and groups its predecessor
+			// left, under a generation of its own; a kill elsewhere leaves
+			// the bridge untouched, generations and all.
+			revalidate(t)
+			bridge := gw.bridge(t)
+			if !slices.Equal(bridge.rules, gw.programmed.rules) {
+				t.Errorf("bridge after the %s kill:\n%s\nwant:\n%s", name,
+					strings.Join(bridge.rules, "\n"), strings.Join(gw.programmed.rules, "\n"))
+			}
+			if name != "datapath" && !maps.Equal(bridge.generations, gw.programmed.generations) {
+				t.Errorf("the %s kill moved the datapath generations %v -> %v", name,
+					gw.programmed.generations, bridge.generations)
+			}
 
 			load.waitForTraffic(t)
 			if name != "proxy" {
@@ -266,8 +317,9 @@ func startSupervisedGatewayd(t *testing.T) *supervisedGatewayd {
 		t.Fatalf("split %s: %v", bgpAddress, err)
 	}
 	cgroupParent := UniqueID("gatewayd-it")
+	createSupervisedBridge(t)
 	config := fmt.Sprintf(supervisedConfig, bgpPort, bgpHost, certFile, keyFile, proxyAddress,
-		echo.URL, filepath.Join(dir, "run"), cgroupParent, supervisedReadyTimeout)
+		echo.URL, filepath.Join(dir, "run"), cgroupParent, supervisedReadyTimeout, supervisedBridge)
 	configPath := filepath.Join(dir, "gatewayd.yaml")
 	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -312,10 +364,11 @@ func startSupervisedGatewayd(t *testing.T) *supervisedGatewayd {
 	})
 	t.Cleanup(func() { gw.stop(t) })
 
-	WaitFor(t, 60*time.Second, 200*time.Millisecond, "the proxy and routing children to serve", func() bool {
+	WaitFor(t, 60*time.Second, 200*time.Millisecond, "the datapath, proxy and routing children to serve", func() bool {
 		gw.requireRunning(t)
 		children := gw.children(t)
-		return children["proxy"] != 0 && children["routing"] != 0 && gw.proxyServes() && gw.bgpListens()
+		return children["datapath"] != 0 && children["proxy"] != 0 && children["routing"] != 0 &&
+			gw.datapathProgrammed() && gw.proxyServes() && gw.bgpListens()
 	})
 	return gw
 }
@@ -425,6 +478,222 @@ func (g *supervisedGatewayd) bgpListens() bool {
 		return false
 	}
 	return conn.Close() == nil
+}
+
+// datapathProgrammed reports whether the datapath child has programmed the
+// suite bridge: flows under a gateway generation, and the VIP's group.
+func (g *supervisedGatewayd) datapathProgrammed() bool {
+	state, err := readBridge()
+	if err != nil {
+		return false
+	}
+	return len(state.generations) > 0 && slices.ContainsFunc(state.rules, func(rule string) bool {
+		return strings.HasPrefix(rule, "group_id=")
+	})
+}
+
+// datapathReconciled reports whether a relaunched datapath child has
+// reprogrammed the bridge: the flows and groups the killed child left, none
+// still under a generation the killed child stamped. Until the successor
+// sweeps them, a stale generation also shows as a duplicate rule.
+func (g *supervisedGatewayd) datapathReconciled() bool {
+	state, err := readBridge()
+	if err != nil || !slices.Equal(state.rules, g.programmed.rules) {
+		return false
+	}
+	if len(state.generations) != len(g.programmed.generations) {
+		return false
+	}
+	for cookie := range state.generations {
+		if g.programmed.generations[cookie] {
+			return false
+		}
+	}
+	return true
+}
+
+// bridge is readBridge for a caller that cannot go on without the dump.
+func (g *supervisedGatewayd) bridge(t *testing.T) bridgeState {
+	t.Helper()
+	state, err := readBridge()
+	if err != nil {
+		t.Fatalf("read %s: %v", supervisedBridge, err)
+	}
+	return state
+}
+
+// bridgeState is the suite bridge's flows and groups, sorted, each flow's
+// counters dropped and its gateway cookie cut to the owner id, so two dumps
+// of the same programming compare equal whichever generation stamped it.
+// generations is the set of full gateway cookies the flows carried.
+type bridgeState struct {
+	rules       []string
+	generations map[uint64]bool
+}
+
+// flowCounters are the dump-flows fields that change with time and traffic,
+// not with what the datapath programmed.
+var flowCounters = []string{"duration=", "n_packets=", "n_bytes=", "idle_age=", "hard_age="}
+
+// readBridge dumps the suite bridge's flows and groups.
+func readBridge() (bridgeState, error) {
+	flows, err := ovsCommand("ovs-ofctl", "-O", "OpenFlow13", "dump-flows", supervisedBridge)
+	if err != nil {
+		return bridgeState{}, err
+	}
+	groups, err := ovsCommand("ovs-ofctl", "-O", "OpenFlow13", "dump-groups", supervisedBridge)
+	if err != nil {
+		return bridgeState{}, err
+	}
+	return parseBridge(flows, groups)
+}
+
+// parseBridge builds a bridgeState from dump-flows and dump-groups output.
+func parseBridge(flows, groups string) (bridgeState, error) {
+	state := bridgeState{generations: make(map[uint64]bool)}
+	for _, line := range strings.Split(flows, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "cookie=") {
+			continue // the reply header
+		}
+		rule, err := state.addFlow(line)
+		if err != nil {
+			return bridgeState{}, err
+		}
+		state.rules = append(state.rules, rule)
+	}
+	for _, line := range strings.Split(groups, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "group_id=") {
+			state.rules = append(state.rules, line)
+		}
+	}
+	slices.Sort(state.rules)
+	return state, nil
+}
+
+// addFlow records the flow's gateway cookie and returns the flow without its
+// counters and with the cookie cut to its owner.
+func (s bridgeState) addFlow(line string) (string, error) {
+	fields := strings.Split(line, ", ")
+	kept := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if slices.ContainsFunc(flowCounters, func(counter string) bool { return strings.HasPrefix(field, counter) }) {
+			continue
+		}
+		if value, ok := strings.CutPrefix(field, "cookie="); ok {
+			cookie, err := strconv.ParseUint(value, 0, 64)
+			if err != nil {
+				return "", &bridgeDumpError{Line: line, Cause: err}
+			}
+			if owner := cookie & ovs.OwnerCookieMask; owner != 0 {
+				s.generations[cookie] = true
+				field = fmt.Sprintf("owner=0x%x", owner)
+			}
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, ", "), nil
+}
+
+// bridgeDumpError is a dump-flows line whose cookie does not parse.
+type bridgeDumpError struct {
+	Line  string
+	Cause error
+}
+
+func (e *bridgeDumpError) Error() string {
+	return fmt.Sprintf("dump-flows line %q: %v", e.Line, e.Cause)
+}
+
+func (e *bridgeDumpError) Unwrap() error { return e.Cause }
+
+// ovsCommandError is an OVS command the suite ran that failed.
+type ovsCommandError struct {
+	Args   []string
+	Output string
+	Cause  error
+}
+
+func (e *ovsCommandError) Error() string {
+	return fmt.Sprintf("%s: %v: %s", strings.Join(e.Args, " "), e.Cause, e.Output)
+}
+
+func (e *ovsCommandError) Unwrap() error { return e.Cause }
+
+// ovsCommand runs an OVS command and returns its output.
+func ovsCommand(args ...string) (string, error) {
+	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	if err != nil {
+		return "", &ovsCommandError{Args: args, Output: string(out), Cause: err}
+	}
+	return string(out), nil
+}
+
+// revalidate waits for OVS to bring its datapath flows in line with the
+// OpenFlow tables, so nothing the comparison reads is still in flight.
+func revalidate(t *testing.T) {
+	t.Helper()
+	if _, err := ovsCommand("ovs-appctl", "revalidator/wait"); err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+}
+
+// createSupervisedBridge gives the datapath child an OpenFlow 1.3 bridge of
+// its own, deleted when the test ends, and waits for its management socket.
+func createSupervisedBridge(t *testing.T) {
+	t.Helper()
+	if _, err := ovsCommand("ovs-vsctl", "--if-exists", "del-br", supervisedBridge); err != nil {
+		t.Fatalf("clear %s: %v", supervisedBridge, err)
+	}
+	if _, err := ovsCommand("ovs-vsctl", "add-br", supervisedBridge,
+		"--", "set", "bridge", supervisedBridge, "protocols=OpenFlow13"); err != nil {
+		t.Fatalf("create %s: %v", supervisedBridge, err)
+	}
+	t.Cleanup(func() {
+		if _, err := ovsCommand("ovs-vsctl", "--if-exists", "del-br", supervisedBridge); err != nil {
+			t.Errorf("delete %s: %v", supervisedBridge, err)
+		}
+	})
+	socket := filepath.Join("/var/run/openvswitch", supervisedBridge+".mgmt")
+	WaitFor(t, 10*time.Second, 50*time.Millisecond, "the "+supervisedBridge+" management socket", func() bool {
+		_, err := os.Stat(socket)
+		return err == nil
+	})
+}
+
+func TestParseBridgeComparesProgrammingNotGenerations(t *testing.T) {
+	const header = "OFPST_FLOW reply (OF1.3) (xid=0x2):\n"
+	first, err := parseBridge(header+
+		" cookie=0xf1be000300000001, duration=1.5s, table=0, n_packets=4, n_bytes=240, priority=100,tcp,nw_dst=10.100.0.20,tp_dst=80 actions=group:1\n"+
+		" cookie=0x0, duration=1.5s, table=0, n_packets=0, n_bytes=0, priority=0 actions=NORMAL\n",
+		"OFPST_GROUP_DESC reply (OF1.3) (xid=0x2):\n group_id=1,type=select,bucket=actions=output:7\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	second, err := parseBridge(header+
+		" cookie=0xf1be000300000002, duration=9.1s, table=0, n_packets=0, n_bytes=0, priority=100,tcp,nw_dst=10.100.0.20,tp_dst=80 actions=group:1\n"+
+		" cookie=0x0, duration=9.1s, table=0, n_packets=7, n_bytes=420, priority=0 actions=NORMAL\n",
+		" group_id=1,type=select,bucket=actions=output:7\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !slices.Equal(first.rules, second.rules) {
+		t.Errorf("rules differ only in counters and generation, yet\n%v\n!=\n%v", first.rules, second.rules)
+	}
+	if want := map[uint64]bool{0xf1be000300000001: true}; !maps.Equal(first.generations, want) {
+		t.Errorf("generations = %v, want %v: the uncookied flow carries none", first.generations, want)
+	}
+	if len(first.rules) != 3 {
+		t.Errorf("rules = %v, want two flows and one group", first.rules)
+	}
+}
+
+func TestParseBridgeRefusesAnUnparsableCookie(t *testing.T) {
+	_, err := parseBridge(" cookie=0xzz, table=0, priority=0 actions=NORMAL\n", "")
+	var dumpErr *bridgeDumpError
+	if !errors.As(err, &dumpErr) {
+		t.Fatalf("err = %v, want *bridgeDumpError", err)
+	}
 }
 
 // requireRunning fails the test at once if gatewayd itself has exited: the

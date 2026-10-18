@@ -551,7 +551,9 @@ func (e *ErrServiceUnhealthy) Unwrap() error {
 // ErrSupervisedSnapshot reports a snapshot section whose state lives in a
 // supervised child that could not be read (#557). The snapshot carries it in
 // the section's error field rather than omitting the section's detail
-// silently. Cause is the supervisor's own typed error.
+// silently; a datapath section, which has no error field, is left empty and
+// the failure is logged, while Services reports the service unhealthy. Cause
+// is the supervisor's own typed error.
 type ErrSupervisedSnapshot struct {
 	Service string
 	Cause   error

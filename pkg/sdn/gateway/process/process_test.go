@@ -71,16 +71,29 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 	for _, service := range []string{gateway.ServiceDHCP, gateway.ServicePXE, gateway.ServiceEdge} {
 		assert.Truef(t, sup.Supervises(service), "%s: provisioning is the third process moved out (#557)", service)
 	}
-	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceManagementVPN} {
-		assert.Falsef(t, sup.Supervises(service), "%s has not moved yet", service)
+	datapath, err := DefinitionByName("datapath")
+	require.NoError(t, err)
+	for _, service := range datapath.Services {
+		assert.Truef(t, sup.Supervises(service), "%s: datapath is the last process moved out (#557, R14)", service)
 	}
-	// Only a parser moves first: the kernel class stays with the parent
-	// until the datapath IPC is the parent's only way to program it.
+	// vpn moves once it has a backend; until then it runs in the parent.
+	assert.False(t, sup.Supervises(gateway.ServiceManagementVPN), "vpn has no backend yet and has not moved")
+
+	// Every moved parser drops to the service account. The one moved
+	// process that keeps privilege is the kernel class, and it keeps
+	// exactly the two capabilities the kernel needs from it.
 	for _, def := range Definitions() {
-		if def.Supervised {
-			assert.Equal(t, ClassParser, def.Class, def.Name)
-			assert.True(t, def.Unprivileged, "%s: a moved parser drops to the service account", def.Name)
+		if !def.Supervised {
+			continue
 		}
+		if def.Class == ClassKernel {
+			assert.Equal(t, "datapath", def.Name, "datapath is the only kernel-class process")
+			assert.False(t, def.Unprivileged, "datapath programs the kernel and cannot drop to the service account")
+			assert.ElementsMatch(t, []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW}, def.Capabilities)
+			continue
+		}
+		assert.Equal(t, ClassParser, def.Class, def.Name)
+		assert.True(t, def.Unprivileged, "%s: a moved parser drops to the service account", def.Name)
 	}
 }
 
@@ -716,6 +729,9 @@ func TestStartService_CreatesTheControlSocketDirectory(t *testing.T) {
 			"so the service group needs write; at 0750 every parser gets EACCES from bind")
 	assert.NotZero(t, info.Mode()&os.ModeSticky,
 		"the parsers share one account, so the sticky bit is what stops one unlinking another's socket")
+	assert.NotZero(t, info.Mode()&os.ModeSetgid,
+		"every socket bound here inherits the service group, so the datapath child needs no CAP_CHOWN")
+	assert.Equal(t, uint32(os.Getgid()), info.Sys().(*syscall.Stat_t).Gid, "the directory has the socket group")
 	assert.Zero(t, info.Mode().Perm()&0o007, "and nothing else on the host may do anything")
 
 	// An unusable path is a typed error, not a launch that half-happens.
@@ -764,6 +780,26 @@ func TestBindableByServiceGroup_TheModesAChildCanAndCannotBindIn(t *testing.T) {
 	err := &ErrSocketDirNotGroupWritable{Path: "/run/gatewayd", Mode: 0o750}
 	assert.Contains(t, err.Error(), "0750")
 	assert.Contains(t, err.Error(), "bind its control socket")
+}
+
+func TestSocketDirFault_ASocketGroupNeedsTheSetgidBit(t *testing.T) {
+	// The datapath child stays uid 0 but keeps only CAP_NET_ADMIN and
+	// CAP_NET_RAW and is not in the service group: it cannot chown its socket,
+	// so the socket has to inherit the group from a setgid directory.
+	const dir = "/run/gatewayd"
+	assert.NoError(t, socketDirFault(dir, os.ModeDir|runtimeDirMode, true))
+	assert.NoError(t, socketDirFault(dir, os.ModeDir|os.ModeSticky|0o770, false),
+		"without a socket group there is nothing to inherit")
+
+	var notSetgid *ErrSocketDirNotSetgid
+	require.ErrorAs(t, socketDirFault(dir, os.ModeDir|os.ModeSticky|0o770, true), &notSetgid)
+	assert.Equal(t, os.FileMode(0o770), notSetgid.Mode)
+	assert.Contains(t, notSetgid.Error(), "0770")
+	assert.Contains(t, notSetgid.Error(), "setgid")
+
+	var notWritable *ErrSocketDirNotGroupWritable
+	require.ErrorAs(t, socketDirFault(dir, os.ModeDir|os.ModeSetgid|0o750, true), &notWritable,
+		"group write is checked first: without it no child binds at all")
 }
 
 func TestStartService_RefusesAServiceWithNoProcessClass(t *testing.T) {

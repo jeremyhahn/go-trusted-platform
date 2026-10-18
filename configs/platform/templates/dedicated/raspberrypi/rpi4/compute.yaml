@@ -64,9 +64,8 @@ platform:
   # a distributed lock in the SecretsService. Paths are short-form —
   # tenant and node identifiers are implicitly prepended at resolution
   # time from platform.tenant_id and the node hostname.
-  # TODO: revert to kms:// once firstboot seeds SecretsService pre-platformd.
-  so-pin: "12345678"
-  user-pin: "123456"
+  so-pin: "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
 
 
 # =============================================================================

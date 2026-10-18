@@ -14,6 +14,13 @@ hostmaster: hostmaster@server.example.com
 tenant-id: platform
 pin-seal-policy: true
 
+# Secret resolution: every secret below is a kms:// reference, resolved
+# (and, with ensure=true, generated on first start) by the embedded
+# quicbaas SecretsService. No literal secret is kept in this file.
+secrets:
+  enabled: true
+  local-kms: true
+
 
 # =============================================================================
 # INSTALLATION CONFIGURATION (System Manifest)
@@ -136,7 +143,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: 123456
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
         tpm-policy: platform
         ecc:
           curve: P-256
@@ -376,7 +383,7 @@ tpm:
   golden-pcrs: [7, 9]
   platform-srk:
     srk-handle: 0x81000002
-    srk-auth: 123456
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 
 
@@ -404,7 +411,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: 123456
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         # PKCS #8 RSA w/ PSS
@@ -414,7 +421,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -425,7 +432,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -436,7 +443,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -447,7 +454,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -458,7 +465,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -486,7 +493,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: 123456
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - # PKCS #8 RSA w/ PSS
@@ -496,7 +503,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -507,7 +514,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -518,7 +525,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -529,7 +536,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
 
@@ -540,7 +547,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
           tpm-policy: platform
           debug: true
       valid: 10
@@ -621,7 +628,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: 123456
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
       tpm-policy: platform
       debug: true
     certificate:
@@ -698,7 +705,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: 123456
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
       tpm-policy: platform
       debug: true
     certificate:

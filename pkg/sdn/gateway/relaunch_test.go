@@ -54,15 +54,38 @@ func (c *gatewayChild) exit(err error) {
 	})
 }
 
+// kill ends the child as SIGKILL does: its socket goes, but its gateway
+// never stops, so everything it programmed stays on the bridge. The gateway
+// is stopped only once the test is over, to end its goroutines.
+func (c *gatewayChild) kill(t *testing.T) {
+	c.once.Do(func() {
+		c.err = errors.New("signal: killed")
+		c.server.Stop()
+		close(c.done)
+	})
+	t.Cleanup(func() {
+		if err := c.gw.Stop(context.Background()); err != nil {
+			t.Logf("the killed child's gateway, stopped after the test: %v", err)
+		}
+	})
+}
+
 type gatewayLauncher struct {
 	t *testing.T
+	// runtime builds each child's datapath runtime; nil gives every child
+	// its own fake one.
+	runtime func() *gateway.GatewayRuntime
 
 	mu       sync.Mutex
 	children []*gatewayChild
 }
 
 func (l *gatewayLauncher) Launch(_ context.Context, spec process.Spec) (process.Child, error) {
-	gw, err := gateway.NewGateway(relaunchGatewayConfig())
+	config := relaunchGatewayConfig()
+	if l.runtime != nil {
+		config.Runtime = l.runtime()
+	}
+	gw, err := gateway.NewGateway(config)
 	if err != nil {
 		return nil, err
 	}
@@ -155,15 +178,18 @@ func heldDNAT(gw *gateway.Gateway) []string {
 	return out
 }
 
-func TestSupervisedRelaunch_TheNewChildHoldsTheDesiredVIPsAndDNATRules(t *testing.T) {
-	// A relaunched datapath child sweeps its predecessor's flows on Start,
-	// and the parent still holds the document's version, so without the
-	// supervisor's re-send the desired VIP and DNAT rule would stay missing
-	// until the document changed (#557).
+// startRelaunchSupervisor supervises the datapath child launcher builds,
+// with its load balancer and NAT started and the relaunch document applied,
+// and returns the first child.
+func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewayLauncher) (*process.Supervisor, *gatewayChild) {
+	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "gwrl")
 	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	launcher := &gatewayLauncher{t: t}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove runtime dir: %v", err)
+		}
+	})
 	supervisor := process.New(process.Config{
 		Launcher:       launcher,
 		RuntimeDir:     dir,
@@ -174,8 +200,6 @@ func TestSupervisedRelaunch_TheNewChildHoldsTheDesiredVIPsAndDNATRules(t *testin
 		RestartBackoff: time.Millisecond,
 		RestartWindow:  time.Minute,
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
 	t.Cleanup(func() {
 		if err := supervisor.Shutdown(context.Background()); err != nil {
 			t.Errorf("shutdown: %v", err)
@@ -200,20 +224,70 @@ func TestSupervisedRelaunch_TheNewChildHoldsTheDesiredVIPsAndDNATRules(t *testin
 	require.NoError(t, err)
 	first := launcher.child(1)
 	require.NotNil(t, first)
+	return supervisor, first
+}
+
+// awaitRelaunch waits until the supervisor reports the relaunched child up,
+// which it does only once the child holds its document again, and returns
+// that child.
+func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatewayLauncher) *gatewayChild {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return launcher.child(2) != nil &&
+			supervisor.ServiceHealth(gateway.ServiceLoadBalancer) == nil &&
+			supervisor.ServiceHealth(gateway.ServiceNAT) == nil
+	}, 15*time.Second, 10*time.Millisecond, "the relaunched child is reported up once it holds its document")
+	return launcher.child(2)
+}
+
+func TestSupervisedRelaunch_TheNewChildHoldsTheDesiredVIPsAndDNATRules(t *testing.T) {
+	// A relaunched datapath child sweeps its predecessor's flows on Start,
+	// and the parent still holds the document's version, so without the
+	// supervisor's re-send the desired VIP and DNAT rule would stay missing
+	// until the document changed (#557).
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	launcher := &gatewayLauncher{t: t}
+	supervisor, first := startRelaunchSupervisor(t, ctx, launcher)
 	assert.ElementsMatch(t, []string{"10.100.0.20:80"}, heldVIPs(first.gw))
 	assert.Equal(t, []string{"10.0.100.5:22"}, heldDNAT(first.gw))
 
 	first.exit(errors.New("signal: killed"))
 
-	require.Eventually(t, func() bool {
-		return supervisor.ServiceHealth(gateway.ServiceLoadBalancer) == nil &&
-			supervisor.ServiceHealth(gateway.ServiceNAT) == nil
-	}, 15*time.Second, 10*time.Millisecond, "the relaunched child is reported up once it holds its document")
-	second := launcher.child(2)
-	require.NotNil(t, second)
+	second := awaitRelaunch(t, supervisor, launcher)
 	assert.ElementsMatch(t, []string{"10.100.0.20:80"}, heldVIPs(second.gw),
 		"the desired VIP is back on the relaunched child")
 	assert.Equal(t, []string{"10.0.100.5:22"}, heldDNAT(second.gw),
 		"the desired DNAT rule is back on the relaunched child")
 	assert.Equal(t, "rev-1", second.gw.DesiredConfigState().Version)
+}
+
+func TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft(t *testing.T) {
+	// SIGKILL runs no Stop, so the killed child's flows and groups are still
+	// on the bridge when its successor starts there. The successor gets the
+	// desired document again and must end holding exactly the flows the
+	// first child held, every one under its own generation: a stale
+	// generation left behind is a flow no process owns (#557).
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	bridge := gateway.NewTestBridge()
+	launcher := &gatewayLauncher{t: t, runtime: func() *gateway.GatewayRuntime { return gateway.NewTestRuntimeOn(bridge) }}
+	supervisor, first := startRelaunchSupervisor(t, ctx, launcher)
+
+	before := bridge.State()
+	require.NotEmpty(t, before)
+	firstGenerations := bridge.Generations()
+	require.Len(t, firstGenerations, 2, "the load balancer and NAT each stamp their flows")
+
+	first.kill(t)
+	require.Equal(t, before, bridge.State(), "a killed child withdraws nothing")
+
+	awaitRelaunch(t, supervisor, launcher)
+	assert.Equal(t, before, bridge.State(), "the successor holds what the killed child held")
+	generations := bridge.Generations()
+	require.Len(t, generations, len(firstGenerations))
+	for owner, held := range generations {
+		require.Len(t, held, 1, "owner 0x%x keeps one generation, the successor's", owner)
+		assert.NotEqual(t, firstGenerations[owner], held, "owner 0x%x carries the successor's generation", owner)
+	}
 }

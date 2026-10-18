@@ -348,11 +348,16 @@ On an internet edge, the parsers that face the internet should not share a
 process with the datapath. The `process:` section turns on the supervised
 model (#557): `gatewayd serve` starts each supervised process as a child,
 dropped to its own privilege class, and restarts it with backoff if it dies.
-Today three processes move: `routing` (`transit`, the BGP speaker), `proxy`
-(the authenticating reverse proxy, when `proxy:` enables it) and
-`provisioning` (`edge`, `dhcp`, `pxe`). Each runs as the service account and
-holds `CAP_NET_BIND_SERVICE` alone. Every other service stays in the main
-process. The provisioning sections have no backend yet, so enabling one still
+Four processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
+authenticating reverse proxy, when `proxy:` enables it) and `provisioning`
+(`edge`, `dhcp`, `pxe`) each run as the service account and hold
+`CAP_NET_BIND_SERVICE` alone; `datapath` (`firewall`, `nat`, `load-balancer`,
+`nat64`, `hostfw`, `tunnels`, `overlay`) stays root but keeps only
+`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB.
+Only the management VPN stays in the main process. A desired configuration
+pushed to the gateway goes to the `datapath` process, and a restarted
+`datapath` process gets the last one again and reprograms its flows from it.
+The provisioning sections have no backend yet, so enabling one still
 stops the daemon with the section's reason, which now comes from the
 `provisioning` child.
 
@@ -383,7 +388,10 @@ account must own. A process that has
 used up its restart budget stays down, and the gateway status reports it.
 The gateway snapshot still shows the BGP peers, read from the routing
 process; if that process cannot be reached, the snapshot's `bgp.error` says
-why rather than showing a speaker with no peers.
+why rather than showing a speaker with no peers. The firewall, NAT, host
+filter, tunnel, overlay and pipeline sections are read from the `datapath`
+process; if it cannot be reached they are left out, and the gateway status
+reports those services unhealthy.
 
 ## Checking a gateway
 
