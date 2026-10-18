@@ -134,7 +134,9 @@ process exits, the orchestrator (`recordExit`, `pkg/compute/qemu.go`) moves a
 any other state, so a VM whose guest powers off or crashes while `running` or
 `suspended` keeps that state, with its PID cleared and a warning logged. An
 `error` VM stays `error`, and a VM already deleted or migrated away is not
-recreated.
+recreated. Stopping such a VM, forced or not, records it `stopped`: there is no
+process left to stop, so the stop is complete. Suspending or resuming it is
+FailedPrecondition, because there is no QEMU process to pause or continue.
 
 **Reboot is stop then start** on every transport (`compute.RebootWithOptions`,
 `pkg/compute/reboot.go`), so a stopped VM refuses a reboot with

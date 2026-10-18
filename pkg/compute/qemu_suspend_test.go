@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
 
 var errFakeQMP = errors.New("fake QMP failure")
@@ -274,6 +276,49 @@ func TestStop_StoppedVMIsRefused(t *testing.T) {
 
 	err := orch.Stop(context.Background(), "vm1")
 	assert.ErrorIs(t, err, ErrInstanceNotRunning)
+}
+
+// installExitedProcessSeam stands in for a QEMU process that exited on its
+// own: Start's wait goroutine has already returned and recorded the exit, so
+// the process stop finds nothing to stop.
+func installExitedProcessSeam(t *testing.T) {
+	t.Helper()
+	orig := stopVMProcess
+	stopVMProcess = func(inst *qemuInstance, opts StopOptions) error {
+		return qemu.ErrVMNotRunning
+	}
+	t.Cleanup(func() { stopVMProcess = orig })
+}
+
+func TestStop_ExitedProcessIsRecordedStopped(t *testing.T) {
+	for _, opts := range []StopOptions{{}, {Force: true}} {
+		orch := newOpsOrchestrator(t)
+		qi := insertVMInstance(t, orch, "vm1", true, &InstanceConfig{})
+		installRunControlSeam(t, &fakeRunControl{}, nil)
+		installExitedProcessSeam(t)
+
+		require.NoError(t, orch.StopWithOptions(context.Background(), "vm1", opts))
+		assertVMState(t, orch, qi, StateStopped)
+		assert.Zero(t, qi.instance.PID)
+	}
+}
+
+func TestSuspendResume_ExitedProcessIsNotRunning(t *testing.T) {
+	exited := &WrappedError{Msg: "failed to connect QMP monitor", Err: qemu.ErrVMNotRunning}
+
+	orch := newOpsOrchestrator(t)
+	running := insertVMInstance(t, orch, "vm1", true, &InstanceConfig{})
+	suspended := insertSuspendedVM(t, orch, "vm2")
+	installRunControlSeam(t, nil, exited)
+
+	err := orch.Suspend(context.Background(), "vm1")
+	require.ErrorIs(t, err, ErrInstanceNotRunning)
+	assert.ErrorIs(t, err, qemu.ErrVMNotRunning)
+	assertVMState(t, orch, running, StateRunning)
+
+	err = orch.Resume(context.Background(), "vm2")
+	require.ErrorIs(t, err, ErrInstanceNotRunning)
+	assertVMState(t, orch, suspended, StateSuspended)
 }
 
 func TestDelete_SuspendedVMIsStoppedFirst(t *testing.T) {
