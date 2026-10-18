@@ -157,22 +157,22 @@ reachable by unidentified machines and is rate-limited for that reason.
 | Unit | `pkg/provisioning/**/*_test.go`, `pkg/installer/*_test.go` | Session state, nonce handling, config generation, UKI rebuild |
 | Integration | `test/integration/provision/`, `test/integration/pxe/`, `test/integration/ipxe/`, `test/integration/iso/` | Real boot flows |
 
-**Known holes in the integration suite:**
+`test/integration/pxe/` drives every transport through real clients: the REST,
+CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`) pinned to
+gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. The shared integration
+platformd's `pxe:` section (`test/integration/config.yaml`) gives its
+`PXEGRPCService` a `pkg/compute/pxe.Service` backend, so the suite reaches a
+real device registry on every transport and runs in `make integration-test`'s
+default set as well as by name with `make integration-test-pxe`. A platformd
+without an enabled `pxe:` section answers every PXE call
+`SERVICE_NOT_CONFIGURED` ([`docs/ipxe/engineering.md`](../ipxe/engineering.md)
+§4).
 
-- `test/integration/pxe/` drives every transport through real clients: the
-  REST, CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
-  pinned to gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
-  production code constructs a `pkg/compute/pxe.Service`, so platformd's
-  `PXEGRPCService` has no backend (`pkg/api/daemon/daemon.go:975-979`) and every
-  PXE call answers `SERVICE_NOT_CONFIGURED`. Against the shared integration
-  platformd the suite fails at adapter setup on every transport, so it is
-  kept out of `make integration-test`'s default set and runs by name with
-  `make integration-test-pxe`.
-- `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
-  protocol adapters commented out**: a multi-protocol conformance test that
-  exercises the CLI alone.
-
-Both are recorded here rather than left to be rediscovered.
+**Known hole in the integration suite:**
+`test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
+protocol adapters commented out**: a multi-protocol conformance test that
+exercises the CLI alone. It is recorded here rather than left to be
+rediscovered.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

@@ -162,8 +162,9 @@ that is worth noting; recorded as a gap in the migration report.
 type exists in this repository** (grepped 2026-08-18), so the requirement is
 unmet repo-wide.
 
-Additionally, two provisioning integration suites do not exercise what they
-appear to. The PXE suite's adapters are real on every transport, but platformd
-has no PXE backend, so every call answers `SERVICE_NOT_CONFIGURED`.
-`test/integration/authenticode/multiprotocol_test.go` has all five protocol
-adapters commented out. See [engineering.md](engineering.md) §7.
+Additionally, one provisioning integration suite does not exercise what it
+appears to: `test/integration/authenticode/multiprotocol_test.go` has all five
+protocol adapters commented out. The PXE suite's adapters are real on every
+transport and reach a real backend, which the integration platformd's `pxe:`
+section builds; a platformd without an enabled `pxe:` section answers every
+PXE call `SERVICE_NOT_CONFIGURED`. See [engineering.md](engineering.md) §7.

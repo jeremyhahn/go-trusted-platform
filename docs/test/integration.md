@@ -341,9 +341,8 @@ listed below.
 every key except `cold-start` and `barrier-gate` (each needs the shared
 `platformd` not running), `diskimage`,
 `netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
-`pxe` (platformd has no PXE backend), `bootstrap` (the shared platformd
-publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
-artifacts), all three in the table below, and the keys that
+`bootstrap` (the shared platformd publishes no DANE records) and `secureboot`
+(needs prebuilt FIPS-kernel artifacts), both in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
 `ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
 daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
