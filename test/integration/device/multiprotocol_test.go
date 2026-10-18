@@ -636,6 +636,9 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 		}
 
 		findResult, err := adapter.FindProfileByMACAddress(ctx, findOpts)
+		if requireQUICProfileLookupGap(t, adapter, "FindProfileByMACAddress", err) {
+			return
+		}
 		if err != nil {
 			surface.RequireImplemented(t, err)
 			t.Fatalf("FindProfileByMACAddress failed: %v", err)
@@ -671,6 +674,9 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 		}
 
 		findResult, err := adapter.FindProfileBySerial(ctx, findOpts)
+		if requireQUICProfileLookupGap(t, adapter, "FindProfileBySerial", err) {
+			return
+		}
 		if err != nil {
 			surface.RequireImplemented(t, err)
 			t.Fatalf("FindProfileBySerial failed: %v", err)
@@ -716,6 +722,28 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 			t.Fatal("FindMatchingProfile returned nil profile")
 		}
 	})
+}
+
+// requireQUICProfileLookupGap records the declared QUIC profile-lookup gap:
+// docs/device/api.md §3 reads MISSING on QUIC for "Find profile by MAC" and
+// "Find profile by serial", so the QUIC adapter refuses both with
+// surface.ErrNoSurface. On QUIC it asserts that typed refusal for the named
+// operation and reports true; every other transport reports false and keeps
+// the success assertions. When the QUIC opcodes land, drop this check so QUIC
+// runs the success path too.
+func requireQUICProfileLookupGap(t *testing.T, adapter DeviceCommands, op string, err error) bool {
+	t.Helper()
+	if adapter.Name() != "QUIC" {
+		return false
+	}
+	var noSurface surface.ErrNoSurface
+	if !errors.As(err, &noSurface) {
+		t.Fatalf("%s over QUIC: got %v, want surface.ErrNoSurface (docs/device/api.md §3)", op, err)
+	}
+	if noSurface.Transport != "QUIC" || noSurface.Operation != op {
+		t.Fatalf("%s over QUIC: declared %s %s, want QUIC %s", op, noSurface.Transport, noSurface.Operation, op)
+	}
+	return true
 }
 
 // ============================================================================
