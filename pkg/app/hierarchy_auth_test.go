@@ -14,7 +14,6 @@
 package app
 
 import (
-	"errors"
 	"testing"
 
 	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
@@ -66,25 +65,4 @@ func TestSealHierarchyAuth_NoPINIsNoAuth(t *testing.T) {
 	auth, err = sealHierarchyAuth(mustPassword(t, nil))
 	require.NoError(t, err)
 	assert.Nil(t, auth)
-}
-
-func TestAssertNoUnresolvedKMSSecret_RefusesAnUnresolvedURI(t *testing.T) {
-	for _, raw := range []string{"kms://vault/so-pin", "KMS://vault/so-pin"} {
-		err := assertNoUnresolvedKMSSecret("TPMConfig.EK.HierarchyAuth", &quicbaassecret.SecretValue{Raw: raw})
-		var msgErr *MessageError
-		require.True(t, errors.As(err, &msgErr), "raw %q: want *MessageError, got %v", raw, err)
-		assert.Contains(t, msgErr.Msg, "TPMConfig.EK.HierarchyAuth")
-	}
-}
-
-func TestAssertNoUnresolvedKMSSecret_AllowsEverythingElse(t *testing.T) {
-	require.NoError(t, assertNoUnresolvedKMSSecret("TPMConfig.SSRK.HierarchyAuth", nil))
-	require.NoError(t, assertNoUnresolvedKMSSecret("TPMConfig.SSRK.HierarchyAuth",
-		&quicbaassecret.SecretValue{Raw: "literal-pin"}))
-
-	// A resolved secret keeps the reference it was resolved from in Raw;
-	// that is not an unresolved URI.
-	resolved, err := quicbaassecret.NewSecretValue("kms://vault/so-pin", []byte("pin"), quicbaassecret.StrategyLiteral)
-	require.NoError(t, err)
-	require.NoError(t, assertNoUnresolvedKMSSecret("TPMConfig.SSRK.HierarchyAuth", resolved))
 }

@@ -4892,16 +4892,6 @@ func assertNoUnresolvedKMSURI(fieldName, v string) error {
 	return nil
 }
 
-// assertNoUnresolvedKMSSecret applies assertNoUnresolvedKMSURI to a secret
-// that was never resolved (empty Strategy), whose Raw is still the reference
-// the operator wrote. A nil or resolved secret passes.
-func assertNoUnresolvedKMSSecret(fieldName string, sv *quicbaassecret.SecretValue) error {
-	if sv == nil || sv.Strategy != "" {
-		return nil
-	}
-	return assertNoUnresolvedKMSURI(fieldName, sv.Raw)
-}
-
 // sealHierarchyAuth seals the security officer PIN as a TPM hierarchy auth
 // value. An absent PIN yields nil: the hierarchy keeps its TCG factory
 // state (empty auth). Each SecretValue has a single owner, so every config
