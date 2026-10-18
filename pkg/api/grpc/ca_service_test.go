@@ -15,6 +15,7 @@ package grpc
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -341,6 +343,29 @@ type configurableMockCA struct {
 	bundle          []byte
 	parsedBundle    []*x509.Certificate
 	certStore       xkmssdk.CertStore
+	keyStore        xkmsbackend.Backend
+	revokedCert     *x509.Certificate
+	revokeOpts      xkmsca.RevokeOptions
+}
+
+// renewalKeyStore holds one key for every CN. Generating a key is not
+// implemented: the embedded nil Backend panics if renewal reaches for one.
+type renewalKeyStore struct {
+	xkmsbackend.Backend
+	rotateErr error
+	rotated   []string
+}
+
+func (k *renewalKeyStore) Signer(_ context.Context, _ *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+	return nil, nil
+}
+
+func (k *renewalKeyStore) RotateKey(_ context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+	if k.rotateErr != nil {
+		return nil, k.rotateErr
+	}
+	k.rotated = append(k.rotated, attrs.CN)
+	return nil, nil
 }
 
 func (m *configurableMockCA) IsInitialized() bool { return m.isInitialized }
@@ -379,10 +404,13 @@ func (m *configurableMockCA) IssueCertificate(_ context.Context, _ *xkmsca.CACer
 	}
 	return &xkmsca.IssuedCertificate{Certificate: m.issuedCert}, nil
 }
-func (m *configurableMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *configurableMockCA) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
+	m.revokedCert = cert
+	m.revokeOpts = opts
 	return m.revokeErr
 }
-func (m *configurableMockCA) CertStore() xkmssdk.CertStore { return m.certStore }
+func (m *configurableMockCA) CertStore() xkmssdk.CertStore  { return m.certStore }
+func (m *configurableMockCA) KeyStore() xkmsbackend.Backend { return m.keyStore }
 
 // Test cases
 
@@ -992,9 +1020,11 @@ func TestRenewCertificate_Success(t *testing.T) {
 
 	certStore := newMockCertStore()
 	certStore.certs[serial] = existingCert
+	keyStore := &renewalKeyStore{}
 
 	mockCA := &configurableMockCA{
 		certStore:  certStore,
+		keyStore:   keyStore,
 		issuedCert: newCert,
 	}
 
@@ -1020,6 +1050,18 @@ func TestRenewCertificate_Success(t *testing.T) {
 	if resp.NewCertificate == nil {
 		t.Error("expected new certificate")
 	}
+
+	// The old certificate is superseded rotate-first and keeps its key, so
+	// the renewal certifies the rotated key rather than generating one.
+	if len(keyStore.rotated) != 1 || keyStore.rotated[0] != "test.example.com" {
+		t.Errorf("rotated keys = %v, want [test.example.com]", keyStore.rotated)
+	}
+	if mockCA.revokedCert != existingCert {
+		t.Error("expected the old certificate to be revoked")
+	}
+	if mockCA.revokeOpts.DeleteKeys {
+		t.Error("renewal must not delete the rotated key")
+	}
 }
 
 func TestRenewCertificate_WithNewSans(t *testing.T) {
@@ -1035,6 +1077,7 @@ func TestRenewCertificate_WithNewSans(t *testing.T) {
 
 	mockCA := &configurableMockCA{
 		certStore:  certStore,
+		keyStore:   &renewalKeyStore{},
 		issuedCert: newCert,
 	}
 
@@ -1071,6 +1114,7 @@ func TestRenewCertificate_Error(t *testing.T) {
 
 	mockCA := &configurableMockCA{
 		certStore:    certStore,
+		keyStore:     &renewalKeyStore{},
 		issueCertErr: errors.New("failed to renew"),
 	}
 
@@ -1083,6 +1127,55 @@ func TestRenewCertificate_Error(t *testing.T) {
 		ValidDays: 365,
 	})
 	assertGRPCError(t, err, codes.Internal)
+}
+
+func TestRenewCertificate_RefusedWithoutAKeystore(t *testing.T) {
+	t.Parallel()
+
+	rootCA := createTestCAWithKey(t, "Test Root CA")
+	existingCert := createCertSignedByCA(t, "test.example.com", rootCA)
+	serial := hex.EncodeToString(existingCert.SerialNumber.Bytes())
+
+	certStore := newMockCertStore()
+	certStore.certs[serial] = existingCert
+
+	mockCA := &configurableMockCA{certStore: certStore}
+
+	svc := NewCAGRPCService(createTestLogger(), mockCA, nil)
+	_, err := svc.RenewCertificate(context.Background(), &platformv1.RenewCertificateRequest{
+		Serial:    serial,
+		ValidDays: 365,
+	})
+	assertGRPCError(t, err, codes.FailedPrecondition)
+	if mockCA.revokedCert != nil {
+		t.Error("a refused renewal must not revoke")
+	}
+}
+
+func TestRenewCertificate_RotationFailureLeavesTheCertificate(t *testing.T) {
+	t.Parallel()
+
+	rootCA := createTestCAWithKey(t, "Test Root CA")
+	existingCert := createCertSignedByCA(t, "test.example.com", rootCA)
+	serial := hex.EncodeToString(existingCert.SerialNumber.Bytes())
+
+	certStore := newMockCertStore()
+	certStore.certs[serial] = existingCert
+
+	mockCA := &configurableMockCA{
+		certStore: certStore,
+		keyStore:  &renewalKeyStore{rotateErr: errors.New("rotate failed")},
+	}
+
+	svc := NewCAGRPCService(createTestLogger(), mockCA, nil)
+	_, err := svc.RenewCertificate(context.Background(), &platformv1.RenewCertificateRequest{
+		Serial:    serial,
+		ValidDays: 365,
+	})
+	assertGRPCError(t, err, codes.Internal)
+	if mockCA.revokedCert != nil {
+		t.Error("a failed rotation must leave the old certificate unrevoked")
+	}
 }
 
 func TestVerifyCertificate_NilCA(t *testing.T) {
