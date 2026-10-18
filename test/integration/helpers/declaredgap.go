@@ -18,6 +18,7 @@ package helpers
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
@@ -54,6 +55,10 @@ var (
 	// GapEmbeddedVector: quicbaas.Vector has no embedded handler in the
 	// pinned SDK; go-quicbaas main routes it since #1404.
 	GapEmbeddedVector = DeclaredGap{Issue: "go-quicbaas #1404", Service: "quicbaas.Vector"}
+	// GapEmbeddedSecrets: quicbaas.Secrets routes only Store, Get, List,
+	// Delete and Ensure; Rotate, UpdateStatus and the rotation-policy calls
+	// have no embedded handler.
+	GapEmbeddedSecrets = DeclaredGap{Issue: "go-quicbaas #1540", Service: "quicbaas.Secrets"}
 )
 
 // DeclaredGapClosedError reports that a call did not fail the way its
@@ -82,6 +87,18 @@ func (g DeclaredGap) CheckUnserved(method string, err error) error {
 	want := fmt.Sprintf("embedded.UnknownMethodError(%s/%s)", g.Service, method)
 	var unknown *embedded.UnknownMethodError
 	if errors.As(err, &unknown) && unknown.Service == g.Service && unknown.Method == method {
+		return nil
+	}
+	return g.closed(method, want, err)
+}
+
+// CheckUnservedOverWire returns nil when err carries the text of the
+// embedded transport's UnknownMethodError for the gap's service and method.
+// A daemon that met the gap sends that error over its transport as text, so
+// the client sees the message rather than the type.
+func (g DeclaredGap) CheckUnservedOverWire(method string, err error) error {
+	want := embedded.NewUnknownMethodError(g.Service, method).Error()
+	if err != nil && strings.Contains(err.Error(), want) {
 		return nil
 	}
 	return g.closed(method, want, err)
@@ -120,6 +137,13 @@ func (g DeclaredGap) closed(method, want string, err error) error {
 func (g DeclaredGap) Unserved(t testing.TB, method string, err error) bool {
 	t.Helper()
 	return holds(t, g.CheckUnserved(method, err))
+}
+
+// UnservedOverWire asserts CheckUnservedOverWire and reports whether the gap
+// is still open. A false return has already failed t.
+func (g DeclaredGap) UnservedOverWire(t testing.TB, method string, err error) bool {
+	t.Helper()
+	return holds(t, g.CheckUnservedOverWire(method, err))
 }
 
 // Mistyped asserts CheckMistyped and reports whether the gap is still open.
