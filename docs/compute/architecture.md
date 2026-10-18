@@ -272,6 +272,15 @@ via the go-qemu library (github.com/digitalocean/go-qemu).
   └──────────────────────────────────────┴────────────────────────────────┘
 ```
 
+`Start` reports success only after step 4: the instance becomes `running`
+once its QMP monitor accepts a connection, so suspend, resume and reboot work
+as soon as `Start` returns. The monitor is retried for up to 30 seconds while
+QEMU initializes. If QEMU exits first, `Start` fails with
+`ErrVMExitedDuringStart` and QEMU's own stderr (for example `failed to
+initialize kvm: No such file or directory`). If QEMU keeps running but the
+monitor never accepts, `Start` kills the process and fails with
+`ErrMonitorNotReady`. In both cases the instance is left in `error`.
+
 ### VM Configuration
 
 ```
@@ -541,6 +550,8 @@ var (
     ErrInvalidState             = errors.New("invalid state transition")
     ErrTimeout                  = errors.New("operation timed out")
     ErrResourceExhausted        = errors.New("resource limit reached")
+    ErrVMExitedDuringStart      = errors.New("QEMU exited during start")
+    ErrMonitorNotReady          = errors.New("QMP monitor not ready")
 )
 ```
 

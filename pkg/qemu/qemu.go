@@ -559,7 +559,13 @@ func (vm *VM) Wait() error {
 		if vm.stdoutBuf.Len() > 0 {
 			vm.logger.Debugf("QEMU stdout: %s", vm.stdoutBuf.String())
 		}
-		return &SentinelCauseError{Sentinel: ErrQEMUFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
+		// QEMU explains why it exited on stderr (no KVM, missing firmware,
+		// a refused netdev); the error carries it to whoever reports the exit.
+		msg := err.Error()
+		if stderr := strings.TrimSpace(vm.stderrBuf.String()); stderr != "" {
+			msg += ": " + stderr
+		}
+		return &SentinelCauseError{Sentinel: ErrQEMUFailed, Cause: &MessageError{Msg: msg}}
 	}
 
 	vm.logger.Info("VM exited successfully")
