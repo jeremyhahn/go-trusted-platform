@@ -2186,9 +2186,16 @@ order:
    an attestation time is refused, not dated by when it was recorded.
 5. The verdict names the device's serial whenever the device record has one.
 
-A missing record (allocation, device or verdict) is a denial. Any other read
+A missing record (allocation, device or verdict) is a denial. The verdict is
+the device's attestation report (`GetDeviceReport`). A platformd that keeps no
+device reports, because it runs no reporting collector, answers
+`FailedPrecondition`; it holds no verdict for any device, so that answer is a
+denial too (`ErrOverlayVTEPVerdict`, "no verdict recorded"). Any other read
 error is an outage (`ErrOverlayAdmissionUnavailable`). The route is refused
-for now, but the error is not a judgement on the VTEP.
+for now, but the error is not a judgement on the VTEP. A failed verdict
+platformd streamed for the device is the exception: it is a judgement, so the
+VTEP is refused for its verdict even while the report cannot be read, until a
+newer pass arrives.
 
 gatewayd reads all three records from platformd over the SDK. EVPN hands
 routes to handlers one at a time, so the fabric allocations are kept in an

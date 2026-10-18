@@ -782,6 +782,13 @@ func (a *VTEPAdmitter) evaluate(ctx context.Context, vni uint32, vtep netip.Addr
 		return nil, ErrOverlayVTEPVerdict{VTEP: vtep, DeviceID: deviceID, VNI: vni, Reason: "no verdict recorded", Cause: err}
 	}
 	if err != nil {
+		// A failed verdict platformd streamed is a judgement no report read
+		// can overturn until a newer pass arrives, so it refuses the VTEP
+		// even while the report cannot be read.
+		if held, _ := a.failureHeld(deviceID, time.Time{}); held {
+			return nil, ErrOverlayVTEPVerdict{VTEP: vtep, DeviceID: deviceID, VNI: vni,
+				Reason: "a failed verdict was streamed and no newer report can be read", Cause: err}
+		}
 		return nil, ErrOverlayAdmissionUnavailable{VTEP: vtep, DeviceID: deviceID, Source: "verdict", Cause: err}
 	}
 	held, failureEpoch := a.failureHeld(deviceID, recorded.RecordedAt)

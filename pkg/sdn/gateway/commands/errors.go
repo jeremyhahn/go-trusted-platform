@@ -248,7 +248,8 @@ func (e *ErrTOFUPinDirUnusable) Unwrap() error { return e.Cause }
 type ErrOverlayPlatformRecordMissing struct {
 	// Record names what was looked up, such as "device 42".
 	Record string
-	// Cause is the platformd NotFound error.
+	// Cause is the platformd NotFound error, or the FailedPrecondition of a
+	// platformd that keeps no device reports.
 	Cause error
 }
 
