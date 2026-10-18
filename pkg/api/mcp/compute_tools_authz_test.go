@@ -101,6 +101,16 @@ func (s *computeRecordingServer) ResumeVM(context.Context, *platformv1.ResumeVMR
 	return &platformv1.ResumeVMResponse{}, nil
 }
 
+func (s *computeRecordingServer) PrepareMigration(context.Context, *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	s.provider.record("VMMigrationPrepare")
+	return &platformv1.PrepareMigrationResponse{}, nil
+}
+
+func (s *computeRecordingServer) FinalizeMigration(context.Context, *platformv1.FinalizeMigrationRequest) (*platformv1.FinalizeMigrationResponse, error) {
+	s.provider.record("VMMigrationFinalize")
+	return &platformv1.FinalizeMigrationResponse{}, nil
+}
+
 func (p *computeRecordingProvider) VMSnapshotList(context.Context, string) (interface{}, error) {
 	return p.record("VMSnapshotList"), nil
 }
@@ -221,7 +231,6 @@ var computeToolCases = []computeToolCase{
 	{"vm_resume", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMResume"},
 	{"vm_snapshot_create", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "name": "snap-1"}, "VMSnapshotCreate"},
 	{"vm_snapshot_list", "vm", "read", map[string]interface{}{"vm_id": "vm-1"}, "VMSnapshotList"},
-	// vm_snapshot_get has no gRPC twin; it reads one entry of ListSnapshots.
 	{"vm_snapshot_get", "vm", "read", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotGet"},
 	{"vm_snapshot_restore", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotRestore"},
 	{"vm_snapshot_delete", "vm", "delete", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotDelete"},
@@ -235,6 +244,8 @@ var computeToolCases = []computeToolCase{
 	{"vm_disk_detach", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "disk_id": "disk-1"}, "VMDiskDetach"},
 	{"vm_disk_resize", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "disk_id": "disk-1", "new_size_gb": float64(20)}, "VMDiskResize"},
 	{"vm_migrate", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "destination_host": "node-2"}, "VMMigrate"},
+	{"vm_migration_prepare", "vm", "write", map[string]interface{}{"spec": map[string]interface{}{"memory_mb": float64(512)}}, "VMMigrationPrepare"},
+	{"vm_migration_finalize", "vm", "write", map[string]interface{}{"receiver_id": "recv-1"}, "VMMigrationFinalize"},
 	{"container_create", "container", "write", map[string]interface{}{"name": "web", "image": "nginx:latest"}, "ContainerCreate"},
 	{"container_start", "container", "write", map[string]interface{}{"id": "c-1"}, "ContainerStart"},
 	{"container_stop", "container", "write", map[string]interface{}{"id": "c-1"}, "ContainerStop"},

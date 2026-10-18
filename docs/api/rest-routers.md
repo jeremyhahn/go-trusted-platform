@@ -82,8 +82,10 @@ them:
 | `/api/v1/proxy` | `SetProxyService` |
 | `/api/v1/version` | `registerRoutes` |
 | `/api/v1/sdn/gateway/{nat64,overlay,perf}` | `SetGatewayIPAMService` (this router serves `/api/v1/sdn/gateway/ipam`) |
+| `/api/v1/kms/{batch-encrypt,batch-decrypt,rewrap}`, `/api/v1/kms/keys/{id}/export` | `SetKMSHandlers` (this router serves the rest of `/api/v1/kms`) |
 
-The list is `DaemonOnlyPrefixes` in `pkg/testutil/routeclaims.go`. Two tests
+The list is `DaemonOnlyPrefixes` in `pkg/testutil/routeclaims.go`; a
+placeholder segment in an entry matches any one path segment. Two tests
 check every claim against a built table (#452):
 
 - `TestSDKRouteClaims` (`pkg/webservice/v1/route_coverage_test.go`) checks

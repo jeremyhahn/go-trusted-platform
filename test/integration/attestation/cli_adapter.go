@@ -18,15 +18,20 @@ package attestation
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -102,20 +107,6 @@ func (a *CLIAdapter) Name() string {
 	return "CLI"
 }
 
-// runCommand executes a CLI command and returns the output
-func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, &CLIAdapterError{
-			Operation: strings.Join(args, " "),
-			Message:   err.Error(),
-			Output:    string(output),
-		}
-	}
-	return output, nil
-}
-
 // cliContextName is the context Setup writes into the adapter's config.
 const cliContextName = "integration-test"
 
@@ -161,448 +152,222 @@ func (a *CLIAdapter) reportingCommand(ctx context.Context, operation, deviceID s
 // VM Attestation Operations
 // =============================================================================
 
-// GenerateVMQuote generates a TPM quote for a VM
+// runProto runs platformctl with JSON output and decodes the document into
+// out. The attestation verbs print the wire message with proto field names,
+// so the CLI result maps onto the adapter types exactly as gRPC does.
+func (a *CLIAdapter) runProto(ctx context.Context, out proto.Message, args ...string) error {
+	output, err := a.runJSON(ctx, args...)
+	if err != nil {
+		return err
+	}
+	if err := protojson.Unmarshal(output, out); err != nil {
+		return &CLIAdapterError{Operation: strings.Join(args, " "), Message: "failed to parse response: " + err.Error(), Output: string(output)}
+	}
+	return nil
+}
+
+// collectVMAttestation runs `platformctl attestation vm collect <vm-id>`.
+func (a *CLIAdapter) collectVMAttestation(ctx context.Context, vmID string, nonce []byte, pcrIndices []int, hashAlgorithm string) (*platformv1.CollectVMAttestationResponse, error) {
+	args := []string{"attestation", "vm", "collect", vmID, "--nonce", hex.EncodeToString(nonce)}
+	if len(pcrIndices) > 0 {
+		pcrList := make([]string, len(pcrIndices))
+		for i, idx := range pcrIndices {
+			pcrList[i] = strconv.Itoa(idx)
+		}
+		args = append(args, "--pcrs", strings.Join(pcrList, ","))
+	}
+	if hashAlgorithm != "" {
+		args = append(args, "--hash-algorithm", hashAlgorithm)
+	}
+
+	attest := &platformv1.VMAttestation{}
+	if err := a.runProto(ctx, attest, args...); err != nil {
+		return nil, err
+	}
+	return &platformv1.CollectVMAttestationResponse{Attestation: attest}, nil
+}
+
+// GenerateVMQuote collects a VM quote via `platformctl attestation vm collect`.
 func (a *CLIAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteOptions) (*GenerateVMQuoteResult, error) {
-	args := []string{"attestation", "vm", "quote",
-		"--vm-id", opts.VMID,
-		"--nonce", base64.StdEncoding.EncodeToString(opts.Nonce),
-		"--output", "json",
-	}
-
-	if len(opts.PCRIndices) > 0 {
-		pcrList := make([]string, len(opts.PCRIndices))
-		for i, idx := range opts.PCRIndices {
-			pcrList[i] = fmt.Sprintf("%d", idx)
-		}
-		args = append(args, "--pcrs", strings.Join(pcrList, ","))
-	}
-
-	if opts.HashAlgorithm != "" {
-		args = append(args, "--hash-algorithm", opts.HashAlgorithm)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	resp, err := a.collectVMAttestation(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
-
-	var result GenerateVMQuoteResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GenerateVMQuote",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	result, err := vmQuoteResult(resp)
+	if err != nil {
+		return nil, &CLIAdapterError{Operation: "GenerateVMQuote", Message: err.Error()}
 	}
-
-	return &result, nil
+	return result, nil
 }
 
-// GetVMIdentity retrieves VM identity from vTPM EK certificate
+// GetVMIdentity has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptions) (*GetVMIdentityResult, error) {
-	args := []string{"attestation", "vm", "identity",
-		"--vm-id", opts.VMID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetVMIdentityResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetVMIdentity",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetVMIdentity"}
 }
 
-// GetVMAttestation generates a full VM attestation
+// GetVMAttestation collects a full VM attestation via
+// `platformctl attestation vm collect`.
 func (a *CLIAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestationOptions) (*GetVMAttestationResult, error) {
-	args := []string{"attestation", "vm", "attest",
-		"--vm-id", opts.VMID,
-		"--nonce", base64.StdEncoding.EncodeToString(opts.Nonce),
-		"--output", "json",
-	}
-
-	if len(opts.PCRIndices) > 0 {
-		pcrList := make([]string, len(opts.PCRIndices))
-		for i, idx := range opts.PCRIndices {
-			pcrList[i] = fmt.Sprintf("%d", idx)
-		}
-		args = append(args, "--pcrs", strings.Join(pcrList, ","))
-	}
-
-	if opts.HashAlgorithm != "" {
-		args = append(args, "--hash-algorithm", opts.HashAlgorithm)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	resp, err := a.collectVMAttestation(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
-
-	var result GetVMAttestationResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetVMAttestation",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	result, err := vmAttestationResult(resp)
+	if err != nil {
+		return nil, &CLIAdapterError{Operation: "GetVMAttestation", Message: err.Error()}
 	}
-
-	return &result, nil
+	return result, nil
 }
 
-// VerifyVMAttestation verifies a VM attestation
+// VerifyVMAttestation verifies a quote via `platformctl attestation quote
+// verify -f`, sending the request gRPC sends.
 func (a *CLIAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (*VerifyVMAttestationResult, error) {
-	args := []string{"attestation", "vm", "verify",
-		"--attestation-id", opts.AttestationID,
-		"--nonce", base64.StdEncoding.EncodeToString(opts.ExpectedNonce),
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	raw, err := protojson.Marshal(verifyAttestationQuoteRequest(opts))
 	if err != nil {
-		return nil, err
+		return nil, &CLIAdapterError{Operation: "VerifyVMAttestation", Message: "failed to encode request: " + err.Error()}
+	}
+	requestPath := filepath.Join(a.configDir, "verify-quote-request.json")
+	if err := os.WriteFile(requestPath, raw, 0o600); err != nil {
+		return nil, &CLIAdapterError{Operation: "VerifyVMAttestation", Message: "failed to write request: " + err.Error()}
 	}
 
-	var result VerifyVMAttestationResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "VerifyVMAttestation",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	resp := &platformv1.VerifyAttestationQuoteResponse{}
+	runErr := a.runProto(ctx, resp, "attestation", "quote", "verify", "-f", requestPath)
+	if err := os.Remove(requestPath); err != nil && runErr == nil {
+		return nil, &CLIAdapterError{Operation: "VerifyVMAttestation", Message: "failed to remove request: " + err.Error()}
 	}
-
-	return &result, nil
+	if runErr != nil {
+		return nil, runErr
+	}
+	return verifyVMAttestationResult(opts, resp), nil
 }
 
 // =============================================================================
 // Manifest Operations
 // =============================================================================
 
-// BuildManifest builds a host manifest with attestations
+// BuildManifest builds and stores a signed host manifest via
+// `platformctl attestation manifests build`, with the options gRPC sends.
 func (a *CLIAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptions) (*BuildManifestResult, error) {
-	args := []string{"attestation", "manifest", "build",
-		"--host-id", opts.HostID,
-		"--output", "json",
-	}
-
+	args := []string{"attestation", "manifests", "build", "--host-id", opts.HostID}
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash-algorithm", opts.HashAlgorithm)
 	}
-
 	if opts.Version != "" {
 		args = append(args, "--version", opts.Version)
 	}
+	if len(opts.VMAttestations) > 0 {
+		args = append(args, "--include-vms")
+	}
+	if len(opts.ContainerAttestations) > 0 {
+		args = append(args, "--include-containers")
+	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	manifest := &platformv1.HostManifest{}
+	if err := a.runProto(ctx, manifest, args...); err != nil {
 		return nil, err
 	}
-
-	var result BuildManifestResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "BuildManifest",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	result, err := buildManifestResult(&platformv1.BuildManifestResponse{Manifest: manifest})
+	if err != nil {
+		return nil, &CLIAdapterError{Operation: "BuildManifest", Message: err.Error()}
 	}
-
-	return &result, nil
+	return result, nil
 }
 
-// SignManifest signs a manifest with the host TPM
+// SignManifest has no platformctl verb: no transport serves it, and
+// `manifests build` signs unless --sign=false.
 func (a *CLIAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
-	args := []string{"attestation", "manifest", "sign",
-		"--manifest-id", opts.ManifestID,
-		"--output", "json",
-	}
-
-	if opts.HashAlgorithm != "" {
-		args = append(args, "--hash-algorithm", opts.HashAlgorithm)
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result SignManifestResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "SignManifest",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "SignManifest"}
 }
 
-// VerifyManifest verifies a signed manifest
+// getManifest runs `platformctl attestation manifests get <id>`.
+func (a *CLIAdapter) getManifest(ctx context.Context, manifestID string) (*platformv1.GetManifestResponse, error) {
+	manifest := &platformv1.HostManifest{}
+	if err := a.runProto(ctx, manifest, "attestation", "manifests", "get", manifestID); err != nil {
+		return nil, err
+	}
+	return &platformv1.GetManifestResponse{Manifest: manifest}, nil
+}
+
+// VerifyManifest verifies a stored manifest via
+// `platformctl attestation manifests verify <id>`. The stored manifest is
+// fetched first, as gRPC does, so the host id can be compared.
 func (a *CLIAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	args := []string{"attestation", "manifest", "verify",
-		"--manifest-id", opts.ManifestID,
-		"--output", "json",
-	}
-
-	if opts.ExpectedHostID != "" {
-		args = append(args, "--host-id", opts.ExpectedHostID)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	getResp, err := a.getManifest(ctx, opts.ManifestID)
 	if err != nil {
 		return nil, err
 	}
-
-	var result VerifyManifestResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "VerifyManifest",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	manifest, err := storedManifest(getResp)
+	if err != nil {
+		return nil, &CLIAdapterError{Operation: "VerifyManifest", Message: err.Error()}
 	}
 
-	return &result, nil
+	verification := &platformv1.ManifestVerificationResult{}
+	if err := a.runProto(ctx, verification, "attestation", "manifests", "verify", opts.ManifestID); err != nil {
+		return nil, err
+	}
+	result, err := verifyManifestResult(opts, manifest, &platformv1.VerifyManifestResponse{Result: verification})
+	if err != nil {
+		return nil, &CLIAdapterError{Operation: "VerifyManifest", Message: err.Error()}
+	}
+	return result, nil
 }
 
-// GetManifest retrieves a manifest by ID
+// GetManifest retrieves a manifest by id via
+// `platformctl attestation manifests get <id>`.
 func (a *CLIAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	args := []string{"attestation", "manifest", "get",
-		"--manifest-id", opts.ManifestID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	resp, err := a.getManifest(ctx, opts.ManifestID)
 	if err != nil {
 		return nil, err
 	}
-
-	var result GetManifestResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetManifest",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	result, err := getManifestResult(resp)
+	if err != nil {
+		return nil, &CLIAdapterError{Operation: "GetManifest", Message: err.Error()}
 	}
-
-	return &result, nil
+	return result, nil
 }
 
 // =============================================================================
 // Push Operations
 // =============================================================================
 
-// PushAttestation pushes an attestation to a target
+// PushAttestation has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) PushAttestation(ctx context.Context, opts PushAttestationOptions) (*PushAttestationResult, error) {
-	args := []string{"attestation", "push",
-		"--manifest-id", opts.ManifestID,
-		"--target-id", opts.TargetID,
-		"--endpoint", opts.Endpoint,
-		"--transport", opts.Transport,
-		"--output", "json",
-	}
-
-	if opts.ContentType != "" {
-		args = append(args, "--content-type", opts.ContentType)
-	}
-
-	if opts.Timeout > 0 {
-		args = append(args, "--timeout", opts.Timeout.String())
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result PushAttestationResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "PushAttestation",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "PushAttestation"}
 }
 
-// PushAttestationBatch pushes to multiple targets concurrently
+// PushAttestationBatch has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) PushAttestationBatch(ctx context.Context, opts PushAttestationBatchOptions) (*PushAttestationBatchResult, error) {
-	args := []string{"attestation", "push", "batch",
-		"--manifest-id", opts.ManifestID,
-		"--output", "json",
-	}
-
-	// For batch, we might need to pass targets via file or inline JSON
-	// This is a simplified implementation
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result PushAttestationBatchResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "PushAttestationBatch",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "PushAttestationBatch"}
 }
 
-// GetPushStatus retrieves the status of a push operation
+// GetPushStatus has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptions) (*GetPushStatusResult, error) {
-	args := []string{"attestation", "push", "status",
-		"--push-id", opts.PushID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetPushStatusResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetPushStatus",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetPushStatus"}
 }
 
 // =============================================================================
 // Workload Chain Operations
 // =============================================================================
 
-// ExtendWorkloadChain extends the workload PCR with a measurement
+// ExtendWorkloadChain has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) ExtendWorkloadChain(ctx context.Context, opts ExtendWorkloadChainOptions) (*ExtendWorkloadChainResult, error) {
-	args := []string{"attestation", "workload", "extend",
-		"--workload-type", opts.WorkloadType,
-		"--workload-id", opts.WorkloadID,
-		"--image-digest", opts.ImageDigest,
-		"--output", "json",
-	}
-
-	if len(opts.ConfigHash) > 0 {
-		args = append(args, "--config-hash", base64.StdEncoding.EncodeToString(opts.ConfigHash))
-	}
-
-	if len(opts.RuntimeHash) > 0 {
-		args = append(args, "--runtime-hash", base64.StdEncoding.EncodeToString(opts.RuntimeHash))
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result ExtendWorkloadChainResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "ExtendWorkloadChain",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "ExtendWorkloadChain"}
 }
 
-// GetWorkloadChainHistory retrieves the chain history
+// GetWorkloadChainHistory has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) GetWorkloadChainHistory(ctx context.Context, opts GetWorkloadChainHistoryOptions) (*GetWorkloadChainHistoryResult, error) {
-	args := []string{"attestation", "workload", "history",
-		"--output", "json",
-	}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetWorkloadChainHistoryResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetWorkloadChainHistory",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetWorkloadChainHistory"}
 }
 
-// VerifyWorkloadChain verifies the chain against expected PCR
+// VerifyWorkloadChain has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorkloadChainOptions) (*VerifyWorkloadChainResult, error) {
-	args := []string{"attestation", "workload", "verify",
-		"--expected-pcr", base64.StdEncoding.EncodeToString(opts.ExpectedPCRValue),
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result VerifyWorkloadChainResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "VerifyWorkloadChain",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "VerifyWorkloadChain"}
 }
 
-// GetWorkloadChainStats retrieves chain statistics
+// GetWorkloadChainStats has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
-	args := []string{"attestation", "workload", "stats",
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetWorkloadChainStatsResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetWorkloadChainStats",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetWorkloadChainStats"}
 }
 
 // ListDeviceReports runs `platformctl attestation reports list`.

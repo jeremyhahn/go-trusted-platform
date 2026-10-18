@@ -162,9 +162,9 @@ platformctl compute migrate web-01 --destination worker-02.example.com:9443 --li
 hostname — migration is daemon-to-daemon.
 
 **`--live` requires shared storage.** Without it the destination has no way to
-reach the disk. For a staged migration with a confirmation point, use the gRPC
-two-phase pair (`PrepareMigration`, `FinalizeMigration`) rather than the one-shot
-CLI verb.
+reach the disk. For a staged migration with a confirmation point, use the
+two-phase pair (`PrepareMigration`, `FinalizeMigration`, on REST, gRPC, QUIC
+and MCP) rather than the one-shot CLI verb.
 
 ---
 

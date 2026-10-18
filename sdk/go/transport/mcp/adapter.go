@@ -367,6 +367,15 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.KeyManagementService/GenerateRandom":         "kms_random",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "kms_generate_data_key",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "kms_generate_wrapped_data_key",
+	"/platform.v1.KeyManagementService/Hash":                   "kms_hash",
+	"/platform.v1.KeyManagementService/HMAC":                   "kms_hmac",
+	"/platform.v1.KeyManagementService/VerifyHMAC":             "kms_verify_hmac",
+	"/platform.v1.KeyManagementService/Rewrap":                 "kms_rewrap",
+	"/platform.v1.KeyManagementService/ImportKey":              "kms_import_key",
+	"/platform.v1.KeyManagementService/UpdateKeyStatus":        "kms_update_key_status",
+	"/platform.v1.KeyManagementService/GetKeyVersions":         "kms_list_key_versions",
+	"/platform.v1.KeyManagementService/BatchEncrypt":           "kms_batch_encrypt",
+	"/platform.v1.KeyManagementService/BatchDecrypt":           "kms_batch_decrypt",
 
 	// vTPM — proto: pkg/api/grpc/proto/vtpm.proto
 	"/platform.v1.VTPMService/QuoteVTPM":     "vtpm_quote",

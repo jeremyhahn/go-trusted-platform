@@ -70,8 +70,9 @@ import (
 //
 //   - VM ops (OpVMCreate..OpVMList, 0x60-0x65, and
 //     OpVMRestart..OpVMResume, 0xB6-0xB8, and
-//     OpVMSnapshotCreate..OpVMSnapshotList, 0xBB-0xBE, and
-//     OpVMAttest 0xB9, OpVMVerifyAttest 0xBF) and the
+//     OpVMSnapshotCreate..OpVMSnapshotList, 0xBB-0xBE, OpVMSnapshotGet 0xBA, and
+//     OpVMAttest 0xB9, OpVMVerifyAttest 0xBF, and
+//     OpVMMetrics..OpVMFinalizeMigration, 0xCC-0xD2) and the
 //     container ops (create/start/stop/remove/attest) travel as
 //     sub-opcodes in payload[0] under quicwire.OpVMExtendedCategory (0x69).
 //   - Overlay/gateway ops travel under their category opcodes 0x2E/0x2F.
@@ -506,6 +507,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpVMSnapshotDelete":          {value: quicwire.OpVMSnapshotDelete, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMGroupList":              {value: quicwire.OpIAMGroupList, mode: wireDirect, family: "iam"},
 	"OpVMSnapshotList":            {value: quicwire.OpVMSnapshotList, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMSnapshotGet":             {value: quicwire.OpVMSnapshotGet, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMGroupAddMember":         {value: quicwire.OpIAMGroupAddMember, mode: wireDirect, family: "iam"},
 	"OpVMVerifyAttest":            {value: quicwire.OpVMVerifyAttest, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpKMSGenerateKey":            {value: quicwire.OpKMSGenerateKey, mode: wireDirect, family: "kms"},
@@ -575,6 +577,8 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpVMDetachDisk":              {value: quicwire.OpVMDetachDisk, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpVMResizeDisk":              {value: quicwire.OpVMResizeDisk, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpVMMigrate":                 {value: quicwire.OpVMMigrate, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMPrepareMigration":        {value: quicwire.OpVMPrepareMigration, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMFinalizeMigration":       {value: quicwire.OpVMFinalizeMigration, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpContainerExec":             {value: quicwire.OpContainerExec, mode: categorySub, family: "container", category: quicwire.OpVMExtendedCategory},
 	"OpContainerMetrics":          {value: quicwire.OpContainerMetrics, mode: categorySub, family: "container", category: quicwire.OpVMExtendedCategory},
 	"OpContainerCreate":           {value: quicwire.OpContainerCreate, mode: categorySub, family: "container", category: quicwire.OpVMExtendedCategory},

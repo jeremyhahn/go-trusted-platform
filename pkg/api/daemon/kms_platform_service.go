@@ -65,6 +65,24 @@ func (e ErrKMSUnsupportedValue) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrKMSRewrapSourceVersionUnsupported is returned when a rewrap names the
+// key version the ciphertext was sealed under. The go-quicbaas SDK
+// RewrapRequest has no source version field, so the version cannot be
+// passed on; refusing keeps a caller from believing it was honoured.
+type ErrKMSRewrapSourceVersionUnsupported struct {
+	SourceVersion uint64
+}
+
+func (e ErrKMSRewrapSourceVersionUnsupported) Error() string {
+	return "rewrap source_version " + strconv.FormatUint(e.SourceVersion, 10) +
+		" is not supported: the SDK rewrap request has no source version; omit it or send 0"
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSRewrapSourceVersionUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSInvalidCursor is returned when a pagination cursor cannot be parsed.
 type ErrKMSInvalidCursor struct {
 	Cursor string
@@ -785,6 +803,9 @@ func (b *PlatformKMSBackend) Rewrap(
 	}
 	if req == nil {
 		return nil, ErrKMSMissingRequest{Operation: "Rewrap"}
+	}
+	if req.SourceVersion != 0 {
+		return nil, ErrKMSRewrapSourceVersionUnsupported{SourceVersion: req.SourceVersion}
 	}
 
 	resp, err := client.Rewrap(ctx, &quicbaas.RewrapRequest{

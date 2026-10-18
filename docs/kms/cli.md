@@ -135,6 +135,10 @@ Generate a key.
 | `--description` | `-d` | string | | no |
 | `--owner` | | string | | no |
 
+`<key-id>` travels as the generate request's `name` and becomes the key's ID
+(`api.md` §2). `--name` is a display name, not the ID: the generate request
+has no display-name field, so set it with `key metadata update <key-id> --name`.
+
 Algorithms: `aes-128`, `aes-192`, `aes-256`, `chacha20-poly1305`, `rsa-2048`,
 `rsa-3072`, `rsa-4096`, `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
 `dilithium2`, `dilithium3`, `dilithium5`, `hmac-sha256`, `hmac-sha384`,

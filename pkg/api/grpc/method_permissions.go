@@ -770,6 +770,7 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.ComputeService/RestoreSnapshot":     scope(vm, write),
 		"/platform.v1.ComputeService/DeleteSnapshot":      scope(vm, del),
 		"/platform.v1.ComputeService/ListSnapshots":       scope(vm, read),
+		"/platform.v1.ComputeService/GetSnapshot":         scope(vm, read),
 		"/platform.v1.ComputeService/MigrateVM":           scope(vm, write),
 		"/platform.v1.ComputeService/PrepareMigration":    scope(vm, write),
 		"/platform.v1.ComputeService/FinalizeMigration":   scope(vm, write),

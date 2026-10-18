@@ -301,7 +301,6 @@ one audit event. Audit consumers and tests match these strings exactly:
 | `zone_missing` | zone-scoped route, certificate carries no readable zone |
 | `zone_not_allowed` | client zone not in `allowed-zones` |
 | `zone_matrix_denied` | no allowed path from client zone to `backend-zone` |
-| `role_required` | identity lacks a `required-roles` entry |
 | `token_auth_not_configured` | token path on a chain with no `TokenAuthenticator` |
 | `token_missing` | token path, no `Authorization: Bearer` |
 | `token_invalid` | signature / `iss` / `aud` / `exp` / DPoP / liveness failure |
@@ -326,11 +325,16 @@ policy contract:
 
 ```json
 {
-  "client":  {"id", "zone", "device_id", "attested", "auth_method", "roles"},
+  "client":  {"id", "zone", "device_id", "attested", "auth_method"},
   "route":   {"id", "hosts", "path_prefix", "backend_zone"},
   "request": {"method", "path", "host"}
 }
 ```
+
+The document carries **no roles**. OPA answers evidence questions — zone,
+attestation, method — and never the access question "may this principal call
+this route"; that is the IAM decision (a route's `required-scopes`), not the
+policy's (#926).
 
 `client.attested` reflects the attestation gate's outcome, which is why the
 gate runs before the policy.
@@ -418,10 +422,17 @@ keys, parsed by viper (`LoadServeConfig`).
 
 Per-route keys, all under `proxy.routes[].auth`:
 `mode` (**required**), `require-idevid`, `allowed-zones`, `backend-zone`,
-`require-attestation`, `attestation-max-age`, `required-roles`,
-`required-scopes`, `opa-policy`, `token-zone`.
+`require-attestation`, `attestation-max-age`, `required-scopes`,
+`opa-policy`, `token-zone`.
 Route-level: `id`, `hosts`, `path-prefix`, `pool`, `strip-prefix`,
 `preserve-host`.
+
+The `proxy:` section is decoded **strictly**, by gatewayd (`LoadServeConfig`)
+and by platformd's config check alike: an unknown key fails the load with
+`*config.ErrUnknownConfigKeys` naming its path. A route still carrying the
+removed `required-roles` is refused as
+`proxy.routes[N].auth.required-roles` — a route's permission is its
+`required-scopes`, and there is no role requirement (#926).
 
 Per-pool keys: `id`, `backends[].url`, `backends[].weight`, `balancer`,
 `tls.trust-class`, `tls.mtls-client-cert`, `max-idle-conns-per-host`,

@@ -16,18 +16,16 @@
 package registry
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -164,456 +162,6 @@ var (
 )
 
 // =============================================================================
-// REST Adapter Implementation
-// =============================================================================
-
-// RESTAdapter implements RegistryCommands using HTTP/REST calls.
-type RESTAdapter struct {
-	baseURL    string
-	httpClient *http.Client
-}
-
-// NewRESTAdapter creates a new REST adapter for integration testing.
-func NewRESTAdapter() *RESTAdapter {
-	return &RESTAdapter{}
-}
-
-// Name returns the protocol adapter identifier.
-func (r *RESTAdapter) Name() string {
-	return "REST"
-}
-
-// Setup initializes the REST client.
-func (r *RESTAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformAPIEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformAPIEndpoint
-	}
-	r.baseURL = "http://" + endpoint
-
-	r.httpClient = &http.Client{
-		Timeout: DefaultCommandTimeout,
-	}
-
-	// Verify connectivity
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/health", nil)
-	if err != nil {
-		return ErrAdapterConnectionFailed{Adapter: "REST", URL: r.baseURL, Err: err}
-	}
-	if statusCode != http.StatusOK {
-		return ErrAdapterConnectionFailed{Adapter: "REST", URL: r.baseURL, Err: fmt.Errorf("unexpected status: %d", statusCode)}
-	}
-
-	return nil
-}
-
-// Teardown cleans up REST client resources.
-func (r *RESTAdapter) Teardown() error {
-	if r.httpClient != nil {
-		r.httpClient.CloseIdleConnections()
-	}
-	return nil
-}
-
-// doRequest performs an HTTP request.
-func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
-	if body != nil {
-		jsonBytes, err := json.Marshal(body)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonBytes)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reqBody)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	return respBody, resp.StatusCode, nil
-}
-
-// handleResponse processes the response and checks for errors.
-func (r *RESTAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
-	if statusCode >= 400 {
-		var errResp struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			msg := errResp.Error
-			if msg == "" {
-				msg = errResp.Message
-			}
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return ErrImageNotFound{Reference: ""}
-			}
-			return fmt.Errorf("API error (%d): %s", statusCode, msg)
-		}
-		return fmt.Errorf("API error (%d): %s", statusCode, string(respBody))
-	}
-
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrInvalidResponse{Operation: "response", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Push pushes an image to the registry via REST.
-func (r *RESTAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	reqBody := restPushRequest{
-		Reference:      ref,
-		Encrypt:        opts.Encrypt,
-		KeyID:          opts.KeyID,
-		AllowOverwrite: opts.AllowOverwrite,
-		Sign:           opts.SignImage,
-		SigningKeyID:   opts.SigningKeyID,
-		Annotations:    opts.Annotations,
-	}
-
-	// Encode layers as base64
-	if len(opts.Layers) > 0 {
-		reqBody.Layers = make([]restLayerData, len(opts.Layers))
-		for i, layer := range opts.Layers {
-			reqBody.Layers[i] = restLayerData{
-				MediaType:   layer.MediaType,
-				Content:     base64.StdEncoding.EncodeToString(layer.Content),
-				Annotations: layer.Annotations,
-			}
-		}
-	}
-
-	if len(opts.Config) > 0 {
-		reqBody.Config = base64.StdEncoding.EncodeToString(opts.Config)
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/images", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restPushResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toPushResult(), nil
-}
-
-// Pull pulls an image from the registry via REST.
-func (r *RESTAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s", ref)
-	params := make([]string, 0)
-
-	if opts.DecryptIfEncrypted {
-		params = append(params, "decrypt=true")
-	}
-	if opts.VerifySignature {
-		params = append(params, "verify=true")
-	}
-	if opts.Platform != "" {
-		params = append(params, fmt.Sprintf("platform=%s", opts.Platform))
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restPullResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toPullResult(), nil
-}
-
-// List lists images in the registry via REST.
-func (r *RESTAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	path := "/api/v1/registry/images"
-	params := make([]string, 0)
-
-	if opts.Repository != "" {
-		params = append(params, fmt.Sprintf("repository=%s", opts.Repository))
-	}
-	if opts.TagPrefix != "" {
-		params = append(params, fmt.Sprintf("tag_prefix=%s", opts.TagPrefix))
-	}
-	if opts.Limit > 0 {
-		params = append(params, fmt.Sprintf("limit=%d", opts.Limit))
-	}
-	if opts.Cursor != "" {
-		params = append(params, fmt.Sprintf("cursor=%s", opts.Cursor))
-	}
-	if opts.IncludeEncrypted {
-		params = append(params, "include_encrypted=true")
-	}
-	if opts.SortBy != "" {
-		params = append(params, fmt.Sprintf("sort_by=%s", opts.SortBy))
-	}
-	if opts.SortDesc {
-		params = append(params, "sort_desc=true")
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restListResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toListResult(), nil
-}
-
-// Delete deletes an image from the registry via REST.
-func (r *RESTAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s", ref)
-	params := make([]string, 0)
-
-	if opts.Force {
-		params = append(params, "force=true")
-	}
-	if opts.DeleteLayers {
-		params = append(params, "delete_layers=true")
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDeleteResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDeleteResult(), nil
-}
-
-// Inspect inspects an image in the registry via REST.
-func (r *RESTAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s/inspect", ref)
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restInspectResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toInspectResult(), nil
-}
-
-// Status retrieves the registry status via REST.
-func (r *RESTAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/registry/status", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restStatusResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toStatusResult(), nil
-}
-
-// Tag adds a tag to an existing image via REST.
-func (r *RESTAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	reqBody := struct {
-		SourceReference string `json:"source_reference"`
-		TargetReference string `json:"target_reference"`
-	}{
-		SourceReference: sourceRef,
-		TargetReference: targetRef,
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/images/tag", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: sourceRef}
-	}
-
-	var result restTagResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toTagResult(), nil
-}
-
-// VerifyClient verifies a client's attestation via REST.
-func (r *RESTAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	reqBody := restVerifyClientRequest{
-		ClientID:  opts.ClientID,
-		AIK:       base64.StdEncoding.EncodeToString(opts.AIK),
-		Quote:     base64.StdEncoding.EncodeToString(opts.Quote),
-		Signature: base64.StdEncoding.EncodeToString(opts.Signature),
-		Nonce:     base64.StdEncoding.EncodeToString(opts.Nonce),
-		PCRs:      make(map[int]string),
-		EventLog:  base64.StdEncoding.EncodeToString(opts.EventLog),
-		Timestamp: opts.Timestamp,
-	}
-
-	for idx, val := range opts.PCRs {
-		reqBody.PCRs[idx] = base64.StdEncoding.EncodeToString(val)
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/attestation/verify", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restVerifyClientResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toVerifyClientResult(), nil
-}
-
-// GetSession retrieves a client session via REST.
-func (r *RESTAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrSessionNotFound{ClientID: clientID}
-	}
-
-	var result restSessionResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toSessionResult(), nil
-}
-
-// InvalidateSession invalidates a client session via REST.
-func (r *RESTAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return ErrSessionNotFound{ClientID: clientID}
-	}
-
-	return r.handleResponse(body, statusCode, nil)
-}
-
-// EncryptImage encrypts an image via REST.
-func (r *RESTAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-		KeyID     string `json:"key_id"`
-	}{
-		Reference: ref,
-		KeyID:     keyID,
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/encrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restEncryptImageResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toEncryptImageResult(), nil
-}
-
-// DecryptImage decrypts an image via REST.
-func (r *RESTAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-	}{
-		Reference: ref,
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/decrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDecryptImageResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDecryptImageResult(), nil
-}
-
-// =============================================================================
 // gRPC Adapter Implementation
 // =============================================================================
 
@@ -621,6 +169,7 @@ func (r *RESTAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptIma
 type GRPCAdapter struct {
 	endpoint string
 	conn     *grpc.ClientConn
+	client   *regsvc.Client
 }
 
 // NewGRPCAdapter creates a new gRPC adapter for integration testing.
@@ -650,6 +199,7 @@ func (g *GRPCAdapter) Setup(ctx context.Context) error {
 	}
 
 	g.conn = conn
+	g.client = regsvc.NewClientFromGRPC(pb.NewRegistryServiceClient(conn))
 	return nil
 }
 
@@ -661,71 +211,13 @@ func (g *GRPCAdapter) Teardown() error {
 	return nil
 }
 
-// Push pushes an image to the registry via gRPC.
-func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	return nil, fmt.Errorf("gRPC Push not yet implemented")
-}
-
-// Pull pulls an image from the registry via gRPC.
-func (g *GRPCAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	return nil, fmt.Errorf("gRPC Pull not yet implemented")
-}
-
-// List lists images in the registry via gRPC.
-func (g *GRPCAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	return nil, fmt.Errorf("gRPC List not yet implemented")
-}
-
-// Delete deletes an image from the registry via gRPC.
-func (g *GRPCAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	return nil, fmt.Errorf("gRPC Delete not yet implemented")
-}
-
-// Inspect inspects an image in the registry via gRPC.
-func (g *GRPCAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	return nil, fmt.Errorf("gRPC Inspect not yet implemented")
-}
-
-// Status retrieves the registry status via gRPC.
-func (g *GRPCAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	return nil, fmt.Errorf("gRPC Status not yet implemented")
-}
-
-// Tag adds a tag to an existing image via gRPC.
-func (g *GRPCAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, fmt.Errorf("gRPC Tag not yet implemented")
-}
-
-// VerifyClient verifies a client's attestation via gRPC.
-func (g *GRPCAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, fmt.Errorf("gRPC VerifyClient not yet implemented")
-}
-
-// GetSession retrieves a client session via gRPC.
-func (g *GRPCAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, fmt.Errorf("gRPC GetSession not yet implemented")
-}
-
-// InvalidateSession invalidates a client session via gRPC.
-func (g *GRPCAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return fmt.Errorf("gRPC InvalidateSession not yet implemented")
-}
-
-// EncryptImage encrypts an image via gRPC.
-func (g *GRPCAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, fmt.Errorf("gRPC EncryptImage not yet implemented")
-}
-
-// DecryptImage decrypts an image via gRPC.
-func (g *GRPCAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, fmt.Errorf("gRPC DecryptImage not yet implemented")
-}
-
 // =============================================================================
 // QUIC Adapter Implementation
 // =============================================================================
 
-// QUICAdapter implements RegistryCommands using QUIC protocol.
+// QUICAdapter implements RegistryCommands for QUIC. QUIC carries no registry
+// opcode (docs/registry/api.md §2), so every operation returns the suite's
+// surface.ErrNoSurface.
 type QUICAdapter struct {
 	endpoint string
 }
@@ -748,7 +240,8 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 	}
 	q.endpoint = endpoint
 
-	// TODO: Implement QUIC connection verification
+	// QUIC carries no registry opcode, so there is no registry call to open
+	// a connection for: every operation reports the missing surface.
 	return nil
 }
 
@@ -759,181 +252,87 @@ func (q *QUICAdapter) Teardown() error {
 
 // Push pushes an image to the registry via QUIC.
 func (q *QUICAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	return nil, fmt.Errorf("QUIC Push not yet implemented")
+	return nil, noSurface("QUIC", opPush)
 }
 
 // Pull pulls an image from the registry via QUIC.
 func (q *QUICAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	return nil, fmt.Errorf("QUIC Pull not yet implemented")
+	return nil, noSurface("QUIC", opPull)
 }
 
 // List lists images in the registry via QUIC.
 func (q *QUICAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	return nil, fmt.Errorf("QUIC List not yet implemented")
+	return nil, noSurface("QUIC", opList)
 }
 
 // Delete deletes an image from the registry via QUIC.
 func (q *QUICAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	return nil, fmt.Errorf("QUIC Delete not yet implemented")
+	return nil, noSurface("QUIC", opDelete)
 }
 
 // Inspect inspects an image in the registry via QUIC.
 func (q *QUICAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	return nil, fmt.Errorf("QUIC Inspect not yet implemented")
+	return nil, noSurface("QUIC", opInspect)
 }
 
 // Status retrieves the registry status via QUIC.
 func (q *QUICAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	return nil, fmt.Errorf("QUIC Status not yet implemented")
+	return nil, noSurface("QUIC", opStatus)
 }
 
 // Tag adds a tag to an existing image via QUIC.
 func (q *QUICAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, fmt.Errorf("QUIC Tag not yet implemented")
+	return nil, noSurface("QUIC", opTag)
 }
 
 // VerifyClient verifies a client's attestation via QUIC.
 func (q *QUICAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, fmt.Errorf("QUIC VerifyClient not yet implemented")
+	return nil, noSurface("QUIC", opVerifyClient)
 }
 
 // GetSession retrieves a client session via QUIC.
 func (q *QUICAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, fmt.Errorf("QUIC GetSession not yet implemented")
+	return nil, noSurface("QUIC", opGetSession)
 }
 
 // InvalidateSession invalidates a client session via QUIC.
 func (q *QUICAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return fmt.Errorf("QUIC InvalidateSession not yet implemented")
+	return noSurface("QUIC", opInvalidateSession)
 }
 
 // EncryptImage encrypts an image via QUIC.
 func (q *QUICAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, fmt.Errorf("QUIC EncryptImage not yet implemented")
+	return nil, noSurface("QUIC", opEncryptImage)
 }
 
 // DecryptImage decrypts an image via QUIC.
 func (q *QUICAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, fmt.Errorf("QUIC DecryptImage not yet implemented")
-}
-
-// =============================================================================
-// MCP Adapter Implementation
-// =============================================================================
-
-// MCPAdapter implements RegistryCommands using Model Context Protocol.
-type MCPAdapter struct {
-	endpoint string
-}
-
-// NewMCPAdapter creates a new MCP adapter for integration testing.
-func NewMCPAdapter() *MCPAdapter {
-	return &MCPAdapter{}
-}
-
-// Name returns the protocol adapter identifier.
-func (m *MCPAdapter) Name() string {
-	return "MCP"
-}
-
-// Setup initializes the MCP connection.
-func (m *MCPAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdMCPEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformdMCPEndpoint
-	}
-	m.endpoint = endpoint
-
-	// TODO: Implement MCP connection verification
-	return nil
-}
-
-// Teardown closes the MCP connection.
-func (m *MCPAdapter) Teardown() error {
-	return nil
-}
-
-// Push pushes an image to the registry via MCP.
-func (m *MCPAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	return nil, fmt.Errorf("MCP Push not yet implemented")
-}
-
-// Pull pulls an image from the registry via MCP.
-func (m *MCPAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	return nil, fmt.Errorf("MCP Pull not yet implemented")
-}
-
-// List lists images in the registry via MCP.
-func (m *MCPAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	return nil, fmt.Errorf("MCP List not yet implemented")
-}
-
-// Delete deletes an image from the registry via MCP.
-func (m *MCPAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	return nil, fmt.Errorf("MCP Delete not yet implemented")
-}
-
-// Inspect inspects an image in the registry via MCP.
-func (m *MCPAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	return nil, fmt.Errorf("MCP Inspect not yet implemented")
-}
-
-// Status retrieves the registry status via MCP.
-func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	return nil, fmt.Errorf("MCP Status not yet implemented")
-}
-
-// Tag adds a tag to an existing image via MCP.
-func (m *MCPAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, fmt.Errorf("MCP Tag not yet implemented")
-}
-
-// VerifyClient verifies a client's attestation via MCP.
-func (m *MCPAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, fmt.Errorf("MCP VerifyClient not yet implemented")
-}
-
-// GetSession retrieves a client session via MCP.
-func (m *MCPAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, fmt.Errorf("MCP GetSession not yet implemented")
-}
-
-// InvalidateSession invalidates a client session via MCP.
-func (m *MCPAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return fmt.Errorf("MCP InvalidateSession not yet implemented")
-}
-
-// EncryptImage encrypts an image via MCP.
-func (m *MCPAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, fmt.Errorf("MCP EncryptImage not yet implemented")
-}
-
-// DecryptImage decrypts an image via MCP.
-func (m *MCPAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, fmt.Errorf("MCP DecryptImage not yet implemented")
+	return nil, noSurface("QUIC", opDecryptImage)
 }
 
 // =============================================================================
 // Unix Socket Adapter Implementation
 // =============================================================================
 
-// UnixAdapter implements RegistryCommands using Unix socket.
+// UnixAdapter implements RegistryCommands over the daemon's Unix socket.
+// platformd serves gRPC on that socket, not HTTP, so this is the gRPC
+// adapter dialled over the socket instead of TCP (docs/registry/api.md §2).
 type UnixAdapter struct {
+	GRPCAdapter
 	socketPath string
-	httpClient *http.Client
 }
 
-// NewUnixAdapter creates a new Unix socket adapter for integration testing.
+// NewUnixAdapter creates a new Unix socket adapter.
 func NewUnixAdapter() *UnixAdapter {
 	return &UnixAdapter{}
 }
 
-// Name returns the protocol adapter identifier.
+// Name returns the adapter name.
 func (u *UnixAdapter) Name() string {
 	return "Unix"
 }
 
-// Setup initializes the Unix socket connection.
+// Setup dials the daemon's gRPC server over the Unix socket.
 func (u *UnixAdapter) Setup(ctx context.Context) error {
 	socketPath := os.Getenv(EnvPlatformdSocket)
 	if socketPath == "" {
@@ -941,386 +340,51 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 	}
 	u.socketPath = socketPath
 
-	// Create HTTP client that uses Unix socket
-	u.httpClient = &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.Dial("unix", u.socketPath)
-			},
-		},
-		Timeout: DefaultCommandTimeout,
+	conn, err := grpc.DialContext(ctx, "unix://"+socketPath,
+		helpers.GRPCUnixCredentials(),
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", strings.TrimPrefix(addr, "unix://"))
+		}),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: socketPath, Err: err}
 	}
 
-	// Verify socket exists
-	if _, err := os.Stat(u.socketPath); os.IsNotExist(err) {
-		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: u.socketPath, Err: err}
-	}
-
+	u.conn = conn
+	u.client = regsvc.NewClientFromGRPC(pb.NewRegistryServiceClient(conn))
 	return nil
 }
 
-// Teardown closes the Unix socket connection.
-func (u *UnixAdapter) Teardown() error {
-	if u.httpClient != nil {
-		u.httpClient.CloseIdleConnections()
-	}
-	return nil
-}
-
-// doRequest performs an HTTP request over Unix socket.
-func (u *UnixAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
-	if body != nil {
-		jsonBytes, err := json.Marshal(body)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonBytes)
-	}
-
-	// Use http://localhost as dummy host - the transport uses Unix socket
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, reqBody)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := u.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	return respBody, resp.StatusCode, nil
-}
-
-// handleResponse processes the response.
-func (u *UnixAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
-	if statusCode >= 400 {
-		var errResp struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			msg := errResp.Error
-			if msg == "" {
-				msg = errResp.Message
-			}
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return ErrImageNotFound{Reference: ""}
-			}
-			return fmt.Errorf("API error (%d): %s", statusCode, msg)
-		}
-		return fmt.Errorf("API error (%d): %s", statusCode, string(respBody))
-	}
-
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrInvalidResponse{Operation: "response", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Push pushes an image to the registry via Unix socket.
-func (u *UnixAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	reqBody := restPushRequest{
-		Reference:      ref,
-		Encrypt:        opts.Encrypt,
-		KeyID:          opts.KeyID,
-		AllowOverwrite: opts.AllowOverwrite,
-		Sign:           opts.SignImage,
-		SigningKeyID:   opts.SigningKeyID,
-		Annotations:    opts.Annotations,
-	}
-
-	if len(opts.Layers) > 0 {
-		reqBody.Layers = make([]restLayerData, len(opts.Layers))
-		for i, layer := range opts.Layers {
-			reqBody.Layers[i] = restLayerData{
-				MediaType:   layer.MediaType,
-				Content:     base64.StdEncoding.EncodeToString(layer.Content),
-				Annotations: layer.Annotations,
-			}
-		}
-	}
-
-	if len(opts.Config) > 0 {
-		reqBody.Config = base64.StdEncoding.EncodeToString(opts.Config)
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/images", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restPushResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toPushResult(), nil
-}
-
-// Pull pulls an image from the registry via Unix socket.
-func (u *UnixAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s", ref)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restPullResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toPullResult(), nil
-}
-
-// List lists images in the registry via Unix socket.
-func (u *UnixAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	path := "/api/v1/registry/images"
-	params := make([]string, 0)
-
-	if opts.Limit > 0 {
-		params = append(params, fmt.Sprintf("limit=%d", opts.Limit))
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restListResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toListResult(), nil
-}
-
-// Delete deletes an image from the registry via Unix socket.
-func (u *UnixAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s", ref)
-	if opts.Force {
-		path += "?force=true"
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDeleteResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDeleteResult(), nil
-}
-
-// Inspect inspects an image in the registry via Unix socket.
-func (u *UnixAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s/inspect", ref)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restInspectResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toInspectResult(), nil
-}
-
-// Status retrieves the registry status via Unix socket.
-func (u *UnixAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, "/api/v1/registry/status", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restStatusResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toStatusResult(), nil
-}
-
-// Tag adds a tag to an existing image via Unix socket.
+// Tag has no RegistryService call on the socket.
 func (u *UnixAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	reqBody := struct {
-		SourceReference string `json:"source_reference"`
-		TargetReference string `json:"target_reference"`
-	}{
-		SourceReference: sourceRef,
-		TargetReference: targetRef,
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/images/tag", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: sourceRef}
-	}
-
-	var result restTagResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toTagResult(), nil
+	return nil, noSurface(u.Name(), opTag)
 }
 
-// VerifyClient verifies a client's attestation via Unix socket.
+// VerifyClient has no RegistryService call on the socket.
 func (u *UnixAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	reqBody := restVerifyClientRequest{
-		ClientID:  opts.ClientID,
-		AIK:       base64.StdEncoding.EncodeToString(opts.AIK),
-		Quote:     base64.StdEncoding.EncodeToString(opts.Quote),
-		Signature: base64.StdEncoding.EncodeToString(opts.Signature),
-		Nonce:     base64.StdEncoding.EncodeToString(opts.Nonce),
-		PCRs:      make(map[int]string),
-		EventLog:  base64.StdEncoding.EncodeToString(opts.EventLog),
-		Timestamp: opts.Timestamp,
-	}
-
-	for idx, val := range opts.PCRs {
-		reqBody.PCRs[idx] = base64.StdEncoding.EncodeToString(val)
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/attestation/verify", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restVerifyClientResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toVerifyClientResult(), nil
+	return nil, noSurface(u.Name(), opVerifyClient)
 }
 
-// GetSession retrieves a client session via Unix socket.
+// GetSession has no RegistryService call on the socket.
 func (u *UnixAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrSessionNotFound{ClientID: clientID}
-	}
-
-	var result restSessionResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toSessionResult(), nil
+	return nil, noSurface(u.Name(), opGetSession)
 }
 
-// InvalidateSession invalidates a client session via Unix socket.
+// InvalidateSession has no RegistryService call on the socket.
 func (u *UnixAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return ErrSessionNotFound{ClientID: clientID}
-	}
-
-	return u.handleResponse(body, statusCode, nil)
+	return noSurface(u.Name(), opInvalidateSession)
 }
 
-// EncryptImage encrypts an image via Unix socket.
+// EncryptImage has no RegistryService call on the socket.
 func (u *UnixAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-		KeyID     string `json:"key_id"`
-	}{
-		Reference: ref,
-		KeyID:     keyID,
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/encrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restEncryptImageResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toEncryptImageResult(), nil
+	return nil, noSurface(u.Name(), opEncryptImage)
 }
 
-// DecryptImage decrypts an image via Unix socket.
+// DecryptImage has no RegistryService call on the socket.
 func (u *UnixAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-	}{
-		Reference: ref,
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/decrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDecryptImageResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDecryptImageResult(), nil
+	return nil, noSurface(u.Name(), opDecryptImage)
 }
 
 // =============================================================================
@@ -1330,12 +394,12 @@ func (u *UnixAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptIma
 // CLI Response Types
 
 type cliPushResponse struct {
-	Reference string    `json:"reference"`
-	Digest    string    `json:"digest"`
-	Size      int64     `json:"size"`
-	Encrypted bool      `json:"encrypted"`
-	Signed    bool      `json:"signed"`
-	PushedAt  time.Time `json:"pushed_at"`
+	Reference string `json:"reference"`
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	Encrypted bool   `json:"encrypted"`
+	Signed    bool   `json:"signed"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func (r *cliPushResponse) toPushResult() *PushResult {
@@ -1345,7 +409,7 @@ func (r *cliPushResponse) toPushResult() *PushResult {
 		Size:      r.Size,
 		Encrypted: r.Encrypted,
 		Signed:    r.Signed,
-		PushedAt:  r.PushedAt,
+		PushedAt:  time.Unix(r.Timestamp, 0).UTC(),
 	}
 }
 
@@ -1575,148 +639,4 @@ func (r *cliStatusResponse) toStatusResult() *StatusResult {
 		StorageBackend:     r.StorageBackend,
 		StorageStatus:      r.StorageStatus,
 	}
-}
-
-type cliTagResponse struct {
-	SourceReference string    `json:"source_reference"`
-	TargetReference string    `json:"target_reference"`
-	Digest          string    `json:"digest"`
-	TaggedAt        time.Time `json:"tagged_at"`
-}
-
-func (r *cliTagResponse) toTagResult() *TagResult {
-	return &TagResult{
-		SourceReference: r.SourceReference,
-		TargetReference: r.TargetReference,
-		Digest:          r.Digest,
-		TaggedAt:        r.TaggedAt,
-	}
-}
-
-type cliVerifyClientResponse struct {
-	Verified    bool      `json:"verified"`
-	ClientID    string    `json:"client_id"`
-	SessionID   string    `json:"session_id,omitempty"`
-	ValidUntil  time.Time `json:"valid_until,omitempty"`
-	Permissions []string  `json:"permissions,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
-}
-
-func (r *cliVerifyClientResponse) toVerifyClientResult() *VerifyClientResult {
-	return &VerifyClientResult{
-		Verified:    r.Verified,
-		ClientID:    r.ClientID,
-		SessionID:   r.SessionID,
-		ValidUntil:  r.ValidUntil,
-		Permissions: r.Permissions,
-		Reason:      r.Reason,
-	}
-}
-
-type cliSessionResponse struct {
-	ClientID    string         `json:"client_id"`
-	SessionID   string         `json:"session_id"`
-	AIK         string         `json:"aik"`
-	PCRs        map[int]string `json:"pcrs,omitempty"`
-	ValidUntil  time.Time      `json:"valid_until"`
-	Permissions []string       `json:"permissions"`
-	CreatedAt   time.Time      `json:"created_at"`
-}
-
-func (r *cliSessionResponse) toSessionResult() *SessionResult {
-	pcrs := make(map[int][]byte)
-	for idx, val := range r.PCRs {
-		pcrs[idx], _ = base64.StdEncoding.DecodeString(val)
-	}
-
-	return &SessionResult{
-		ClientID:    r.ClientID,
-		SessionID:   r.SessionID,
-		AIK:         r.AIK,
-		PCRs:        pcrs,
-		ValidUntil:  r.ValidUntil,
-		Permissions: r.Permissions,
-		CreatedAt:   r.CreatedAt,
-	}
-}
-
-type cliEncryptImageResponse struct {
-	Reference       string    `json:"reference"`
-	KeyID           string    `json:"key_id"`
-	EncryptedAt     time.Time `json:"encrypted_at"`
-	LayersEncrypted int       `json:"layers_encrypted"`
-}
-
-func (r *cliEncryptImageResponse) toEncryptImageResult() *EncryptImageResult {
-	return &EncryptImageResult{
-		Reference:       r.Reference,
-		KeyID:           r.KeyID,
-		EncryptedAt:     r.EncryptedAt,
-		LayersEncrypted: r.LayersEncrypted,
-	}
-}
-
-type cliDecryptImageResponse struct {
-	Reference   string              `json:"reference"`
-	KeyID       string              `json:"key_id"`
-	DecryptedAt time.Time           `json:"decrypted_at"`
-	Manifest    cliManifestResponse `json:"manifest"`
-	Layers      []cliLayerResponse  `json:"layers"`
-}
-
-func (r *cliDecryptImageResponse) toDecryptImageResult() *DecryptImageResult {
-	layers := make([]LayerData, len(r.Layers))
-	for i, layer := range r.Layers {
-		layers[i] = layer.toLayerData()
-	}
-
-	return &DecryptImageResult{
-		Reference:   r.Reference,
-		KeyID:       r.KeyID,
-		DecryptedAt: r.DecryptedAt,
-		Manifest:    r.Manifest.toImageManifest(),
-		Layers:      layers,
-	}
-}
-
-// REST Request/Response Types
-
-type restPushRequest struct {
-	Reference      string            `json:"reference"`
-	Encrypt        bool              `json:"encrypt,omitempty"`
-	KeyID          string            `json:"key_id,omitempty"`
-	AllowOverwrite bool              `json:"allow_overwrite,omitempty"`
-	Sign           bool              `json:"sign,omitempty"`
-	SigningKeyID   string            `json:"signing_key_id,omitempty"`
-	Annotations    map[string]string `json:"annotations,omitempty"`
-	Config         string            `json:"config,omitempty"`
-	Layers         []restLayerData   `json:"layers,omitempty"`
-}
-
-type restLayerData struct {
-	MediaType   string            `json:"media_type"`
-	Content     string            `json:"content"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-type restPushResponse = cliPushResponse
-type restPullResponse = cliPullResponse
-type restListResponse = cliListResponse
-type restDeleteResponse = cliDeleteResponse
-type restInspectResponse = cliInspectResponse
-type restStatusResponse = cliStatusResponse
-type restTagResponse = cliTagResponse
-type restVerifyClientResponse = cliVerifyClientResponse
-type restSessionResponse = cliSessionResponse
-type restEncryptImageResponse = cliEncryptImageResponse
-type restDecryptImageResponse = cliDecryptImageResponse
-type restVerifyClientRequest struct {
-	ClientID  string         `json:"client_id"`
-	AIK       string         `json:"aik"`
-	Quote     string         `json:"quote"`
-	Signature string         `json:"signature"`
-	Nonce     string         `json:"nonce"`
-	PCRs      map[int]string `json:"pcrs,omitempty"`
-	EventLog  string         `json:"event_log,omitempty"`
-	Timestamp time.Time      `json:"timestamp"`
 }

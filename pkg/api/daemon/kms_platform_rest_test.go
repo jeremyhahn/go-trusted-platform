@@ -274,8 +274,8 @@ func TestPlatformKMSRESTFacadeBatchEncrypt(t *testing.T) {
 		resp, err := facade.BatchEncrypt(ctx, &restapi.KMSBatchEncryptServiceRequest{
 			KeyID: "key-1",
 			Items: []*restapi.KMSBatchEncryptItem{
-				{Plaintext: []byte("p1")},
-				{Plaintext: []byte("p2")},
+				{ItemID: "a", Plaintext: []byte("p1")},
+				{ItemID: "b", Plaintext: []byte("p2")},
 			},
 		})
 		if err != nil {
@@ -283,6 +283,9 @@ func TestPlatformKMSRESTFacadeBatchEncrypt(t *testing.T) {
 		}
 		if resp.KeyVersion != 3 || resp.SuccessCount != 1 || resp.FailureCount != 1 {
 			t.Errorf("unexpected response: %+v", resp)
+		}
+		if resp.Results[0].ItemID != "a" || resp.Results[1].ItemID != "b" {
+			t.Errorf("item ids not carried through: %q, %q", resp.Results[0].ItemID, resp.Results[1].ItemID)
 		}
 		if !bytes.Equal(resp.Results[0].Ciphertext, []byte("ct-1")) || resp.Results[0].Error != "" {
 			t.Errorf("unexpected result 0: %+v", resp.Results[0])

@@ -295,7 +295,7 @@ distinct values, twenty-three names:
 | `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x55` | `OpMessagingCategory` | Messaging through the composed go-quicbaas SDK; sub-opcodes `MessagingSub*` `0x01`–`0x08`, scopes `messaging:read`/`messaging:write`/`messaging:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x60` | `OpObjectStorageCategory` | Object storage through the composed go-quicbaas SDK; sub-opcodes `ObjectStorageSub*` `0x01`–`0x08`, scopes `objectstorage:read`/`objectstorage:write`/`objectstorage:delete` ([docs/objectstorage/api-reference-quic.md](../objectstorage/api-reference-quic.md)) |
-| `0x69` | `OpVMExtendedCategory` | VM verbs (create, delete, start, stop, get, list `0x60`–`0x65`; reboot, suspend, resume `0xB6`–`0xB8`), snapshot create, restore, delete, list (`0xBB`–`0xBE`), attest and verify attestation (`0xB9`, `0xBF`) and operational sub-opcodes (`0xCC`–`0xD0`), each answered by `ComputeService` ([`docs/compute/api.md`](../compute/api.md) §2, §3, §5, §6). The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned and refused as unclassified (#704) |
+| `0x69` | `OpVMExtendedCategory` | VM verbs (create, delete, start, stop, get, list `0x60`–`0x65`; reboot, suspend, resume `0xB6`–`0xB8`), snapshot get, create, restore, delete, list (`0xBA`–`0xBE`), attest and verify attestation (`0xB9`, `0xBF`) and operational sub-opcodes (`0xCC`–`0xD2`, including the destination-side prepare and finalize migration `0xD1`, `0xD2`), each answered by `ComputeService` ([`docs/compute/api.md`](../compute/api.md) §2, §3, §5, §6). The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned and refused as unclassified (#704) |
 | `0x90` | `OpClusterCategory` | Cluster; sub-opcodes `ClusterSub*` `0x01`–`0x05`, one per `ClusterService` RPC, scopes `cluster:read`/`cluster:write` ([`docs/cluster/api.md`](../cluster/api.md)). Reclaimed from the never-implemented `OpJWTCreate` |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
@@ -305,8 +305,8 @@ distinct values, twenty-three names:
 | `0x9E` | `OpTenantBarrierCategory` | Per-tenant barrier |
 | `0x9F` | `OpBMCCategory` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC ([`docs/bmc/api.md`](../bmc/api.md)) |
 | `0xCC` | `OpSwitchCategory` | Physical switch; sub-opcodes `SwitchSub*` `0x01`–`0x05` |
-| `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4) |
-| `0xCE` | `OpSecretsCategory` | Secrets |
+| `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4); subs `0x08`–`0x0D` are the `DEKManagement` calls (`docs/kms/api.md` §4) |
+| `0xCE` | `OpSecretsCategory` | Secrets; sub-opcodes `SecretsSub*` `0x01`–`0x0B`: store, get, list, delete, rotation-policy set/get (`0x01`–`0x06`), then version get, version list, rotate, rollback, status (`0x07`–`0x0B`), scopes `secrets:read`/`secrets:list`/`secrets:write`/`secrets:delete` ([`docs/kms/api.md`](../kms/api.md) §4) |
 | `0xCF` | `OpProvisioningCategory` | Provisioning / config delivery. Device sub-opcodes `0x20`–`0x29` (profile assign/unassign, attestation certificate, diskless boot certificate and delivery, disable/enable, template create, profile from template, find matching profile) are routed first — [`docs/device/api.md`](../device/api.md) §3.7 |
 
 **This is why opcode values repeat.** `OpOverlayStatus`, `OpGatewayStatus` and

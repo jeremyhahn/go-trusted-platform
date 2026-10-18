@@ -139,9 +139,6 @@ func routeArgs(verb string, route *platformv1.ProxyRoute) []string {
 		if auth.GetAttestationMaxAgeNanos() > 0 {
 			args = append(args, "--attestation-max-age", time.Duration(auth.GetAttestationMaxAgeNanos()).String())
 		}
-		for _, r := range auth.GetRequiredRoles() {
-			args = append(args, "--required-role", r)
-		}
 		for _, s := range auth.GetRequiredScopes() {
 			args = append(args, "--required-scope", s)
 		}

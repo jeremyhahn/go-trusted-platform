@@ -29,6 +29,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
@@ -126,6 +127,16 @@ func (s *parityStore) secret(secretID string) ([]byte, uint64, error) {
 	return data, s.versions[secretID], nil
 }
 
+// rotateSecret stores data as an existing secret's next version and
+// returns the old and new version numbers.
+func (s *parityStore) rotateSecret(secretID string, data []byte) (uint64, uint64, error) {
+	_, oldVersion, err := s.secret(secretID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return oldVersion, s.putSecret(secretID, data), nil
+}
+
 func (s *parityStore) rotationPolicy(secretID string) error {
 	if !s.rotation[secretID] {
 		return parityMissing(secretID)
@@ -209,6 +220,13 @@ func newParityMCP(store *parityStore) *mcp.ToolRegistry {
 				Policy:   &service.SecretRotationPolicy{Enabled: true, RetainVersions: parityRetainVersions},
 			}, nil
 		},
+		rotateSecretFunc: func(ctx context.Context, req *service.RotateSecretRequest) (*service.RotateSecretResponse, error) {
+			oldVersion, newVersion, err := store.rotateSecret(req.SecretID, req.NewData)
+			if err != nil {
+				return nil, err
+			}
+			return &service.RotateSecretResponse{SecretID: req.SecretID, OldVersion: oldVersion, NewVersion: newVersion}, nil
+		},
 	}
 
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
@@ -249,6 +267,35 @@ func (c *parityKMSClient) GetKeyPolicy(ctx context.Context, keyID string) (*kms.
 	return &kms.KeyPolicy{KeyID: keyID, Version: parityPolicyVersion}, nil
 }
 
+// ImportKey stores the imported key under its name, so the name is its ID.
+func (c *parityKMSClient) ImportKey(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error) {
+	c.store.keys[req.Name] = req.Name
+	return &kms.ImportKeyResponse{KeyID: req.Name, Version: 1, Algorithm: req.Algorithm}, nil
+}
+
+func (c *parityKMSClient) UpdateKeyStatus(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error) {
+	if _, err := c.store.keyName(req.KeyID); err != nil {
+		return nil, err
+	}
+	return &kms.UpdateKeyStatusResponse{KeyID: req.KeyID, Version: req.Version, Status: req.Status}, nil
+}
+
+// ListKeyVersions answers versions 1..parityKeyVersion, the newest enabled.
+func (c *parityKMSClient) ListKeyVersions(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error) {
+	if _, err := c.store.keyName(keyID); err != nil {
+		return nil, err
+	}
+	versions := make([]kms.KeyVersionInfo, 0, parityKeyVersion)
+	for v := 1; v <= parityKeyVersion; v++ {
+		info := kms.KeyVersionInfo{Version: v, Status: kms.KeyStatusDisabled, Algorithm: kms.AlgorithmAES256GCM, CreatedAt: time.Unix(int64(100*v), 0)}
+		if v == parityKeyVersion {
+			info.Status = kms.KeyStatusEnabled
+		}
+		versions = append(versions, info)
+	}
+	return &kms.ListKeyVersionsResponse{KeyID: keyID, Versions: versions}, nil
+}
+
 // paritySecretsClient serves the store through the quicbaas secrets client.
 type paritySecretsClient struct {
 	extSecretsClientMock
@@ -276,6 +323,14 @@ func (c *paritySecretsClient) GetRotationPolicy(ctx context.Context, secretID st
 	return &secrets.RotationPolicy{Enabled: true, RetainVersions: parityRetainVersions}, nil
 }
 
+func (c *paritySecretsClient) Rotate(ctx context.Context, req *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error) {
+	oldVersion, newVersion, err := c.store.rotateSecret(req.SecretID, req.NewData)
+	if err != nil {
+		return nil, err
+	}
+	return &secrets.RotateSecretResponse{SecretID: req.SecretID, OldVersion: int(oldVersion), NewVersion: int(newVersion)}, nil
+}
+
 // newParityCryptoClient serves the store through the quicbaas crypto client.
 func newParityCryptoClient(store *parityStore) *platformMockCryptoClient {
 	return &platformMockCryptoClient{
@@ -296,7 +351,81 @@ func newParityCryptoClient(store *parityStore) *platformMockCryptoClient {
 		generateRandomFn: func(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
 			return &quicbaas.GenerateRandomResponse{RandomBytes: store.random(req.NumBytes)}, nil
 		},
+		hashFn: func(ctx context.Context, req *quicbaas.HashRequest) (*quicbaas.HashResponse, error) {
+			return &quicbaas.HashResponse{HashAlg: req.HashAlg, Hash: append([]byte("digest:"), req.Data...)}, nil
+		},
+		// The parity "MAC" is the store's seal of the message: keyed, and
+		// NotFound under a key the store does not hold.
+		generateHMACFn: func(ctx context.Context, req *quicbaas.GenerateHMACRequest) (*quicbaas.GenerateHMACResponse, error) {
+			mac, err := store.encrypt(req.KeyID, req.Message)
+			if err != nil {
+				return nil, err
+			}
+			return &quicbaas.GenerateHMACResponse{KeyID: req.KeyID, KeyVersion: parityKeyVersion, HMAC: mac, HashAlg: req.HashAlg}, nil
+		},
+		verifyHMACFn: func(ctx context.Context, req *quicbaas.VerifyHMACRequest) (*quicbaas.VerifyHMACResponse, error) {
+			mac, err := store.encrypt(req.KeyID, req.Message)
+			if err != nil {
+				return nil, err
+			}
+			return &quicbaas.VerifyHMACResponse{Valid: bytes.Equal(mac, req.HMAC)}, nil
+		},
+		rewrapFn: func(ctx context.Context, req *quicbaas.RewrapRequest) (*quicbaas.RewrapResponse, error) {
+			plaintext, err := store.decrypt(req.KeyID, req.Ciphertext)
+			if err != nil {
+				return nil, err
+			}
+			ciphertext, err := store.encrypt(req.KeyID, plaintext)
+			if err != nil {
+				return nil, err
+			}
+			return &quicbaas.RewrapResponse{
+				KeyID:         req.KeyID,
+				OldKeyVersion: parityKeyVersion - 1,
+				NewKeyVersion: parityKeyVersion,
+				Ciphertext:    ciphertext,
+			}, nil
+		},
+		// A batch under a missing key fails whole; a bad item fails alone.
+		encryptBatchFn: func(ctx context.Context, req *quicbaas.EncryptBatchRequest) (*quicbaas.EncryptBatchResponse, error) {
+			if _, err := store.keyName(req.KeyID); err != nil {
+				return nil, err
+			}
+			results := make([]sdkcrypto.BatchEncryptResult, len(req.Items))
+			for i, item := range req.Items {
+				ciphertext, err := store.encrypt(req.KeyID, item.Plaintext)
+				if err != nil {
+					results[i].Error = err.Error()
+					continue
+				}
+				results[i] = sdkcrypto.BatchEncryptResult{Ciphertext: ciphertext, Nonce: store.random(12)}
+			}
+			return &quicbaas.EncryptBatchResponse{KeyID: req.KeyID, KeyVersion: parityKeyVersion, Results: results}, nil
+		},
+		decryptBatchFn: func(ctx context.Context, req *quicbaas.DecryptBatchRequest) (*quicbaas.DecryptBatchResponse, error) {
+			if _, err := store.keyName(req.KeyID); err != nil {
+				return nil, err
+			}
+			results := make([]sdkcrypto.BatchDecryptResult, len(req.Items))
+			for i, item := range req.Items {
+				plaintext, err := store.decrypt(req.KeyID, item.Ciphertext)
+				if err != nil {
+					results[i].Error = err.Error()
+					continue
+				}
+				results[i].Plaintext = plaintext
+			}
+			return &quicbaas.DecryptBatchResponse{KeyID: req.KeyID, Results: results}, nil
+		},
 	}
+}
+
+// newParityBackendTransports serves one store through the PlatformKMSBackend
+// shared by the MCP tools and gRPC KeyManagementService, as the daemon wires it.
+func newParityBackendTransports(store *parityStore) (*mcp.ToolRegistry, *grpcapi.KMSGRPCService) {
+	backend := NewPlatformKMSBackend(&parityKMSClient{store: store}, newParityCryptoClient(store), slog.Default())
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{KMSBackend: backend, Logger: slog.Default()})
+	return mcp.NewToolRegistry(provider, logging.DefaultLogger()), grpcapi.NewKMSGRPCService(logging.DefaultLogger(), backend)
 }
 
 // parityTool runs an MCP tool and decodes its JSON answer into out, as an MCP
@@ -488,6 +617,129 @@ func TestMCPKMSParity_DataKeys(t *testing.T) {
 	})
 }
 
+// digestAnswer is the JSON shape of the kms_hash, kms_hmac, kms_verify_hmac
+// and kms_rewrap answers.
+type digestAnswer struct {
+	KeyID         string `json:"key_id"`
+	KeyVersion    uint64 `json:"key_version"`
+	Hash          []byte `json:"hash"`
+	HMAC          []byte `json:"hmac"`
+	Valid         bool   `json:"valid"`
+	Algorithm     int32  `json:"algorithm"`
+	SourceVersion uint64 `json:"source_version"`
+	TargetVersion uint64 `json:"target_version"`
+	Ciphertext    []byte `json:"ciphertext"`
+}
+
+// TestMCPKMSParity_DigestAndRewrap compares kms_hash, kms_hmac,
+// kms_verify_hmac and kms_rewrap with the platform.v1 RPCs; both call the
+// same PlatformKMSBackend method.
+func TestMCPKMSParity_DigestAndRewrap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tools, rpc := newParityBackendTransports(newParityStore())
+	message := []byte("ledger line")
+	mac := append([]byte(parityKeyID+":"), message...)
+	sealed := append([]byte(parityKeyID+":"), message...)
+	// MCP arguments arrive as decoded JSON, so numbers are float64.
+	sha256 := float64(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256)
+	sha1 := float64(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1)
+
+	t.Run("hash answers the digest", func(t *testing.T) {
+		var got digestAnswer
+		args := map[string]interface{}{"data": b64(message), "algorithm": sha256}
+		require.NoError(t, parityTool(t, tools, "kms_hash", args, &got))
+		want, err := rpc.Hash(ctx, &platformv1.HashRequest{Data: message, Algorithm: platformv1.HashAlgorithm(sha256)})
+		require.NoError(t, err)
+		assert.Equal(t, want.GetHash(), got.Hash)
+		assert.Equal(t, int32(want.GetAlgorithm()), got.Algorithm)
+	})
+
+	t.Run("hmac answers the mac", func(t *testing.T) {
+		var got digestAnswer
+		args := map[string]interface{}{"key_id": parityKeyID, "message": b64(message)}
+		require.NoError(t, parityTool(t, tools, "kms_hmac", args, &got))
+		want, err := rpc.HMAC(ctx, &platformv1.HMACRequest{KeyId: parityKeyID, Message: message})
+		require.NoError(t, err)
+		assert.Equal(t, want.GetHmac(), got.HMAC)
+		assert.Equal(t, want.GetKeyVersion(), got.KeyVersion)
+	})
+
+	t.Run("verify_hmac answers valid", func(t *testing.T) {
+		var got digestAnswer
+		args := map[string]interface{}{"key_id": parityKeyID, "message": b64(message), "hmac": b64(mac)}
+		require.NoError(t, parityTool(t, tools, "kms_verify_hmac", args, &got))
+		want, err := rpc.VerifyHMAC(ctx, &platformv1.VerifyHMACRequest{KeyId: parityKeyID, Message: message, Hmac: mac})
+		require.NoError(t, err)
+		assert.True(t, want.GetValid())
+		assert.Equal(t, want.GetValid(), got.Valid)
+	})
+
+	t.Run("rewrap answers the new ciphertext", func(t *testing.T) {
+		var got digestAnswer
+		args := map[string]interface{}{"key_id": parityKeyID, "ciphertext": b64(sealed)}
+		require.NoError(t, parityTool(t, tools, "kms_rewrap", args, &got))
+		want, err := rpc.Rewrap(ctx, &platformv1.RewrapRequest{KeyId: parityKeyID, Ciphertext: sealed})
+		require.NoError(t, err)
+		assert.Equal(t, want.GetCiphertext(), got.Ciphertext)
+		assert.Equal(t, want.GetSourceVersion(), got.SourceVersion)
+		assert.Equal(t, want.GetTargetVersion(), got.TargetVersion)
+	})
+
+	t.Run("hash with an unsupported algorithm", func(t *testing.T) {
+		args := map[string]interface{}{"data": b64(message), "algorithm": sha1}
+		mcpErr := parityTool(t, tools, "kms_hash", args, &digestAnswer{})
+		_, grpcErr := rpc.Hash(ctx, &platformv1.HashRequest{Data: message, Algorithm: platformv1.HashAlgorithm(sha1)})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("hash without data", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "kms_hash", map[string]interface{}{}, &digestAnswer{})
+		_, grpcErr := rpc.Hash(ctx, &platformv1.HashRequest{})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("hmac under a missing key", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityMissingID, "message": b64(message)}
+		mcpErr := parityTool(t, tools, "kms_hmac", args, &digestAnswer{})
+		_, grpcErr := rpc.HMAC(ctx, &platformv1.HMACRequest{KeyId: parityMissingID, Message: message})
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
+	})
+
+	t.Run("hmac without message", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "kms_hmac", map[string]interface{}{"key_id": parityKeyID}, &digestAnswer{})
+		_, grpcErr := rpc.HMAC(ctx, &platformv1.HMACRequest{KeyId: parityKeyID})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("verify_hmac without hmac", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityKeyID, "message": b64(message)}
+		mcpErr := parityTool(t, tools, "kms_verify_hmac", args, &digestAnswer{})
+		_, grpcErr := rpc.VerifyHMAC(ctx, &platformv1.VerifyHMACRequest{KeyId: parityKeyID, Message: message})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("rewrap under a missing key", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityMissingID, "ciphertext": b64(sealed)}
+		mcpErr := parityTool(t, tools, "kms_rewrap", args, &digestAnswer{})
+		_, grpcErr := rpc.Rewrap(ctx, &platformv1.RewrapRequest{KeyId: parityMissingID, Ciphertext: sealed})
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
+	})
+
+	t.Run("rewrap with a source version is refused", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityKeyID, "ciphertext": b64(sealed), "source_version": float64(2)}
+		mcpErr := parityTool(t, tools, "kms_rewrap", args, &digestAnswer{})
+		_, grpcErr := rpc.Rewrap(ctx, &platformv1.RewrapRequest{KeyId: parityKeyID, Ciphertext: sealed, SourceVersion: 2})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("rewrap without ciphertext", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "kms_rewrap", map[string]interface{}{"key_id": parityKeyID}, &digestAnswer{})
+		_, grpcErr := rpc.Rewrap(ctx, &platformv1.RewrapRequest{KeyId: parityKeyID})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+}
+
 func TestMCPKMSParity_Policies(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -583,6 +835,167 @@ func TestMCPKMSParity_Secrets(t *testing.T) {
 	t.Run("secret_store without data", func(t *testing.T) {
 		mcpErr := parityTool(t, tools, "secret_store", map[string]interface{}{"secret_id": "api/token"}, &service.StoreSecretResponse{})
 		_, grpcErr := adapter.StoreSecret(ctx, &pb.StoreSecretRequest{SecretId: "api/token"})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("secret_rotate answers both versions", func(t *testing.T) {
+		rotated := []byte("battery staple")
+		var got service.RotateSecretResponse
+		args := map[string]interface{}{"secret_id": "api/token", "new_data": b64(rotated)}
+		require.NoError(t, parityTool(t, tools, "secret_rotate", args, &got))
+		want, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: "api/token", NewData: rotated})
+		require.NoError(t, err)
+		assert.Equal(t, want.GetSecretId(), got.SecretID)
+		assert.Equal(t, want.GetOldVersion(), got.OldVersion)
+		assert.Equal(t, want.GetNewVersion(), got.NewVersion)
+	})
+
+	t.Run("secret_rotate without new_data", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "secret_rotate", map[string]interface{}{"secret_id": "api/token"}, &service.RotateSecretResponse{})
+		_, grpcErr := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: "api/token"})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("secret_rollback without target_version", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "secret_rollback", map[string]interface{}{"secret_id": "api/token"}, &service.RollbackSecretResponse{})
+		_, grpcErr := adapter.RollbackSecret(ctx, &pb.RollbackSecretRequest{SecretId: "api/token"})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+}
+
+// TestMCPKMSParity_KeyAdminAndBatch compares kms_import_key,
+// kms_update_key_status, kms_list_key_versions, kms_batch_encrypt and
+// kms_batch_decrypt with the platform.v1 RPCs; both call the same
+// PlatformKMSBackend method. Each answer is decoded into the platform.v1
+// reply with encoding/json, the decode the SDK MCP adapter applies, so the
+// test also holds the adapter's method-to-tool mapping to a usable answer.
+func TestMCPKMSParity_KeyAdminAndBatch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tools, rpc := newParityBackendTransports(newParityStore())
+	aes := platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256
+	disabled := platformv1.KeyStatus_KEY_STATUS_DISABLED
+	sealed := append([]byte(parityKeyID+":"), []byte("row")...)
+
+	t.Run("import_key answers the new key", func(t *testing.T) {
+		var got platformv1.ImportKeyResponse
+		args := map[string]interface{}{
+			"name": "imported", "key_material": b64([]byte("material")),
+			"key_spec": map[string]interface{}{"algorithm": float64(aes)},
+		}
+		require.NoError(t, parityTool(t, tools, "kms_import_key", args, &got))
+		want, err := rpc.ImportKey(ctx, &platformv1.ImportKeyRequest{
+			Name: "imported", KeyMaterial: []byte("material"),
+			KeySpec: &platformv1.KMSKeySpec{Algorithm: aes},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, got.GetKey())
+		assert.Equal(t, want.GetKey().GetKeyId(), got.GetKey().GetKeyId())
+		assert.Equal(t, want.GetKey().GetVersion(), got.GetKey().GetVersion())
+		assert.Equal(t, want.GetKey().GetAlgorithm(), got.GetKey().GetAlgorithm())
+		assert.Equal(t, want.GetKey().GetStatus(), got.GetKey().GetStatus())
+	})
+
+	t.Run("update_key_status answers the status", func(t *testing.T) {
+		var got platformv1.UpdateKeyStatusResponse
+		args := map[string]interface{}{"key_id": parityKeyID, "version": float64(2), "status": float64(disabled)}
+		require.NoError(t, parityTool(t, tools, "kms_update_key_status", args, &got))
+		want, err := rpc.UpdateKeyStatus(ctx, &platformv1.UpdateKeyStatusRequest{KeyId: parityKeyID, Version: 2, Status: disabled})
+		require.NoError(t, err)
+		assert.Equal(t, want.GetKeyId(), got.GetKeyId())
+		assert.Equal(t, want.GetVersion(), got.GetVersion())
+		assert.Equal(t, want.GetKeyStatus(), got.GetKeyStatus())
+	})
+
+	t.Run("list_key_versions answers every version", func(t *testing.T) {
+		var got platformv1.GetKeyVersionsResponse
+		require.NoError(t, parityTool(t, tools, "kms_list_key_versions", map[string]interface{}{"key_id": parityKeyID}, &got))
+		want, err := rpc.GetKeyVersions(ctx, &platformv1.GetKeyVersionsRequest{KeyId: parityKeyID})
+		require.NoError(t, err)
+		require.Len(t, got.GetVersions(), len(want.GetVersions()))
+		for i, v := range want.GetVersions() {
+			assert.Equal(t, v.GetVersion(), got.GetVersions()[i].GetVersion())
+			assert.Equal(t, v.GetStatus(), got.GetVersions()[i].GetStatus())
+		}
+		assert.Equal(t, want.GetHasMore(), got.GetHasMore())
+	})
+
+	t.Run("batch_encrypt answers each item", func(t *testing.T) {
+		var got platformv1.BatchEncryptResponse
+		args := map[string]interface{}{"key_id": parityKeyID, "items": []interface{}{
+			map[string]interface{}{"item_id": "a", "plaintext": b64([]byte("row"))},
+		}}
+		require.NoError(t, parityTool(t, tools, "kms_batch_encrypt", args, &got))
+		want, err := rpc.BatchEncrypt(ctx, &platformv1.BatchEncryptRequest{KeyId: parityKeyID, Items: []*platformv1.BatchEncryptItem{
+			{ItemId: "a", Plaintext: []byte("row")},
+		}})
+		require.NoError(t, err)
+		require.Len(t, got.GetResults(), 1)
+		assert.Equal(t, want.GetSuccessCount(), got.GetSuccessCount())
+		r := want.GetResults()[0]
+		assert.Equal(t, r.GetItemId(), got.GetResults()[0].GetItemId())
+		assert.Equal(t, r.GetStatus().GetSuccess(), got.GetResults()[0].GetStatus().GetSuccess())
+		assert.Equal(t, r.GetCiphertext(), got.GetResults()[0].GetCiphertext())
+		assert.Equal(t, r.GetKeyVersion(), got.GetResults()[0].GetKeyVersion())
+	})
+
+	t.Run("batch_decrypt answers each item", func(t *testing.T) {
+		var got platformv1.BatchDecryptResponse
+		args := map[string]interface{}{"key_id": parityKeyID, "items": []interface{}{
+			map[string]interface{}{"item_id": "a", "ciphertext": b64(sealed)},
+			map[string]interface{}{"item_id": "b", "ciphertext": b64([]byte("foreign"))},
+		}}
+		require.NoError(t, parityTool(t, tools, "kms_batch_decrypt", args, &got))
+		want, err := rpc.BatchDecrypt(ctx, &platformv1.BatchDecryptRequest{KeyId: parityKeyID, Items: []*platformv1.BatchDecryptItem{
+			{ItemId: "a", Ciphertext: sealed},
+			{ItemId: "b", Ciphertext: []byte("foreign")},
+		}})
+		require.NoError(t, err)
+		require.Len(t, got.GetResults(), 2)
+		assert.Equal(t, want.GetSuccessCount(), got.GetSuccessCount())
+		assert.Equal(t, want.GetFailureCount(), got.GetFailureCount())
+		for i, r := range want.GetResults() {
+			assert.Equal(t, r.GetItemId(), got.GetResults()[i].GetItemId())
+			assert.Equal(t, r.GetStatus().GetSuccess(), got.GetResults()[i].GetStatus().GetSuccess())
+			assert.Equal(t, r.GetStatus().GetMessage(), got.GetResults()[i].GetStatus().GetMessage())
+			assert.Equal(t, r.GetPlaintext(), got.GetResults()[i].GetPlaintext())
+		}
+	})
+
+	t.Run("update_key_status of a missing key", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityMissingID, "status": float64(disabled)}
+		mcpErr := parityTool(t, tools, "kms_update_key_status", args, &platformv1.UpdateKeyStatusResponse{})
+		_, grpcErr := rpc.UpdateKeyStatus(ctx, &platformv1.UpdateKeyStatusRequest{KeyId: parityMissingID, Status: disabled})
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
+	})
+
+	t.Run("list_key_versions of a missing key", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "kms_list_key_versions", map[string]interface{}{"key_id": parityMissingID}, &platformv1.GetKeyVersionsResponse{})
+		_, grpcErr := rpc.GetKeyVersions(ctx, &platformv1.GetKeyVersionsRequest{KeyId: parityMissingID})
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
+	})
+
+	t.Run("batch_encrypt under a missing key", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityMissingID, "items": []interface{}{
+			map[string]interface{}{"plaintext": b64([]byte("row"))},
+		}}
+		mcpErr := parityTool(t, tools, "kms_batch_encrypt", args, &platformv1.BatchEncryptResponse{})
+		_, grpcErr := rpc.BatchEncrypt(ctx, &platformv1.BatchEncryptRequest{KeyId: parityMissingID, Items: []*platformv1.BatchEncryptItem{
+			{Plaintext: []byte("row")},
+		}})
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
+	})
+
+	t.Run("import_key without key_spec", func(t *testing.T) {
+		args := map[string]interface{}{"key_material": b64([]byte("material"))}
+		mcpErr := parityTool(t, tools, "kms_import_key", args, &platformv1.ImportKeyResponse{})
+		_, grpcErr := rpc.ImportKey(ctx, &platformv1.ImportKeyRequest{KeyMaterial: []byte("material")})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("batch_decrypt without items", func(t *testing.T) {
+		mcpErr := parityTool(t, tools, "kms_batch_decrypt", map[string]interface{}{"key_id": parityKeyID}, &platformv1.BatchDecryptResponse{})
+		_, grpcErr := rpc.BatchDecrypt(ctx, &platformv1.BatchDecryptRequest{KeyId: parityKeyID})
 		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
 	})
 }

@@ -106,7 +106,7 @@ func TestMCPServiceProvider_VMAttestVerify_RejectsOtherBank(t *testing.T) {
 	assert.Nil(t, orchestrator.lastEvidence)
 }
 
-// vm_snapshot_get has no RPC of its own: it filters ListSnapshots by id.
+// vm_snapshot_get answers ComputeService.GetSnapshot's response.
 func TestMCPServiceProvider_VMSnapshotGet(t *testing.T) {
 	orchestrator := newVMCapableMockOrchestrator()
 	orchestrator.snapshots = []*compute.VMSnapshot{
@@ -117,10 +117,10 @@ func TestMCPServiceProvider_VMSnapshotGet(t *testing.T) {
 
 	result, err := provider.VMSnapshotGet(context.Background(), "vm1", "nightly")
 	require.NoError(t, err)
-	var snapshot platformv1.Snapshot
-	decodeMCPProto(t, result, &snapshot)
-	assert.Equal(t, "nightly", snapshot.GetId())
-	assert.Equal(t, "before upgrade", snapshot.GetConfig().GetDescription())
+	var resp platformv1.GetSnapshotResponse
+	decodeMCPProto(t, result, &resp)
+	assert.Equal(t, "nightly", resp.GetSnapshot().GetId())
+	assert.Equal(t, "before upgrade", resp.GetSnapshot().GetConfig().GetDescription())
 }
 
 func TestMCPServiceProvider_VMSnapshotGet_UnknownSnapshot(t *testing.T) {

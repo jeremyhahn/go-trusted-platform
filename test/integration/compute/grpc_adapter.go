@@ -266,6 +266,34 @@ func (a *GRPCAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions)
 	return nil
 }
 
+// GetSnapshot returns one VM snapshot via the gRPC SDK client.
+func (a *GRPCAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver via the gRPC SDK client.
+func (a *GRPCAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.client.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "PrepareMigration", Err: err}
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver via the gRPC SDK client.
+func (a *GRPCAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	if err := a.client.FinalizeMigration(ctx, receiverID, commit); err != nil {
+		return ErrGRPCCallFailed{Method: "FinalizeMigration", Err: err}
+	}
+	return nil
+}
+
 // DeleteSnapshot deletes a VM snapshot via the gRPC SDK client.
 func (a *GRPCAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
 	if err := a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {

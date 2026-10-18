@@ -233,13 +233,6 @@ func TestChainTokenPathDenyReasons(t *testing.T) {
 			ReasonIDevIDRequired,
 		},
 		{
-			"missing role",
-			phase3Chain(t, &fakeTokenAuth{principal: &TokenPrincipal{Subject: "s", Roles: []string{"reader"}}}, nil, nil),
-			tokenRequest("tok", ""),
-			AuthRequirements{Mode: AuthModeToken, RequiredRoles: []string{"admin"}},
-			ReasonRoleRequired,
-		},
-		{
 			"zone requires mtls",
 			phase3Chain(t, &fakeTokenAuth{principal: &TokenPrincipal{Subject: "s"}}, nil, nil),
 			tokenRequest("tok", ""),
@@ -525,6 +518,9 @@ func TestChainOPAPolicy(t *testing.T) {
 		if client["id"] != "device-9" || client["zone"] != "control-plane" || client["attested"] != true ||
 			client["auth_method"] != authMethodMTLS {
 			t.Errorf("client input = %+v", client)
+		}
+		if _, has := client["roles"]; has {
+			t.Errorf("client input carries roles; OPA answers evidence questions only (#926): %+v", client)
 		}
 		routeDoc := eval.lastInput["route"].(map[string]any)
 		if routeDoc["id"] != "api" || routeDoc["backend_zone"] != "internal" || routeDoc["path_prefix"] != "/" {

@@ -101,6 +101,8 @@ func (r *ComputeRouter) RegisterRoutes(parent *mux.Router) {
 //	POST   /api/v1/compute/vms/{id}/resume           - ResumeVM
 //	GET    /api/v1/compute/vms/{id}/metrics          - GetVMMetrics
 //	POST   /api/v1/compute/vms/{id}/migrate          - MigrateVM
+//	POST   /api/v1/compute/migrations/prepare        - PrepareMigration
+//	POST   /api/v1/compute/migrations/{receiverId}/finalize - FinalizeMigration
 func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms", r.handlers.CreateVM).Methods("POST")
 	sr.HandleFunc("/vms", r.handlers.ListVMs).Methods("GET")
@@ -113,6 +115,8 @@ func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms/{id}/resume", r.handlers.ResumeVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/metrics", r.handlers.GetVMMetrics).Methods("GET")
 	sr.HandleFunc("/vms/{id}/migrate", r.handlers.MigrateVM).Methods("POST")
+	sr.HandleFunc("/migrations/prepare", r.handlers.PrepareMigration).Methods("POST")
+	sr.HandleFunc("/migrations/{receiverId}/finalize", r.handlers.FinalizeMigration).Methods("POST")
 }
 
 // registerDiskRoutes registers VM disk attachment endpoints.
@@ -130,11 +134,13 @@ func (r *ComputeRouter) registerDiskRoutes(sr *mux.Router) {
 //
 //	POST   /api/v1/compute/vms/{id}/snapshots                       - CreateSnapshot
 //	GET    /api/v1/compute/vms/{id}/snapshots                       - ListSnapshots
+//	GET    /api/v1/compute/vms/{id}/snapshots/{snapshotId}          - GetSnapshot
 //	DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}          - DeleteSnapshot
 //	POST   /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore  - RestoreSnapshot
 func (r *ComputeRouter) registerSnapshotRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms/{id}/snapshots", r.handlers.CreateSnapshot).Methods("POST")
 	sr.HandleFunc("/vms/{id}/snapshots", r.handlers.ListSnapshots).Methods("GET")
+	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}", r.handlers.GetSnapshot).Methods("GET")
 	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}", r.handlers.DeleteSnapshot).Methods("DELETE")
 	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}/restore", r.handlers.RestoreSnapshot).Methods("POST")
 }

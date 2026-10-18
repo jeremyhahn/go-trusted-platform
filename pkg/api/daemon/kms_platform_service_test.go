@@ -1061,6 +1061,24 @@ func TestPlatformKMSBackendRewrap(t *testing.T) {
 			t.Fatalf("expected sdk error, got %v", err)
 		}
 	})
+
+	t.Run("non-zero source version is refused before the sdk is called", func(t *testing.T) {
+		t.Parallel()
+		backend := newTestPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{
+			rewrapFn: func(ctx context.Context, req *quicbaas.RewrapRequest) (*quicbaas.RewrapResponse, error) {
+				t.Error("the SDK must not be called with a source version it cannot carry")
+				return nil, errPlatformKMSTest
+			},
+		})
+		_, err := backend.Rewrap(ctx, &grpcapi.KMSRewrapRequest{KeyID: "key-1", Ciphertext: []byte("ct"), SourceVersion: 2})
+		var refused ErrKMSRewrapSourceVersionUnsupported
+		if !errors.As(err, &refused) || refused.SourceVersion != 2 {
+			t.Fatalf("expected ErrKMSRewrapSourceVersionUnsupported{2}, got %T: %v", err, err)
+		}
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("class = %v, want InvalidArgument", got)
+		}
+	})
 }
 
 func TestPlatformKMSBackendSign(t *testing.T) {

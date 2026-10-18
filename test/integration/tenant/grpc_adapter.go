@@ -19,6 +19,7 @@ package tenant
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -68,21 +69,30 @@ func (e ErrGRPCCallFailed) Unwrap() error {
 
 // GRPCAdapter implements TenantCommands using native gRPC API
 type GRPCAdapter struct {
-	endpoint string
-	conn     *grpc.ClientConn
-	client   platformv1.TenantServiceClient
+	endpoint  string
+	tlsConfig *tls.Config
+	conn      *grpc.ClientConn
+	client    platformv1.TenantServiceClient
 }
 
-// NewGRPCAdapter creates a new gRPC adapter
+// NewGRPCAdapter creates a new gRPC adapter that dials with the harness
+// admin credential (system tenant).
 func NewGRPCAdapter() *GRPCAdapter {
+	return NewGRPCAdapterWithTLS(helpers.TLSConfigOrInsecure())
+}
+
+// NewGRPCAdapterWithTLS creates a gRPC adapter that dials with tlsConfig,
+// so a test can call as the tenant another client credential is bound to.
+func NewGRPCAdapterWithTLS(tlsConfig *tls.Config) *GRPCAdapter {
 	return &GRPCAdapter{
-		endpoint: GetGRPCEndpoint(),
+		endpoint:  GetGRPCEndpoint(),
+		tlsConfig: tlsConfig,
 	}
 }
 
 // Setup prepares the adapter for testing
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
-	tlsConfig := helpers.TLSConfigOrInsecure()
+	tlsConfig := a.tlsConfig
 
 	// Create a short timeout context for the dial attempt (5 seconds)
 	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

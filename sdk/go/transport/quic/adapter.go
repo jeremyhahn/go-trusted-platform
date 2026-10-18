@@ -569,6 +569,8 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DetachDisk":          quicwire.OpVMDetachDisk,
 	"/platform.v1.ComputeService/ResizeDisk":          quicwire.OpVMResizeDisk,
 	"/platform.v1.ComputeService/MigrateVM":           quicwire.OpVMMigrate,
+	"/platform.v1.ComputeService/PrepareMigration":    quicwire.OpVMPrepareMigration,
+	"/platform.v1.ComputeService/FinalizeMigration":   quicwire.OpVMFinalizeMigration,
 	"/platform.v1.ComputeService/RebootVM":            quicwire.OpVMRestart,
 	"/platform.v1.ComputeService/SuspendVM":           quicwire.OpVMSuspend,
 	"/platform.v1.ComputeService/ResumeVM":            quicwire.OpVMResume,
@@ -576,6 +578,7 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/RestoreSnapshot":     quicwire.OpVMSnapshotRestore,
 	"/platform.v1.ComputeService/DeleteSnapshot":      quicwire.OpVMSnapshotDelete,
 	"/platform.v1.ComputeService/ListSnapshots":       quicwire.OpVMSnapshotList,
+	"/platform.v1.ComputeService/GetSnapshot":         quicwire.OpVMSnapshotGet,
 	"/platform.v1.ComputeService/AttestVM":            quicwire.OpVMAttest,
 	"/platform.v1.ComputeService/VerifyVMAttestation": quicwire.OpVMVerifyAttest,
 
@@ -1001,6 +1004,8 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DetachDisk":          quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ResizeDisk":          quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/MigrateVM":           quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/PrepareMigration":    quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/FinalizeMigration":   quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/RebootVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/SuspendVM":           quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ResumeVM":            quicwire.OpVMExtendedCategory,
@@ -1008,6 +1013,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/RestoreSnapshot":     quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/DeleteSnapshot":      quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ListSnapshots":       quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/GetSnapshot":         quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/AttestVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/VerifyVMAttestation": quicwire.OpVMExtendedCategory,
 

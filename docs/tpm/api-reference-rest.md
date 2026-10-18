@@ -166,8 +166,8 @@ A refused request, or an RPC error, is the standard error body:
 | Status | Cause |
 |--------|-------|
 | `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
-| `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`); the RPC's `Unauthenticated` |
-| `403 Forbidden` | The token is rejected or lacks the route's scope, or no token validator is configured (`ErrTPMForbidden`); the RPC's `PermissionDenied` |
+| `401 Unauthorized` | Neither a bearer token nor a verified client certificate, or a token the validator rejects (`ErrRouteUnauthenticated`); the RPC's `Unauthenticated` |
+| `403 Forbidden` | The token lacks the route's scope, or the listener has no scope guard (`ErrRouteForbidden`); the RPC's `PermissionDenied` |
 | `404 Not Found` | The RPC's `NotFound` |
 | `409 Conflict` | The RPC's `AlreadyExists` or `Aborted` |
 | `412 Precondition Failed` | `DELETE /ak` and `DELETE /ak/{handle}`: the RPC's `FailedPrecondition` |

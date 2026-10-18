@@ -117,7 +117,7 @@ func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 	}
 }
 
-// testVMSnapshots creates, lists, restores and deletes a snapshot of a
+// testVMSnapshots creates, lists, gets, restores and deletes a snapshot of a
 // running VM, then checks a deleted snapshot answers NotFound.
 func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter) {
 	vmName := generateTestVMName("snap-" + uuid.New().String()[:8])
@@ -158,6 +158,14 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	requireSnapshotListed(t, ctx, adapter, vmID, snapshotName, true)
 
 	snapshot := SnapshotOptions{VMID: vmID, SnapshotID: snapshotName}
+	got, err := adapter.GetSnapshot(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if got.ID != snapshotName || got.VMID != vmID {
+		t.Errorf("GetSnapshot = %+v, want ID %q on VM %q", *got, snapshotName, vmID)
+	}
+
 	if err := adapter.RestoreSnapshot(ctx, snapshot); err != nil {
 		t.Fatalf("RestoreSnapshot failed: %v", err)
 	}
@@ -170,6 +178,11 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	err = adapter.DeleteSnapshot(ctx, snapshot)
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("DeleteSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+
+	_, err = adapter.GetSnapshot(ctx, snapshot)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
 	}
 
 	_, err = adapter.ListSnapshots(ctx, "")
@@ -195,6 +208,56 @@ func requireSnapshotListed(t *testing.T, ctx context.Context, adapter snapshotAd
 	}
 	if listed != want {
 		t.Fatalf("ListSnapshots(%s) carries %q = %v, want %v: %+v", vmID, snapshotID, listed, want, snapshots)
+	}
+}
+
+// migrationAdapter is a transport that carries the destination half of a
+// two-phase migration.
+type migrationAdapter interface {
+	ComputeCommands
+	MigrationCommands
+}
+
+// TestComputeMigrationMultiProtocol holds the migration refusals against the
+// running daemon on every transport: the local-qemu orchestrator can receive
+// a migration, so the request checks behind it answer, not FailedPrecondition.
+func TestComputeMigrationMultiProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t.Cleanup(cancel)
+
+	adapters := []migrationAdapter{
+		NewRESTAdapter(),
+		NewGRPCAdapter(),
+		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
+	}
+
+	gate := helpers.NewAdapterGate(t, "compute migration", helpers.AdapterNames(adapters)...)
+	for _, adapter := range adapters {
+		adapter := adapter
+		t.Run(adapter.Name(), func(t *testing.T) {
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
+			t.Cleanup(func() {
+				if err := adapter.Teardown(ctx); err != nil {
+					t.Logf("Warning: teardown failed: %v", err)
+				}
+			})
+
+			t.Run("MigrationRefusals", func(t *testing.T) { testMigrationRefusals(t, ctx, adapter) })
+		})
+	}
+}
+
+func testMigrationRefusals(t *testing.T, ctx context.Context, adapter migrationAdapter) {
+	_, err := adapter.PrepareMigration(ctx, PrepareMigrationOptions{VMName: "guest", Mode: "live"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("PrepareMigration without a guest over %s: got %v, want InvalidArgument", adapter.Name(), err)
+	}
+
+	err = adapter.FinalizeMigration(ctx, "recv-"+uuid.New().String()[:8], false)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("FinalizeMigration of an unknown receiver over %s: got %v, want NotFound", adapter.Name(), err)
 	}
 }
 

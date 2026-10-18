@@ -38,6 +38,8 @@ var vmToolNames = []string{
 	"vm_reboot",
 	"vm_suspend",
 	"vm_resume",
+	"vm_migration_prepare",
+	"vm_migration_finalize",
 	"vm_snapshot_create",
 	"vm_snapshot_get",
 	"vm_snapshot_list",

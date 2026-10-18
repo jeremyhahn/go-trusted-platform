@@ -120,6 +120,7 @@ GET /api/v1/compute/vms
 GET /api/v1/compute/vms/{id}
 GET /api/v1/compute/vms/{id}/metrics
 GET /api/v1/compute/vms/{id}/snapshots
+GET /api/v1/compute/vms/{id}/snapshots/{snapshotId}
 GET /api/v1/config
 GET /api/v1/device/profile
 GET /api/v1/device/profiles
@@ -376,6 +377,8 @@ POST /api/v1/compute/containers/{id}/start
 POST /api/v1/compute/containers/{id}/stop
 POST /api/v1/compute/images
 POST /api/v1/compute/images/
+POST /api/v1/compute/migrations/prepare
+POST /api/v1/compute/migrations/{receiverId}/finalize
 POST /api/v1/compute/vms
 POST /api/v1/compute/vms/{id}/attest
 POST /api/v1/compute/vms/{id}/attest/verify

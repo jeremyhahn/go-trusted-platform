@@ -76,6 +76,22 @@ func snapshotSummary(snapshot *pb.Snapshot) SnapshotSummary {
 	return SnapshotSummary{ID: snapshot.GetId(), VMID: snapshot.GetVmId()}
 }
 
+func prepareMigrationRequest(opts PrepareMigrationOptions) *pb.PrepareMigrationRequest {
+	req := &pb.PrepareMigrationRequest{VmName: opts.VMName, Mode: opts.Mode}
+	if opts.Guest != nil {
+		req.Spec = &pb.VMMigrationSpec{MemoryMb: opts.Guest.MemoryMB, Cpus: opts.Guest.CPUs}
+	}
+	return req
+}
+
+func migrationReceiverSummary(resp *pb.PrepareMigrationResponse) *MigrationReceiverSummary {
+	return &MigrationReceiverSummary{
+		ReceiverID:  resp.GetReceiverId(),
+		Port:        resp.GetPort(),
+		TLSHostname: resp.GetTlsHostname(),
+	}
+}
+
 // snapshotSummaries converts SDK snapshots into their test summaries.
 func snapshotSummaries(snapshots []*pb.Snapshot) []SnapshotSummary {
 	summaries := make([]SnapshotSummary, 0, len(snapshots))

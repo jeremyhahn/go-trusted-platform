@@ -86,6 +86,9 @@ type QUICServiceHandler struct {
 	kmsService     KMSServiceInterface
 	cryptoService  CryptoServiceInterface
 	secretsService SecretsServiceInterface
+	// dekService backs the DEK sub-opcodes of OpKMSExtendedCategory with the
+	// DEKServerAdapter the gRPC DEKManagement service serves.
+	dekService DEKServiceInterface
 	// configDeliveryService backs the OpProvisioningCategory handlers with
 	// the same ConfigDeliveryGRPCService as the gRPC transport.
 	configDeliveryService ConfigDeliveryQUICService

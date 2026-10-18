@@ -43,6 +43,14 @@ import (
 // Multi-Protocol Test Entry Point
 // =============================================================================
 
+// The persistent handles the daemon keeps its keys at: the TCG
+// recommended EK handle, and the SSRK handle that CreateSRK always
+// creates at, whatever algorithm the request names.
+const (
+	ekHandle   uint32 = 0x81010001
+	ssrkHandle uint32 = 0x81000001
+)
+
 // TestTPMMultiProtocol runs the complete TPM test suite against all protocol adapters.
 // Each adapter implements the TPMCommands interface, enabling unified testing across
 // CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
@@ -61,23 +69,42 @@ func TestTPMMultiProtocol(t *testing.T) {
 	}
 
 	gate := helpers.NewAdapterGate(t, "tpm", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
-		adapter := adapter // Capture for closure
-		t.Run(adapter.Name(), func(t *testing.T) {
-			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
-			defer func() {
-				if err := adapter.Teardown(); err != nil {
-					t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)
-				}
-			}()
+	var ready []TPMCommands
+	defer func() {
+		for _, adapter := range ready {
+			if err := adapter.Teardown(); err != nil {
+				t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)
+			}
+		}
+	}()
 
-			testTPMProtocol(t, ctx, adapter)
-		})
-	}
+	// Every adapter shares the daemon's one TPM. The read-only tests run
+	// for every adapter first, against the TPM the daemon provisioned at
+	// start; the lifecycle, which clears it, runs after. Interleaved, an
+	// adapter's lifecycle would leave every later adapter's read-only
+	// tests facing a cleared TPM.
+	t.Run("ReadOnly", func(t *testing.T) {
+		for _, adapter := range adapters {
+			t.Run(adapter.Name(), func(t *testing.T) {
+				gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
+				ready = append(ready, adapter)
+				testTPMReadOnly(t, ctx, adapter)
+			})
+		}
+	})
+
+	t.Run("Lifecycle", func(t *testing.T) {
+		for _, adapter := range ready {
+			t.Run(adapter.Name(), func(t *testing.T) {
+				testTPMLifecycle(t, ctx, adapter)
+			})
+		}
+	})
 }
 
-// testTPMProtocol runs the complete TPM test suite against a single protocol adapter.
-func testTPMProtocol(t *testing.T, ctx context.Context, cmd TPMCommands) {
+// testTPMReadOnly runs the tests that leave the TPM as they found it
+// against a single protocol adapter.
+func testTPMReadOnly(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	// Generate unique test prefix for this protocol run
 	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
 
@@ -85,16 +112,12 @@ func testTPMProtocol(t *testing.T, ctx context.Context, cmd TPMCommands) {
 		testTPMInfo(t, ctx, cmd)
 	})
 
-	t.Run("Provision", func(t *testing.T) {
-		testTPMProvision(t, ctx, cmd)
-	})
-
 	t.Run("EK", func(t *testing.T) {
-		testEKOperations(t, ctx, cmd)
+		testEKReadOnly(t, ctx, cmd)
 	})
 
 	t.Run("SRK", func(t *testing.T) {
-		testSRKOperations(t, ctx, cmd)
+		testSRKInfo(t, ctx, cmd)
 	})
 
 	t.Run("SealUnseal", func(t *testing.T) {
@@ -104,9 +127,60 @@ func testTPMProtocol(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	t.Run("EventLog", func(t *testing.T) {
 		testEventLog(t, ctx, cmd)
 	})
+}
 
-	t.Run("Clear", func(t *testing.T) {
-		testTPMClear(t, ctx, cmd)
+// testTPMLifecycle clears the TPM, creates the EK and SRK on the cleared
+// TPM, then clears it again and provisions it. A failed Clear ends the
+// sequence: every step after it would fail against a TPM in an unknown
+// state, and those failures would only hide the one that matters. The
+// next adapter's lifecycle starts with its own Clear.
+func testTPMLifecycle(t *testing.T, ctx context.Context, cmd TPMCommands) {
+	testCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
+
+	if !t.Run("ClearWithEmptyLockoutAuth", func(t *testing.T) {
+		testTPMClear(t, testCtx, cmd)
+	}) {
+		return
+	}
+
+	// A cleared TPM holds no EK and no SRK, and its endorsement and owner
+	// auth are empty, so both create.
+	t.Run("EK", func(t *testing.T) {
+		testEKCreateDelete(t, testCtx, cmd)
+	})
+
+	t.Run("SRKCreateRSA", func(t *testing.T) {
+		testSRKCreate(t, testCtx, cmd, "RSA-2048", true)
+	})
+
+	t.Run("SRKDelete", func(t *testing.T) {
+		result, err := cmd.SRKDelete(testCtx, ssrkHandle, "")
+		require.NoError(t, err, "SRK delete should succeed")
+		require.NotNil(t, result, "Result should not be nil")
+		assert.True(t, result.Success, "SRK deletion should be successful")
+	})
+
+	// The daemon creates its configured SSRK at the one SSRK handle, so
+	// the handle must be free again for a second create.
+	if !t.Run("ClearBeforeSRKCreateECDSA", func(t *testing.T) {
+		testTPMClear(t, testCtx, cmd)
+	}) {
+		return
+	}
+
+	t.Run("SRKCreateECDSA", func(t *testing.T) {
+		testSRKCreate(t, testCtx, cmd, "ECDSA-P256", false)
+	})
+
+	if !t.Run("ClearBeforeProvision", func(t *testing.T) {
+		testTPMClear(t, testCtx, cmd)
+	}) {
+		return
+	}
+
+	t.Run("Provision", func(t *testing.T) {
+		testTPMProvision(t, testCtx, cmd)
 	})
 }
 
@@ -141,8 +215,23 @@ func testTPMInfo(t *testing.T, ctx context.Context, cmd TPMCommands) {
 // =============================================================================
 
 func testTPMProvision(t *testing.T, ctx context.Context, cmd TPMCommands) {
-	testCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
+	// TPM2_Clear (TPM 2.0 Part 3 §24.6) emptied the owner auth, so a
+	// Provision presenting an owner password, the SO PIN included, is
+	// refused by the TPM. The refusal is what keeps the empty auth
+	// visible: a daemon that accepted it would be hiding which auth the
+	// TPM actually holds.
+	t.Run("ProvisionWithPasswordRefusedOnClearedTPM", func(t *testing.T) {
+		opts := ProvisionOptions{
+			CreateEK:      true,
+			CreateSRK:     true,
+			CreateAK:      true,
+			OwnerPassword: "test-password",
+		}
+
+		_, err := cmd.Provision(ctx, opts)
+		require.Error(t, err, "Provision with an owner password on a cleared TPM should be refused")
+		assert.Contains(t, err.Error(), "TPM_RC_BAD_AUTH", "the TPM should refuse the owner password")
+	})
 
 	t.Run("ProvisionWithDefaults", func(t *testing.T) {
 		opts := ProvisionOptions{
@@ -151,22 +240,8 @@ func testTPMProvision(t *testing.T, ctx context.Context, cmd TPMCommands) {
 			CreateAK:  true,
 		}
 
-		result, err := cmd.Provision(testCtx, opts)
+		result, err := cmd.Provision(ctx, opts)
 		require.NoError(t, err, "Provision should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "Provision should be successful")
-	})
-
-	t.Run("ProvisionWithPassword", func(t *testing.T) {
-		opts := ProvisionOptions{
-			CreateEK:      true,
-			CreateSRK:     true,
-			CreateAK:      true,
-			OwnerPassword: "test-password",
-		}
-
-		result, err := cmd.Provision(testCtx, opts)
-		require.NoError(t, err, "Provision with password should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "Provision should be successful")
 	})
@@ -176,31 +251,15 @@ func testTPMProvision(t *testing.T, ctx context.Context, cmd TPMCommands) {
 // EK Tests
 // =============================================================================
 
-func testEKOperations(t *testing.T, ctx context.Context, cmd TPMCommands) {
+func testEKReadOnly(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	testCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	t.Run("EKCreateRSA", func(t *testing.T) {
-		opts := EKCreateOptions{
-			Algorithm:  "RSA-2048",
-			Persistent: true,
-		}
-
-		result, err := cmd.EKCreate(testCtx, opts)
-		require.NoError(t, err, "EK create should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "EK creation should be successful")
-		assert.NotZero(t, result.Handle, "Handle should be set")
-	})
-
 	t.Run("EKInfo", func(t *testing.T) {
-		// TCG recommended EK handle
-		handle := uint32(0x81010001)
-
-		result, err := cmd.EKInfo(testCtx, handle)
+		result, err := cmd.EKInfo(testCtx, ekHandle)
 		require.NoError(t, err, "EK info should succeed")
 		require.NotNil(t, result, "Result should not be nil")
-		assert.Equal(t, handle, result.Handle, "Handle should match")
+		assert.Equal(t, ekHandle, result.Handle, "Handle should match")
 		assert.NotEmpty(t, result.Algorithm, "Algorithm should be set")
 	})
 
@@ -210,11 +269,24 @@ func testEKOperations(t *testing.T, ctx context.Context, cmd TPMCommands) {
 		require.NotNil(t, result, "Result should not be nil")
 		assert.NotEmpty(t, result.Certificate, "Certificate should not be empty")
 	})
+}
+
+func testEKCreateDelete(t *testing.T, ctx context.Context, cmd TPMCommands) {
+	t.Run("EKCreateRSA", func(t *testing.T) {
+		opts := EKCreateOptions{
+			Algorithm:  "RSA-2048",
+			Persistent: true,
+		}
+
+		result, err := cmd.EKCreate(ctx, opts)
+		require.NoError(t, err, "EK create should succeed")
+		require.NotNil(t, result, "Result should not be nil")
+		assert.True(t, result.Success, "EK creation should be successful")
+		assert.NotZero(t, result.Handle, "Handle should be set")
+	})
 
 	t.Run("EKDelete", func(t *testing.T) {
-		handle := uint32(0x81010001)
-
-		result, err := cmd.EKDelete(testCtx, handle, "")
+		result, err := cmd.EKDelete(ctx, ekHandle, "")
 		require.NoError(t, err, "EK delete should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "EK deletion should be successful")
@@ -225,56 +297,32 @@ func testEKOperations(t *testing.T, ctx context.Context, cmd TPMCommands) {
 // SRK Tests
 // =============================================================================
 
-func testSRKOperations(t *testing.T, ctx context.Context, cmd TPMCommands) {
+func testSRKInfo(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	testCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	t.Run("SRKCreateRSA", func(t *testing.T) {
-		opts := SRKCreateOptions{
-			Algorithm:  "RSA-2048",
-			Handle:     0x81000005,
-			Persistent: true,
-			Policy:     true,
-		}
-
-		result, err := cmd.SRKCreate(testCtx, opts)
-		require.NoError(t, err, "SRK create should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "SRK creation should be successful")
-		assert.NotZero(t, result.Handle, "Handle should be set")
-	})
-
-	t.Run("SRKCreateECDSA", func(t *testing.T) {
-		opts := SRKCreateOptions{
-			Algorithm:  "ECDSA-P256",
-			Handle:     0x81000006,
-			Persistent: true,
-			Policy:     false,
-		}
-
-		result, err := cmd.SRKCreate(testCtx, opts)
-		require.NoError(t, err, "SRK create ECDSA should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "SRK creation should be successful")
-	})
-
 	t.Run("SRKInfo", func(t *testing.T) {
-		handle := uint32(0x81000005)
-
-		result, err := cmd.SRKInfo(testCtx, handle)
+		result, err := cmd.SRKInfo(testCtx, ssrkHandle)
 		require.NoError(t, err, "SRK info should succeed")
 		require.NotNil(t, result, "Result should not be nil")
-		assert.Equal(t, handle, result.Handle, "Handle should match")
+		assert.Equal(t, ssrkHandle, result.Handle, "Handle should match")
 	})
+}
 
-	t.Run("SRKDelete", func(t *testing.T) {
-		handle := uint32(0x81000005)
+// testSRKCreate creates the SRK on a TPM whose SSRK handle is free.
+func testSRKCreate(t *testing.T, ctx context.Context, cmd TPMCommands, algorithm string, policy bool) {
+	opts := SRKCreateOptions{
+		Algorithm:  algorithm,
+		Handle:     ssrkHandle,
+		Persistent: true,
+		Policy:     policy,
+	}
 
-		result, err := cmd.SRKDelete(testCtx, handle, "")
-		require.NoError(t, err, "SRK delete should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "SRK deletion should be successful")
-	})
+	result, err := cmd.SRKCreate(ctx, opts)
+	require.NoError(t, err, "SRK create %s should succeed", algorithm)
+	require.NotNil(t, result, "Result should not be nil")
+	assert.True(t, result.Success, "SRK creation should be successful")
+	assert.NotZero(t, result.Handle, "Handle should be set")
 }
 
 // =============================================================================
@@ -382,30 +430,14 @@ func testEventLog(t *testing.T, ctx context.Context, cmd TPMCommands) {
 // TPM Clear Tests
 // =============================================================================
 
+// testTPMClear clears the TPM with the empty lockout auth, which is the
+// lockout auth the daemon leaves in place. The suite never sends a wrong
+// one: the lockout hierarchy is dictionary-attack protected, and a single
+// refused lockoutAuth locks it until lockoutRecovery expires, so every
+// later Clear, on every adapter, fails with TPM_RC_LOCKOUT.
 func testTPMClear(t *testing.T, ctx context.Context, cmd TPMCommands) {
-	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	t.Run("ClearWithConfirmation", func(t *testing.T) {
-		opts := ClearOptions{
-			Confirm: true,
-		}
-
-		result, err := cmd.Clear(testCtx, opts)
-		require.NoError(t, err, "Clear should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "Clear should be successful")
-	})
-
-	t.Run("ClearWithPassword", func(t *testing.T) {
-		opts := ClearOptions{
-			OwnerPassword: "test-password",
-			Confirm:       true,
-		}
-
-		result, err := cmd.Clear(testCtx, opts)
-		require.NoError(t, err, "Clear with password should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Success, "Clear should be successful")
-	})
+	result, err := cmd.Clear(ctx, ClearOptions{Confirm: true})
+	require.NoError(t, err, "Clear should succeed")
+	require.NotNil(t, result, "Result should not be nil")
+	assert.True(t, result.Success, "Clear should be successful")
 }

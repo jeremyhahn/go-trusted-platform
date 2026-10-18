@@ -27,15 +27,17 @@ import (
 // its RPC's full request in protojson form and answers its response the
 // same way, so every request field reaches the service (#704).
 var vmLifecycleToolMap = map[string]string{
-	platformv1.ComputeService_CreateVM_FullMethodName:  "vm_create",
-	platformv1.ComputeService_ListVMs_FullMethodName:   "vm_list",
-	platformv1.ComputeService_GetVM_FullMethodName:     "vm_get",
-	platformv1.ComputeService_DeleteVM_FullMethodName:  "vm_delete",
-	platformv1.ComputeService_StartVM_FullMethodName:   "vm_start",
-	platformv1.ComputeService_StopVM_FullMethodName:    "vm_stop",
-	platformv1.ComputeService_RebootVM_FullMethodName:  "vm_reboot",
-	platformv1.ComputeService_SuspendVM_FullMethodName: "vm_suspend",
-	platformv1.ComputeService_ResumeVM_FullMethodName:  "vm_resume",
+	platformv1.ComputeService_CreateVM_FullMethodName:          "vm_create",
+	platformv1.ComputeService_ListVMs_FullMethodName:           "vm_list",
+	platformv1.ComputeService_GetVM_FullMethodName:             "vm_get",
+	platformv1.ComputeService_DeleteVM_FullMethodName:          "vm_delete",
+	platformv1.ComputeService_StartVM_FullMethodName:           "vm_start",
+	platformv1.ComputeService_StopVM_FullMethodName:            "vm_stop",
+	platformv1.ComputeService_RebootVM_FullMethodName:          "vm_reboot",
+	platformv1.ComputeService_SuspendVM_FullMethodName:         "vm_suspend",
+	platformv1.ComputeService_ResumeVM_FullMethodName:          "vm_resume",
+	platformv1.ComputeService_PrepareMigration_FullMethodName:  "vm_migration_prepare",
+	platformv1.ComputeService_FinalizeMigration_FullMethodName: "vm_migration_finalize",
 }
 
 // vmSnapshotAttestTools maps the ComputeService snapshot and attestation
@@ -48,6 +50,7 @@ var vmSnapshotAttestTools = map[string]struct {
 }{
 	platformv1.ComputeService_CreateSnapshot_FullMethodName:      {"vm_snapshot_create", vmSnapshotCreateArgs},
 	platformv1.ComputeService_ListSnapshots_FullMethodName:       {"vm_snapshot_list", vmFieldArgs("vm_id")},
+	platformv1.ComputeService_GetSnapshot_FullMethodName:         {"vm_snapshot_get", vmFieldArgs("vm_id", "snapshot_id")},
 	platformv1.ComputeService_DeleteSnapshot_FullMethodName:      {"vm_snapshot_delete", vmFieldArgs("vm_id", "snapshot_id")},
 	platformv1.ComputeService_RestoreSnapshot_FullMethodName:     {"vm_snapshot_restore", vmFieldArgs("vm_id", "snapshot_id")},
 	platformv1.ComputeService_AttestVM_FullMethodName:            {"vm_attest", vmAttestArgs},

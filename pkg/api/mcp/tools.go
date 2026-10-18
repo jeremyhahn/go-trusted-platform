@@ -2160,9 +2160,21 @@ func (r *ToolRegistry) registerKMSTools() {
 	// Register cryptographic operation tools
 	r.registerKMSCryptoTools()
 
+	// Register hash, HMAC and rewrap tools
+	r.registerKMSDigestTools()
+
+	// Register key import, key status and key version tools
+	r.registerKMSKeyAdminTools()
+
+	// Register batch encrypt and decrypt tools
+	r.registerKMSBatchTools()
+
 	// Register random byte generation tool
 	r.registerKMSRandomTools()
 
 	// Register data key tools (envelope encryption)
 	r.registerKMSDataKeyTools()
+
+	// Register DEK management tools
+	r.registerDEKTools()
 }

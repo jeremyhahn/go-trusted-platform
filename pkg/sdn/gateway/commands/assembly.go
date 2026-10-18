@@ -139,7 +139,9 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 	}
 	if v.IsSet("proxy") {
 		pc := &proxysvc.Config{}
-		if err := v.UnmarshalKey("proxy", pc, serveDecodeHook); err != nil {
+		// Strict, like sdn below: a removed proxy key (a route's
+		// required-roles, #926) fails the load instead of being ignored.
+		if err := config.CheckViperSection(v, "proxy", pc); err != nil {
 			return nil, &ErrConfigSection{Section: "proxy", Cause: err}
 		}
 		cfg.Proxy = pc

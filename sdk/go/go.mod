@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	github.com/google/go-tpm v0.9.8
 	github.com/jeremyhahn/go-codec v1.4.0 // held: v1.5.0-alpha is not in the module cache and cannot be fetched offline in #933; go-quicbaas, go-xkms and go-qrdb (every cached tag) still require v1.4.0
+	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/quic-go/quic-go v0.62.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/stretchr/testify v1.12.1
@@ -146,7 +147,6 @@ require (
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha // indirect
 	github.com/jeremyhahn/go-quicraft v0.13.1-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
 	github.com/jeremyhahn/go-xkms v0.17.0-alpha // indirect

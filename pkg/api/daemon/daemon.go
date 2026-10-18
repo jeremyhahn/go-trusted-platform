@@ -167,6 +167,7 @@ type Daemon struct {
 	sdnService         *SDNService
 	kmsService         *KMSService
 	kmsPlatformGRPC    *grpccreds.KMSGRPCService
+	kmsPlatformBackend *PlatformKMSBackend
 	iamService         *IAMService
 	tenantService      *TenantService
 	vtpmService        *VTPMServiceServer
@@ -319,23 +320,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var grpcAuthValidator *grpcTokenValidator
 	var quicAuthValidator *grpcTokenValidator
 
-	// Build the shared broker platform-token validator once when configured. It
-	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them
-	// validate the same QuicBaaS OIDC tokens (JWKS-by-kid + aud + exp + DPoP
-	// where applicable) and enforce scp -> RBAC + tenant_id -> RLS via the
-	// AuthorizedContext, matching the HTTP path. nil means the legacy
-	// per-transport validators are used (additive cutover).
-	var platformTokenValidatorShared *platformTokenValidator
-	if config.PlatformToken.Enabled {
-		ptv, err := newPlatformTokenValidator(config.PlatformToken, logger)
-		if err != nil {
-			return nil, err
-		}
-		platformTokenValidatorShared = ptv
-		logger.Info("Shared platform-token validator enabled for gRPC/QUIC/MCP",
-			"issuer", config.PlatformToken.Issuer)
-	}
-
 	// Create the IAM service - MANDATORY for the platform (unless
 	// SkipIAMValidation is set for testing). It is built before the transports
 	// because the gRPC and QUIC token validators authorize tokens without scope
@@ -353,6 +337,24 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var iamPEP iamsdk.PEPClient
 	if iamService != nil {
 		iamPEP = iamService.PEP()
+	}
+
+	// Build the shared broker platform-token validator once when configured. It
+	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them
+	// validate the same QuicBaaS OIDC tokens (JWKS-by-kid + aud + exp + DPoP
+	// where applicable) and enforce scp -> RBAC + tenant_id -> RLS via the
+	// AuthorizedContext, matching the HTTP path. nil means the legacy
+	// per-transport validators are used (additive cutover).
+	// Its CheckPermission is decided by the IAM PEP built above (#926).
+	var platformTokenValidatorShared *platformTokenValidator
+	if config.PlatformToken.Enabled {
+		ptv, err := newPlatformTokenValidator(config.PlatformToken, iamPEP, logger)
+		if err != nil {
+			return nil, err
+		}
+		platformTokenValidatorShared = ptv
+		logger.Info("Shared platform-token validator enabled for gRPC/QUIC/MCP",
+			"issuer", config.PlatformToken.Issuer)
 	}
 
 	// Fail closed (#550, #312): the daemon REST server authenticates by mTLS
@@ -663,6 +665,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			// even though the REST router has IAM available via the embedded
 			// transport.
 			iamGRPCService = NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
+			iamGRPCService.SetSystemTenant(config.PlatformTenantID)
 			if grpcServer != nil {
 				platformv1.RegisterPlatformIAMServiceServer(grpcServer, iamGRPCService)
 			}
@@ -1218,6 +1221,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 					quicHandler.SetSecretsService(kmsService.SecretsServer())
 					logger.Debug("Secrets service set for QUIC handler")
 				}
+				if kmsService.DEKServer() != nil {
+					quicHandler.SetDEKService(kmsService.DEKServer())
+					logger.Debug("DEK service set for QUIC handler")
+				}
 			}
 		}
 
@@ -1379,6 +1386,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		sdnService:                   sdnService,
 		kmsService:                   kmsService,
 		kmsPlatformGRPC:              kmsPlatformGRPC,
+		kmsPlatformBackend:           kmsPlatformBackend,
 		iamService:                   iamService,
 		tenantService:                tenantService,
 		vtpmService:                  vtpmService,
@@ -1512,14 +1520,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService, platformTokenValidatorShared)
+		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
 	}
 
 	// Wire the physical TPM REST handlers. Quote and verify run on the same
 	// TPM service gRPC and the Unix socket serve, so one quote verifies the
 	// same way on every transport (#482).
 	if daemon.concreteRestServer != nil {
-		daemon.concreteRestServer.SetTPMHandlers(tpmService, platformTokenValidatorShared)
+		daemon.concreteRestServer.SetTPMHandlers(tpmService, restGuard)
 	}
 
 	// Wire KMS REST handlers when the platform KMS backend is available.
@@ -1935,6 +1943,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		IAMClient:             d.iamService.Client(),
 		PEPClient:             d.iamService.PEP(),
 		IAMTokens:             d.iamTokenService,
+		PlatformTenantID:      d.config.PlatformTenantID,
 		CAService:             d.caService,
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,
@@ -1961,6 +1970,10 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		Overlay:               d.overlayCtrl,
 		ConfigDeliveryService: d.configDeliveryService,
 		ProxyService:          d.proxyGRPCService,
+		// The hash, HMAC, rewrap, batch, import, export and key-version
+		// tools call the backend gRPC KeyManagementService, QUIC and the
+		// daemon REST facade call, so every transport shares one method.
+		KMSBackend: d.kmsPlatformBackend,
 	})
 
 	// Wire DNS service to MCP provider if available via App
@@ -1998,6 +2011,15 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.kmsService = d.config.App.KMS()
 		serviceProvider.cryptoService = d.config.App.CryptoService()
 		serviceProvider.secretsService = d.config.App.Secrets()
+	}
+	// The dek_* tools call the gRPC DEKManagement adapter, the one the QUIC
+	// DEK sub-opcodes call. initializeServers is idempotent.
+	if d.kmsService != nil {
+		if initErr := d.kmsService.initializeServers(); initErr != nil {
+			d.logger.Warn("KMS service MCP initialization failed", "error", initErr)
+		} else if d.kmsService.DEKServer() != nil {
+			serviceProvider.SetDEKService(d.kmsService.DEKServer())
+		}
 	}
 
 	// The platform_bmc_* tools call the gRPC BMC servicer, which already
@@ -2087,6 +2109,12 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			return nil, err
 		}
 		mcpConfig.TLSConfig = tlsConfig
+
+		peers, err := newMCPPeerAuthenticator(d.config, d.logger)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfig.PeerAuthenticator = peers
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token

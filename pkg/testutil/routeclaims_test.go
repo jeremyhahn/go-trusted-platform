@@ -57,6 +57,12 @@ func TestDaemonOnlyPrefixOf(t *testing.T) {
 		{"prefix is only a word prefix", "/api/v1/versions", "", false},
 		{"shared prefix", "/api/v1/tpm/info", "", false},
 		{"outside /api/v1", "/bmc/1/power", "", false},
+		{"placeholder entry faces a claim's placeholder", "/api/v1/kms/keys/{id}/export", "kms/keys/{id}/export", true},
+		{"placeholder entry faces another placeholder name", "/api/v1/kms/keys/{name}/export", "kms/keys/{id}/export", true},
+		{"placeholder entry faces a literal segment", "/api/v1/kms/keys/k1/export", "kms/keys/{id}/export", true},
+		{"placeholder entry's sibling", "/api/v1/kms/keys/{name}/versions", "", false},
+		{"placeholder entry needs a non-empty segment", "/api/v1/kms/keys//export", "", false},
+		{"shorter than a placeholder entry", "/api/v1/kms/keys/{name}", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

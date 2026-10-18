@@ -66,24 +66,6 @@ const (
 // CA REST Handler Errors
 // =============================================================================
 
-// ErrSignCSRTokenRequired is returned when a sign-csr request carries no
-// platform bearer token.
-type ErrSignCSRTokenRequired struct{}
-
-func (e ErrSignCSRTokenRequired) Error() string {
-	return "signing a CSR requires a platform bearer token granting " + issuance.SignCSRScope
-}
-
-// ErrSignCSRForbidden is returned when a sign-csr request's token does not
-// grant ca:sign-csr.
-type ErrSignCSRForbidden struct {
-	Reason string
-}
-
-func (e ErrSignCSRForbidden) Error() string {
-	return "signing a CSR requires " + issuance.SignCSRScope + ": " + e.Reason
-}
-
 // ErrCAServiceNotAvailable is returned when the CA service is not configured.
 type ErrCAServiceNotAvailable struct{}
 
@@ -478,7 +460,7 @@ type CAHandlers struct {
 	logger     *slog.Logger
 	objStorage objectstorage.Client
 	kms        issuance.KMS
-	tokens     TokenAuthorizer
+	guard      *ScopeGuard
 }
 
 // TokenAuthorizer validates a platform bearer token, with its DPoP proof
@@ -487,10 +469,11 @@ type TokenAuthorizer interface {
 	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
 }
 
-// WithTokenAuthorizer sets the platform-token authorizer that gates
-// sign-csr. Without one, sign-csr refuses every request.
-func (h *CAHandlers) WithTokenAuthorizer(tokens TokenAuthorizer) *CAHandlers {
-	h.tokens = tokens
+// WithScopeGuard sets the guard that gates sign-csr: only a platform bearer
+// token granting ca:sign-csr reaches it. Without one, sign-csr refuses every
+// request with 403.
+func (h *CAHandlers) WithScopeGuard(guard *ScopeGuard) *CAHandlers {
+	h.guard = guard
 	return h
 }
 
@@ -526,8 +509,9 @@ func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/revoke", h.handleRevokeCertificate).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/renew", h.handleRenewCertificate).Methods(http.MethodPost)
 
-	// Code-signing certification of a KMS key from its CSR
-	router.HandleFunc("/api/v1/ca/sign-csr", h.handleSignCSR).Methods(http.MethodPost)
+	// Code-signing certification of a KMS key from its CSR. A client
+	// certificate alone never certifies a code-signing key (#691).
+	router.HandleFunc("/api/v1/ca/sign-csr", h.guard.RequireToken(issuance.SignCSRScope, h.handleSignCSR)).Methods(http.MethodPost)
 
 	// Certificate verification
 	router.HandleFunc("/api/v1/ca/certificates/verify", h.handleVerifyCertificate).Methods(http.MethodPost)
@@ -669,10 +653,6 @@ func (h *CAHandlers) handleSignCSR(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
-	if status, err := h.authorizeSignCSR(r); err != nil {
-		h.writeError(w, status, err)
-		return
-	}
 
 	req := &platformv1.SignCSRRequest{}
 	if !h.decodeProto(w, r, req) {
@@ -693,27 +673,6 @@ func (h *CAHandlers) handleSignCSR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeIssued(w, cert)
-}
-
-// authorizeSignCSR requires a platform bearer token granting ca:sign-csr.
-// It returns the HTTP status to refuse the request with.
-func (h *CAHandlers) authorizeSignCSR(r *http.Request) (int, error) {
-	if h.tokens == nil {
-		return http.StatusForbidden, ErrSignCSRForbidden{Reason: "no platform-token validator is configured"}
-	}
-	token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !found || strings.TrimSpace(token) == "" {
-		return http.StatusUnauthorized, ErrSignCSRTokenRequired{}
-	}
-
-	authCtx, err := h.tokens.AuthorizeToken(r.Context(), token, issuance.SignCSRScope, r.Header.Get("DPoP"), r.Method, requestURL(r))
-	if err != nil {
-		return http.StatusForbidden, ErrSignCSRForbidden{Reason: err.Error()}
-	}
-	if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
-		return http.StatusForbidden, err
-	}
-	return http.StatusOK, nil
 }
 
 // requestURL is the DPoP htu of r: its absolute URL without query or

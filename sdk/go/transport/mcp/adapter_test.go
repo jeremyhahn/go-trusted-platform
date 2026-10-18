@@ -553,6 +553,15 @@ func TestGRPCMethodToMCPToolMap_KMS(t *testing.T) {
 		{"/platform.v1.KeyManagementService/Decrypt", "kms_decrypt"},
 		{"/platform.v1.KeyManagementService/Sign", "kms_sign"},
 		{"/platform.v1.KeyManagementService/Verify", "kms_verify"},
+		{"/platform.v1.KeyManagementService/Hash", "kms_hash"},
+		{"/platform.v1.KeyManagementService/HMAC", "kms_hmac"},
+		{"/platform.v1.KeyManagementService/VerifyHMAC", "kms_verify_hmac"},
+		{"/platform.v1.KeyManagementService/Rewrap", "kms_rewrap"},
+		{"/platform.v1.KeyManagementService/ImportKey", "kms_import_key"},
+		{"/platform.v1.KeyManagementService/UpdateKeyStatus", "kms_update_key_status"},
+		{"/platform.v1.KeyManagementService/GetKeyVersions", "kms_list_key_versions"},
+		{"/platform.v1.KeyManagementService/BatchEncrypt", "kms_batch_encrypt"},
+		{"/platform.v1.KeyManagementService/BatchDecrypt", "kms_batch_decrypt"},
 	}
 
 	for _, tt := range tests {

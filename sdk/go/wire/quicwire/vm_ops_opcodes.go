@@ -33,7 +33,9 @@ package quicwire
 // pkg/api/daemon/quic_vm_pb.go::handleVMPB), the same business path the gRPC
 // transport uses. MigrateVM is likewise unary — its long-running work happens
 // server-side against the QEMU migration manager and it returns a terminal
-// status; interactive console and log-follow remain streaming-only and
+// status, and the
+// destination-side PrepareMigration and FinalizeMigration are plain unary
+// calls; interactive console and log-follow remain streaming-only and
 // daemon-native.
 const (
 	// OpVMMetrics samples a running VM's resource-usage metrics.
@@ -50,6 +52,13 @@ const (
 
 	// OpVMMigrate migrates a VM to another host (cold or live).
 	OpVMMigrate byte = 0xD0
+
+	// OpVMPrepareMigration stands up a receiver for an inbound migration
+	// (the destination half of MigrateVM).
+	OpVMPrepareMigration byte = 0xD1
+
+	// OpVMFinalizeMigration commits or aborts a prepared migration receiver.
+	OpVMFinalizeMigration byte = 0xD2
 )
 
 // vmSubOpcodes is the set of operational VM opcodes accepted as compute
@@ -63,6 +72,9 @@ var vmSubOpcodes = map[byte]bool{
 	OpVMDetachDisk: true,
 	OpVMResizeDisk: true,
 	OpVMMigrate:    true,
+
+	OpVMPrepareMigration:  true,
+	OpVMFinalizeMigration: true,
 }
 
 // IsVMSubOpcode reports whether op is an operational VM sub-opcode routed to

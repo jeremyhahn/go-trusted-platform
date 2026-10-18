@@ -32,7 +32,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
@@ -103,13 +102,18 @@ func SetupTestInfrastructure(ctx context.Context, t *testing.T, config *TestConf
 		return nil, fmt.Errorf("failed to setup network bridges: %w", err)
 	}
 
-	// Create a mock flow controller for the policy engine
-	flowController := newMockFlowController()
+	// The policy engine drives the real OVS flow controller, built the way
+	// the daemon builds it (pkg/daemon/commands/quarantine_init.go): one
+	// controller serves as both the flow and the port controller.
+	flowController, err := policy.NewOVSFlowController(ovsClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OVS flow controller: %w", err)
+	}
 
-	// Setup policy engine
 	policyEngine, err := policy.NewEngine(policy.Config{
 		BridgeName:     config.ProvisioningNetwork.Bridge,
 		FlowController: flowController,
+		PortController: flowController,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create policy engine: %w", err)
@@ -395,37 +399,6 @@ func (i *TestInfrastructure) configureTAPInterface(tapName string) error {
 
 	i.Logger.Info("TAP interface configured", "name", tapName)
 	return nil
-}
-
-// Mock FlowController for testing
-type mockFlowController struct{}
-
-func newMockFlowController() *mockFlowController {
-	return &mockFlowController{}
-}
-
-func (m *mockFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) DeleteFlow(bridgeName string, match string) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) DeleteFlowsByPort(bridgeName string, portID string) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) ListFlows(bridgeName string) ([]string, error) {
-	return []string{}, nil
 }
 
 // Helper functions

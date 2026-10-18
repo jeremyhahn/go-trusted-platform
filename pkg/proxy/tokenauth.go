@@ -101,9 +101,6 @@ func (c *Chain) authenticateToken(ctx context.Context, r *http.Request, route *C
 	if decision != nil {
 		return nil, decision
 	}
-	if !hasAllRoles(principal.Roles, req.RequiredRoles) {
-		return nil, deny(ReasonRoleRequired)
-	}
 	return &ClientIdentity{
 		ID:         principal.Subject,
 		Zone:       clientZone,

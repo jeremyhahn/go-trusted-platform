@@ -830,6 +830,30 @@ func (s *ComputeGRPCService) ListSnapshots(ctx context.Context, req *platformv1.
 	}, nil
 }
 
+// GetSnapshot returns one snapshot of a VM. The snapshot id is the snapshot
+// name ListSnapshots reports; an unknown id is NotFound.
+func (s *ComputeGRPCService) GetSnapshot(ctx context.Context, req *platformv1.GetSnapshotRequest) (*platformv1.GetSnapshotResponse, error) {
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	snapshotID := req.GetSnapshotId()
+	if snapshotID == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot ID is required")
+	}
+
+	listed, err := s.ListSnapshots(ctx, &platformv1.ListSnapshotsRequest{VmId: vmID})
+	if err != nil {
+		return nil, err
+	}
+	for _, snapshot := range listed.GetSnapshots() {
+		if snapshot.GetId() == snapshotID {
+			return &platformv1.GetSnapshotResponse{Snapshot: snapshot}, nil
+		}
+	}
+	return nil, ErrVMSnapshotNotFound{VMID: vmID, SnapshotID: snapshotID}
+}
+
 // vmMigrator returns the orchestrator's VM migration capability or a gRPC error
 // when the orchestrator is missing or does not manage VMs.
 func (s *ComputeGRPCService) vmMigrator() (compute.VMMigrator, error) {

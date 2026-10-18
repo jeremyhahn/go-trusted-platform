@@ -16,6 +16,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,6 +162,27 @@ func TestNewCommand_Structure(t *testing.T) {
 	}
 }
 
+// TestRouteAdd_RequiredRoleRemoved pins the #926 removal: a route's
+// permission is its required scopes, so --required-role is no flag and the
+// command never reaches the client.
+func TestRouteAdd_RequiredRoleRemoved(t *testing.T) {
+	fake := &fakeCLIClient{}
+	withFakeClient(t, fake)
+
+	err := execute(t, "route", "add",
+		"--id", "web",
+		"--path-prefix", "/api",
+		"--pool", "web-pool",
+		"--auth-mode", "token",
+		"--required-role", "admin")
+	if err == nil || !strings.Contains(err.Error(), "required-role") {
+		t.Fatalf("route add --required-role: err = %v, want an unknown-flag error naming it", err)
+	}
+	if fake.lastCall != "" {
+		t.Errorf("client call = %s, want none", fake.lastCall)
+	}
+}
+
 func TestRouteAdd(t *testing.T) {
 	fake := &fakeCLIClient{}
 	withFakeClient(t, fake)
@@ -176,7 +198,6 @@ func TestRouteAdd(t *testing.T) {
 		"--backend-zone", "internal",
 		"--require-attestation",
 		"--attestation-max-age", "5m",
-		"--required-role", "admin",
 		"--required-scope", "proxy:write",
 		"--opa-policy", "policies/p.rego",
 		"--strip-prefix",

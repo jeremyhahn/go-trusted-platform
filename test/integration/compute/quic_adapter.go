@@ -257,6 +257,34 @@ func (a *QUICAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions)
 	return nil
 }
 
+// GetSnapshot returns one VM snapshot via the QUIC SDK client.
+func (a *QUICAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.compute.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, ErrQUICCallFailed{Method: "GetSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver via the QUIC SDK client.
+func (a *QUICAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.compute.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, ErrQUICCallFailed{Method: "PrepareMigration", Err: err}
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver via the QUIC SDK client.
+func (a *QUICAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	if err := a.compute.FinalizeMigration(ctx, receiverID, commit); err != nil {
+		return ErrQUICCallFailed{Method: "FinalizeMigration", Err: err}
+	}
+	return nil
+}
+
 // DeleteSnapshot deletes a VM snapshot via the QUIC SDK client.
 func (a *QUICAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
 	if err := a.compute.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {

@@ -55,19 +55,9 @@ func (m *MCPServiceProvider) VMSnapshotCreate(ctx context.Context, req *platform
 	return protoResult(m.ComputeServiceServer().CreateSnapshot(ctx, req))
 }
 
-// VMSnapshotGet returns one snapshot: ComputeService.ListSnapshots filtered
-// to the snapshot id. It has no RPC of its own.
+// VMSnapshotGet returns one snapshot through ComputeService.GetSnapshot.
 func (m *MCPServiceProvider) VMSnapshotGet(ctx context.Context, vmID, snapshotID string) (interface{}, error) {
-	resp, err := m.ComputeServiceServer().ListSnapshots(ctx, &platformv1.ListSnapshotsRequest{VmId: vmID})
-	if err != nil {
-		return nil, err
-	}
-	for _, snapshot := range resp.GetSnapshots() {
-		if snapshot.GetId() == snapshotID {
-			return protoResult(snapshot, nil)
-		}
-	}
-	return nil, ErrVMSnapshotNotFound{VMID: vmID, SnapshotID: snapshotID}
+	return protoResult(m.ComputeServiceServer().GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: vmID, SnapshotId: snapshotID}))
 }
 
 // VMSnapshotList lists a VM's snapshots through ComputeService.ListSnapshots.

@@ -417,6 +417,31 @@ func (a *RESTAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions)
 	return a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID)
 }
 
+// GetSnapshot returns one VM snapshot via the REST SDK client.
+func (a *RESTAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver via the REST SDK client.
+func (a *RESTAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.client.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, err
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver via the REST SDK client.
+func (a *RESTAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	return a.client.FinalizeMigration(ctx, receiverID, commit)
+}
+
 // DeleteSnapshot deletes a VM snapshot via the REST SDK client.
 func (a *RESTAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
 	return a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID)

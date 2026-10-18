@@ -21,12 +21,14 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
-// DefaultTenantID returns the default tenant ID for tests
+// DefaultTenantID returns the tenant the IAM tests name. It defaults to the
+// harness credential's own tenant: the IAM services refuse a request that
+// names a tenant other than the caller's.
 func DefaultTenantID() string {
 	if id := os.Getenv("IAM_TENANT_ID"); id != "" {
 		return id
 	}
-	return "test-tenant"
+	return helpers.HarnessTenantID
 }
 
 // GetRESTEndpoint returns the REST API endpoint

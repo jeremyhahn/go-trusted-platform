@@ -18,6 +18,7 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -41,6 +42,11 @@ type SecretsServiceInterface interface {
 	DeleteSecret(ctx context.Context, req *pb.DeleteSecretRequest) (*pb.DeleteSecretResponse, error)
 	SetRotationPolicy(ctx context.Context, req *pb.SetRotationPolicyRequest) (*pb.SetRotationPolicyResponse, error)
 	GetRotationPolicy(ctx context.Context, req *pb.GetRotationPolicyRequest) (*pb.GetRotationPolicyResponse, error)
+	GetSecretVersion(ctx context.Context, req *pb.GetSecretVersionRequest) (*pb.GetSecretVersionResponse, error)
+	ListSecretVersions(ctx context.Context, req *pb.ListSecretVersionsRequest) (*pb.ListSecretVersionsResponse, error)
+	RotateSecret(ctx context.Context, req *pb.RotateSecretRequest) (*pb.RotateSecretResponse, error)
+	RollbackSecret(ctx context.Context, req *pb.RollbackSecretRequest) (*pb.RollbackSecretResponse, error)
+	UpdateSecretStatus(ctx context.Context, req *pb.UpdateSecretStatusRequest) (*pb.UpdateSecretStatusResponse, error)
 }
 
 // Compile-time check: the gRPC secrets adapter satisfies the QUIC interface.
@@ -152,6 +158,39 @@ var secretsQUICDispatch = map[byte]secretsQUICHandler{
 	quicwire.SecretsSubDelete:            (*QUICServiceHandler).handleSecretsDelete,
 	quicwire.SecretsSubSetRotationPolicy: (*QUICServiceHandler).handleSecretsSetRotationPolicy,
 	quicwire.SecretsSubGetRotationPolicy: (*QUICServiceHandler).handleSecretsGetRotationPolicy,
+	quicwire.SecretsSubGetVersion:        secretsPBHandler("SecretsGetVersion", SecretsServiceInterface.GetSecretVersion),
+	quicwire.SecretsSubListVersions:      secretsPBHandler("SecretsListVersions", SecretsServiceInterface.ListSecretVersions),
+	quicwire.SecretsSubRotate:            secretsPBHandler("SecretsRotate", SecretsServiceInterface.RotateSecret),
+	quicwire.SecretsSubRollback:          secretsPBHandler("SecretsRollback", SecretsServiceInterface.RollbackSecret),
+	quicwire.SecretsSubUpdateStatus:      secretsPBHandler("SecretsUpdateStatus", SecretsServiceInterface.UpdateSecretStatus),
+}
+
+// secretsPBHandler serves a secrets sub-operation whose payload is the
+// quicbaas.kms.v1 request message itself. It calls the SecretsManagement
+// method the gRPC transport calls and answers that method's reply message, so
+// the SDK QUIC adapter sends and decodes the generated types unchanged, and an
+// error carries the class gRPC answers.
+func secretsPBHandler[Req, Resp any](op string, call func(SecretsServiceInterface, context.Context, *Req) (*Resp, error)) secretsQUICHandler {
+	return func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response {
+		return servePBCall(h, ctx, payload, op, h.secretsService, call)
+	}
+}
+
+// servePBCall decodes payload as the quicbaas.kms.v1 request message, calls
+// the gRPC adapter method on svc and answers its reply message. An error
+// carries the QUIC status of the gRPC code the adapter returned.
+func servePBCall[Svc, Req, Resp any](h *QUICServiceHandler, ctx context.Context, payload []byte, op string, svc Svc,
+	call func(Svc, context.Context, *Req) (*Resp, error)) *quicwire.Response {
+	req := new(Req)
+	if err := quicwire.DecodePayload(payload, req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+	resp, err := call(svc, ctx, req)
+	if err != nil {
+		h.logger.Error(err, "kms operation failed", "op", op)
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: op, Cause: err})
+	}
+	return h.encodeKMSExtendedResponse(resp)
 }
 
 // handleSecretsCategory routes a secrets request to the correct

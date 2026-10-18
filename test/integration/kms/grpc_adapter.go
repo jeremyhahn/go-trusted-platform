@@ -184,19 +184,19 @@ func algorithmProtoToString(alg pb.KeyAlgorithm) string {
 func statusProtoToString(status pb.KeyStatus) string {
 	switch status {
 	case pb.KeyStatus_KEY_STATUS_ENABLED:
-		return "enabled"
+		return "ENABLED"
 	case pb.KeyStatus_KEY_STATUS_DISABLED:
-		return "disabled"
+		return "DISABLED"
 	case pb.KeyStatus_KEY_STATUS_PENDING_DELETION:
-		return "pending_deletion"
+		return "PENDING_DELETION"
 	case pb.KeyStatus_KEY_STATUS_DELETED:
-		return "deleted"
+		return "DELETED"
 	case pb.KeyStatus_KEY_STATUS_ROTATING:
-		return "rotating"
+		return "ROTATING"
 	case pb.KeyStatus_KEY_STATUS_COMPROMISED:
-		return "compromised"
+		return "COMPROMISED"
 	default:
-		return "unknown"
+		return "UNSPECIFIED"
 	}
 }
 
@@ -228,11 +228,11 @@ func hashAlgorithmStringToProto(alg string) pb.HashAlgorithm {
 func hashAlgorithmProtoToString(alg pb.HashAlgorithm) string {
 	switch alg {
 	case pb.HashAlgorithm_HASH_ALG_SHA256:
-		return "SHA-256"
+		return "SHA256"
 	case pb.HashAlgorithm_HASH_ALG_SHA384:
-		return "SHA-384"
+		return "SHA384"
 	case pb.HashAlgorithm_HASH_ALG_SHA512:
-		return "SHA-512"
+		return "SHA512"
 	case pb.HashAlgorithm_HASH_ALG_SHA3_256:
 		return "SHA3-256"
 	case pb.HashAlgorithm_HASH_ALG_SHA3_384:
@@ -240,9 +240,9 @@ func hashAlgorithmProtoToString(alg pb.HashAlgorithm) string {
 	case pb.HashAlgorithm_HASH_ALG_SHA3_512:
 		return "SHA3-512"
 	case pb.HashAlgorithm_HASH_ALG_BLAKE2B_256:
-		return "BLAKE2b-256"
+		return "BLAKE2B-256"
 	case pb.HashAlgorithm_HASH_ALG_BLAKE2B_512:
-		return "BLAKE2b-512"
+		return "BLAKE2B-512"
 	default:
 		return "UNSPECIFIED"
 	}
@@ -291,10 +291,11 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 	req := &pb.GenerateKeyRequest{
 		KeySpec: &pb.KeySpec{
 			Algorithm:          algorithmStringToProto(opts.Algorithm),
+			Usage:              purposeToKeyUsages(opts.Purpose),
 			Exportable:         opts.Exportable,
 			DeletionProtection: opts.DeletionProtection,
 		},
-		Name:        opts.Name,
+		Name:        keyName(opts),
 		Description: opts.Description,
 		Owner:       opts.Owner,
 	}
@@ -304,7 +305,7 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, ErrGRPCCallFailed{Method: "GenerateKey", Err: err}
 	}
 
-	return &KeyGenerateResult{
+	result := &KeyGenerateResult{
 		KeyID:              resp.Key.KeyId,
 		Version:            resp.Key.Version,
 		Algorithm:          algorithmProtoToString(resp.Key.Algorithm),
@@ -314,7 +315,11 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		Description:        resp.Metadata.Description,
 		Exportable:         resp.Metadata.Exportable,
 		DeletionProtection: resp.Metadata.DeletionProtection,
-	}, nil
+	}
+	if err := applyKeyDisplay(ctx, g, opts, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // KeyGet retrieves a key by ID and optional version via gRPC.
@@ -825,89 +830,29 @@ func (g *GRPCAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRa
 
 // DEKCreate creates a new DEK via gRPC.
 func (g *GRPCAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEKCreateResult, error) {
-	req := &pb.CreateDEKRequest{
-		Path:           opts.Path,
-		Algorithm:      algorithmStringToProto(opts.Algorithm),
-		Description:    opts.Description,
-		MaxOperations:  opts.MaxOperations,
-		MaxBytes:       opts.MaxBytes,
-		WarningPercent: opts.WarningPercent,
-	}
-
-	resp, err := g.dek.CreateDEK(ctx, req)
+	resp, err := g.dek.CreateDEK(ctx, newCreateDEKRequest(opts))
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "CreateDEK", Err: err}
 	}
-
-	return &DEKCreateResult{
-		Path:        resp.Dek.Path,
-		Algorithm:   algorithmProtoToString(resp.Dek.Algorithm),
-		Version:     resp.Dek.Version,
-		CreatedAt:   grpcUnixToTime(resp.Dek.CreatedAt),
-		Description: resp.Dek.Description,
-	}, nil
+	return dekCreateResult(resp)
 }
 
 // DEKGet retrieves a DEK by path via gRPC.
 func (g *GRPCAdapter) DEKGet(ctx context.Context, path string) (*DEKGetResult, error) {
-	req := &pb.GetDEKRequest{
-		Path: path,
-	}
-
-	resp, err := g.dek.GetDEK(ctx, req)
+	resp, err := g.dek.GetDEK(ctx, &pb.GetDEKRequest{Path: path})
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetDEK", Err: err}
 	}
-
-	return &DEKGetResult{
-		Path:           resp.Dek.Path,
-		Algorithm:      algorithmProtoToString(resp.Dek.Algorithm),
-		Version:        resp.Dek.Version,
-		Status:         resp.Dek.Status,
-		IsDefault:      resp.Dek.IsDefault,
-		CreatedAt:      grpcUnixToTime(resp.Dek.CreatedAt),
-		RotatedAt:      grpcUnixToTime(resp.Dek.RotatedAt),
-		Description:    resp.Dek.Description,
-		BackendType:    resp.Dek.BackendType,
-		UsageCount:     resp.Dek.UsageCount,
-		BytesUsed:      resp.Dek.BytesUsed,
-		MaxUsageCount:  resp.Dek.MaxUsageCount,
-		MaxBytesUsed:   resp.Dek.MaxBytesUsed,
-		WarningPercent: resp.Dek.WarningPercent,
-	}, nil
+	return dekGetResult(resp)
 }
 
 // DEKList lists DEKs with optional prefix via gRPC.
 func (g *GRPCAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKListResult, error) {
-	req := &pb.ListDEKsRequest{
-		Prefix:    opts.Prefix,
-		Recursive: opts.Recursive,
-		Limit:     opts.Limit,
-		Cursor:    opts.Cursor,
-	}
-
-	resp, err := g.dek.ListDEKs(ctx, req)
+	resp, err := g.dek.ListDEKs(ctx, newListDEKsRequest(opts))
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "ListDEKs", Err: err}
 	}
-
-	deks := make([]DEKSummary, 0, len(resp.Deks))
-	for _, d := range resp.Deks {
-		deks = append(deks, DEKSummary{
-			Path:      d.Path,
-			Algorithm: algorithmProtoToString(d.Algorithm),
-			Version:   d.Version,
-			Status:    d.Status,
-			IsDefault: d.IsDefault,
-			CreatedAt: grpcUnixToTime(d.CreatedAt),
-		})
-	}
-
-	return &DEKListResult{
-		DEKs:       deks,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+	return dekListResult(resp), nil
 }
 
 // DEKDelete deletes a DEK via gRPC.
@@ -950,42 +895,11 @@ func (g *GRPCAdapter) DEKRotate(ctx context.Context, path string, background boo
 
 // DEKStatus retrieves DEK status via gRPC.
 func (g *GRPCAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResult, error) {
-	req := &pb.GetDEKStatusRequest{
-		Path: path,
-	}
-
-	resp, err := g.dek.GetDEKStatus(ctx, req)
+	resp, err := g.dek.GetDEKStatus(ctx, &pb.GetDEKStatusRequest{Path: path})
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetDEKStatus", Err: err}
 	}
-
-	result := &DEKStatusResult{
-		Path:           resp.Dek.Path,
-		Algorithm:      algorithmProtoToString(resp.Dek.Algorithm),
-		Version:        resp.Dek.Version,
-		Status:         resp.Dek.Status,
-		IsDefault:      resp.Dek.IsDefault,
-		CreatedAt:      grpcUnixToTime(resp.Dek.CreatedAt),
-		RotatedAt:      grpcUnixToTime(resp.Dek.RotatedAt),
-		Description:    resp.Dek.Description,
-		BackendType:    resp.Dek.BackendType,
-		UsageCount:     resp.Dek.UsageCount,
-		BytesUsed:      resp.Dek.BytesUsed,
-		MaxUsageCount:  resp.Dek.MaxUsageCount,
-		MaxBytesUsed:   resp.Dek.MaxBytesUsed,
-		WarningPercent: resp.Dek.WarningPercent,
-	}
-
-	if resp.ReencryptionProgress != nil {
-		result.ReencryptionInProgress = resp.ReencryptionProgress.InProgress
-		result.ProcessedKeys = int64(resp.ReencryptionProgress.ProcessedKeys)
-		result.TotalKeys = int64(resp.ReencryptionProgress.TotalKeys)
-		result.FailedKeys = int64(resp.ReencryptionProgress.FailedKeys)
-		result.ReencryptionStartedAt = grpcUnixToTime(resp.ReencryptionProgress.StartedAt)
-		result.EstimatedCompletion = grpcUnixToTime(resp.ReencryptionProgress.EstimatedCompletion)
-	}
-
-	return result, nil
+	return dekStatusResult(resp)
 }
 
 // =============================================================================
@@ -1204,9 +1118,9 @@ func (g *GRPCAdapter) SecretsStatus(ctx context.Context, name string, enabled bo
 		return nil, ErrGRPCCallFailed{Method: "UpdateSecretStatus", Err: err}
 	}
 
-	statusStr := "disabled"
+	statusStr := "DISABLED"
 	if resp.Status == pb.SecretStatus_SECRET_STATUS_ENABLED {
-		statusStr = "enabled"
+		statusStr = "ENABLED"
 	}
 
 	return &SecretsStatusResult{

@@ -292,8 +292,8 @@ func TestQUICServiceHandler_VMServiceOperation(t *testing.T) {
 
 	t.Run("unknown sub-opcode is not implemented", func(t *testing.T) {
 		handler := newTestQUICServiceHandler(logger)
-		// 0xBA was OpVMConsole, retired with the flat VM handler (#704).
-		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory, Payload: []byte{0xBA}}
+		// 0x01 is no VM or container sub-opcode.
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory, Payload: []byte{0x01}}
 
 		resp := handler.handleVMServiceOperation(ctx, req)
 		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)

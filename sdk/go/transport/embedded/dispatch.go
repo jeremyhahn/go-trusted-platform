@@ -805,8 +805,17 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_ListSnapshots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ListSnapshots(ctx, req.(*platformv1.ListSnapshotsRequest))
 	}
+	m[platformv1.ComputeService_GetSnapshot_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSnapshot(ctx, req.(*platformv1.GetSnapshotRequest))
+	}
 	m[platformv1.ComputeService_MigrateVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.MigrateVM(ctx, req.(*platformv1.MigrateVMRequest))
+	}
+	m[platformv1.ComputeService_PrepareMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PrepareMigration(ctx, req.(*platformv1.PrepareMigrationRequest))
+	}
+	m[platformv1.ComputeService_FinalizeMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FinalizeMigration(ctx, req.(*platformv1.FinalizeMigrationRequest))
 	}
 	m[platformv1.ComputeService_CreateContainer_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateContainer(ctx, req.(*platformv1.CreateContainerRequest))

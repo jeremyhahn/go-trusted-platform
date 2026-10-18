@@ -254,6 +254,46 @@ func (h *Handlers) MigrateVM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// PrepareMigration handles POST /api/v1/compute/migrations/prepare: it
+// stands up a receiver for an inbound migration (the destination half of
+// MigrateVM).
+func (h *Handlers) PrepareMigration(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.PrepareMigrationRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.PrepareMigration(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// FinalizeMigration handles POST /api/v1/compute/migrations/{receiverId}/finalize:
+// it commits or aborts the receiver PrepareMigration returned.
+func (h *Handlers) FinalizeMigration(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.FinalizeMigrationRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.ReceiverId = mux.Vars(r)["receiverId"]
+	resp, err := h.server.FinalizeMigration(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // AttachDisk handles POST /api/v1/compute/vms/{id}/disks.
 func (h *Handlers) AttachDisk(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
@@ -336,6 +376,23 @@ func (h *Handlers) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := h.server.ListSnapshots(r.Context(), &platformv1.ListSnapshotsRequest{VmId: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// GetSnapshot handles GET /api/v1/compute/vms/{id}/snapshots/{snapshotId}.
+func (h *Handlers) GetSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	vars := mux.Vars(r)
+	resp, err := h.server.GetSnapshot(r.Context(), &platformv1.GetSnapshotRequest{
+		VmId:       vars["id"],
+		SnapshotId: vars["snapshotId"],
+	})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

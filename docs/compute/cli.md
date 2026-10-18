@@ -244,7 +244,7 @@ This is the **only attestation verb in the entire CLI** — see
 | Exec in a container | REST, gRPC, QUIC, MCP |
 | Attest a VM | REST, gRPC, QUIC, MCP |
 | Console attach | gRPC streaming only |
-| Two-phase migration (`Prepare` / `Finalize`) | gRPC only |
+| Two-phase migration (`Prepare` / `Finalize`) | REST, gRPC, QUIC, MCP |
 
 ---
 

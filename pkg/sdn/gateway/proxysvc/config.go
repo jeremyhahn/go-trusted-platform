@@ -253,7 +253,6 @@ func (c *Config) EngineConfig() proxy.Config {
 	for _, r := range c.Routes {
 		r.Hosts = append([]string(nil), r.Hosts...)
 		r.Auth.AllowedZones = append([]string(nil), r.Auth.AllowedZones...)
-		r.Auth.RequiredRoles = append([]string(nil), r.Auth.RequiredRoles...)
 		r.Auth.RequiredScopes = append([]string(nil), r.Auth.RequiredScopes...)
 		out.Routes = append(out.Routes, r)
 	}

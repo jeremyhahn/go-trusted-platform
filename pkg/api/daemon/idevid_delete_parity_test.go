@@ -211,7 +211,7 @@ func restTPMIAKDelete(t *testing.T, service platformv1.TPMServiceServer) tpmIAKD
 	validator := newSharedValidator(t, key.jwksHandler(t).URL, true)
 	token := key.sign(t, "operator", "", []string{"tpm:delete"})
 	server := newTPMTestRESTServer(t)
-	server.SetTPMHandlers(service, validator)
+	server.SetTPMHandlers(service, tokenScopeGuard(validator))
 	classify := func(httpStatus int) codes.Code {
 		return classOf(httpStatus, func(c codes.Code) int {
 			return idevidGRPCToHTTPStatus(status.Error(c, ""))

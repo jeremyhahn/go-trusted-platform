@@ -136,7 +136,7 @@ func (r *ToolRegistry) registerProxyTools() {
 	}
 	routeSchema := map[string]interface{}{
 		"type":        "object",
-		"description": "Proxy route definition (platform.v1.ProxyRoute JSON): id, hosts, path_prefix, pool_id, auth {mode, require_idevid, allowed_zones, backend_zone, require_attestation, attestation_max_age_nanos, required_roles, required_scopes, opa_policy}, strip_prefix, preserve_host, passthrough_tcp",
+		"description": "Proxy route definition (platform.v1.ProxyRoute JSON): id, hosts, path_prefix, pool_id, auth {mode, require_idevid, allowed_zones, backend_zone, require_attestation, attestation_max_age_nanos, required_scopes, opa_policy}, strip_prefix, preserve_host, passthrough_tcp",
 	}
 	poolSchema := map[string]interface{}{
 		"type":        "object",

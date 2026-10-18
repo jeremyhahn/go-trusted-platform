@@ -201,3 +201,49 @@ func TestIAMGRPCService_TenantBinding(t *testing.T) {
 		}
 	}
 }
+
+// TestIAMGRPCService_CrossTenantRPCsAreSystemOnly pins the REST
+// RequireSystemTenant rule on the shared IAM service every transport calls:
+// only the system tenant creates or lists IAM tenants, and a refused create
+// leaves no tenant behind.
+func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
+	cases := []struct {
+		name         string
+		systemTenant string
+		ctx          context.Context
+		wantCode     codes.Code
+	}{
+		{name: "system tenant", systemTenant: "system", ctx: tokenCallerContext("system"), wantCode: codes.OK},
+		{name: "unbound local caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.OK},
+		{name: "other tenant", systemTenant: "system", ctx: tokenCallerContext("tenant-a"), wantCode: codes.PermissionDenied},
+		{name: "unset system tenant", systemTenant: "", ctx: tokenCallerContext("system"), wantCode: codes.PermissionDenied},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewIAMGRPCService(slog.Default(), newMemIAM(), nil)
+			svc.SetSystemTenant(tc.systemTenant)
+
+			_, err := svc.CreateTenant(tc.ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("CreateTenant code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
+			}
+			_, err = svc.ListTenants(tc.ctx, &platformv1.ListIAMTenantsRequest{})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("ListTenants code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
+			}
+
+			listed, err := svc.ListTenants(context.Background(), &platformv1.ListIAMTenantsRequest{})
+			if err != nil {
+				t.Fatalf("ListTenants as the local caller: %v", err)
+			}
+			wantTenants := 0
+			if tc.wantCode == codes.OK {
+				wantTenants = 1
+			}
+			if len(listed.GetTenants()) != wantTenants {
+				t.Fatalf("tenants after CreateTenant = %d, want %d", len(listed.GetTenants()), wantTenants)
+			}
+		})
+	}
+}

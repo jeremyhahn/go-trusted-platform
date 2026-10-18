@@ -199,6 +199,54 @@ transport ([api.md §2](api.md#2-vm-lifecycle)). An unknown state, any
 3600, is invalid argument. The service does not yet read `delete_disks`, on
 any transport.
 
+### vm_migration_prepare
+
+The destination half of a staged migration (`PrepareMigration`, `vm:write`).
+`spec` is a `VMMigrationSpec` describing the guest: `memory_mb` and `cpus`
+(integers), `disk_size`, `boot_mode`, `network_mode`, `mac_address` and `arch`
+(strings), `secure_boot`, `enable_kvm` and `tpm_enabled` (booleans). The reply
+is `PrepareMigrationResponse`, whose `receiver_id`, `port` and `tls_hostname`
+the source dials.
+
+```json
+{
+  "name": "vm_migration_prepare",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "vm_id": {"type": "string"},
+      "vm_name": {"type": "string"},
+      "mode": {"type": "string"},
+      "spec": {"type": "object"}
+    },
+    "required": ["spec"]
+  }
+}
+```
+
+### vm_migration_finalize
+
+Commits (`commit: true`) or discards a received migration
+(`FinalizeMigration`, `vm:write`).
+
+```json
+{
+  "name": "vm_migration_finalize",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "receiver_id": {"type": "string"},
+      "commit": {"type": "boolean"}
+    },
+    "required": ["receiver_id"]
+  }
+}
+```
+
+A missing `spec` or `receiver_id` is invalid argument, an unknown receiver is
+not found, and a daemon whose orchestrator cannot receive a migration answers
+failed precondition, as `PrepareMigration` and `FinalizeMigration` do on gRPC.
+
 ## Other VM tools
 
 | Tool | Required | Optional (default) |

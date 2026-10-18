@@ -139,6 +139,11 @@ var kmsExtendedQUICDispatch = map[byte]kmsExtendedQUICHandler{
 // handleKMSExtendedCategory routes a KMS extended request to the correct
 // sub-handler based on the first payload byte.
 func (h *QUICServiceHandler) handleKMSExtendedCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if len(req.Payload) > 0 {
+		if fn, isDEK := dekQUICDispatch[req.Payload[0]]; isDEK {
+			return fn(h, ctx, req.Payload[1:])
+		}
+	}
 	if h.kmsService == nil {
 		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "kms"})
 	}

@@ -37,6 +37,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -83,16 +84,21 @@ type MCPServiceProviderConfig struct {
 	// AttestationServer serves the device verdict feed for
 	// attestation_device_verdicts_poll (#709); nil answers that no feed is
 	// configured.
-	AttestationServer     *AttestationServiceServer
-	DNSService            dns.DNSService
-	SDNService            *SDNService
-	HealthService         *Service
-	IAMClient             quicbaassdk.IAMClient
-	PEPClient             quicbaassdk.IAMPEPClient
-	IAMTokens             *IAMTokenService // iam_*_token tools; nil refuses verification
-	KMSService            baasservice.KMSService
-	CryptoService         baasservice.CryptoService
-	SecretsService        baasservice.SecretsService
+	AttestationServer *AttestationServiceServer
+	DNSService        dns.DNSService
+	SDNService        *SDNService
+	HealthService     *Service
+	IAMClient         quicbaassdk.IAMClient
+	PEPClient         quicbaassdk.IAMPEPClient
+	IAMTokens         *IAMTokenService // iam_*_token tools; nil refuses verification
+	PlatformTenantID  string           // the system tenant, the only one admitted to create and list IAM tenants
+	KMSService        baasservice.KMSService
+	CryptoService     baasservice.CryptoService
+	SecretsService    baasservice.SecretsService
+	// DEKService backs the dek_* tools; nil answers that the DEK service is
+	// not available.
+	DEKService            DEKServiceInterface
+	KMSBackend            *PlatformKMSBackend
 	TPM2Service           xkmssdk.TrustedPlatformModule
 	Logger                *slog.Logger
 	ComputeOrchestrator   compute.Orchestrator
@@ -150,6 +156,8 @@ type MCPServiceProvider struct {
 	kmsService            baasservice.KMSService
 	cryptoService         baasservice.CryptoService
 	secretsService        baasservice.SecretsService
+	dekService            DEKServiceInterface // the gRPC DEKManagement adapter, shared with QUIC
+	kmsBackend            *PlatformKMSBackend // shared with gRPC KeyManagementService, QUIC and REST
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
 	bmcServer             platformv1.BMCServiceServer
@@ -193,6 +201,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		logger = slog.Default()
 	}
 
+	iam := NewIAMGRPCService(logger, config.IAMClient, config.PEPClient)
+	iam.SetSystemTenant(config.PlatformTenantID)
+
 	return &MCPServiceProvider{
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
@@ -207,11 +218,13 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		healthService:         config.HealthService,
-		iam:                   NewIAMGRPCService(logger, config.IAMClient, config.PEPClient),
+		iam:                   iam,
 		iamTokens:             config.IAMTokens,
 		kmsService:            config.KMSService,
 		cryptoService:         config.CryptoService,
 		secretsService:        config.SecretsService,
+		dekService:            config.DEKService,
+		kmsBackend:            config.KMSBackend,
 		tpm2Service:           config.TPM2Service,
 		computeOrchestrator:   config.ComputeOrchestrator,
 		registryService:       config.RegistryService,
@@ -2905,7 +2918,7 @@ func (p *MCPServiceProvider) TPMClear(ctx context.Context, ownerPassword string)
 		lockoutAuth = []byte(ownerPassword)
 	}
 
-	if err := p.tpm2Service.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(p.tpm2Service, lockoutAuth); err != nil {
 		return nil, mapTPMError(err)
 	}
 

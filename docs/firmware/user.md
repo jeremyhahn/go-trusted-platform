@@ -191,7 +191,7 @@ platformctl authenticode sign \
     --key <install-dir>/secure-boot/DB.key \
     --cert <install-dir>/secure-boot/DB.crt \
     --input ./BOOTX64.EFI.unsigned \
-    --output ./BOOTX64.EFI
+    --out ./BOOTX64.EFI
 
 # 3. Put it on the ESP
 install -m 0755 ./BOOTX64.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI

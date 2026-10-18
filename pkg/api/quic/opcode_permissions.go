@@ -261,6 +261,7 @@ var (
 
 	secretsRead   = OpcodePermission{Resource: "secrets", Action: actionRead}
 	secretsWrite  = OpcodePermission{Resource: "secrets", Action: actionWrite}
+	secretsList   = OpcodePermission{Resource: "secrets", Action: actionList}
 	secretsDelete = OpcodePermission{Resource: "secrets", Action: actionDelete}
 
 	switchRead  = OpcodePermission{Resource: "switch", Action: actionRead}
@@ -721,6 +722,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpVMSnapshotRestore: vmWrite,
 		quicwire.OpVMSnapshotDelete:  vmDelete,
 		quicwire.OpVMSnapshotList:    vmRead,
+		quicwire.OpVMSnapshotGet:     vmRead,
 		quicwire.OpVMAttest:          vmRead,
 		quicwire.OpVMVerifyAttest:    vmRead,
 		quicwire.OpVMMetrics:         vmRead,
@@ -728,6 +730,9 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpVMDetachDisk:      vmWrite,
 		quicwire.OpVMResizeDisk:      vmWrite,
 		quicwire.OpVMMigrate:         vmWrite,
+
+		quicwire.OpVMPrepareMigration:  vmWrite,
+		quicwire.OpVMFinalizeMigration: vmWrite,
 
 		quicwire.OpContainerCreate:  containerWrite,
 		quicwire.OpContainerStart:   containerWrite,
@@ -885,15 +890,26 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.KMSSubGetKeyPolicy:           kmsRead,
 		quicwire.KMSSubGetSupportedAlgorithms: kmsRead,
 		quicwire.KMSSubSignCSR:                CASignCSRPermission,
+		quicwire.KMSSubCreateDEK:              kmsWrite,
+		quicwire.KMSSubListDEKs:               kmsRead,
+		quicwire.KMSSubGetDEK:                 kmsRead,
+		quicwire.KMSSubGetDEKStatus:           kmsRead,
+		quicwire.KMSSubRotateDEK:              kmsWrite,
+		quicwire.KMSSubDeleteDEK:              kmsDelete,
 	},
 
 	quicwire.OpSecretsCategory: {
 		quicwire.SecretsSubStore:             secretsWrite,
 		quicwire.SecretsSubGet:               secretsRead,
-		quicwire.SecretsSubList:              secretsRead,
+		quicwire.SecretsSubList:              secretsList,
 		quicwire.SecretsSubDelete:            secretsDelete,
 		quicwire.SecretsSubSetRotationPolicy: secretsWrite,
 		quicwire.SecretsSubGetRotationPolicy: secretsRead,
+		quicwire.SecretsSubGetVersion:        secretsRead,
+		quicwire.SecretsSubListVersions:      secretsList,
+		quicwire.SecretsSubRotate:            secretsWrite,
+		quicwire.SecretsSubRollback:          secretsWrite,
+		quicwire.SecretsSubUpdateStatus:      secretsWrite,
 	},
 
 	// Provisioning: config delivery, EAB credentials and device profile

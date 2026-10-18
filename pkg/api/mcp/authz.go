@@ -26,17 +26,25 @@ type AuthorizationChecker struct {
 	authService AuthorizationService
 	authManager AuthManager
 
+	// peerAuthenticator turns the verified client certificate of a
+	// tokenless request into its principal; nil disables that path.
+	peerAuthenticator PeerAuthenticator
+
 	// toolPermissions maps tool names to required permissions
 	toolPermissions map[string]string
 }
 
 // NewAuthorizationChecker creates a new authorization checker.
-func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager) *AuthorizationChecker {
-	return &AuthorizationChecker{
+func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager, opts ...AuthorizationCheckerOption) *AuthorizationChecker {
+	c := &AuthorizationChecker{
 		authService:     authService,
 		authManager:     authManager,
 		toolPermissions: toolPermissionCatalog(),
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // toolPermissionCatalog returns the permission each MCP tool requires, keyed
@@ -276,8 +284,6 @@ func toolPermissionCatalog() map[string]string {
 	// VM and container tools carry the scopes of their gRPC ComputeService
 	// twins (pkg/api/grpc/method_permissions.go, #304). vm_disk_detach is
 	// vm:write as DetachDisk is: the disk is unplugged, not destroyed.
-	// vm_snapshot_get has no gRPC twin; it reads one entry of what
-	// ListSnapshots returns, so it carries ListSnapshots' vm:read.
 	permissions["vm_create"] = "vm:write"
 	permissions["vm_list"] = "vm:read"
 	permissions["vm_get"] = "vm:read"
@@ -300,6 +306,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vm_disk_detach"] = "vm:write"
 	permissions["vm_disk_resize"] = "vm:write"
 	permissions["vm_migrate"] = "vm:write"
+	permissions["vm_migration_prepare"] = "vm:write"
+	permissions["vm_migration_finalize"] = "vm:write"
 	permissions["container_create"] = "container:write"
 	permissions["container_start"] = "container:write"
 	permissions["container_stop"] = "container:write"
@@ -558,6 +566,16 @@ func toolPermissionCatalog() map[string]string {
 	permissions["kms_generate_wrapped_data_key"] = "kms:write"
 	permissions["kms_decrypt"] = "kms:read"
 	permissions["kms_verify"] = "kms:read"
+	// Same scopes as the gRPC KeyManagementService methods they mirror.
+	permissions["kms_hash"] = "kms:read"
+	permissions["kms_hmac"] = "kms:write"
+	permissions["kms_verify_hmac"] = "kms:read"
+	permissions["kms_rewrap"] = "kms:write"
+	permissions["kms_import_key"] = "kms:write"
+	permissions["kms_update_key_status"] = "kms:write"
+	permissions["kms_list_key_versions"] = "kms:read"
+	permissions["kms_batch_encrypt"] = "kms:write"
+	permissions["kms_batch_decrypt"] = "kms:read"
 	permissions["kms_random"] = "kms:read"
 
 	// Secret tools (#304) require the scope of the matching gRPC method on
@@ -568,6 +586,17 @@ func toolPermissionCatalog() map[string]string {
 	permissions["secret_get_rotation_policy"] = "secrets:read"
 	permissions["secret_list"] = "secrets:list"
 	permissions["secret_delete"] = "secrets:delete"
+	permissions["secret_get_version"] = "secrets:read"
+	permissions["secret_list_versions"] = "secrets:list"
+	permissions["secret_rotate"] = "secrets:write"
+	permissions["secret_rollback"] = "secrets:write"
+	permissions["secret_update_status"] = "secrets:write"
+	permissions["dek_create"] = "kms:write"
+	permissions["dek_list"] = "kms:read"
+	permissions["dek_get"] = "kms:read"
+	permissions["dek_status"] = "kms:read"
+	permissions["dek_rotate"] = "kms:write"
+	permissions["dek_delete"] = "kms:delete"
 
 	// EAB tools (#304) carry exactly the scope of their gRPC EABService
 	// twin (pkg/api/grpc/method_permissions.go); both reach the same
@@ -756,6 +785,13 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// If no permission required, allow
 	if permission == "" {
 		return ctx, nil
+	}
+
+	// Under mTLS the verified client certificate authenticates a tokenless
+	// request, as on REST, gRPC and QUIC. A presented token never takes this
+	// path: it is validated by the token backend below.
+	if token == "" && c.peerAuthenticator != nil {
+		return c.authorizePeer(ctx, permission)
 	}
 
 	// With no authorization backend there is nothing that can grant the

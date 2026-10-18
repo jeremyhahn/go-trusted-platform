@@ -171,7 +171,11 @@ func createEmbeddedSDKClient(cfg *Config, svc service.QuicBaaS, embeddedServer *
 		opts = append(opts, qrdbOpt)
 	}
 
-	return quicbaas.NewClient(address, opts...)
+	client, err := quicbaas.NewClient(address, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return withVectorAvailability(cfg, client), nil
 }
 
 // createUnixSDKClient creates an SDK client for Unix socket transport.

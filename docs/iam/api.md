@@ -160,7 +160,9 @@ Every IAM byte the daemon dispatches (`handleIAMOperation`,
 | `0x51` | `OpIAMCategory` | Tenant records; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
 
 The bytes between the IAM ranges belong to other services: `0xB0`–`0xB4` are
-SDN and `0xF0`–`0xF5` are DEK operations.
+SDN and `0xF0`–`0xF5` are reserved `OpDEK*` bytes the daemon does not serve
+(DEK is KMS extended category `0xCD`, subs `0x08`–`0x0D`,
+[`docs/kms/api.md`](../kms/api.md) §4).
 
 ## 6. Tenants, tokens and authentication
 
@@ -304,8 +306,13 @@ On gRPC, QUIC and MCP the check is `authorizeIAMTenant`
 (`pkg/api/daemon/iam_tenant_authz.go`); MCP reaches it because its IAM tools
 answer through the same `IAMGRPCService` methods. It covers every user, role,
 group, policy and application RPC, `CheckPermission`, and `GetTenant`,
-`UpdateTenant` and `DeleteTenant`. It does not cover `CreateTenant`,
-`ListTenants` or the token RPCs. The platform `TenantService` lifecycle RPCs have their own binding,
+`UpdateTenant` and `DeleteTenant`. `CreateTenant` and `ListTenants` act
+across tenants, so they admit the system tenant only, the rule REST applies
+with `RequireSystemTenant`: `authorizeSystemCaller` (same file) refuses any
+other tenant-bound caller with `PermissionDenied` (`ErrTenantSystemOnly`), and
+the unbound Unix operator is admitted. The daemon hands the service its
+system tenant with `SetSystemTenant`; without one, no tenant-bound caller is
+admitted. The token RPCs carry no tenant check. The platform `TenantService` lifecycle RPCs have their own binding,
 `authorizeTenant` (`pkg/api/daemon/tenant_grpc_authz.go`,
 [`docs/tenant/api.md`](../tenant/api.md) §7). A daemon run with `SkipIAMValidation`
 has no caller identity and serves the named tenant.
@@ -397,20 +404,20 @@ handle, which deletes nothing, as gRPC `DeleteEK`/`DeleteSRK` do.
 `platform_tpm_iak_delete` refuses with `FailedPrecondition`, as `iak_delete`
 and gRPC `DeleteAK` do (#704).
 
-**The KMS and secret MCP tools are classified (#304).** Each of the 20 `kms_*`
-and 6 `secret_*` tools carries the scope of the gRPC method it mirrors
+**The KMS, secret and DEK MCP tools are classified (#304).** Each of the 29
+`kms_*`, 11 `secret_*` and 6 `dek_*` tools carries the scope of the gRPC method it mirrors
 (`pkg/api/grpc/method_permissions.go`), so it answers a caller holding that
 scope and refuses everyone else with `PermissionDenied` before the handler
 runs:
 
 | Scope | MCP tools |
 |---|---|
-| `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_decrypt`, `kms_verify`, `kms_random` |
-| `kms:write` | `kms_generate_key`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_sign`, `kms_generate_data_key`, `kms_generate_wrapped_data_key` |
-| `kms:delete` | `kms_delete_key` |
-| `secrets:read` | `secret_get`, `secret_get_rotation_policy` |
-| `secrets:write` | `secret_store`, `secret_set_rotation_policy` |
-| `secrets:list` | `secret_list` |
+| `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_list_key_versions`, `kms_decrypt`, `kms_batch_decrypt`, `kms_verify`, `kms_hash`, `kms_verify_hmac`, `kms_random`, `dek_list`, `dek_get`, `dek_status` |
+| `kms:write` | `kms_generate_key`, `kms_import_key`, `kms_update_key_status`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_batch_encrypt`, `kms_sign`, `kms_hmac`, `kms_rewrap`, `kms_generate_data_key`, `kms_generate_wrapped_data_key`, `dek_create`, `dek_rotate` |
+| `kms:delete` | `kms_delete_key`, `dek_delete` |
+| `secrets:read` | `secret_get`, `secret_get_rotation_policy`, `secret_get_version` |
+| `secrets:write` | `secret_store`, `secret_set_rotation_policy`, `secret_rotate`, `secret_rollback`, `secret_update_status` |
+| `secrets:list` | `secret_list`, `secret_list_versions` |
 | `secrets:delete` | `secret_delete` |
 
 `kms_decrypt`, `kms_generate_data_key` and `secret_get` answer key or secret

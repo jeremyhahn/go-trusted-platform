@@ -75,6 +75,22 @@ type SnapshotCommands interface {
 
 	// ListSnapshots lists a virtual machine's snapshots.
 	ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error)
+
+	// GetSnapshot returns one of a virtual machine's snapshots.
+	GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error)
+}
+
+// MigrationCommands defines the destination half of a two-phase migration.
+// Every API transport implements it.
+type MigrationCommands interface {
+	// Name returns the adapter name.
+	Name() string
+
+	// PrepareMigration asks the destination to start a migration receiver.
+	PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error)
+
+	// FinalizeMigration commits or aborts a migration receiver.
+	FinalizeMigration(ctx context.Context, receiverID string, commit bool) error
 }
 
 // AttestCommands defines the VM attestation verbs. Every API transport
@@ -244,6 +260,27 @@ type SnapshotOptions struct {
 type SnapshotSummary struct {
 	ID   string
 	VMID string
+}
+
+// PrepareMigrationOptions describes the guest a destination is asked to
+// receive. A nil Guest sends no guest description.
+type PrepareMigrationOptions struct {
+	VMName string
+	Mode   string
+	Guest  *MigrationGuest
+}
+
+// MigrationGuest is the shape of an incoming guest.
+type MigrationGuest struct {
+	MemoryMB int32
+	CPUs     int32
+}
+
+// MigrationReceiverSummary is where the source streams a migrating guest.
+type MigrationReceiverSummary struct {
+	ReceiverID  string
+	Port        int32
+	TLSHostname string
 }
 
 // AttestVMOptions contains options for attesting a VM.

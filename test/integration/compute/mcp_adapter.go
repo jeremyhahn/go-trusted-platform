@@ -271,6 +271,35 @@ func (a *MCPAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) 
 	return nil
 }
 
+// GetSnapshot returns one VM snapshot through the vm_snapshot_get tool.
+func (a *MCPAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.compute.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "GetSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver through the vm_migration_prepare tool.
+func (a *MCPAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.compute.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "PrepareMigration", Err: err}
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver through the
+// vm_migration_finalize tool.
+func (a *MCPAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	if err := a.compute.FinalizeMigration(ctx, receiverID, commit); err != nil {
+		return ErrMCPCallFailed{Method: "FinalizeMigration", Err: err}
+	}
+	return nil
+}
+
 // DeleteSnapshot deletes a VM snapshot through the vm_snapshot_delete tool.
 func (a *MCPAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
 	if err := a.compute.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {

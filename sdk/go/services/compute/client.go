@@ -223,6 +223,15 @@ func (c *Client) ListSnapshots(ctx context.Context, vmID string) ([]*platformv1.
 	return resp.Snapshots, nil
 }
 
+// GetSnapshot returns one snapshot of a VM by id.
+func (c *Client) GetSnapshot(ctx context.Context, vmID, snapshotID string) (*platformv1.Snapshot, error) {
+	resp, err := c.grpc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: vmID, SnapshotId: snapshotID})
+	if err != nil {
+		return nil, &ErrGetSnapshotFailed{VMID: vmID, SnapshotID: snapshotID, Cause: err}
+	}
+	return resp.GetSnapshot(), nil
+}
+
 // MigrateVM migrates a virtual machine to another host.
 func (c *Client) MigrateVM(ctx context.Context, vmID, destinationHost string, live bool, bandwidthLimit uint64) error {
 	_, err := c.grpc.MigrateVM(ctx, &platformv1.MigrateVMRequest{
@@ -233,6 +242,26 @@ func (c *Client) MigrateVM(ctx context.Context, vmID, destinationHost string, li
 	})
 	if err != nil {
 		return &ErrMigrateVMFailed{VMID: vmID, Cause: err}
+	}
+	return nil
+}
+
+// PrepareMigration readies this host to receive a migrating VM described by
+// req and returns the receiver the source streams to.
+func (c *Client) PrepareMigration(ctx context.Context, req *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	resp, err := c.grpc.PrepareMigration(ctx, req)
+	if err != nil {
+		return nil, &ErrPrepareMigrationFailed{VMName: req.GetVmName(), Cause: err}
+	}
+	return resp, nil
+}
+
+// FinalizeMigration commits (commit=true) or discards the VM received by
+// receiverID.
+func (c *Client) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	_, err := c.grpc.FinalizeMigration(ctx, &platformv1.FinalizeMigrationRequest{ReceiverId: receiverID, Commit: commit})
+	if err != nil {
+		return &ErrFinalizeMigrationFailed{ReceiverID: receiverID, Cause: err}
 	}
 	return nil
 }

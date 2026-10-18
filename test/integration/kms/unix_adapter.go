@@ -17,15 +17,15 @@ package kms
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
-	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 // =============================================================================
@@ -64,23 +64,18 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 		s.socketPath = DefaultPlatformdSocket
 	}
 
-	// Create dial context with timeout to fail fast when socket unavailable
-	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeout)
-	defer cancel()
-
-	// Create gRPC connection using Unix socket dialer
-	conn, err := grpc.DialContext(dialCtx, "unix://"+s.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			// Strip the unix:// prefix if present
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-		grpc.WithBlock(),
-	)
+	conn, err := grpc.NewClient("unix://"+s.socketPath, helpers.GRPCUnixCredentials())
 	if err != nil {
 		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
+	}
+
+	// NewClient connects lazily. Connect now and wait for READY so Setup
+	// fails fast when the socket is unavailable instead of at the first RPC.
+	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeout)
+	defer cancel()
+	if err := awaitUnixReady(dialCtx, conn); err != nil {
+		closeErr := conn.Close()
+		return ErrUnixConnectionFailed{Path: s.socketPath, Err: errors.Join(err, closeErr)}
 	}
 
 	s.conn = conn
@@ -99,6 +94,25 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 	return nil
 }
 
+// awaitUnixReady starts connecting conn and blocks until it is READY. A
+// connection that fails or shuts down returns at once; one that never settles
+// returns when ctx ends.
+func awaitUnixReady(ctx context.Context, conn *grpc.ClientConn) error {
+	conn.Connect()
+	for {
+		state := conn.GetState()
+		switch state {
+		case connectivity.Ready:
+			return nil
+		case connectivity.TransientFailure, connectivity.Shutdown:
+			return ErrUnixNotReady{State: state}
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			return ErrUnixNotReady{State: state, Err: ctx.Err()}
+		}
+	}
+}
+
 // Teardown closes the gRPC connection.
 func (s *UnixAdapter) Teardown() error {
 	if s.conn != nil {
@@ -114,12 +128,12 @@ func (s *UnixAdapter) Teardown() error {
 // KeyGenerate creates a new cryptographic key.
 func (s *UnixAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
 	req := &pb.GenerateKeyRequest{
-		Name:        opts.Name,
+		Name:        keyName(opts),
 		Description: opts.Description,
 		Owner:       opts.Owner,
 		KeySpec: &pb.KeySpec{
 			Algorithm:          s.stringToKeyAlgorithm(opts.Algorithm),
-			Usage:              s.purposeToKeyUsages(opts.Purpose),
+			Usage:              purposeToKeyUsages(opts.Purpose),
 			Exportable:         opts.Exportable,
 			DeletionProtection: opts.DeletionProtection,
 		},
@@ -143,6 +157,9 @@ func (s *UnixAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 	if resp.GetMetadata() != nil {
 		result.Name = resp.GetMetadata().GetName()
 		result.Description = resp.GetMetadata().GetDescription()
+	}
+	if err := applyKeyDisplay(ctx, s, opts, result); err != nil {
+		return nil, err
 	}
 
 	return result, nil
@@ -1253,13 +1270,15 @@ func (s *UnixAdapter) secretStatusToString(status pb.SecretStatus) string {
 }
 
 // purposeToKeyUsages converts a purpose string to proto KeyUsage slice.
-func (s *UnixAdapter) purposeToKeyUsages(purpose string) []pb.KeyUsage {
+// purposeToKeyUsages maps the suite's key purpose onto the proto key usages
+// the gRPC and Unix GenerateKey requests carry.
+func purposeToKeyUsages(purpose string) []pb.KeyUsage {
 	switch purpose {
 	case "encrypt", "encryption":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_ENCRYPT, pb.KeyUsage_KEY_USAGE_DECRYPT}
 	case "sign", "signing":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_SIGN, pb.KeyUsage_KEY_USAGE_VERIFY}
-	case "hmac":
+	case "hmac", "mac":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_GENERATE_MAC, pb.KeyUsage_KEY_USAGE_VERIFY_MAC}
 	case "wrap", "wrapping":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_WRAP_KEY}
@@ -1351,6 +1370,23 @@ func (e ErrUnixConnectionFailed) Error() string {
 }
 
 func (e ErrUnixConnectionFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrUnixNotReady reports a Unix socket connection that did not reach READY.
+type ErrUnixNotReady struct {
+	State connectivity.State
+	Err   error
+}
+
+func (e ErrUnixNotReady) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("Unix connection not ready (state %s): %v", e.State, e.Err)
+	}
+	return fmt.Sprintf("Unix connection not ready (state %s)", e.State)
+}
+
+func (e ErrUnixNotReady) Unwrap() error {
 	return e.Err
 }
 

@@ -628,7 +628,7 @@ whenever the render output differs.
 | Unit | `pkg/webservice/v1/rest/ntp/*_test.go` | Route registration and status mapping |
 | Unit | `pkg/api/daemon/ntp_health_checker_test.go` | Health projection of each status |
 | Bench | `pkg/ntp/benchmark_test.go` | `make bench-ntp` |
-| Integration | devcontainer, `make integration-test-ntp` | Multi-protocol parity against a real chronyd |
+| Integration | devcontainer, `make integration-test-ntp` | Multi-protocol parity against a real chronyd (see below) |
 
 Make targets (`Makefile`):
 
@@ -641,6 +641,17 @@ make integration-test-ntp  # multi-protocol suite in the devcontainer
 
 `NTP_TAGS` pins the build-tag set the surface needs:
 `iam rest quic mcp cluster codec_json codec_msgpack codec_cbor`.
+
+**The integration chronyd.** `test/integration/config.yaml` carries an `ntp:`
+section (consume mode, one loopback upstream, no startup gate), so the shared
+platformd renders `/etc/chrony/chrony.conf` and serves the NTP surface on every
+transport. The devcontainer is Debian without OpenRC, so platformd's
+`rc-update add chronyd` fails and is logged; the runner
+(`run-integration-tests.sh` `start_chronyd`) then starts `chronyd -x` on the
+rendered file. `-x` keeps chronyd off the system clock, which the container
+shares with the CI host. Nothing serves NTP on the loopback, so no source is
+ever reachable and `Step` always returns the documented `ErrNoReachableSource`
+refusal: no suite can move a clock.
 
 **Fault-injection seams.** `WithRunner` fakes `chronyc`/`rc-service` output
 (including malformed CSV and non-zero exit), `WithFileSystem` keeps rendering

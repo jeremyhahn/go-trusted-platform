@@ -84,7 +84,6 @@ declare -A TARGET_PACKAGES=(
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
-    [invitation]="./test/integration/invitation/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
     [ipxe-tftp]="./test/integration/ipxe/..."
@@ -98,7 +97,6 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
-    [user-registration]="./test/integration/user_registration/..."
     [vtpm]="./test/integration/vtpm/..."
 )
 
@@ -188,9 +186,9 @@ declare -A TARGET_NO_DAEMON=(
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli compute
-    container daemon device dns fido2 iam invitation iso kms luks network
+    container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm user-registration vpn vtpm
+    secrets tenant tpm vpn vtpm
 )
 
 RUN_TARGET="all"
@@ -305,6 +303,12 @@ restore_workspace_ownership() {
         || echo "WARNING: could not restore ownership under ${dir}"
 }
 
+# chronyd paths (start_chronyd): the Debian chrony package's defaults, which
+# pkg/ntp DefaultPaths also renders and drives.
+CHRONYD_CONF="/etc/chrony/chrony.conf"
+CHRONYD_SOCK="/run/chrony/chronyd.sock"
+CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -326,6 +330,11 @@ cleanup() {
         echo "Stopping vBMC (PID: $VBMC_PID)..."
         kill "$VBMC_PID" 2>/dev/null || true
         wait "$VBMC_PID" 2>/dev/null || true
+    fi
+
+    # Stop chronyd
+    if [ -f "${CHRONYD_PID_FILE}" ]; then
+        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -720,6 +729,34 @@ TRUSTEOF
     echo "=== vBMC started ==="
 }
 
+# chronyd backs the ntp suite. platformd renders /etc/chrony/chrony.conf from
+# the config's ntp: section and enables chronyd through OpenRC, which this
+# Debian container does not have, so the runner starts chronyd on the rendered
+# file. -x keeps chronyd off the system clock: the container shares the CI
+# host's kernel clock, and no suite may move it. A config without an ntp:
+# section renders nothing, and chronyd is not started. The paths are set
+# beside cleanup(), which stops chronyd.
+start_chronyd() {
+    if [ ! -f "${CHRONYD_CONF}" ]; then
+        echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
+        return 0
+    fi
+    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
+    mkdir -p "$(dirname "${CHRONYD_SOCK}")"
+    if ! chronyd -x -f "${CHRONYD_CONF}"; then
+        echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
+        return 0
+    fi
+    for _ in $(seq 1 10); do
+        if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
+            echo "chronyd ready"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -790,6 +827,8 @@ start_platformd() {
                 sleep 1
             done
 
+            start_chronyd
+
             echo "=== platformd ready ==="
             return 0
         fi
@@ -856,6 +895,11 @@ setup_env_vars() {
     export PLATFORM_CLIENT_CERT="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CLIENT_KEY="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CA_CERT="/tmp/platformd-integration/tls/ca-bundle.crt"
+    # The same issuer's bundle for the fixed non-system tenant
+    # harness-tenant, written before client-bundle.pem: the suites that
+    # assert what a tenant outside the system tenant is refused use it.
+    export PLATFORM_TENANT_CLIENT_CERT="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
+    export PLATFORM_TENANT_CLIENT_KEY="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
 
     # REST endpoint (mTLS requires HTTPS)
     export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
@@ -908,6 +952,8 @@ setup_env_vars() {
     echo "  PLATFORM_CLIENT_CERT=$PLATFORM_CLIENT_CERT (bundle)"
     echo "  PLATFORM_CLIENT_KEY=$PLATFORM_CLIENT_KEY (bundle)"
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
+    echo "  PLATFORM_TENANT_CLIENT_CERT=$PLATFORM_TENANT_CLIENT_CERT (bundle)"
+    echo "  PLATFORM_TENANT_CLIENT_KEY=$PLATFORM_TENANT_CLIENT_KEY (bundle)"
     echo "  PLATFORM_REST_ENDPOINT=$PLATFORM_REST_ENDPOINT"
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"

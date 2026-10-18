@@ -46,6 +46,25 @@ sdn:
   enabled: true
   environment: {id: 4, ula: fd12:3456:789a::/48}
   ovs: {socket: /var/run/openvswitch/db.sock, bridge: br-fabric}
+proxy:
+  pools:
+    - {id: web, backends: [{url: "https://10.4.1.30:8443"}]}
+  routes:
+    - id: web
+      path-prefix: /
+      pool: web
+      auth: {mode: token, required-scopes: ["proxy:read"], attestation-max-age: 5m}
+`
+
+// strictRolesProxy is a proxy route still naming the removed required-roles
+// (#926); the load must fail on it, not ignore it.
+const strictRolesProxy = `
+proxy:
+  routes:
+    - id: web
+      path-prefix: /
+      pool: web
+      auth: {mode: token, required-roles: [admin]}
 `
 
 const strictStalePlatform = `
@@ -83,6 +102,9 @@ func TestCheckPlatformConfigYAML(t *testing.T) {
 
 	err = CheckPlatformConfigYAML([]byte("sdn:\n  enabled: true\n  networks: []\n  transit: {vlan: 10}\n"))
 	assert.Equal(t, []string{"sdn.networks", "sdn.transit"}, unknownPaths(t, err))
+
+	err = CheckPlatformConfigYAML([]byte(strictRolesProxy))
+	assert.Equal(t, []string{"proxy.routes[0].auth.required-roles"}, unknownPaths(t, err))
 }
 
 func platformViper(t *testing.T, doc string) *viper.Viper {
@@ -103,4 +125,7 @@ func TestCheckPlatformConfigViper(t *testing.T) {
 
 	err = CheckPlatformConfigViper(platformViper(t, "sdn:\n  enabled: true\n  networks: []\n  transit: {vlan: 10}\n"))
 	assert.ElementsMatch(t, []string{"sdn.networks", "sdn.transit"}, unknownPaths(t, err))
+
+	err = CheckPlatformConfigViper(platformViper(t, strictRolesProxy))
+	assert.Equal(t, []string{"proxy.routes[0].auth.required-roles"}, unknownPaths(t, err))
 }

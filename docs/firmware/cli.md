@@ -179,7 +179,7 @@ Authenticode/PKCS#7. Native Go — no `sbsign`/`sbverify` required.
 | `--key` | string | `""` | **yes** | Path to the signing private key (PEM; PKCS#1 or PKCS#8) |
 | `--cert` | string | `""` | **yes** | Path to the signing certificate (PEM) |
 | `--input` | string | `""` | **yes** | Path to the input PE/COFF file |
-| `--output` | string | `""` | **yes** | Path to write the signed file |
+| `--out` | string | `""` | **yes** | Path to write the signed file (named `--out` so the global `-o`/`--output` format flag stays reachable) |
 
 The output file is created fresh and chmodded `0755`; it is removed if signing
 fails. Table output prints a success line; `-o json` / `-o yaml` print
@@ -190,7 +190,7 @@ platformctl authenticode sign \
     --key <install-dir>/secure-boot/DB.key \
     --cert <install-dir>/secure-boot/DB.crt \
     --input ./out/BOOTX64.EFI.unsigned \
-    --output ./out/BOOTX64.EFI
+    --out ./out/BOOTX64.EFI
 ```
 
 **This verb takes a file key.** It is the offline/development path. The
