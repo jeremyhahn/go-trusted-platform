@@ -151,7 +151,6 @@ certificate-authority:
 # start_swtpm in run-integration-tests.sh serves. The integration container is
 # privileged and sees the host's /dev/tpmrm0, so a hardware path here would
 # provision the CI host's own TPM.
->>>>>>> f54964820
 
 tpm:
   device: /tmp/swtpm/swtpm.sock
