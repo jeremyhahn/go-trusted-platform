@@ -232,6 +232,13 @@ any transport.
 | `container_metrics` | `id` | — |
 | `container_attest` | `id` | — |
 
+The SDK's MCP transport sends `CreateContainer` as these flat arguments, not
+the request's nested `config`: `env` becomes an object of name to value,
+`volumes` become `mounts` (`destination` is `target`), and `resources`
+`max_cpus` and `max_memory_mb` become `cpu_limit` and `memory_limit`
+(`"<n>M"`). `network` and `attest_on_create` have no `container_create`
+argument, so MCP does not carry them.
+
 ## Error Handling
 
 MCP errors follow JSON-RPC 2.0. A failed tool call answers the code for its
