@@ -1776,8 +1776,9 @@ func setupSDNAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-br-%d", time.Now().UnixNano()%100000)
-	result, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Test Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-br")
+	bridgeID := opts.BridgeID
+	result, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1788,8 +1789,9 @@ func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 
 func testSDNGetNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-get-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Get Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-get")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1816,8 +1818,9 @@ func testSDNListNetworks(t *testing.T, ctx context.Context, adapter ProtocolAdap
 
 func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-del-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Delete Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-del")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1833,8 +1836,9 @@ func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 
 func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-route-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Route Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-route")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1854,8 +1858,9 @@ func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testSDNRemoveRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-rmrt-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix RemoveRoute Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-rmrt")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}

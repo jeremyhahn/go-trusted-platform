@@ -488,6 +488,10 @@ func ShortTestContext() (context.Context, context.CancelFunc) {
 // =============================================================================
 
 // DefaultBridgeOptions returns default options for creating a test bridge.
+// BridgeID and Name are one unique string: every transport identifies a
+// bridge by its OVS name, so a bridge created under one string and then
+// read or deleted under another is never found and leaks into the next
+// transport's run as "bridge already exists".
 func DefaultBridgeOptions(prefix string) BridgeCreateOptions {
 	uniqueID := GenerateUniqueBridgeName(prefix)
 	return BridgeCreateOptions{
