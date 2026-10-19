@@ -2,6 +2,7 @@ package diskimage
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -88,6 +89,16 @@ func TestRPIEEPROMHSMCommand_Errors(t *testing.T) {
 			as:      new(*ErrEEPROMHSMSign),
 			is:      refusal,
 		},
+		"no certificate for the fleet key": {
+			args: signArgs,
+			clients: func() (*pkgiso.KMSClients, error) {
+				return &pkgiso.KMSClients{
+					KMS: &secureboottest.KMS{Key: key},
+					CA:  &secureboottest.CA{Certs: map[string]*x509.Certificate{}},
+				}, nil
+			},
+			as: new(*ErrEEPROMHSMSign),
+		},
 		"a fleet key that is not RSA-2048": {
 			args:    signArgs,
 			clients: clientsFor(&secureboottest.KMS{Key: bigKey}, bigCert),
@@ -120,6 +131,72 @@ func TestRPIEEPROMHSMCommand_Errors(t *testing.T) {
 			assert.Empty(t, out.String(), "no signature is printed on failure")
 		})
 	}
+}
+
+// failingWriter is a stdout that refuses every write, as a closed pipe does.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// TestRPIEEPROMHSMCommand_ReportsAnUnwritableSignature checks that a
+// signature rpi-eeprom-digest never receives is a failure, not a silent
+// success: the wrapper's caller would otherwise sign with nothing.
+func TestRPIEEPROMHSMCommand_ReportsAnUnwritableSignature(t *testing.T) {
+	key, cert := secureboottest.KeyPair(t, "fleet")
+	clients := func() (*pkgiso.KMSClients, error) {
+		return &pkgiso.KMSClients{
+			KMS: &secureboottest.KMS{Key: key},
+			CA:  &secureboottest.CA{Certs: map[string]*x509.Certificate{"rpi/fleet": cert}},
+		}, nil
+	}
+	input := filepath.Join(t.TempDir(), "bootconf.txt")
+	require.NoError(t, os.WriteFile(input, []byte("SIGNED_BOOT=1\n"), 0o644))
+	closed := errors.New("write |1: broken pipe")
+
+	cmd := newRPIEEPROMHSMCommandWithClients(func() *cli.CommonFlags { return &cli.CommonFlags{} }, clients)
+	cmd.SetOut(failingWriter{err: closed})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--fleet-key", "kms://rpi/fleet", "-a", "rsa2048-sha256", input})
+
+	err := cmd.Execute()
+	var signErr *ErrEEPROMHSMSign
+	require.ErrorAs(t, err, &signErr)
+	assert.Equal(t, "writing the signature", signErr.Step)
+	assert.ErrorIs(t, err, closed)
+}
+
+// TestRPIEEPROMHSMCommand_ValidatesBeforeConnecting runs the production
+// command, which reaches the KMS through the operator's platform client: a
+// bad invocation is refused before any connection is opened, so the lazy
+// client closes cleanly and the refusal is what the caller sees.
+func TestRPIEEPROMHSMCommand_ValidatesBeforeConnecting(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "bootconf.txt")
+	require.NoError(t, os.WriteFile(input, []byte("SIGNED_BOOT=1\n"), 0o644))
+
+	var out bytes.Buffer
+	cmd := newRPIEEPROMHSMCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"-a", "rsa2048-sha256", input})
+
+	err := cmd.Execute()
+	var flagErr *ErrEEPROMHSMFlag
+	require.ErrorAs(t, err, &flagErr)
+	assert.Equal(t, "fleet-key", flagErr.Flag)
+	assert.Empty(t, out.String())
+}
+
+// TestRunRPIEEPROMHSM_NilFlagsAreRefused checks that a nil flag set is an
+// unsupported (empty) algorithm, never a nil dereference.
+func TestRunRPIEEPROMHSM_NilFlagsAreRefused(t *testing.T) {
+	clients := func() (*pkgiso.KMSClients, error) {
+		t.Fatal("the KMS is reached with no flags")
+		return nil, nil
+	}
+	err := runRPIEEPROMHSM(context.Background(), nil, "unused", clients, &bytes.Buffer{})
+	var algErr *ErrEEPROMHSMAlgorithm
+	require.ErrorAs(t, err, &algErr)
+	assert.Empty(t, algErr.Algorithm)
 }
 
 // rsaKeyPair is secureboottest.KeyPair for a key of another size.
