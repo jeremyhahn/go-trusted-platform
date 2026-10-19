@@ -767,7 +767,7 @@ func caRunners(t *testing.T) map[string]func(*cli.CommonFlags) error {
 	output := filepath.Join(dir, "out")
 
 	return map[string]func(*cli.CommonFlags) error{
-		"info":        func(f *cli.CommonFlags) error { return runInfo(f) },
+		"info":        runInfo,
 		"init":        func(f *cli.CommonFlags) error { return runInit(f, false) },
 		"certificate": func(f *cli.CommonFlags) error { return runCertificate(f, "01", false, false) },
 		"list":        func(f *cli.CommonFlags) error { return runList(f, "", "", 1, 20) },
