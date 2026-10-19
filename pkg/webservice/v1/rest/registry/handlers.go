@@ -288,7 +288,9 @@ func parseInt32(s string, def int32) int32 {
 	if s == "" {
 		return def
 	}
-	n, err := strconv.Atoi(s)
+	// bitSize 32 rejects values outside int32, which a plain
+	// int32(n) conversion would silently wrap.
+	n, err := strconv.ParseInt(s, 10, 32)
 	if err != nil {
 		return def
 	}
