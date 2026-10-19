@@ -262,6 +262,21 @@ func TestErrSignCSRScopeRequired(t *testing.T) {
 	})
 }
 
+func TestErrBootstrapBundleFailed(t *testing.T) {
+	t.Run("without a cause", func(t *testing.T) {
+		err := ErrBootstrapBundleFailed{}
+		assert.Equal(t, "bootstrap bundle retrieval failed", err.Error())
+		assert.Nil(t, errors.Unwrap(err))
+	})
+
+	t.Run("with a cause", func(t *testing.T) {
+		cause := errors.New("certificate store unavailable")
+		err := ErrBootstrapBundleFailed{Cause: cause}
+		assert.Equal(t, "bootstrap bundle retrieval failed: certificate store unavailable", err.Error())
+		assert.ErrorIs(t, err, cause)
+	})
+}
+
 func TestErrInvalidPaginationParams(t *testing.T) {
 	t.Run("with reason", func(t *testing.T) {
 		err := ErrInvalidPaginationParams{Reason: "limit must be between 1 and 1000"}
