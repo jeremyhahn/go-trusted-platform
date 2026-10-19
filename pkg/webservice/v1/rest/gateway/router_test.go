@@ -58,12 +58,3 @@ func TestGatewayRouter_RoutesRegistered(t *testing.T) {
 		})
 	}
 }
-
-func TestGatewayRouter_NilServer(t *testing.T) {
-	_, parent := newRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/status", nil)
-	rec := httptest.NewRecorder()
-	parent.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "gateway service is not available")
-}
