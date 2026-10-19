@@ -14,6 +14,7 @@
 package dns
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -339,6 +340,75 @@ func TestPrepareKeyRollover_InvalidKeyType(t *testing.T) {
 	assert.ErrorAs(t, err, &dnssecErr)
 }
 
+// rolloverFailingKeyStore fails DeleteKey or the ZSK generation on demand.
+type rolloverFailingKeyStore struct {
+	*MockKeyStore
+	deleteErr   error
+	generateErr error
+}
+
+func (f *rolloverFailingKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName string, keyType KeyType) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	return f.MockKeyStore.DeleteKey(ctx, tenantID, zoneName, keyType)
+}
+
+func (f *rolloverFailingKeyStore) GenerateZSK(ctx context.Context, tenantID, zoneName string, algorithm uint8) (*dns.DNSKEY, error) {
+	if f.generateErr != nil {
+		return nil, f.generateErr
+	}
+	return f.MockKeyStore.GenerateZSK(ctx, tenantID, zoneName, algorithm)
+}
+
+func newRolloverService(t *testing.T) (*DNSSECService, *rolloverFailingKeyStore, *dns.DNSKEY) {
+	t.Helper()
+	service, mock := createTestDNSSECServiceWithMock(t)
+	_, zsk, err := service.GenerateKeys("test-tenant", "example.com.")
+	require.NoError(t, err)
+	store := &rolloverFailingKeyStore{MockKeyStore: mock}
+	service.keyStore = store
+	return service, store, zsk
+}
+
+func TestPrepareKeyRollover_FailedDeleteKeepsTheCurrentKey(t *testing.T) {
+	service, store, current := newRolloverService(t)
+	store.deleteErr = assert.AnError
+	store.generateErr = errors.New("generate must not be reached")
+
+	_, err := service.PrepareKeyRollover("test-tenant", "example.com.", "zsk")
+
+	var dnssecErr *DNSSECError
+	require.ErrorAs(t, err, &dnssecErr)
+	assert.ErrorIs(t, err, assert.AnError, "the delete failure is returned, not logged")
+	assert.NotErrorIs(t, err, ErrRolloverKeyDeleted)
+	kept, getErr := store.GetDNSKEY(context.Background(), "test-tenant", "example.com.", KeyTypeZSK)
+	require.NoError(t, getErr)
+	assert.Equal(t, current.PublicKey, kept.PublicKey, "the current key is still in place")
+}
+
+func TestPrepareKeyRollover_FailedGenerateAfterDeleteIsReported(t *testing.T) {
+	service, store, _ := newRolloverService(t)
+	store.generateErr = assert.AnError
+
+	_, err := service.PrepareKeyRollover("test-tenant", "example.com.", "zsk")
+
+	var dnssecErr *DNSSECError
+	require.ErrorAs(t, err, &dnssecErr)
+	assert.ErrorIs(t, err, ErrRolloverKeyDeleted, "the caller learns the zone has no ZSK")
+	assert.ErrorIs(t, err, assert.AnError)
+}
+
+func TestPrepareKeyRollover_FailedGenerateWithNoCurrentKey(t *testing.T) {
+	service, mock := createTestDNSSECServiceWithMock(t)
+	service.keyStore = &rolloverFailingKeyStore{MockKeyStore: mock, generateErr: assert.AnError}
+
+	_, err := service.PrepareKeyRollover("test-tenant", "example.com.", "zsk")
+
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.NotErrorIs(t, err, ErrRolloverKeyDeleted, "nothing was deleted")
+}
+
 // TestKeyBitsForAlgorithm tests key bit size selection
 func TestKeyBitsForAlgorithm(t *testing.T) {
 	tests := []struct {
@@ -373,7 +443,10 @@ func TestParseDuration(t *testing.T) {
 		{"60m", 60 * 60, false},
 		{"30s", 30, false},
 		{"1D", 24 * 3600, false},
+		{"1500ms", 1, false},
 		{"invalid", 0, true},
+		{"3xd", 0, true},
+		{"1w", 0, true},
 		{"", 0, true},
 	}
 
@@ -381,7 +454,7 @@ func TestParseDuration(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) {
 			d, err := parseDuration(tt.input)
 			if tt.wantErr {
-				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrInvalidDuration)
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expected, int64(d.Seconds()))

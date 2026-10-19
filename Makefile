@@ -317,6 +317,26 @@ ifeq ($(strip $(WITH_CODEC_PROTOBUF)),1)
     BUILD_TAGS += codec_protobuf
 endif
 
+# GO_BUILD_TAGS (#960). ci-template v1.21 passes the repository's tag set to
+# lint, build, coverage, security and integration-test as a space-separated
+# make variable (handbook devcontainer.md §6). It is appended here, after
+# every `+=` above and before any variable is derived from BUILD_TAGS, so each
+# consumer — print-build-tags, every `go build`/`go test`, TEST_BUILD_TAGS and
+# the integration runner — reads it from this one place. Like WITH_FIPS it is
+# additive: it never replaces the derived set. Empty or unset changes nothing.
+#
+# The analysers that do not read BUILD_TAGS (golangci-lint, gosec,
+# govulncheck) take GO_BUILD_TAGS alone, comma separated, through
+# GO_BUILD_TAGS_CSV. `make check-go-build-tags` (run by `make test`) fails if
+# any of those targets drops it.
+comma                   := ,
+empty                   :=
+space                   := $(empty) $(empty)
+GO_BUILD_TAGS_CSV       := $(subst $(space),$(comma),$(strip $(GO_BUILD_TAGS)))
+ifneq ($(GO_BUILD_TAGS_CSV),)
+    BUILD_TAGS += $(GO_BUILD_TAGS)
+endif
+
 # =============================================================================
 # Build Tag Flags
 # =============================================================================
@@ -1338,7 +1358,7 @@ softhsm-init:
 TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD|TestX10SDVBootMediaType|TestSupermicroManufacturerWideBootMediaType|TestResolveVeloCloudEDGE840
 
 .PHONY: test
-test: check-insecure-tls
+test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
 
@@ -2135,7 +2155,6 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 
 # The docker build arguments every devcontainer stage shares. $(comma) because a
 # literal comma inside $(if ...) would end its condition.
-comma := ,
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
@@ -3270,6 +3289,30 @@ fmt-check:
 	fi
 	@echo "$(GREEN)✓ All files are properly formatted$(RESET)"
 
+.PHONY: check-go-build-tags
+## check-go-build-tags: Fail if a target ci-template calls drops GO_BUILD_TAGS (#960)
+#
+# Dry-runs (`make -n`) each target with a probe tag and fails unless the
+# probe reaches a command line other than an `echo`: a go build/test/vet,
+# golangci-lint, gosec, govulncheck or the integration runner. Nothing
+# builds and nothing runs. `test` is itself probed and depends on this
+# target, so the probe run sets GO_BUILD_TAGS_PROBING to stop the recursion
+# (`make -n` still executes recipe lines that name $(MAKE)).
+GO_BUILD_TAGS_PROBE     := probe_tag_960
+GO_BUILD_TAGS_TARGETS   := lint build coverage security integration-test test
+check-go-build-tags:
+ifndef GO_BUILD_TAGS_PROBING
+	@echo "$(CYAN)$(BOLD)→ Checking GO_BUILD_TAGS reaches $(GO_BUILD_TAGS_TARGETS)...$(RESET)"
+	@for target in $(GO_BUILD_TAGS_TARGETS); do \
+		$(MAKE) -n --no-print-directory $$target GO_BUILD_TAGS=$(GO_BUILD_TAGS_PROBE) GO_BUILD_TAGS_PROBING=1 2>&1 \
+			| grep -v '^echo ' | grep -q -- '$(GO_BUILD_TAGS_PROBE)' || { \
+			echo "$(RED)$(BOLD)✗ make $$target GO_BUILD_TAGS=$(GO_BUILD_TAGS_PROBE) never passes the tag to a command$(RESET)"; \
+			exit 1; \
+		}; \
+	done
+	@echo "$(GREEN)✓ GO_BUILD_TAGS reaches every ci-template target$(RESET)"
+endif
+
 .PHONY: check-insecure-tls
 ## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
 check-insecure-tls:
@@ -3344,7 +3387,7 @@ lint: $(GOLANGCI_LINT) $(ACTIONLINT)
 	@$(ACTIONLINT) || { echo "$(RED)$(BOLD)✗ actionlint failed$(RESET)"; exit 1; }
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_CACHE)
-	@if $(GOLANGCI_LINT) run --allow-serial-runners --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
+	@if $(GOLANGCI_LINT) run --allow-serial-runners --timeout=$(GOLANGCI_LINT_TIMEOUT) $(if $(GO_BUILD_TAGS_CSV),--build-tags=$(GO_BUILD_TAGS_CSV)) ./...; then \
 		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
 		echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
@@ -3362,6 +3405,7 @@ gosec: $(GOSEC)
 	@mkdir -p $(BUILD_DIR)
 	@rc=0; \
 	$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		$(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) \
 		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 		-exclude-generated \
 		-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... 2>$(BUILD_DIR)/gosec-stderr.txt || rc=$$?; \
@@ -3451,7 +3495,7 @@ vuln:
 		exit 1; \
 	fi; \
 	scan() { \
-		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 ./... 2>&1); STATUS=$$?; \
+		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 $(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) ./... 2>&1); STATUS=$$?; \
 		echo "$$OUT"; \
 		if [ $$STATUS -ne 0 ] && [ $$STATUS -ne 3 ]; then \
 			echo "$(RED)✗ govulncheck -scan $$2 could not complete in $$1 (exit $$STATUS)$(RESET)"; \

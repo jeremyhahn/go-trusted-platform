@@ -5,17 +5,17 @@
 Network Working Group                                       M. Ounsworth
 Internet-Draft                                            Cryptic Forest
 Intended status: Standards Track                           H. Tschofenig
-Expires: 6 March 2027                                            Siemens
+Expires: 20 April 2027                                           Siemens
                                                              H. Birkholz
                                                           Fraunhofer SIT
                                                               M. Wiseman
                                                              Independent
                                                                 N. Smith
-                                                        2 September 2026
+                                                         17 October 2026
 
 
      Use of Remote Attestation with Certification Signing Requests
-                  draft-ietf-lamps-csr-attestation-29
+                  draft-ietf-lamps-csr-attestation-30
 
 Abstract
 
@@ -53,9 +53,9 @@ About This Document
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 1]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 1]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
 Status of This Memo
@@ -73,7 +73,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 6 March 2027.
+   This Internet-Draft will expire on 20 April 2027.
 
 Copyright Notice
 
@@ -105,25 +105,25 @@ Table of Contents
            Attributes  . . . . . . . . . . . . . . . . . . . . . . .  10
    6.  Security Considerations . . . . . . . . . . . . . . . . . . .  11
      6.1.  Binding Attestations to the CSR's Public Key  . . . . . .  11
-     6.2.  Freshness . . . . . . . . . . . . . . . . . . . . . . . .  12
+     6.2.  Freshness . . . . . . . . . . . . . . . . . . . . . . . .  13
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 2]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 2]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
-     6.3.  Relationship of Attestations and Certificate
-           Extensions  . . . . . . . . . . . . . . . . . . . . . . .  12
-     6.4.  Additional Security Considerations  . . . . . . . . . . .  12
-   7.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  12
-     7.1.  Normative References  . . . . . . . . . . . . . . . . . .  12
-     7.2.  Informative References  . . . . . . . . . . . . . . . . .  13
-   Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  14
-   Appendix B.  ASN.1 Module . . . . . . . . . . . . . . . . . . . .  14
-   Appendix C.  Acknowledgments  . . . . . . . . . . . . . . . . . .  16
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  16
+     6.3.  Resource Exhaustion . . . . . . . . . . . . . . . . . . .  13
+     6.4.  Additional Security Considerations  . . . . . . . . . . .  13
+   7.  Privacy Considerations  . . . . . . . . . . . . . . . . . . .  14
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  15
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .  15
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .  16
+   Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  17
+   Appendix B.  ASN.1 Module . . . . . . . . . . . . . . . . . . . .  17
+   Appendix C.  Acknowledgments  . . . . . . . . . . . . . . . . . .  18
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  19
 
 1.  Introduction
 
@@ -165,9 +165,9 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 3]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 3]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
    that attestations that are not encoded using the Basic Encoding Rules
@@ -196,7 +196,7 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
    Section 4.2 of [RFC9334] defines several roles that originate,
    forward or process attestation statements (also see Section 1.2 of
-   [RFC9683]): the Attester; Endorser; Relying Party; and Verifier.
+   [RFC9683]): the Attester, Endorser, Relying Party, and Verifier.
    Attestation statements, such as Evidence, may be directed to an
    entity taking at least one of these roles, including to an CA/RA
    acting as a Verifier.  An CA/RA may also forward attestation
@@ -221,9 +221,9 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 4]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 4]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
    This document re-uses the terms defined in [RFC9334] related to
@@ -277,9 +277,9 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 5]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 5]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
 4.1.  AttestationStatement and AttestationBundle
@@ -327,16 +327,20 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
                  Figure 2: Definition of AttestationBundle
 
-   At least one element in the attestations field SHOULD contain an
-   attestation that is cryptographically bound to the public key that is
-   the subject of the CSR containing the AttestationBundle.
+   A CA/RA's issuance policy may place additional requirements on the
+   contents of the attestations sequence, such as requiring claims that
+   are bound to the CSR's public key in a cryptographically verifiable
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 6]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 6]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
+
+   manner.  Such a binding may identify the public key directly or
+   through a cryptographically verifiable reference, as defined by the
+   applicable attestation format.  See Section 6 for more discussion.
 
    The CertificateChoices structure defined in [RFC6268], and reproduced
    below along with OtherCertificateFormat, allows for carrying
@@ -381,19 +385,20 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
          CertificateChoices
              (WITH COMPONENTS {certificate, other})
 
+
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                 [Page 7]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
+
    The certs field is OPTIONAL.  When validation of an
    AttestationStatement requires a public key that cannot be obtained
    otherwise, certs SHOULD contain a certificate containing that public
    key.  A certificate is not needed when the corresponding public key
    is already known to the Verifier or is embedded within the
-
-
-
-Ounsworth, et al.         Expires 6 March 2027                  [Page 7]
-
-Internet-Draft        Remote Attestation with CSRs        September 2026
-
-
    AttestationStatement.  Additional certificates MAY be provided, for
    example, to chain the attestation key back to a trust anchor.  No
    specific order of the certificates in certs should be expected
@@ -440,14 +445,9 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-
-
-
-
-
-Ounsworth, et al.         Expires 6 March 2027                  [Page 8]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 8]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
    id-aa-attestation OBJECT IDENTIFIER ::= { id-aa 59 }
@@ -501,9 +501,9 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                  [Page 9]
+Ounsworth, et al.         Expires 20 April 2027                 [Page 9]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
    When multiple Verifiers support the same attestation-format OID,
@@ -557,9 +557,9 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                 [Page 10]
+Ounsworth, et al.         Expires 20 April 2027                [Page 10]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
 6.  Security Considerations
@@ -575,7 +575,7 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
    additional information without processing.
 
    A CA which accepts or requires attestation(s) SHOULD document its
-   requirements with its Certification Practice Statement(s).
+   requirements with its Certification Practice Statement(s) [RFC3647].
 
    The remainder of this section identifies security considerations that
    apply when the CA/RA chooses to verify the attestation as part of the
@@ -583,15 +583,63 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 6.1.  Binding Attestations to the CSR's Public Key
 
-   Regardless of the topological model, the CA/RA is ultimately
-   responsible for validating the binding between the public key and the
-   attestation(s) in the CSR.  For CAs issuing in conformance with the
-   CA/Browser Forum's Code Signing Baseline Requirements, this means
-   verifying the attestation of HSM generation and protection is
-   cryptographically bound to the public key in the CSR.
+   Key attestation is one use case for the structures defined in this
+   document.  It enables a CA/RA to obtain assurance about the key pair
+   for which a certificate is requested, including the generation,
+   protection, permitted use, or extractability of its private key.
+   Platform attestation may provide additional claims about the
+   environment in which the key pair is generated, stored, or used.  To
+   provide assurance about the requested key pair, the relevant claims
+   must be bound to the CSR's public key in a cryptographically
+   verifiable manner, and appraisal must establish that they support the
+   claimed properties of that key pair.  Including a requester-supplied
+   public key or its hash in a signed platform attestation does not, by
+   itself, demonstrate that the corresponding private key was generated
+   or is protected in the attested environment.
 
-   Multiple attestations from multiple sources, as envisioned in
-   [RFC9334], can introduce additional complications as shown in the
+   Regardless of the topological model, when a CA/RA relies on
+   attestation statements to establish a property of the CSR's public
+   key or the corresponding private key, it MUST ensure that this
+   binding has been validated.  The CA/RA may rely on a trusted Verifier
+   to perform this validation but remains responsible for ensuring that
+   it has been performed.  The binding may identify the public key
+   directly or through a cryptographically verifiable reference, as
+   defined by the applicable attestation format.
+
+   When Evidence is used to establish such a key property, validation
+   includes establishing that the claims refer to the requested key pair
+   and support the properties on which the CA/RA relies.  This appraisal
+   may be performed by a CA/RA acting as a Verifier or by an external
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 11]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
+
+   trusted Verifier.  When Attestation Results are used for this
+   purpose, the CA/RA MUST authenticate the results and establish that
+   they apply to the CSR's public key and confirm the required
+   properties based on a binding validated by the trusted Verifier.
+   These requirements apply whether Evidence or Attestation Results are
+   carried in the CSR or obtained during its processing.  For the code-
+   signing use case described in Section 1, the CA/RA therefore needs
+   assurance that the claims of HSM generation and protection apply to
+   the key pair for which the certificate is requested.
+
+   If no validated binding is available, the CA/RA MUST NOT treat
+   attestation statements as establishing properties of the CSR's public
+   key or the corresponding private key.  The CA/RA's issuance policy
+   determines whether to reject the CSR, obtain additional evidence, or
+   issue a certificate based on other acceptable information.  The
+   absence of a validated binding does not, by itself, require rejection
+   under this specification.  However, an issuance policy that requires
+   attested properties of the requested key cannot be satisfied by
+   attestation statements that lack such validated binding.
+
+   Multiple attestation statements from multiple sources, as envisioned
+   in [RFC9334], can introduce additional complications as shown in the
    following example.
 
    For example, a CA may have an issuance policy that requires key
@@ -611,18 +659,20 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
    to the public key in the CSR.  That is, the CA/RA must analyze the
    attestations to ensure that:
 
-
-
-Ounsworth, et al.         Expires 6 March 2027                 [Page 11]
-
-Internet-Draft        Remote Attestation with CSRs        September 2026
-
-
    1.  the attestation of HSM generation by AttestationStatement 1
        applies to the public key in the CSR;
 
    2.  the attestation of company ownership by AttestationStatement 2
        applies to the platform that contains the HSM; and
+
+
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 12]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
 
    3.  the attestation that a platform was in a known good state by
        AttestationStatement 3 applies to the platform that contains the
@@ -630,25 +680,36 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 6.2.  Freshness
 
-   To avoid replay attacks, the CA/RA may choose to ignore attestations
-   that are stale, or whose freshness cannot be determined.  Mechanisms
-   to address freshness and their application to the RATS topological
-   models are discussed in [RFC9334].  Other mechanisms for determining
-   freshness may be used as the CA/RA deems appropriate.  When CSRs are
-   embedded within certificate management protocols such as EST
-   [RFC7030] or CMP [RFC9810], these protocols can supply the Attester
-   with a nonce.  Further details are specified in
+   To avoid replay attacks, the CA/RA may choose to ignore attestation
+   statements that are stale, or whose freshness cannot be determined.
+   Mechanisms to address freshness and their application to the RATS
+   topological models are discussed in [RFC9334].  Other mechanisms for
+   determining freshness may be used as the CA/RA deems appropriate.
+   When CSRs are embedded within certificate management protocols such
+   as EST [RFC7030] or CMP [RFC9810], these protocols can supply an
+   Attester with a nonce, for example.  Further details are specified in
    [I-D.ietf-lamps-attestation-freshness].
 
-6.3.  Relationship of Attestations and Certificate Extensions
+6.3.  Resource Exhaustion
 
-   Attestations are intended as additional information in the issuance
-   process, and may include sensitive information about the platform,
-   such as hardware details or patch levels, or device ownership.  It is
-   NOT RECOMMENDED for a CA to copy attestations into the published
-   certificate.  CAs that choose to republish attestations in
-   certificates SHOULD review the contents and delete any sensitive
-   information.
+   CSRs are untrusted input to a CA/RA, and processing attestation
+   bundles may consume substantial resources through parsing,
+   cryptographic verification, certification path building and
+   validation, and requests to external Verifiers or other services.  An
+   attacker can exploit these costs to cause resource exhaustion, even
+   with a syntactically valid bundle.
+
+   Implementations SHOULD impose limits appropriate to their deployment
+   on the total bundle size, the number, type and size of attestation
+   statements and certificates, parsing depth, and the computational
+   effort spent processing a request.  These limits SHOULD also bound
+   certification path building, as well as the number, duration, and
+   concurrency of external requests.  Implementations SHOULD enforce
+   limits as early as practicable.  When a limit is exceeded,
+   implementations SHOULD stop the affected processing and release
+   resources allocated to it.  An attestation statement whose
+   verification has not completed successfully MUST NOT be treated as
+   successfully verified.
 
 6.4.  Additional Security Considerations
 
@@ -656,23 +717,90 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
    should be familiar with the security considerations of the
    specifications on which this specification depends: PKCS#10
    [RFC2986], CRMF [RFC4211], as well as general security concepts
-   relating to remote attestation; many of these concepts are discussed
+   relating to remote attestation.  Many of these concepts are discussed
    in Section 6 of [RFC9334], Section 7 of [RFC9334], Section 9 of
    [RFC9334], Section 11 of [RFC9334], and Section 12 of [RFC9334].
    Implementers should also be aware of any security considerations
    relating to the specific attestation formats being carried within the
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 13]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
+
    CSR.
 
-7.  References
+7.  Privacy Considerations
 
-7.1.  Normative References
+   Attestation statements and accompanying certificates can disclose
+   information about a device, its software and hardware environment,
+   and its owner or users.  These statements may contain Evidence,
+   Endorsements, or Attestation Results.  Attesters SHOULD consider how
+   much information is appropriate to disclose to a given CA.  Examples
+   include hardware identifiers, software versions, patch levels, and
+   device ownership.  These disclosures occur during enrollment, even if
+   no attestation data is copied into the issued certificate.
+
+   Attestation formats may use stable device-identifying public keys,
+   certificates, device IDs, or other identifiers.  These values can
+   enable a CA/RA or Verifier to link multiple CSRs to the same device
+   even when the CSR public key, subject name, or enrollment account
+   changes.  Such linkability can affect privacy even when the
+   individual attested claims are not otherwise sensitive.
+
+   A CA/RA that forwards attestation statements or accompanying
+   certificates to an external Verifier discloses this information to
+   another party.  That party may also be able to correlate requests
+   across enrollments or across CAs.  The privacy assessment of a
+   deployment therefore needs to cover the entire enrollment and
+   attestation verification path, including third-party processing,
+   retention, and logging.
+
+   Certificate requesters, CAs/RAs, and Verifiers SHOULD minimize the
+   claims contained in attestation statements and the accompanying
+   certificates they disclose, process, and retain to those needed for
+   the applicable issuance policy.  Where supported by the attestation
+   technology and compatible with that policy, deployments SHOULD use
+   mechanisms that reduce device linkability, such as privacy-preserving
+   attestation procedures.  Such mechanisms do not eliminate correlation
+   through other disclosed information.  Enrollment protocols and
+   communication with external Verifiers SHOULD provide confidentiality
+   protection and authenticate recipients.  Transport confidentiality
+   protects against observers but does not prevent correlation by the
+   recipients themselves.  Access to stored attestation statements and
+   accompanying certificates, including copies in logs, SHOULD be
+   restricted, and retention SHOULD be limited to the period needed for
+   issuance and applicable audit requirements.
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                 [Page 12]
+
+
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 14]
 
-Internet-Draft        Remote Attestation with CSRs        September 2026
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
+
+   Attestation statements are intended as additional information in the
+   issuance process.  It is NOT RECOMMENDED for a CA to copy attestation
+   statements into the published certificate.  CAs that choose to
+   republish attestation statements or claims contained in them in
+   certificates SHOULD review the contents and omit sensitive or
+   identifying information.
+
+   Further discussion of remote attestation privacy risks and
+   mitigations is provided in Section 11 of [RFC9334].  Deployments
+   should also consider the privacy considerations of the specific
+   attestation formats they use.
+
+8.  References
+
+8.1.  Normative References
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
@@ -706,6 +834,14 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
               DOI 10.17487/RFC6268, July 2011,
               <https://www.rfc-editor.org/rfc/rfc6268>.
 
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 15]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
+
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
@@ -715,28 +851,26 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
               Architecture", RFC 9334, DOI 10.17487/RFC9334, January
               2023, <https://www.rfc-editor.org/rfc/rfc9334>.
 
-7.2.  Informative References
+8.2.  Informative References
 
    [CSBR]     CA/Browser Forum, "Baseline Requirements for Code-Signing
               Certificates, v.3.7", February 2024,
               <https://cabforum.org/uploads/Baseline-Requirements-for-
               the-Issuance-and-Management-of-Code-Signing.v3.7.pdf>.
 
-
-
-
-Ounsworth, et al.         Expires 6 March 2027                 [Page 13]
-
-Internet-Draft        Remote Attestation with CSRs        September 2026
-
-
    [I-D.ietf-lamps-attestation-freshness]
               Tschofenig, H., Brockhaus, H., Mandel, J., and S. Turner,
               "Requesting a Freshness Nonce for Attestation Evidence in
               Certificate Signing Requests", Work in Progress, Internet-
-              Draft, draft-ietf-lamps-attestation-freshness-08, 4 July
-              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
-              lamps-attestation-freshness-08>.
+              Draft, draft-ietf-lamps-attestation-freshness-09, 17
+              October 2026, <https://datatracker.ietf.org/doc/html/
+              draft-ietf-lamps-attestation-freshness-09>.
+
+   [RFC3647]  Chokhani, S., Ford, W., Sabett, R., Merrill, C., and S.
+              Wu, "Internet X.509 Public Key Infrastructure Certificate
+              Policy and Certification Practices Framework", RFC 3647,
+              DOI 10.17487/RFC3647, November 2003,
+              <https://www.rfc-editor.org/rfc/rfc3647>.
 
    [RFC7030]  Pritikin, M., Ed., Yee, P., Ed., and D. Harkins, Ed.,
               "Enrollment over Secure Transport", RFC 7030,
@@ -755,10 +889,24 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
               DOI 10.17487/RFC9810, July 2025,
               <https://www.rfc-editor.org/rfc/rfc9810>.
 
+
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 16]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
+
    [RFC9999]  Birkholz, H., Smith, N., Fossati, T., and H. Tschofenig,
               "Remote ATtestation procedureS (RATS) Conceptual Message
               Wrapper (CMW)", RFC 9999, DOI 10.17487/RFC9999, July 2026,
               <https://www.rfc-editor.org/rfc/rfc9999>.
+
+   [RFC10002] Mandel, J., Ed. and S. Turner, Ed., "Certificate
+              Management over CMS (CMC)", RFC 10002,
+              DOI 10.17487/RFC10002, July 2026,
+              <https://www.rfc-editor.org/rfc/rfc10002>.
 
    [SampleData]
               "CSR Attestation Sample Data", n.d.,
@@ -773,18 +921,11 @@ Appendix B.  ASN.1 Module
 
    CSR-ATTESTATION-2025
      { iso(1) identified-organization(3) dod(6) internet(1) security(5)
-     mechanisms(5) pkix(7) id-mod(0) id-mod-pkix-attest-01(TBDMOD) }
+     mechanisms(5) pkix(7) id-mod(0) id-mod-pkix-attest-2025(TBDMOD) }
 
    DEFINITIONS IMPLICIT TAGS ::= BEGIN
 
    EXPORTS ALL;
-
-
-
-Ounsworth, et al.         Expires 6 March 2027                 [Page 14]
-
-Internet-Draft        Remote Attestation with CSRs        September 2026
-
 
    IMPORTS
 
@@ -804,6 +945,14 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
        { iso(1) member-body(2) us(840) rsadsi(113549)
        pkcs(1) pkcs-9(9) smime(16) modules(0) msg-v3dot1-02(39) }
      ;
+
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 17]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
 
    ATTESTATION-STATEMENT ::= TYPE-IDENTIFIER
 
@@ -834,14 +983,6 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
    }
 
    -- Allow either X.509 or OTHER-CERT certificates
-
-
-
-Ounsworth, et al.         Expires 6 March 2027                 [Page 15]
-
-Internet-Draft        Remote Attestation with CSRs        September 2026
-
-
    LimitedCertChoices ::=
        CertificateChoices
           (WITH COMPONENTS {certificate, other})
@@ -861,6 +1002,13 @@ Appendix C.  Acknowledgments
    substantial work on the final version.  The following persons, in no
    specific order, contributed to the work directly, participated in
    design team meetings, or provided review of the document.
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 18]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
+
 
    Richard Kettlewell, Chris Trufan, Bruno Couillard, Jean-Pierre Fiset,
    Sander Temme, Jethro Beekman, Zsolt Rózsahegyi, Ferenc Pető, Mike
@@ -892,12 +1040,6 @@ Authors' Addresses
    Email: mike@ounsworth.ca
 
 
-
-Ounsworth, et al.         Expires 6 March 2027                 [Page 16]
-
-Internet-Draft        Remote Attestation with CSRs        September 2026
-
-
    Hannes Tschofenig
    Siemens
    Germany
@@ -916,6 +1058,12 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
    Independent
    United States
    Email: montywiseman32@gmail.com
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 19]
+
+Internet-Draft        Remote Attestation with CSRs          October 2026
 
 
    Ned Smith
@@ -949,4 +1097,24 @@ Internet-Draft        Remote Attestation with CSRs        September 2026
 
 
 
-Ounsworth, et al.         Expires 6 March 2027                 [Page 17]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Ounsworth, et al.         Expires 20 April 2027                [Page 20]

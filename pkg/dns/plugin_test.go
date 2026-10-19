@@ -531,6 +531,60 @@ func TestBuildResponse_Answer(t *testing.T) {
 	assert.Empty(t, msg.Ns)
 }
 
+// withServedZone points the plugin at an in-memory DAO holding zone, with a
+// public port the test writer's local address (9053) never matches.
+func withServedZone(t *testing.T, zone *entities.Zone) {
+	t.Helper()
+	prevDAO, prevConf := zoneDAO, Configuration
+	zDAO := newMemoryZoneDAO()
+	zDAO.addZone(zone)
+	zoneDAO = zDAO
+	Configuration = &Config{Logger: logging.DefaultLogger(), PublicServer: &PublicServer{Port: 53}}
+	t.Cleanup(func() { zoneDAO, Configuration = prevDAO, prevConf })
+}
+
+func TestServeDNS_UpdateIsNotImplemented(t *testing.T) {
+	withServedZone(t, negativeAnswerZone())
+
+	update := new(dns.Msg)
+	update.SetUpdate("example.com.")
+	update.Insert([]dns.RR{mustA("www.example.com.", "192.0.2.9")})
+
+	w := &fakeResponseWriter{}
+	rcode, err := TrustedPlatformPlugin{}.ServeDNS(context.Background(), w, update)
+
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeNotImplemented, rcode, "RFC 1035 §4.1.1 RCODE 4 for an UPDATE (RFC 2136 §2)")
+	assert.Nil(t, w.msg, "the zone section must not be answered as a query; the CoreDNS server writes NOTIMP")
+}
+
+func TestServeDNS_QueryWithoutQuestionIsFormatError(t *testing.T) {
+	withServedZone(t, negativeAnswerZone())
+
+	query := new(dns.Msg)
+	query.Id = dns.Id()
+
+	w := &fakeResponseWriter{}
+	rcode, err := TrustedPlatformPlugin{}.ServeDNS(context.Background(), w, query)
+
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeFormatError, rcode, "RFC 1035 §4.1.1 RCODE 1 for a query with no question")
+	assert.Nil(t, w.msg, "the CoreDNS server writes FORMERR")
+}
+
+func TestServeDNS_QueryStillResolves(t *testing.T) {
+	withServedZone(t, negativeAnswerZone())
+
+	w := &fakeResponseWriter{}
+	rcode, err := TrustedPlatformPlugin{}.ServeDNS(context.Background(), w, query("www.example.com.", dns.TypeA))
+
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeSuccess, rcode)
+	require.NotNil(t, w.msg)
+	require.Len(t, w.msg.Answer, 1)
+	assert.Equal(t, "192.0.2.1", w.msg.Answer[0].(*dns.A).A.String())
+}
+
 // TestBuildResponse_NameError asserts a name the zone does not define is
 // NXDOMAIN with the zone SOA in the authority section, not the empty NOERROR
 // the server used to send. The negative-caching TTL is the lesser of the SOA

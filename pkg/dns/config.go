@@ -15,7 +15,9 @@ package dns
 
 import (
 	"crypto/fips140"
+	"strconv"
 	"strings"
+	"time"
 
 	xkmsadapter "github.com/jeremyhahn/go-trusted-platform/internal/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -150,6 +152,44 @@ var (
 		Resolver: DefaultResolverConfig(),
 	}
 )
+
+// fallbackRecordTTL is the TTL of a record that has none when default-ttl is
+// unset.
+const fallbackRecordTTL uint32 = 3600
+
+// maxTTL is the largest TTL a record may carry (RFC 2181 §8).
+const maxTTL = 1<<31 - 1
+
+// RecordTTL is the TTL of a record that has none: default-ttl, or 3600 when
+// it is unset.
+func (c *Config) RecordTTL() uint32 {
+	if c == nil || c.DefaultTTL <= 0 {
+		return fallbackRecordTTL
+	}
+	return uint32(c.DefaultTTL)
+}
+
+// Validate refuses a configuration the DNS service cannot honour: a
+// default-ttl outside RFC 2181 §8, a DNSSEC section that cannot be signed
+// with, a DNS64 prefix no translator can reverse, or a resolver section with
+// no usable server.
+func (c *Config) Validate() error {
+	if c.DefaultTTL < 0 || c.DefaultTTL > maxTTL {
+		return &DetailError{Err: ErrInvalidTTL, Detail: ": default-ttl " + strconv.Itoa(c.DefaultTTL)}
+	}
+	if err := c.DNSSEC.Validate(); err != nil {
+		return err
+	}
+	if err := c.DNS64.Validate(c); err != nil {
+		return err
+	}
+	if c.Resolver != nil {
+		if err := c.Resolver.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Config holds the DNS subsystem configuration including server settings,
 // resolver defaults, DNSSEC, DANE, and attestation-gated updates.
@@ -332,7 +372,16 @@ func (c *DNSSECConfig) Validate() error {
 // markets — so a binary built without the fips tag can still be run under
 // GODEBUG=fips140=only, where crypto/sha1 panics.
 func (c *DNSSECConfig) validateForMode(fipsActive bool) error {
-	if c == nil || !c.Enabled || !fipsActive {
+	if c == nil || !c.Enabled {
+		return nil
+	}
+	if err := c.KSK.validateLifetime("ksk"); err != nil {
+		return err
+	}
+	if err := c.ZSK.validateLifetime("zsk"); err != nil {
+		return err
+	}
+	if !fipsActive {
 		return nil
 	}
 	// Only NSEC3 is refused. A FIPS deployment with NSEC zones — or with
@@ -354,6 +403,29 @@ type DNSSECKeyConfig struct {
 	Lifetime string `yaml:"lifetime" json:"lifetime" mapstructure:"lifetime"`
 	// TTL specifies the DNSKEY record TTL in seconds.
 	TTL uint32 `yaml:"ttl" json:"ttl" mapstructure:"ttl"`
+}
+
+// LifetimeDuration returns the key's configured lifetime, or 0 when none is
+// set. A lifetime that does not parse, or is not positive, is
+// ErrInvalidKeyLifetime. Nothing in pkg/dns schedules a rollover yet, so the
+// value is validated but not acted on.
+func (k *DNSSECKeyConfig) LifetimeDuration() (time.Duration, error) {
+	if k == nil || k.Lifetime == "" {
+		return 0, nil
+	}
+	lifetime, err := parseDuration(k.Lifetime)
+	if err != nil || lifetime <= 0 {
+		return 0, &DetailError{Err: ErrInvalidKeyLifetime, Detail: ": " + k.Lifetime}
+	}
+	return lifetime, nil
+}
+
+// validateLifetime names the key role (ksk or zsk) in a lifetime error.
+func (k *DNSSECKeyConfig) validateLifetime(role string) error {
+	if _, err := k.LifetimeDuration(); err != nil {
+		return &DetailError{Err: ErrInvalidKeyLifetime, Detail: ": " + role + " lifetime " + k.Lifetime}
+	}
+	return nil
 }
 
 type PublicServer struct {

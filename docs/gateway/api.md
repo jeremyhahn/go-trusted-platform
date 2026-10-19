@@ -464,9 +464,8 @@ and it is enforced by `ControlPlane.RegisterRoutes` versus
 `ControlPlane.RegisterGatewayFacingRoutes`, asserted exactly and for
 disjointness in that package's tests.
 
-Which operator authorization the `/gateway/state` routes should carry was
-previously left open in the code as an owner decision. #165 answers it with the
-same RBAC role guard #159 established for the rest of the API.
+The `/gateway/state` routes carry the same RBAC role guard as the rest of the
+API (#159, #165).
 
 This changes the REST position only. The gRPC, Unix, MCP and embedded
 positions described above are unchanged. See

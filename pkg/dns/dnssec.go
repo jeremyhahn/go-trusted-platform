@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -831,36 +832,31 @@ func (s *DNSSECService) calculateExpiration(inception time.Time) time.Time {
 	return inception.Add(duration)
 }
 
-// Helper function to parse duration strings like "30d", "24h", etc.
+// parseDuration parses a whole number followed by d, h, m or s ("30d",
+// "24h"), or else a Go duration ("1h30m", "1500ms"). Anything else is
+// ErrInvalidDuration.
 func parseDuration(s string) (time.Duration, error) {
-	if len(s) < 2 {
-		return 0, &MessageError{Msg: fmt.Sprintf("invalid duration: %s", s)}
+	if len(s) >= 2 {
+		unit, ok := durationUnits[s[len(s)-1]]
+		if count, err := strconv.Atoi(s[:len(s)-1]); ok && err == nil {
+			return time.Duration(count) * unit, nil
+		}
 	}
 
-	unit := s[len(s)-1]
-	value := s[:len(s)-1]
-
-	var multiplier time.Duration
-	switch unit {
-	case 'd', 'D':
-		multiplier = 24 * time.Hour
-	case 'h', 'H':
-		multiplier = time.Hour
-	case 'm', 'M':
-		multiplier = time.Minute
-	case 's', 'S':
-		multiplier = time.Second
-	default:
-		return time.ParseDuration(s)
-	}
-
-	var numValue int
-	_, err := fmt.Sscanf(value, "%d", &numValue)
+	duration, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, err
+		return 0, &DetailError{Err: ErrInvalidDuration, Detail: ": " + s}
 	}
+	return duration, nil
+}
 
-	return time.Duration(numValue) * multiplier, nil
+// durationUnits maps the single-letter suffix of a parseDuration value to its
+// unit.
+var durationUnits = map[byte]time.Duration{
+	'd': 24 * time.Hour, 'D': 24 * time.Hour,
+	'h': time.Hour, 'H': time.Hour,
+	'm': time.Minute, 'M': time.Minute,
+	's': time.Second, 'S': time.Second,
 }
 
 // keyBitsForAlgorithm returns the appropriate key size for a given algorithm.
@@ -1205,11 +1201,12 @@ func (s *DNSSECService) nsec3paramToEntity(nsec3param *dns.NSEC3PARAM) *entities
 	}
 }
 
-// PrepareKeyRollover generates a new key pair for key rollover preparation via xkms.
-// The new key is generated but not activated, allowing for pre-publication.
-// The tenantID is used to scope keys to specific tenants.
-// Note: Key rollover with XKMS requires deleting the old key and creating a new one,
-// or using XKMS-specific versioning capabilities.
+// PrepareKeyRollover replaces the tenant's KSK or ZSK for a zone with a newly
+// generated key. The key store holds one key per (tenant, zone, key type), so
+// the current key is deleted before the new one is generated and the two are
+// never published together (no RFC 6781 pre-publication). A failed delete is
+// returned with the current key untouched; a failed generation after the
+// delete is returned wrapping ErrRolloverKeyDeleted.
 func (s *DNSSECService) PrepareKeyRollover(tenantID, zoneName string, keyType string) (*dns.DNSKEY, error) {
 	zoneName = dns.Fqdn(zoneName)
 	if tenantID == "" {
@@ -1240,15 +1237,20 @@ func (s *DNSSECService) PrepareKeyRollover(tenantID, zoneName string, keyType st
 
 	ctx := context.Background()
 
-	// Delete existing key if present
+	// The key store holds one key per (tenant, zone, key type), so the new
+	// key cannot be generated beside the current one: the current key is
+	// deleted first. A failed delete stops the rollover with the current key
+	// still in place.
+	deleted := false
 	if s.keyStore.KeyExists(ctx, tenantID, zoneName, kt) {
 		if err := s.keyStore.DeleteKey(ctx, tenantID, zoneName, kt); err != nil {
-			s.logger.Warn("Failed to delete existing key during rollover",
-				slog.String("tenant", tenantID),
-				slog.String("zone", zoneName),
-				slog.String("keyType", keyType),
-				slog.String("error", err.Error()))
+			return nil, &DNSSECError{
+				Op:   "PrepareKeyRollover",
+				Zone: zoneName,
+				Err:  &WrappedError{Msg: "failed to delete the current key", Err: err},
+			}
 		}
+		deleted = true
 	}
 
 	// Generate new key via xkms
@@ -1260,10 +1262,14 @@ func (s *DNSSECService) PrepareKeyRollover(tenantID, zoneName string, keyType st
 		key, err = s.keyStore.GenerateZSK(ctx, tenantID, zoneName, algorithm)
 	}
 	if err != nil {
+		cause := error(&WrappedError{Msg: "failed to generate new key via xkms", Err: err})
+		if deleted {
+			cause = &SentinelCauseError{Sentinel: ErrRolloverKeyDeleted, Cause: cause}
+		}
 		return nil, &DNSSECError{
 			Op:   "PrepareKeyRollover",
 			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to generate new key via xkms", Err: err},
+			Err:  cause,
 		}
 	}
 

@@ -43,14 +43,9 @@ is not already taken.** Decide deliberately:
 
 ### 2. Which DNSSEC key store you are using
 
-Three backends exist. The **quicbaas KMS key store generates a local placeholder
-key pair** rather than fetching the key from the KMS — the code says so at
-`pkg/dns/dnssec_keystore_quicbaas.go:597`.
-
-Zones signed with such a key validate normally, which is exactly the problem:
-nothing looks wrong, and the key is not actually under KMS management, rotation
-or audit. If DNSSEC key custody matters to you, use the xkms-backed key store
-and confirm which backend is configured before signing anything.
+Three backends exist. Each keeps the private key in its KMS and publishes the
+matching public key as the zone's DNSKEY; confirm which backend is configured
+before signing anything.
 
 ---
 
@@ -227,5 +222,4 @@ forwarder configuration instead.
 - [engineering.md](engineering.md) — the two known defects, in detail
 - [architecture.md](architecture.md) — how zones, DNSSEC and the resolver compose
 - [dnssec.md](dnssec.md), [dnssec-rollover.md](dnssec-rollover.md),
-  [dane.md](dane.md), [dot-doh.md](dot-doh.md) — deep dives (not re-verified in
-  the 2026-08-18 pass)
+  [dane.md](dane.md), [dot-doh.md](dot-doh.md) — deep dives

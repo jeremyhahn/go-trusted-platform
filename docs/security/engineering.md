@@ -107,7 +107,7 @@ type EngineStats struct {
 
 **`EvaluationResult.Bindings` is declared and never populated.**
 **`DecisionLog` is declared and never constructed** — there is no decision
-logging in this package. Both verified 2026-08-18.
+logging in this package.
 
 ### Engine (`engine.go`)
 

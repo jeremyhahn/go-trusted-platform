@@ -84,5 +84,5 @@ The trusted-computing platform product and control plane: provisioning, node and
 - Upstream go-qrdb: an arm64 release, reached through go-quicbaas, for Pi control-plane nodes.
 - Upstream go-luks2: pinned v0.2.0-alpha; needed v1.0.0-rc.2 (#746).
 - Standards watch: draft-ietf-rats-corim-11, pinned at revision -11, implemented in `pkg/attestation/`; a new revision or its RFC updates [docs/reference/rats/](docs/reference/rats/) and the code.
-- Standards watch: draft-ietf-lamps-csr-attestation-29, pinned at revision -29, implemented in `pkg/attestation/` and the enrollment paths (`pkg/device/`, `pkg/webservice/v1/device/`, `pkg/api/daemon/`, `pkg/installer/`, `pkg/firstboot/`); a new revision or its RFC updates [docs/reference/rats/](docs/reference/rats/) and the code.
+- Standards watch: draft-ietf-lamps-csr-attestation-30, pinned at revision -30, implemented in `pkg/attestation/` and the enrollment paths (`pkg/device/`, `pkg/webservice/v1/device/`, `pkg/api/daemon/`, `pkg/installer/`, `pkg/firstboot/`); a new revision or its RFC updates [docs/reference/rats/](docs/reference/rats/) and the code.
 - Downstream: the go-recountly deployment, the automatethethings.com launch and the P1 staging run wait on Dev complete.

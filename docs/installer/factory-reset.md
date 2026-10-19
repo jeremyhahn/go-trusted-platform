@@ -120,8 +120,7 @@ At this point the TPM has NOT been touched. No sealing has happened.
 6. Copies installer state to the root filesystem
 7. Applies `recovery-key-strategy` (see next section)
 
-The empty hierarchy auths of step 3 are superseded by the owner ruling of
-2026-10-17: firstboot sets the owner hierarchy auth to the SO PIN with
+The empty hierarchy auths of step 3 are superseded: firstboot sets the owner hierarchy auth to the SO PIN with
 `TPM2_HierarchyChangeAuth` and hands the PIN to `platformd` over the firstboot
 tmpfs handoff, and recovery means a seal that existed and broke
 ([architecture.md](architecture.md), "First provision, the EK and recovery").
