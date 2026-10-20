@@ -1545,12 +1545,14 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 // CASignCSR certifies the KMS key a CSR names for code signing. The CA
 // service authorizes the caller from the gRPC context, so the MCP caller's
 // validated platform token is carried over to it; a caller without one is
-// refused there.
+// refused there. An operator client certificate presented with no token
+// carries an AuthorizedContext too, but its grant is the peer's, not a
+// token's, so it is not carried over (docs/ca/api.md §4).
 func (p *MCPServiceProvider) CASignCSR(ctx context.Context, req *mcp.CASignCSRRequest) (interface{}, error) {
 	if p.caService == nil {
 		return nil, ErrServiceNotAvailable{Service: "ca"}
 	}
-	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok {
+	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && mcp.TokenFromContext(ctx) != "" {
 		ctx = grpcapi.ContextWithAuthorizedContext(ctx, authCtx)
 	}
 	return p.caService.SignCSR(ctx, &platformv1.SignCSRRequest{

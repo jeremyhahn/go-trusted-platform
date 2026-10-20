@@ -853,7 +853,10 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 				Message: "Invalid or expired token",
 			}
 		}
-		return ContextWithAuthorizedContext(ctx, authCtx), nil
+		// The token goes on ctx with its grant, whether it came in the
+		// params or the request: a tool that accepts only a token's grant,
+		// never a peer certificate's, tells the two apart by it.
+		return ContextWithAuthorizedContext(ContextWithToken(ctx, token), authCtx), nil
 	}
 
 	// Validate token if auth manager configured (legacy bool-only path)
