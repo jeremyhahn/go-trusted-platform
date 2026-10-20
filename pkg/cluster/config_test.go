@@ -14,6 +14,7 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -226,6 +227,9 @@ func TestConfig_Validate(t *testing.T) {
 				}
 				if tt.errField != "" && invalidErr.Field != tt.errField {
 					t.Errorf("expected error field %q, got %q", tt.errField, invalidErr.Field)
+				}
+				if !strings.Contains(invalidErr.Reason, tt.errContains) {
+					t.Errorf("expected error reason containing %q, got %q", tt.errContains, invalidErr.Reason)
 				}
 			} else if err != nil {
 				t.Fatalf("expected no error, got %v", err)

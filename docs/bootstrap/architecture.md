@@ -1,6 +1,6 @@
 # Bootstrap — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/bootstrap/`, `pkg/firstboot/`, `pkg/boot/`, the barrier/seal touchpoints in `pkg/barrier/` and `pkg/api/rest/init_handlers.go` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/bootstrap/`, `pkg/firstboot/`, `pkg/boot/`, the barrier/seal touchpoints in `pkg/barrier/` and `pkg/api/rest/init_handlers.go` · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -98,7 +98,7 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | **`InsecureSkipVerify` when fetching the control plane's own CA bundle** | The bundle *is* the trust anchor, so there is nothing to verify against at handshake time — but "nothing to verify against" is not the same as "verify nothing". `fetchControlPlaneCABundle` captures the served chain in `VerifyConnection` and then verifies that chain **against the bundle it just downloaded**, rejecting a mismatch with `ErrCABundleVerifyFailed`. `SessionTicketsDisabled` is set so a resumed session cannot skip the capture. The capture also has to happen **before** the control plane's own post-install health probe: the probe verifies with ordinary chain validation, so probing before the bundle is captured judges a self-provisioned CA against the system pool and fails for the whole window (#107). `awaitPostInstallHealth` therefore captures first — retrying "not up yet" failures on the health cadence — and probes only once the pool is in place. Every later node's probe verifies against that same captured pool. |
 | **Probing a gateway or worker by address with no expected name, or only for liveness (#655)** | A node's platform listener (`tls-port: 9443`) serves a leaf the control-plane CA issued through `device-attest-01`, carrying DNS SANs only. Verifying it by the dialed address can never succeed, so the wait timed out for every healthy gateway and worker; dropping verification to make it pass would accept any listener on that address. The probe instead verifies every role against the platform anchor (the captured control-plane bundle) under the name the node's role template declares for that listener. A template that declares none is a configuration error (`NodeTLSNameUnknownError`), never a guessed name or a skipped check. |
 | **Trust-on-first-use for the deployer and switch SSH host keys** | The deployer host runs the DHCP/TFTP/HTTP services every node boots from; accepting its host key blindly puts the whole fleet's install path behind an unauthenticated first contact. `deployer.NewSSHClient` fails closed when `known_hosts_path` is empty — there is no TOFU path at all. |
-| **Persisting BMC pins to disk** | A persisted pin is a long-lived credential nobody rotates. BMC pins live in an in-memory store for the lifetime of that `platformctl bootstrap run` process only; SPKI pins are public-key hashes, so nothing is lost by discarding them. (This originally described TOFU-captured pins; tofu is not available for the bmc class — #83 — so today the pin comes from `bmc_spki_pin`.) |
+| **Persisting BMC pins to disk** | A persisted pin is a long-lived credential nobody rotates. BMC pins live in an in-memory store for the lifetime of that `platformctl bootstrap run` process only; SPKI pins are public-key hashes, so nothing is lost by discarding them. (A pin is the operator's `bmc_spki_pin`, or the certificate tofu pins on first contact: #83 barred tofu for the bmc class while it only fetched a CA bundle, and go-xkms#139 made it pin the BMC's own certificate, so it is allowed again.) |
 | **Requiring a BMC on every node** | It would make the same automation unusable for a machine with no out-of-band controller. `BoardController` is the board-agnostic contract and `hasBoardManagement` is the single predicate; a node without a management block gets **zero** hardware operations and is observed rather than driven. |
 | **Skipping BMC MAC discovery when the operator listed MACs in YAML** | On a multi-NIC host the operator usually lists the PXE MAC, while the installed OS enumerates a different NIC as `eth0`. Every per-MAC lookup downstream then misses. Discovery takes the **union** of declared and discovered MACs, operator values first. |
 | **Keying installer config by hostname** | The node does not know its hostname yet — that is what it is fetching. Config is keyed by MAC and published under **every** known MAC, so the fetch succeeds whichever NIC came up first. |
@@ -110,7 +110,7 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | **Rebooting automatically to verify the PCR seal** | On hardware where a PCR differs between the installer and production initramfs, every verify-reboot fails, falls back, and fires another verify-reboot. Verification is deferred to the next operator-initiated reboot; the keyfile fallback covers the gap. |
 | **Tearing down the bootstrap container as soon as the last node installs** | The container is usually the only DHCP/DNS provider on the provisioning network. Teardown runs only after `controlPlaneHealthGate` confirms every control-plane node is serving; a failed gate skips teardown rather than stranding the fleet. A boot node (`deployer.boot_node`) is never torn down by a run. |
 | **Aborting the run when BMC enrollment fails** | Enrollment is a post-install ceremony, not a precondition for a working node. Failures are recorded per node in `BootstrapResult.BMCEnrollments` and logged as warnings; the operator retries with the BMC CLI. |
-| **One shared BMC TLS provider for the whole fleet** | Each BMC presents its own (usually self-signed, often expired) certificate, so one provider cannot carry every node's pin. A node that declares `bmc_spki_pin` or `bmc_trust` gets a node-scoped provider; nodes that declare neither share the run-scoped one. (The run-scoped provider was also meant to preserve TOFU pin continuity across re-contacted BMCs — that never worked, because tofu is a CA-bundle fetch rather than endpoint pinning, and it is no longer allowed for the bmc class; see #83 and go-xkms#139.) |
+| **One shared BMC TLS provider for the whole fleet** | Each BMC presents its own (usually self-signed, often expired) certificate, so one provider cannot carry every node's pin. A node that declares `bmc_spki_pin` or `bmc_trust` gets a node-scoped provider; nodes that declare neither share the run-scoped one. (The run-scoped provider also keeps a tofu pin across re-contacted BMCs within the run, `pkg/bootstrap/bmc_trust.go`; that works since go-xkms#139 made tofu endpoint pinning, after #83 had barred it as a CA-bundle fetch.) |
 
 ## Component boundaries
 
@@ -310,13 +310,13 @@ the logged fallback.
    and invalidate the seal written in step 4.
 4. Seal the LUKS key **under the Platform KeyStore SRK** (never the SSRK)
    with the platform policy on the sealed object (`PlatformPolicy: true`,
-   `pkg/firstboot/strategy.go:1302`), and write it to the EFI partition.
+   `pkg/firstboot/strategy.go:1301`), and write it to the EFI partition.
    This is the only seal first boot writes: it writes no upgrade seal, and
    it deletes any `seal-upgrade.*` it finds
-   (`pkg/firstboot/strategy.go:1361`). `pcr-banks` records the parent handle
+   (`pkg/firstboot/strategy.go:1400`). `pcr-banks` records the parent handle
    and its authorization mode (`keystore-platform-policy`) for the unseal
    side to replay. It also records the configured `seal-pcrs` list
-   (`pkg/firstboot/strategy.go:1335`), but that list is never applied to
+   (`pkg/firstboot/strategy.go:1333`), but that list is never applied to
    the seal; the platform policy decides which PCRs bind it.
 5. Unlock the LUKS root; copy the installer's contents onto it; apply the
    recovery-key strategy (destroy or escrow).
@@ -377,11 +377,11 @@ booting and holds no credential, so the boundary is where it is served
 - **Provisioning listener only.** Only a webservice with
   `surface: provisioning` mounts the route, and that listener mounts nothing
   else. Every full and edge listener answers it with the unknown-route `404`
-  (`WebServerV1.buildRoutes`, `pkg/webservice/webserver_v1.go:1234-1243`).
+  (`WebServerV1.buildRoutes`, `pkg/webservice/webserver_v1.go:1233-1243`).
 - **Bound inside the provisioning zone.** Startup refuses a provisioning
   listener unless its `bind-host` is an IP literal inside the provisioning
   zone of the node's network plan (`webservice.ValidateProvisioningSurface`,
-  `pkg/webservice/provisioning.go:38`, called from `App.validateWebServices`
+  `pkg/webservice/provisioning.go:37`, called from `App.validateWebServices`
   in `pkg/app/app.go`). That zone is the isolated provisioning VLAN, and its
   flows, not the bound address alone, keep everything else off the route. A
   host on that VLAN that knows or guesses a MAC or serial still reads that
@@ -490,23 +490,23 @@ platform is first drawn here.
    the TPM, not the filesystem.
 
    There is **no upgrade seal in production**. The initrd still registers the
-   `TPM-Upgrade` reader (`pkg/initrd/initrd.go:188-189`, priority 2,
-   `pkg/initrd/strategy_tpm_upgrade.go:66`) and it runs every boot, but it
+   `TPM-Upgrade` reader (`pkg/initrd/initrd.go:187-188`, priority 2,
+   `pkg/initrd/strategy_tpm_upgrade.go:65`) and it runs every boot, but it
    finds no `seal-upgrade.*` files and declines
-   (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). The writer,
-   `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is
-   called only from `Executor.Run` (`pkg/firstboot/executor.go:357`), and
+   (`pkg/initrd/strategy_tpm_upgrade.go:116-117`). The writer,
+   `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:762-773`), is
+   called only from `Executor.Run` (`pkg/firstboot/executor.go:356`), and
    nothing calls `Run`: `platformctl firstboot` builds an executor
-   (`pkg/cli/commands/firstboot/firstboot.go:156`) but unlocks through
+   (`pkg/cli/commands/firstboot/firstboot.go:155`) but unlocks through
    `FirstbootSealStrategy` (`firstboot.go:171-189`). So a kernel or firmware
    change that moves the bound PCRs falls through the chain: `TPM-PCR` fails
    under the platform policy, `TPM-Upgrade` declines, `FIDO2` runs only if
    enrolled, `Keyfile` has no `installer.luks` once seal confirmation wiped
    it, and the boot stops at the `Password` prompt. After the passphrase,
    platformd sees the Platform SRK policy no longer match the current PCRs
-   (`pkg/app/app.go:1927-1934`) beside a present seal and refuses to start
-   with `ErrTPMSealPolicyDrift` (`pkg/app/app.go:1970-1972`,
-   `pkg/app/tpm_seal_guard.go:214`).
+   (`pkg/app/app.go:1920-1929`) beside a present seal and refuses to start
+   with `ErrTPMSealPolicyDrift` (`pkg/app/app.go:1971-1973`,
+   `pkg/app/tpm_seal_guard.go:213`).
 
    *Planned, not implemented (go-xkms #1443):* `TPM-Upgrade` stays; upgraded
    images are built and signed centrally and staged, not rebuilt on the
@@ -571,6 +571,7 @@ platform is first drawn here.
   [api.md](api.md) §5.
 - **It does not persist BMC trust pins**, so it cannot detect a BMC certificate
   change *between* runs. Publishing BMC TLSA records is the intended answer.
-- **It does not prove a seal before wiping the recovery path.** The
-  seal-confirmation handshake does not exist yet; until it does, the installer
-  container is preserved rather than trusted. See [engineering.md](engineering.md) §7.
+- **It does not wipe the installer container before the seal is proved.**
+  Only seal confirmation wipes `installer.luks`: a later boot that unlocks the
+  root with `TPM-PCR` (Phase 3a). Until then the container is preserved rather
+  than trusted. See [engineering.md](engineering.md) §7.

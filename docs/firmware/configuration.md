@@ -1,6 +1,6 @@
 # Firmware Configuration Reference
 
-> **Status: NORMATIVE** · Scope: planned firmware device configuration; not implemented
+> **Status: NORMATIVE** · Scope: planned firmware device configuration; not implemented · Last verified: 2026-10-18
 > Conflicts with this document are defects. Fix them here first.
 
 The platform configuration has no `firmware:` section today. Every example
@@ -32,13 +32,13 @@ spec:
     bootloader-size: 4096
 ```
 
-**Exception**: ABAC policies DO use apiVersion/kind/metadata/spec format (see [RBAC/ABAC Policies](#rbacabac-policies)).
+**Exception**: the proposed firmware ABAC policies use an apiVersion/kind/metadata/spec envelope (see [RBAC/ABAC Policies](#rbacabac-policies)).
 
 ---
 
 ## AVR Microcontroller Configuration
 
-> **PROPOSED** - All AVR configurations below are planned for Phase O implementation.
+> **PROPOSED** - All AVR configurations below are planned; not implemented.
 
 ### Basic AVR Device
 
@@ -178,7 +178,7 @@ ota:
 
 ## Raspberry Pi Configuration
 
-> **PROPOSED** - All Raspberry Pi configurations below are planned for Phase O implementation.
+> **PROPOSED** - All Raspberry Pi configurations below are planned; not implemented.
 
 ### Basic Raspberry Pi with Physical TPM
 
@@ -356,7 +356,7 @@ firmware:
 
 ## Android/GrapheneOS Configuration
 
-> **PROPOSED** - All Android/GrapheneOS configurations below are planned for Phase O implementation.
+> **PROPOSED** - All Android/GrapheneOS configurations below are planned; not implemented.
 
 ### Google Pixel Device
 
@@ -430,7 +430,7 @@ identity:
 
 ## Firmware Update Server Configuration
 
-> **PROPOSED** - OTA update manifest format is planned for Phase O implementation.
+> **PROPOSED** - OTA update manifest format is planned; not implemented.
 
 ### OTA Update Manifest
 
@@ -454,7 +454,7 @@ identity:
 
 ## QuicBaaS Integration
 
-> **PROPOSED** - QuicBaaS firmware device entries are planned for Phase O implementation.
+> **PROPOSED** - QuicBaaS firmware device entries are planned; not implemented.
 
 ### Firmware Device Entry
 
@@ -496,7 +496,9 @@ labels:
 
 ### RBAC/ABAC Policies
 
-**Note**: ABAC policies DO use apiVersion/kind/metadata/spec format:
+> **PROPOSED** - no code in this repository defines the `abac.trustedplatform.io/v1` envelope or the `firmware:*` resources.
+> `platformctl iam policy create` takes the name, tenant, description and priority as flags and hands the `--file` body
+> to the go-quicbaas IAM service as the policy spec (`pkg/cli/commands/iam/policy.go`, `runPolicyCreate`).
 
 ```yaml
 # Firmware RBAC policy (YAML with apiVersion/kind/metadata/spec)
@@ -587,7 +589,7 @@ spec:
 
 ## Virtual TPM Bundle Configuration
 
-> **PROPOSED** - swtpm bundle configuration is planned for Phase O implementation.
+> **PROPOSED** - swtpm bundle configuration is planned; not implemented.
 
 ### swtpm Bundle
 
@@ -621,7 +623,7 @@ swtpm:
 
 ## Fuse and Lock Bit Configuration
 
-> **PROPOSED** - Fuse configuration format is planned for Phase O implementation.
+> **PROPOSED** - Fuse configuration format is planned; not implemented.
 
 ### AVR Fuse Settings
 
@@ -660,7 +662,7 @@ lock-bits: 0xFC  # Mode 3 (production)
 
 ## Configuration Files Location
 
-> **PROPOSED** - Firmware device configuration file structure is planned for Phase O implementation.
+> **PROPOSED** - Firmware device configuration file structure is planned; not implemented.
 
 **Remote Development Host**:
 ```
@@ -687,6 +689,8 @@ sftp://user@192.0.2.51/path/to/go-trusted-platform/
 
 ## Environment Variables
 
+> **PROPOSED** - no code in this repository reads any of these variables. An installed node's platform configuration is `/etc/trusted-platform/config.yaml` (`pkg/firstboot/types.go`).
+
 ```bash
 # Platform configuration
 PLATFORM_DIR=/var/lib/trusted-platform
@@ -710,7 +714,7 @@ QUICBAAS_COLLECTION=firmware_devices
 ## Best Practices
 
 1. **Use flat YAML format** for device configs (NOT apiVersion/kind)
-2. **ABAC policies** DO use apiVersion/kind/metadata/spec
+2. **Proposed firmware ABAC policies** use the apiVersion/kind/metadata/spec envelope
 3. **Store secrets securely** (use TPM, ATECC608A, or encrypted storage)
 4. **Test in simulator first** (simavr for AVR, QEMU for RPi)
 5. **Don't lock bootloader/lock bits** until fully tested

@@ -1,15 +1,16 @@
 # Remote-Access VPN — User Guide
 
-> **Status: REFERENCE** · Last verified: 2026-10-16
+> **Status: REFERENCE** · Last verified: 2026-10-19
 > How an operator and a machine use the remote-access VPN. Partial today: operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs, both tunnels and the gateway's admission listener exist, but a machine cannot connect yet.
 > "Operator tasks" below works now, and so does `platformctl vpn posture`.
 > `platformctl vpn connect` (with `--foreground` to keep the lease renewed),
-> `renew`, `lease` and `disconnect` exist, present the machine's TPM identity
-> and bring the WireGuard or MASQUE tunnel up, but `connect` cannot finish
-> until the client's security key and smart card support lands. The gateway
-> end it connects to, the admission listener, exists (#557), but `gatewayd`
-> does not open it on a deployed gateway yet. Until both land the interim
-> administrative VPN on the site firewall remains the way in.
+> `renew`, `lease` and `disconnect` exist, present the machine's TPM identity,
+> sign with your FIDO2 security key (`--factor fido2`) and bring the WireGuard
+> or MASQUE tunnel up; a PIV smart card cannot be used yet. The gateway end it
+> connects to, the admission listener, exists (#557), but `gatewayd` does not
+> open it on a deployed gateway yet: the gateway cannot yet check a security
+> key or smart card. Until both land the interim administrative VPN on the site
+> firewall remains the way in.
 > Feature folder: [architecture.md](architecture.md) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · user (this file).
 

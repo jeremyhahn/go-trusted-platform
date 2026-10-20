@@ -1,6 +1,6 @@
 # Bootstrap — API
 
-> **Status: NORMATIVE** · Scope: bootstrap, first-boot and pre-unseal barrier routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: bootstrap, first-boot and pre-unseal barrier routes on every transport · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -263,7 +263,7 @@ the real handler so the two shapes cannot drift apart again.
 The main device router is constructed with the mTLS middleware. The **seeder**
 router registered alongside it is constructed without any middleware, no
 router-wide authentication middleware is applied to `/api/v1` (only CORS, and
-rate limiting on the ACME subtree), and the seeder's own HTTP client presents no
+the per-source rate limiter on the root router, #571), and the seeder's own HTTP client presents no
 bearer token and no client certificate — it verifies the *server*, not itself.
 
 **The two POST routes are reachable without a credential on every running
@@ -278,8 +278,9 @@ platformd.** The chain is:
    all.
 2. The seeder router registers directly on the `/api/v1` subrouter, while the
    main device router is constructed with `MTLSMiddleware()`.
-3. `pkg/webservice/webserver_v1.go` mounts that `/api/v1` subrouter with only
-   the CORS middleware. There is no router-wide authentication seam behind it.
+3. `pkg/webservice/webserver_v1.go` mounts that `/api/v1` subrouter behind
+   only the per-source rate limiter and the CORS middleware. There is no
+   router-wide authentication seam behind it.
 
 Until #177, `GET /api/v1/devices/config` sat on the same subrouter and returned
 any node's full merged configuration as YAML to an unauthenticated caller on
@@ -293,8 +294,10 @@ boot**.
 The routes stay registered for the daemon's entire life, not only during
 seeding, so they are a defect, not a day-zero affordance.
 
-**The seeder authenticates as `admin@system` over mTLS, using the firstboot
-admin bundle.** The parent record is issue #121; the two POST routes are #176
+**The seeder is to authenticate as `admin@system` over mTLS, using the
+firstboot admin bundle** — not implemented: today its client presents no
+credential (`SeederParams` carries only the CA pool that verifies the server).
+The parent record is issue #121; the two POST routes are #176
 and `GET /api/v1/devices/config` is #177, which cannot take the same treatment:
 its caller is a machine that is still booting and holds no credential, so
 locking it to admin mTLS would break PXE provisioning.

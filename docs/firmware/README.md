@@ -1,6 +1,6 @@
 # Trusted Platform Firmware Support
 
-> **Status: NORMATIVE** · Scope: planned trusted-firmware programme for AVR, Raspberry Pi and Android; `platformctl firmware`, `platformctl ota` and the `firmware:` section are not implemented
+> **Status: NORMATIVE** · Scope: planned trusted-firmware programme for AVR, Raspberry Pi and Android; `platformctl firmware`, `platformctl ota` and the `firmware:` section are not implemented · Last verified: 2026-10-18
 > Conflicts with this document are defects. Fix them here first.
 
 Enterprise-grade firmware signing, attestation, and OTA updates for embedded devices and mobile platforms.
@@ -32,7 +32,7 @@ Trusted Platform Firmware provides comprehensive firmware lifecycle management i
 |--------|----------|
 | Architecture | Firmware built into `pkg/firmware` as integrated module |
 | Binary | Single `platformctl` binary for all operations |
-| OTA System | Extends existing `pkg/ota` for universal OTA |
+| OTA System | A new universal OTA service (no `pkg/ota` exists today) |
 | Attestation | Extends existing `pkg/attestation` service |
 | Device Config | Extends existing `pkg/device` schemas |
 
@@ -116,7 +116,7 @@ platformctl firmware attest --device-id arduino-001 --port /dev/ttyUSB0
 
 > **NOTE: PROPOSED CONFIGURATION - Not yet implemented**
 >
-> The `firmware:` configuration section shown below is a **planned feature** for Phase O.
+> The `firmware:` configuration section shown below is a **planned feature**; not implemented.
 > This schema is proposed and subject to change. The current platform configuration
 > does not include a `firmware:` section.
 
@@ -132,7 +132,7 @@ tpm:
   simulator: false
   hash: SHA-256
 
-# PROPOSED: Firmware settings (Phase O - not yet implemented)
+# PROPOSED: Firmware settings (not implemented)
 firmware:
   platform: raspberry-pi
   model: rpi4b
@@ -210,6 +210,10 @@ platformctl firmware attest --device-id pixel-7 --protocol android-hardware
 
 For Raspberry Pi devices without physical TPM:
 
+> **PROPOSED** - `install-swtpm`, `create-bundle` and `deploy-bundle` are not
+> `platformctl vtpm` commands today; the shipped ones are in
+> [docs/vtpm/cli.md](../vtpm/cli.md).
+
 ```bash
 # Install swtpm on target
 platformctl vtpm install-swtpm --target rpi-001
@@ -229,13 +233,13 @@ platformctl vtpm deploy-bundle \
 
 > **NOTE: PROPOSED CONFIGURATION - Not yet implemented**
 >
-> The firmware device configuration schema shown below is a **planned feature** for Phase O.
+> The firmware device configuration schema shown below is a **planned feature**; not implemented.
 > This schema is proposed and subject to change.
 
 Device configurations use **flat YAML format** (matches existing go-trusted-platform configs):
 
 ```yaml
-# PROPOSED: AVR device config (Phase O - not yet implemented)
+# PROPOSED: AVR device config (not implemented)
 device-id: arduino-uno-001
 model: atmega328p
 role: iot
@@ -310,7 +314,6 @@ spec:
 - [UEFI](uefi.md) - UEFI NVRAM and Secure Boot key enrollment
 
 ### Device Support
-- [AVR Support](avr-attestation.md) - AVR microcontroller implementation details
 - [AVR Attestation](avr-attestation.md) - `pkg/firmware/avr/attestation`, the AVR attestation provider
 - [Raspberry Pi](rpi.md) - Raspberry Pi secure boot and swtpm
 - [Android](android.md) - Android/GrapheneOS support
@@ -335,7 +338,7 @@ go-trusted-platform handles signing and flashing.
 - **Android**: A/B seamless updates
 - **ARM64/AMD64**: Existing mechanisms
 
-All use the same `pkg/ota` service.
+All would use the same OTA service; it is not implemented and no `pkg/ota` exists.
 
 ### Universal Attestation
 

@@ -3,6 +3,8 @@
 > **Status: NORMATIVE** · Scope: attestation verbs in `platformctl` · Last verified: 2026-09-05
 > Conflicts with this document are defects. Fix them here first.
 
+Replaces `docs/man/attestor.md` and `docs/man/verifier.md`, removed in 3ddd4fa19 (`git show 3ddd4fa19^:<path>`).
+
 ---
 
 ## 1. What `platformctl attestation` covers
