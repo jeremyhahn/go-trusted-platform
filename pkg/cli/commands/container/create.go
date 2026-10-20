@@ -38,6 +38,9 @@ type createOptions struct {
 	workDir     string
 	tpmAccess   bool
 	start       bool
+	user        string
+	restart     string
+	attest      bool
 }
 
 // newCreateCommand creates the container create subcommand
@@ -100,6 +103,9 @@ Examples:
 	cmd.Flags().StringVarP(&opts.workDir, "workdir", "w", "", "working directory inside container")
 	cmd.Flags().BoolVar(&opts.tpmAccess, "tpm-access", false, "mount host TPM device into container")
 	cmd.Flags().BoolVar(&opts.start, "start", false, "start container immediately after creation")
+	cmd.Flags().StringVarP(&opts.user, "user", "u", "", "user to run as inside container (name, uid or uid:gid)")
+	cmd.Flags().StringVar(&opts.restart, "restart", "", "restart policy (no, on-failure, always, unless-stopped)")
+	cmd.Flags().BoolVar(&opts.attest, "attest", false, "measure the container into the TPM event log on create")
 
 	// Mark required flags
 	cli.MarkFlagsRequired(cmd, "name", "image")
@@ -165,20 +171,28 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		return err
 	}
 
+	restartPolicy, err := parseRestartPolicy(opts.restart)
+	if err != nil {
+		return err
+	}
+
 	// Build create params
 	params := &computesvc.CreateContainerParams{
-		Name:       opts.name,
-		Image:      opts.image,
-		Env:        envVars,
-		Labels:     labels,
-		Ports:      ports,
-		Volumes:    volumes,
-		Privileged: opts.privileged,
-		Network:    opts.networkMode,
-		Command:    opts.command,
-		WorkingDir: opts.workDir,
-		TpmAccess:  opts.tpmAccess,
-		Start:      opts.start,
+		Name:           opts.name,
+		Image:          opts.image,
+		Env:            envVars,
+		Labels:         labels,
+		Ports:          ports,
+		Volumes:        volumes,
+		Privileged:     opts.privileged,
+		Network:        opts.networkMode,
+		Command:        opts.command,
+		WorkingDir:     opts.workDir,
+		User:           opts.user,
+		RestartPolicy:  restartPolicy,
+		TpmAccess:      opts.tpmAccess,
+		AttestOnCreate: opts.attest,
+		Start:          opts.start,
 	}
 
 	// Set resource limits if specified
@@ -256,4 +270,23 @@ func parseCPUCount(spec string) (uint32, error) {
 	}
 
 	return uint32(value), nil
+}
+
+// parseRestartPolicy converts the --restart value into an SDK restart
+// policy. An empty value leaves the policy unset so the server default
+// applies.
+func parseRestartPolicy(spec string) (computesvc.RestartPolicy, error) {
+	if spec == "" {
+		return "", nil
+	}
+
+	policy, ok := computesvc.ParseRestartPolicy(spec)
+	if !ok {
+		return "", ErrInvalidContainerConfig{
+			Field:  "restart",
+			Reason: fmt.Sprintf("unknown restart policy %q (want no, on-failure, always or unless-stopped)", spec),
+		}
+	}
+
+	return policy, nil
 }
