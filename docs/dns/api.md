@@ -204,6 +204,17 @@ gRPC, Unix and embedded answer `Unavailable` with an `ErrorInfo` reason
 `pkg/api/daemon/errors.go`); REST answers 503 with code
 `SERVICE_NOT_CONFIGURED`; QUIC answers `0x0A`; MCP answers `Unavailable`.
 
+Records are checked the same way on every transport before the zone changes
+(`pkg/dns/record_validate.go`). `InvalidArgument` (QUIC `0x09`, REST 400)
+covers a record with no name (`ErrRecordNameRequired`), an A value that is
+not an IPv4 address (`ErrInvalidIPv4Address`), an AAAA value that is not an
+IPv6 address, IPv4-mapped included (`ErrInvalidIPv6Address`), and a TLSA
+certificate usage above 3 (`ErrInvalidTLSAUsage`, RFC 7218 §2.1). `NotFound`
+(QUIC `0x02`, REST 404) is the answer to an update or delete of a record the
+zone does not hold (`ErrRecordNotFound`); neither changes the zone. An update
+checks the new record before it removes the old one, so a refused update
+keeps the old record.
+
 `ErrNoResolverServers`, `ErrZoneSubdomainsNoInternalServer` and
 `ErrZoneSubdomainsNoNetworkZones` are **load-time** errors — the service does not
 start rather than answering requests badly.

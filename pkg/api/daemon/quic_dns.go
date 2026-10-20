@@ -15,8 +15,10 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -206,9 +208,17 @@ func (h *QUICServiceHandler) handleDNSUpdateRecord(ctx context.Context, req *qui
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "value"})
 	}
 
-	// Update is delete + add
+	// A bad new value is refused before the old record is removed.
+	if err := dns.ValidateRecordValue(updateReq.RecordType, updateReq.Value); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
+	}
+
+	// Update is delete + add; a record that does not exist is not updated.
 	if err := h.dnsService.DeleteRecord(ctx, updateReq.Name, updateReq.RecordType); err != nil {
-		h.logger.Debug("delete during update failed (may not exist)", "error", err)
+		if errors.Is(err, dns.ErrRecordNotFound) {
+			return h.errorResponse(quicwire.StatusNotFound, err)
+		}
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DNSUpdateRecord", Cause: err})
 	}
 
 	ttl := updateReq.TTL

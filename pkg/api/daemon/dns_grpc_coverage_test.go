@@ -86,11 +86,10 @@ func TestDNSServiceServer_DeleteRecord_NonExistentRecord(t *testing.T) {
 		Name:     "nonexistent",
 	}
 
-	resp, err := server.DeleteRecord(context.Background(), req)
+	_, err := server.DeleteRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
-	assert.Len(t, resp.Zone.Records.ARecords, 1)
+	assert.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+	assert.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1, "the existing record was removed")
 }
 
 func TestDNSServiceServer_DeleteRecord_UnspecifiedType(t *testing.T) {
@@ -112,11 +111,10 @@ func TestDNSServiceServer_DeleteRecord_UnspecifiedType(t *testing.T) {
 		Name:     "www",
 	}
 
-	resp, err := server.DeleteRecord(context.Background(), req)
+	_, err := server.DeleteRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
-	assert.Len(t, resp.Zone.Records.ARecords, 1)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+	assert.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1, "the A record was removed")
 }
 
 // UpdateRecord Coverage Tests
@@ -417,10 +415,11 @@ func TestDNSServiceServer_UpdateRecord_NilRecordData(t *testing.T) {
 		},
 	}
 
-	resp, err := server.UpdateRecord(context.Background(), req)
+	_, err := server.UpdateRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
+	// A new record without a name is refused before the old one is touched.
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+	assert.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1, "the old record was removed")
 }
 
 // ListRecords Coverage Tests
