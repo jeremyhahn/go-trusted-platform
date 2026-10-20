@@ -282,6 +282,9 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	if opts.Encrypt && r.encryptor == nil {
 		return ErrEncryptionNotConfigured{Reference: ref}
 	}
+	if opts.SignImage {
+		return ErrSigningNotConfigured{Reference: ref}
+	}
 	// An image without layers has no content to serve; refuse it here so
 	// every transport that pushes through the registry inherits the check.
 	if len(image.Layers) == 0 {

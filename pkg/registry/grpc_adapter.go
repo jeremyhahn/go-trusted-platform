@@ -166,6 +166,10 @@ const (
 	// PushAnnotationKeyID names the encryption key; empty uses the
 	// registry default key.
 	PushAnnotationKeyID = "encrypt-key-id"
+	// PushAnnotationSign is "true" to ask for the image to be signed.
+	// The registry has no image signer, so such a push is refused with
+	// ErrSigningNotConfigured.
+	PushAnnotationSign = "sign"
 )
 
 func pushOptionsOf(annotations map[string]string) PushOptions {
@@ -174,6 +178,7 @@ func pushOptionsOf(annotations map[string]string) PushOptions {
 		AllowOverwrite: annotations[regsvc.AnnotationOverwrite] == "true",
 		Encrypt:        annotations[PushAnnotationEncrypt] == "true",
 		KeyID:          annotations[PushAnnotationKeyID],
+		SignImage:      annotations[PushAnnotationSign] == "true",
 	}
 }
 

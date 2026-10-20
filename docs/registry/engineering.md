@@ -112,7 +112,11 @@ a live backend. They are the fault-injection points:
    (`PushAnnotationKeyID`) set `PushOptions` in `pushOptionsOf`; only the
    value `"true"` turns a flag on. An encrypted push stamps the manifest with
    `ManifestAnnotationEncrypted` and the KMS key ID
-   (`ManifestAnnotationKeyID`), which is how Push and Inspect report it. The
+   (`ManifestAnnotationKeyID`), which is how Push and Inspect report it.
+   `sign` (`PushAnnotationSign`) sets `SignImage`, which `Registry.Push`
+   refuses with `ErrSigningNotConfigured` before storing anything: the
+   registry has no image signer, and an unsigned image is never reported as
+   signed. The
    image config is decoded before anything is stored: a config that is not
    JSON is `ErrInvalidManifest`, and Inspect reports its `os`,
    `architecture` and `author`.

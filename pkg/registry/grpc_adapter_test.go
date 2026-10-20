@@ -219,6 +219,11 @@ func TestPushOptionsOf(t *testing.T) {
 			want:        PushOptions{},
 		},
 		{
+			name:        "sign",
+			annotations: map[string]string{PushAnnotationSign: "true"},
+			want:        PushOptions{SignImage: true},
+		},
+		{
 			name:        "overwrite",
 			annotations: map[string]string{regsvc.AnnotationOverwrite: "true"},
 			want:        PushOptions{AllowOverwrite: true},
@@ -227,9 +232,11 @@ func TestPushOptionsOf(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := pushOptionsOf(tt.annotations)
-			if got.Encrypt != tt.want.Encrypt || got.KeyID != tt.want.KeyID || got.AllowOverwrite != tt.want.AllowOverwrite {
-				t.Errorf("pushOptionsOf = encrypt %v key %q overwrite %v, want encrypt %v key %q overwrite %v",
-					got.Encrypt, got.KeyID, got.AllowOverwrite, tt.want.Encrypt, tt.want.KeyID, tt.want.AllowOverwrite)
+			if got.Encrypt != tt.want.Encrypt || got.KeyID != tt.want.KeyID ||
+				got.AllowOverwrite != tt.want.AllowOverwrite || got.SignImage != tt.want.SignImage {
+				t.Errorf("pushOptionsOf = encrypt %v key %q overwrite %v sign %v, want encrypt %v key %q overwrite %v sign %v",
+					got.Encrypt, got.KeyID, got.AllowOverwrite, got.SignImage,
+					tt.want.Encrypt, tt.want.KeyID, tt.want.AllowOverwrite, tt.want.SignImage)
 			}
 		})
 	}
@@ -298,6 +305,23 @@ func TestGRPCAdapter_PushWithEncryptAnnotationNeedsAnEncryptor(t *testing.T) {
 	}
 	if _, err := a.PushStream(context.Background(), meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one")))); err == nil {
 		t.Fatal("encrypted push succeeded on a registry with no encryptor")
+	}
+}
+
+func TestGRPCAdapter_PushWithSignAnnotationIsRefusedAndStoresNothing(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	ctx := context.Background()
+	meta := &grpcapi.RegistryPushMetadata{
+		Repository:  "apps/web",
+		Tag:         "v1",
+		Annotations: map[string]string{PushAnnotationSign: "true"},
+	}
+	_, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one"))))
+	if !errors.As(err, &ErrSigningNotConfigured{}) {
+		t.Fatalf("PushStream error = %v, want ErrSigningNotConfigured", err)
+	}
+	if _, err := a.Inspect(ctx, &grpcapi.RegistryInspectRequest{Repository: "apps/web", Reference: "v1"}); err == nil {
+		t.Error("Inspect found an image whose signed push was refused")
 	}
 }
 

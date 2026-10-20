@@ -485,6 +485,17 @@ func (e ErrEncryptionNotConfigured) Error() string {
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
+// ErrSigningNotConfigured is returned when a push asks for the image to be
+// signed: the registry has no image signer, so it refuses rather than
+// storing an unsigned image the caller believes is signed.
+type ErrSigningNotConfigured struct {
+	Reference string
+}
+
+func (e ErrSigningNotConfigured) Error() string {
+	return fmt.Sprintf("registry: image signing not configured (ref=%s)", e.Reference)
+}
+
 type MessageError struct {
 	Msg string
 }

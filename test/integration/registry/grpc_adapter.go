@@ -156,6 +156,12 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		metadata.Annotations[registry.PushAnnotationEncrypt] = "true"
 		metadata.Annotations[registry.PushAnnotationKeyID] = opts.KeyID
 	}
+	if opts.SignImage {
+		if metadata.Annotations == nil {
+			metadata.Annotations = make(map[string]string, 1)
+		}
+		metadata.Annotations[registry.PushAnnotationSign] = "true"
+	}
 	if err := stream.Send(regsvc.NewPushMetadataRequest(metadata)); err != nil {
 		return nil, err
 	}
