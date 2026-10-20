@@ -123,8 +123,13 @@ long-lived credential.
 platformctl ca renew 0A1B2C3D --days 90
 ```
 
+Renewal revokes the old certificate, rotates its key to new material under the
+same key name, and issues the new certificate on that key. Renewing the same
+certificate again works the same way.
+
 `--force` renews even when the certificate is not near expiry. That is the flag
-to use after a suspected key exposure — renew first, then revoke the old one.
+to use after a suspected key exposure: the old key is replaced and the old
+certificate is revoked in the same step.
 
 **Renewal has no REST route.** Use the CLI, gRPC, QUIC or MCP.
 

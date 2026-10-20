@@ -444,15 +444,36 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	// Supersede the existing certificate before issuing the renewal.
-	// DeleteKeys must be true: it is what removes the old cert-store entry
-	// (and the leaf's namespaced key) — without it IssueCertificate still
-	// fails with ErrCertificateAlreadyExists. Leaf keys are CN-namespaced,
-	// so this can never touch the CA signing key.
-	revokeErr := s.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true})
+	// Renewal re-keys the certificate (docs/ca/user.md "Renewing"). The key
+	// keeps its name and gets new material: the SDK KMS keeps a deleted key's
+	// name reserved, so a revoke with DeleteKeys followed by a fresh
+	// generation under the same CN fails with already_exists.
+	keyStore := s.ca.KeyStore()
+	certStore := s.ca.CertStore()
+	if keyStore == nil || certStore == nil {
+		return nil, status.Error(codes.FailedPrecondition, "failed to renew certificate: CA key or certificate store is not available")
+	}
+
+	revokeErr := s.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{})
 	if revokeErr != nil {
 		s.logger.Error(revokeErr, "failed to revoke old certificate during renewal")
 		return nil, status.Error(codes.Internal, "failed to renew certificate: "+revokeErr.Error())
+	}
+
+	rotateAttrs := &xkmssdk.KeyAttributes{
+		CN:           existingCert.Subject.CommonName,
+		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
+	}
+	if _, rotateErr := keyStore.RotateKey(ctx, rotateAttrs); rotateErr != nil {
+		s.logger.Error(rotateErr, "failed to rotate key during renewal")
+		return nil, status.Error(codes.Internal, "failed to renew certificate: "+rotateErr.Error())
+	}
+
+	// IssueCertificate refuses a CN the certificate store still holds.
+	deleteErr := certStore.DeleteCertificate(existingCert.Subject.CommonName)
+	if deleteErr != nil {
+		s.logger.Error(deleteErr, "failed to remove old certificate during renewal")
+		return nil, status.Error(codes.Internal, "failed to renew certificate: "+deleteErr.Error())
 	}
 
 	// Issue the renewed certificate

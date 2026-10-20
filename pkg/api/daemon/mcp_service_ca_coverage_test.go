@@ -30,6 +30,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -209,6 +210,7 @@ func (m *mockCAForMCPCoverage) TrustedIntermediate() (*x509.Certificate, error) 
 	return m.intermCert, nil
 }
 func (m *mockCAForMCPCoverage) CertStore() xkmssdk.CertStore                    { return m.certStore }
+func (m *mockCAForMCPCoverage) KeyStore() xkmsbackend.Backend                   { return &rotatingKeyStore{} }
 func (m *mockCAForMCPCoverage) Signer(_ context.Context) (crypto.Signer, error) { return m, nil }
 func (m *mockCAForMCPCoverage) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
