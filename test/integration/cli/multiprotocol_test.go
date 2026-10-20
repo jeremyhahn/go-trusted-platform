@@ -257,6 +257,8 @@ func testConfigCommands(t *testing.T, ctx context.Context, cmd CLICommands) {
 		result, err := cmd.ConfigGet(testCtx, sectionName)
 		require.NoError(t, err, "Config get section should succeed")
 		require.NotNil(t, result, "Result should not be nil")
+		require.Len(t, result.Sections, 1, "Config get <section> returns only that section")
+		assert.Equal(t, sectionName, result.Sections[0].Section)
 	})
 
 	t.Run("ConfigSetAndReload", func(t *testing.T) {
