@@ -24,7 +24,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -1426,5 +1428,26 @@ func TestRegistryGRPCService_Pull_SendMetadataError(t *testing.T) {
 	err := grpcSvc.Pull(req, stream)
 	if err == nil {
 		t.Fatal("expected error for send failure")
+	}
+}
+
+// A malformed reference is the caller's error: the gRPC surface answers
+// InvalidArgument, never Internal (m779, run 58285).
+func TestRegistryErrorStatus_ClientErrorsAreInvalidArgument(t *testing.T) {
+	for _, err := range []error{
+		ErrInvalidArtifactReference{Reference: "Unix-1-push:v1", Reason: "invalid format"},
+		ErrInvalidArtifactDigest{Digest: "sha256:zz"},
+		ErrMissingRepository{},
+		ErrMissingReference{},
+	} {
+		if got := status.Code(RegistryErrorStatus(err)); got != codes.InvalidArgument {
+			t.Errorf("RegistryErrorStatus(%T) code = %v, want InvalidArgument", err, got)
+		}
+	}
+}
+
+func TestRegistryErrorStatus_UnknownErrorIsInternal(t *testing.T) {
+	if got := status.Code(RegistryErrorStatus(errors.New("disk exploded"))); got != codes.Internal {
+		t.Errorf("code = %v, want Internal", got)
 	}
 }

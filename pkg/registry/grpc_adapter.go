@@ -114,7 +114,7 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 		if errors.As(err, &ErrImageAlreadyExists{}) {
 			return nil, grpcapi.ErrArtifactAlreadyExists{Repository: metadata.Repository, Reference: metadata.Tag}
 		}
-		return nil, err
+		return nil, a.mapRegistryError(metadata.Repository, metadata.Tag, err)
 	}
 	return &grpcapi.RegistryPushResponse{
 		Artifact:      a.manifestToArtifact(metadata.Repository, metadata.Tag, img.Manifest),
@@ -143,7 +143,7 @@ func (a *GRPCAdapter) Pull(ctx context.Context, req *grpcapi.RegistryPullRequest
 	}
 	img, err := a.registry.Pull(ctx, ref, PullOptions{})
 	if err != nil {
-		return nil, a.mapPullError(req.Repository, req.Reference, err)
+		return nil, a.mapRegistryError(req.Repository, req.Reference, err)
 	}
 	data, err := json.Marshal(img)
 	if err != nil {
@@ -214,7 +214,7 @@ func (a *GRPCAdapter) Inspect(ctx context.Context, req *grpcapi.RegistryInspectR
 	}
 	img, err := a.registry.Pull(ctx, ref, PullOptions{})
 	if err != nil {
-		return nil, a.mapPullError(req.Repository, req.Reference, err)
+		return nil, a.mapRegistryError(req.Repository, req.Reference, err)
 	}
 	art := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
 	return &grpcapi.RegistryInspectResponse{
@@ -236,7 +236,7 @@ func (a *GRPCAdapter) Delete(ctx context.Context, req *grpcapi.RegistryDeleteReq
 		return nil, grpcapi.ErrMissingReference{}
 	}
 	if err := a.registry.Delete(ctx, ref); err != nil {
-		return nil, err
+		return nil, a.mapRegistryError(req.Repository, req.Reference, err)
 	}
 	return &grpcapi.RegistryDeleteResponse{
 		Digest:    req.Digest,
@@ -305,13 +305,17 @@ func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifes
 	}
 }
 
-// mapPullError converts public Registry errors into the artifact-
+// mapRegistryError converts public Registry errors into the artifact-
 // shaped gRPC errors so callers see a consistent surface across
 // transports.
-func (a *GRPCAdapter) mapPullError(repository, reference string, err error) error {
+func (a *GRPCAdapter) mapRegistryError(repository, reference string, err error) error {
 	var notFound ErrImageNotFound
 	if errors.As(err, &notFound) {
 		return grpcapi.ErrArtifactNotFound{Repository: repository, Reference: reference}
+	}
+	var invalidRef ErrInvalidImageRef
+	if errors.As(err, &invalidRef) {
+		return grpcapi.ErrInvalidArtifactReference{Reference: invalidRef.Reference, Reason: invalidRef.Reason}
 	}
 	return err
 }
