@@ -854,7 +854,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
-| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists |
+| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists, and a `memory.swap.max` the leaf carries reset to `max` (the class table sets no swap limit) |
 | `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
@@ -1395,7 +1395,8 @@ its limit from outside. It checks the child sits in its own leaf at the class
 
 - the kernel's `oom_kill` count in `memory.events` rises;
 - only that child comes back, with a new PID;
-- the relaunch rewrites the class limit (`Prepare` runs on every launch);
+- the relaunch rewrites the class limit and resets the test's `memory.swap.max`
+  of 0 to `max` (`Prepare` runs on every launch);
 - the proxy loses no request.
 
 `TestGatewaydSupervisorDeathLeavesTheDatapath` kills the supervisor instead

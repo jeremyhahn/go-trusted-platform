@@ -1876,6 +1876,42 @@ func TestCgroupManager_WritesTheClassLimitsIntoALeaf(t *testing.T) {
 	require.NoError(t, manager.Remove("proxy"), "removing an absent leaf is not an error")
 }
 
+// A relaunch reuses the leaf: a swap limit left on it from before must not
+// reach the successor, whose limits come from the class table alone.
+func TestCgroupManager_ARelaunchResetsALeftoverSwapLimit(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	def, err := DefinitionByName("routing")
+	require.NoError(t, err)
+	path := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(path, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(path, "memory.swap.max"), []byte("0"), 0o600))
+
+	leaf, err := manager.Prepare(def)
+	require.NoError(t, err)
+	t.Cleanup(func() { leaf.Close() })
+
+	swap, err := os.ReadFile(filepath.Join(path, "memory.swap.max"))
+	require.NoError(t, err)
+	assert.Equal(t, "max", string(swap))
+}
+
+// Without swap accounting the kernel provides no memory.swap.max, and Prepare
+// must not try to create one.
+func TestCgroupManager_LeavesAnAbsentSwapLimitAbsent(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	def, err := DefinitionByName("routing")
+	require.NoError(t, err)
+
+	leaf, err := manager.Prepare(def)
+	require.NoError(t, err)
+	t.Cleanup(func() { leaf.Close() })
+
+	_, err = os.Stat(filepath.Join(root, "gatewayd", "routing", "memory.swap.max"))
+	assert.True(t, os.IsNotExist(err), "Prepare created memory.swap.max: %v", err)
+}
+
 func TestCgroupManager_DisabledDoesNothing(t *testing.T) {
 	var manager *CgroupManager
 	assert.False(t, manager.Enabled())
