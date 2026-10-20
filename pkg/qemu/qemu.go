@@ -34,8 +34,9 @@ import (
 // Default timeout for QMP connection attempts
 const defaultQMPTimeout = 5 * time.Second
 
-// Default timeout for graceful shutdown via QMP before falling back to SIGTERM
-const defaultGracefulShutdownTimeout = 30 * time.Second
+// DefaultGracefulShutdownTimeout is how long Stop waits for the guest to
+// answer the QMP power-down before it falls back to SIGTERM.
+const DefaultGracefulShutdownTimeout = 30 * time.Second
 
 // How long Start waits for QEMU to create the TAP device before bringing it up
 const tapOpenTimeout = 2 * time.Second
@@ -591,7 +592,7 @@ func (vm *VM) bringTapUp() error {
 // waiting up to the configured timeout. If QMP is not available or the graceful
 // shutdown times out, it falls back to SIGTERM.
 func (vm *VM) Stop() error {
-	return vm.StopWithTimeout(defaultGracefulShutdownTimeout)
+	return vm.StopWithTimeout(DefaultGracefulShutdownTimeout)
 }
 
 // StopWithTimeout stops the VM with a custom timeout for graceful shutdown.

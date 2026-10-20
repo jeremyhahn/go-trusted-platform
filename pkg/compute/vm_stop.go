@@ -17,11 +17,17 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
 
 // MaxStopTimeout bounds StopOptions.Timeout. The instance stays locked while
 // its guest is given time to power down, so the wait cannot be unbounded.
 const MaxStopTimeout = time.Hour
+
+// DefaultStopTimeout is how long a guest gets to power down when
+// StopOptions.Timeout is zero.
+const DefaultStopTimeout = qemu.DefaultGracefulShutdownTimeout
 
 // ErrInvalidStopOptions is returned when StopOptions carry a value no
 // orchestrator can honour.
@@ -42,6 +48,20 @@ type StopOptions struct {
 // IsDefault reports whether opts asks for nothing beyond a default stop.
 func (opts StopOptions) IsDefault() bool {
 	return opts == StopOptions{}
+}
+
+// GuestWait is the longest a stop with these options waits for the guest to
+// power down before it terminates it: nothing when forced, otherwise Timeout
+// or DefaultStopTimeout.
+func (opts StopOptions) GuestWait() time.Duration {
+	switch {
+	case opts.Force:
+		return 0
+	case opts.Timeout > 0:
+		return opts.Timeout
+	default:
+		return DefaultStopTimeout
+	}
 }
 
 // Validate refuses a negative or over-long timeout, and a timeout on a
