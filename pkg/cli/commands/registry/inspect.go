@@ -33,8 +33,8 @@ type ImageManifest struct {
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 	Signature   *SignatureInfo    `json:"signature,omitempty" yaml:"signature,omitempty"`
 	Encryption  *EncryptionInfo   `json:"encryption,omitempty" yaml:"encryption,omitempty"`
-	CreatedAt   int64             `json:"created_at" yaml:"created_at"`
-	PushedAt    int64             `json:"pushed_at" yaml:"pushed_at"`
+	CreatedAt   unixSeconds       `json:"created_at" yaml:"created_at"`
+	PushedAt    unixSeconds       `json:"pushed_at" yaml:"pushed_at"`
 	PushedBy    string            `json:"pushed_by,omitempty" yaml:"pushed_by,omitempty"`
 }
 
@@ -176,8 +176,8 @@ func convertInspectDomainResponse(detail *regsvc.ArtifactDetail, ref string) *In
 	if detail.Artifact != nil {
 		result.Manifest.Digest = detail.Artifact.Digest
 		result.Manifest.Annotations = detail.Artifact.Annotations
-		result.Manifest.CreatedAt = detail.Artifact.CreatedAt
-		result.Manifest.PushedAt = detail.Artifact.PushedAt
+		result.Manifest.CreatedAt = unixSeconds(detail.Artifact.CreatedAt)
+		result.Manifest.PushedAt = unixSeconds(detail.Artifact.PushedAt)
 	}
 
 	if detail.Manifest != nil {
@@ -225,8 +225,8 @@ func printInspectTable(printer *cli.Printer, manifest *ImageManifest, showLayers
 	printer.PrintKeyValue("Digest", manifest.Digest)
 	printer.PrintKeyValue("Media Type", manifest.MediaType)
 	printer.PrintKeyValue("Schema Version", fmt.Sprintf("%d", manifest.SchemaVer))
-	printer.PrintKeyValue("Created At", formatTimestamp(manifest.CreatedAt))
-	printer.PrintKeyValue("Pushed At", formatTimestamp(manifest.PushedAt))
+	printer.PrintKeyValue("Created At", formatTimestamp(int64(manifest.CreatedAt)))
+	printer.PrintKeyValue("Pushed At", formatTimestamp(int64(manifest.PushedAt)))
 	if manifest.PushedBy != "" {
 		printer.PrintKeyValue("Pushed By", manifest.PushedBy)
 	}
