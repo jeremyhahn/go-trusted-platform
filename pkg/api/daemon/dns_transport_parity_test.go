@@ -408,6 +408,45 @@ func TestDNSServiceServer_WithBackendStillRefusesBadInput(t *testing.T) {
 	assert.Empty(t, listed.(*platformv1.ListZonesResponse).GetZones())
 }
 
+// TestDNSServiceServer_ListZonesHonoursThePageSize is the regression for the
+// servicer that dropped the request's pagination and answered every zone on
+// gRPC, Unix, QUIC and MCP.
+func TestDNSServiceServer_ListZonesHonoursThePageSize(t *testing.T) {
+	ctx := context.Background()
+	server := NewDNSServiceServer(newDNSParityBackend(t), testLogger())
+	for _, name := range []string{"a.page.internal.", "b.page.internal.", "c.page.internal."} {
+		_, err := server.CreateZone(ctx, &platformv1.CreateZoneRequest{Name: name, Ttl: 3600, Internal: true})
+		require.NoError(t, err)
+	}
+
+	first, err := server.ListZones(ctx, &platformv1.ListZonesRequest{Pagination: &platformv1.PaginationRequest{PageSize: 2}})
+	require.NoError(t, err)
+	assert.Len(t, first.GetZones(), 2)
+	assert.Equal(t, uint64(3), first.GetPagination().GetTotalItems())
+	assert.Equal(t, uint32(2), first.GetPagination().GetTotalPages())
+
+	second, err := server.ListZones(ctx, &platformv1.ListZonesRequest{Pagination: &platformv1.PaginationRequest{PageSize: 2, Page: 2}})
+	require.NoError(t, err)
+	require.Len(t, second.GetZones(), 1)
+	for _, zone := range first.GetZones() {
+		assert.NotEqual(t, zone.GetName(), second.GetZones()[0].GetName(), "pages overlap")
+	}
+}
+
+func TestDNSServiceServer_ListZonesWithoutPageSizeAnswersEveryZone(t *testing.T) {
+	ctx := context.Background()
+	server := NewDNSServiceServer(newDNSParityBackend(t), testLogger())
+	for _, name := range []string{"a.all.internal.", "b.all.internal.", "c.all.internal."} {
+		_, err := server.CreateZone(ctx, &platformv1.CreateZoneRequest{Name: name, Ttl: 3600, Internal: true})
+		require.NoError(t, err)
+	}
+
+	listed, err := server.ListZones(ctx, &platformv1.ListZonesRequest{})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetZones(), 3)
+	assert.Equal(t, uint64(3), listed.GetPagination().GetTotalItems())
+}
+
 // TestDaemon_DNSServicerIsTheOneEveryTransportShares: New hands
 // config.DNSService to the servicer it registers on gRPC and Unix, and the
 // embedded transport registers that same servicer.

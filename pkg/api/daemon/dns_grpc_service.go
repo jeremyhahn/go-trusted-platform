@@ -227,8 +227,10 @@ func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZo
 		protoZones = append(protoZones, s.zoneToProto(zone))
 	}
 
+	page, pagination := paginatePage(protoZones, req.GetPagination())
 	return &platformv1.ListZonesResponse{
-		Zones: protoZones,
+		Zones:      page,
+		Pagination: pagination,
 	}, nil
 }
 
