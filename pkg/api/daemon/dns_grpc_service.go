@@ -379,8 +379,10 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 
 	records := s.extractRecords(&zone.RecordSet, req.GetType())
 
+	page, pagination := paginatePage(records, req.GetPagination())
 	return &platformv1.ListRecordsResponse{
-		Records: records,
+		Records:    page,
+		Pagination: pagination,
 	}, nil
 }
 

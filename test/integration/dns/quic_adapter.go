@@ -252,7 +252,8 @@ func (w *quicRecordWire) toPB() *pb.Record {
 }
 
 type quicListRecordsWire struct {
-	Records []*quicRecordWire `codec:"Records"`
+	Records    []*quicRecordWire      `codec:"Records"`
+	Pagination *pb.PaginationResponse `codec:"Pagination"`
 }
 
 type quicResolveWire struct {
@@ -708,6 +709,9 @@ func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 	if opts.RecordType != "" {
 		req.Type = recordTypeStringToProto(opts.RecordType)
 	}
+	if opts.Limit > 0 {
+		req.Pagination = &pb.PaginationRequest{PageSize: uint32(opts.Limit)}
+	}
 	resp, err := q.sendRequest(ctx, OpDNSListRecords, req)
 	if err != nil {
 		return nil, err
@@ -728,7 +732,12 @@ func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 			Priority:   priority,
 		})
 	}
-	return &ListRecordsResult{Records: records, TotalCount: int32(len(records))}, nil
+	out := &ListRecordsResult{Records: records, TotalCount: int32(len(records))}
+	if wire.Pagination != nil {
+		out.TotalCount = int32(wire.Pagination.GetTotalItems())
+		out.HasMore = wire.Pagination.GetPage() < wire.Pagination.GetTotalPages()
+	}
+	return out, nil
 }
 
 // =============================================================================

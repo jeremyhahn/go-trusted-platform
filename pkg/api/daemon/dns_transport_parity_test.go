@@ -467,6 +467,82 @@ func aRecord(name, value string) *platformv1.Record {
 	}
 }
 
+// newDNSRecordPageServer is newDNSRecordParityServer with four A records in
+// rec.internal.
+func newDNSRecordPageServer(t *testing.T) *DNSServiceServer {
+	t.Helper()
+	ctx := context.Background()
+	server := newDNSRecordParityServer(t)
+	for name, value := range map[string]string{
+		"a.rec.internal.": "192.0.2.20",
+		"b.rec.internal.": "192.0.2.21",
+		"c.rec.internal.": "192.0.2.22",
+	} {
+		_, err := server.AddRecord(ctx, &platformv1.AddRecordRequest{
+			ZoneName: "rec.internal.",
+			Record:   aRecord(name, value),
+		})
+		require.NoError(t, err)
+	}
+	return server
+}
+
+// TestDNSServiceServer_ListRecordsHonoursThePageSize is the regression for the
+// servicer that had no page on ListRecords and answered every record on gRPC,
+// Unix, QUIC and MCP.
+func TestDNSServiceServer_ListRecordsHonoursThePageSize(t *testing.T) {
+	ctx := context.Background()
+	server := newDNSRecordPageServer(t)
+
+	first, err := server.ListRecords(ctx, &platformv1.ListRecordsRequest{
+		ZoneName:   "rec.internal.",
+		Type:       platformv1.RecordType_RECORD_TYPE_A,
+		Pagination: &platformv1.PaginationRequest{PageSize: 2},
+	})
+	require.NoError(t, err)
+	assert.Len(t, first.GetRecords(), 2)
+	assert.Equal(t, uint64(4), first.GetPagination().GetTotalItems())
+	assert.Equal(t, uint32(2), first.GetPagination().GetTotalPages())
+
+	second, err := server.ListRecords(ctx, &platformv1.ListRecordsRequest{
+		ZoneName:   "rec.internal.",
+		Type:       platformv1.RecordType_RECORD_TYPE_A,
+		Pagination: &platformv1.PaginationRequest{PageSize: 2, Page: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, second.GetRecords(), 2)
+	for _, record := range first.GetRecords() {
+		for _, other := range second.GetRecords() {
+			assert.NotEqual(t, record.GetA().GetName(), other.GetA().GetName(), "pages overlap")
+		}
+	}
+}
+
+func TestDNSServiceServer_ListRecordsWithoutPageSizeAnswersEveryRecord(t *testing.T) {
+	server := newDNSRecordPageServer(t)
+
+	listed, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "rec.internal.",
+		Type:     platformv1.RecordType_RECORD_TYPE_A,
+	})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetRecords(), 4)
+	assert.Equal(t, uint64(4), listed.GetPagination().GetTotalItems())
+}
+
+func TestDNSServiceServer_ListRecordsPagePastTheEndIsEmpty(t *testing.T) {
+	server := newDNSRecordPageServer(t)
+
+	listed, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName:   "rec.internal.",
+		Type:       platformv1.RecordType_RECORD_TYPE_A,
+		Pagination: &platformv1.PaginationRequest{PageSize: 2, Page: 3},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, listed.GetRecords())
+	assert.Equal(t, uint64(4), listed.GetPagination().GetTotalItems())
+}
+
 // TestDNSServiceServer_AddRecordRefusesBadInput is the regression for the
 // servicer, shared by gRPC, Unix, QUIC and MCP, that stored a record with no
 // name, an A record holding no IPv4 address, an AAAA record holding no IPv6

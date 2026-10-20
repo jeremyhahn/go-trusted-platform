@@ -384,6 +384,49 @@ func TestDNSRecordGet_RefusesWhatItCannotAnswer(t *testing.T) {
 
 // A name the zone holds only in another type is not found: the AAAA "www"
 // does not answer an A lookup for a name with no A record, and vice versa.
+// dns_record_get searches every record of the type: a page argument never
+// narrows the ListRecords it answers from.
+func TestDNSRecordGet_IgnoresAPage(t *testing.T) {
+	fake := &fakeMCPDNS{}
+	registry := newDNSTestRegistry(fake)
+
+	_, err := registry.ExecuteTool(context.Background(), "dns_record_get", map[string]interface{}{
+		"zone_name":  "example.internal.",
+		"type":       "RECORD_TYPE_A",
+		"name":       "www",
+		"pagination": map[string]interface{}{"page_size": 1, "page": 3},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, fake.listed)
+	assert.Nil(t, fake.listed.GetPagination())
+}
+
+// dns_record_list offers the ListRecords page; dns_record_get does not.
+func TestDNSRecordTools_PageArgumentInSchema(t *testing.T) {
+	listProperties, ok := dnsTools["dns_record_list"].binding.schema()["properties"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Contains(t, listProperties, "pagination")
+
+	getProperties, ok := dnsRecordGetSchema()["properties"].(map[string]interface{})
+	require.True(t, ok)
+	assert.NotContains(t, getProperties, "pagination")
+	assert.Contains(t, getProperties, "name")
+}
+
+func TestDNSRecordList_PassesThePage(t *testing.T) {
+	fake := &fakeMCPDNS{}
+	registry := newDNSTestRegistry(fake)
+
+	_, err := registry.ExecuteTool(context.Background(), "dns_record_list", map[string]interface{}{
+		"zone_name":  "example.internal.",
+		"pagination": map[string]interface{}{"page_size": 2},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), fake.listed.GetPagination().GetPageSize())
+}
+
 func TestDNSRecordGet_NotFoundIsTypedAndNotFoundClass(t *testing.T) {
 	registry := newDNSTestRegistry(&fakeMCPDNS{})
 
