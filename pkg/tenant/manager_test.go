@@ -1228,6 +1228,50 @@ func TestListTenants_WithTenants(t *testing.T) {
 	}
 }
 
+// A list must not replace the platform's cached tenant with IAM's bare
+// projection: IAM carries no lifecycle state, quotas or labels, so a
+// clobbered tenant reads back "created" and can no longer be suspended.
+func TestListTenants_KeepsCachedTenantState(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	quota := ComputeQuota{MaxVMs: 100}
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:         "listed-tenant",
+		Labels:       map[string]string{"team": "a"},
+		ComputeQuota: &quota,
+	})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
+	tenants, _, err := manager.ListTenants(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(tenants) != 1 || tenants[0].State != StateActive {
+		t.Fatalf("expected one active tenant in the list, got %+v", tenants)
+	}
+
+	got, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get tenant: %v", err)
+	}
+	if got.State != StateActive {
+		t.Errorf("expected state %q after list, got %q", StateActive, got.State)
+	}
+	if got.ComputeQuota.MaxVMs != 100 {
+		t.Errorf("expected MaxVMs 100 after list, got %d", got.ComputeQuota.MaxVMs)
+	}
+	if got.Labels["team"] != "a" {
+		t.Errorf("expected label team=a after list, got %v", got.Labels)
+	}
+
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Errorf("expected suspend after list to succeed, got %v", err)
+	}
+}
+
 func TestListTenants_DefaultLimit(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()

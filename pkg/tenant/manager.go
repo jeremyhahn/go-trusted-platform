@@ -487,6 +487,14 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 
 	entities := make([]*TenantEntity, 0, len(tenants))
 	for _, t := range tenants {
+		// A cached tenant is the richer record: IAM carries no lifecycle
+		// state, quotas, labels or annotations, so replacing it with
+		// FromIAM would reset an active tenant to "created".
+		if cached, ok := m.cache.Load(t.ID); ok {
+			entities = append(entities, cached.(*TenantEntity).Clone())
+			continue
+		}
+
 		entity := FromIAM(&t)
 
 		// Enrich with DEK path
