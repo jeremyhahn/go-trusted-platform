@@ -776,7 +776,11 @@ func (p *MCPServiceProvider) DeviceFindBySerial(ctx context.Context, serial stri
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
-	return p.deviceService.FindBySerial(ctx, serial)
+	dev, err := p.deviceService.FindBySerial(ctx, serial)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return dev, nil
 }
 
 // registerMCPDevice stores the device described by a device_register request
@@ -801,7 +805,9 @@ func registerMCPDevice(ctx context.Context, svc device.DeviceService, req *mcp.D
 	return dev, nil
 }
 
-// DeviceGet retrieves a device by ID.
+// DeviceGet retrieves a device by ID. Service failures are classified by
+// deviceStatusError, as the gRPC device service classifies them, so a missing
+// device is NotFound on MCP as it is on every other transport.
 func (p *MCPServiceProvider) DeviceGet(ctx context.Context, deviceID string) (interface{}, error) {
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
@@ -811,7 +817,11 @@ func (p *MCPServiceProvider) DeviceGet(ctx context.Context, deviceID string) (in
 	if err != nil {
 		return nil, err
 	}
-	return p.deviceService.Get(ctx, id)
+	dev, err := p.deviceService.Get(ctx, id)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return dev, nil
 }
 
 // DeviceList lists devices with optional filter.
@@ -826,7 +836,7 @@ func (p *MCPServiceProvider) DeviceList(ctx context.Context, filter map[string]s
 	}
 	result, err := p.deviceService.Page(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, deviceStatusError(err)
 	}
 
 	devices := make([]interface{}, len(result.Entities))
@@ -848,9 +858,9 @@ func (p *MCPServiceProvider) DeviceDelete(ctx context.Context, deviceID string) 
 	}
 	dev, err := p.deviceService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
-	return p.deviceService.Delete(ctx, dev)
+	return deviceStatusError(p.deviceService.Delete(ctx, dev))
 }
 
 // DeviceUpdate updates a device.
@@ -865,7 +875,7 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 	}
 	dev, err := p.deviceService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
 	if model, ok := updates["model"].(string); ok {
 		dev.Model = model
@@ -873,7 +883,7 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 	if serial, ok := updates["serial"].(string); ok {
 		dev.Serial = serial
 	}
-	return p.deviceService.Update(ctx, dev)
+	return deviceStatusError(p.deviceService.Update(ctx, dev))
 }
 
 // DeviceAttest verifies a TPM quote submitted for a device over MCP. It
