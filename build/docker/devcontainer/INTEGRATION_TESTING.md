@@ -524,7 +524,11 @@ jobs:
 ```
 
 Without `/dev/kvm` the QEMU suites still run, only slower: QEMU falls back to
-software emulation. Do not add a skip guard for a missing device.
+software emulation. Do not add a skip guard for a missing device. The runner
+prints whether `/dev/kvm` is present. The iso install suite's 20-minute bound
+(`vmInstallTimeout`, `test/integration/iso/helpers.go`) assumes KVM, so on a
+runner without it that suite times out: give the runner `/dev/kvm` rather
+than raising the bound.
 
 ## Best Practices
 

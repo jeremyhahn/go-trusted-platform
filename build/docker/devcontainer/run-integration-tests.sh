@@ -405,9 +405,14 @@ setup_devices() {
         chmod 666 /dev/net/tun
     fi
 
-    # KVM permissions
+    # KVM permissions. Without /dev/kvm every QEMU guest runs TCG (pkg/qemu
+    # logs "KVM requested but unusable, running TCG"), and the iso install
+    # suite does not finish inside its 20-minute bound: say which it is.
     if [ -e /dev/kvm ]; then
         chmod 666 /dev/kvm
+        echo "/dev/kvm: available (QEMU guests run KVM)"
+    else
+        echo "WARNING: /dev/kvm NOT AVAILABLE: QEMU guests run TCG; the iso install suite will exceed its bound"
     fi
 
     # Load kernel modules (best effort)
