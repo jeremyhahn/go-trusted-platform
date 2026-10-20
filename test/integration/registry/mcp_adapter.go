@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -184,13 +185,33 @@ func (m *MCPAdapter) callTool(ctx context.Context, tool string, args map[string]
 // mcpArtifact is an artifact as pkg/api/daemon/mcp_registry.go renders it;
 // times are UNIX milliseconds, 0 when unset.
 type mcpArtifact struct {
-	Repository  string            `json:"repository"`
-	Tag         string            `json:"tag"`
+	Repository   string            `json:"repository"`
+	Tag          string            `json:"tag"`
+	Digest       string            `json:"digest"`
+	Size         int64             `json:"size"`
+	Annotations  map[string]string `json:"annotations"`
+	OS           string            `json:"os"`
+	Architecture string            `json:"architecture"`
+	Author       string            `json:"author"`
+	Manifest     *mcpManifest      `json:"manifest"`
+	CreatedAt    int64             `json:"created_at"`
+	UpdatedAt    int64             `json:"updated_at"`
+}
+
+// mcpManifest is the manifest platform_registry_inspect carries on an
+// artifact (docs/registry/api.md §4).
+type mcpManifest struct {
+	MediaType    string          `json:"media_type"`
+	ConfigDigest string          `json:"config_digest"`
+	Layers       []mcpDescriptor `json:"layers"`
+}
+
+// mcpDescriptor is one layer of an mcpManifest.
+type mcpDescriptor struct {
+	MediaType   string            `json:"media_type"`
 	Digest      string            `json:"digest"`
 	Size        int64             `json:"size"`
 	Annotations map[string]string `json:"annotations"`
-	CreatedAt   int64             `json:"created_at"`
-	UpdatedAt   int64             `json:"updated_at"`
 }
 
 // fromMilli converts the tools' millisecond timestamps, keeping 0 as unset.
@@ -202,7 +223,7 @@ func fromMilli(ms int64) time.Time {
 }
 
 func (a mcpArtifact) manifest() ImageManifest {
-	return ImageManifest{
+	m := ImageManifest{
 		Reference:   a.Repository + ":" + a.Tag,
 		Digest:      a.Digest,
 		Size:        a.Size,
@@ -210,6 +231,14 @@ func (a mcpArtifact) manifest() ImageManifest {
 		CreatedAt:   fromMilli(a.CreatedAt),
 		UpdatedAt:   fromMilli(a.UpdatedAt),
 	}
+	if a.Manifest != nil {
+		m.MediaType = a.Manifest.MediaType
+		m.Config = Descriptor{Digest: a.Manifest.ConfigDigest}
+		for _, l := range a.Manifest.Layers {
+			m.Layers = append(m.Layers, Descriptor(l))
+		}
+	}
+	return m
 }
 
 // Push is not an MCP tool.
@@ -279,7 +308,20 @@ func (m *MCPAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, e
 	}
 	manifest := resp.Artifact.manifest()
 	manifest.Reference = ref
-	return &InspectResult{Reference: ref, Manifest: &manifest, TotalSize: resp.Artifact.Size}, nil
+	annotations := resp.Artifact.Annotations
+	return &InspectResult{
+		Reference: ref,
+		Manifest:  &manifest,
+		Config: &ImageConfig{
+			Architecture: resp.Artifact.Architecture,
+			OS:           resp.Artifact.OS,
+			Author:       resp.Artifact.Author,
+		},
+		TotalSize:       resp.Artifact.Size,
+		LayerCount:      len(manifest.Layers),
+		Encrypted:       annotations[registry.ManifestAnnotationEncrypted] == "true",
+		EncryptionKeyID: annotations[registry.ManifestAnnotationKeyID],
+	}, nil
 }
 
 // Status calls platform_registry_status.
