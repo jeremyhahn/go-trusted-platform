@@ -206,7 +206,11 @@ it without continuing it first. `RebootVM` has only `force`, which forces its
 stop half. A forced stop that also carries a timeout, or a timeout over 3600,
 is InvalidArgument before the VM is touched. An orchestrator that cannot honour
 the options (any but `local-qemu`) answers FailedPrecondition for a non-default
-stop rather than taking a default one.
+stop rather than taking a default one. Over REST the stop and reboot routes
+move the reply's write deadline to the guest's power-down window plus 30
+seconds (`StopOptions.GuestWait`), so a graceful stop that runs past the
+server's 30-second write timeout still answers instead of closing the
+connection.
 
 **List honours `states`, `selector` and `pagination`**
 (`ComputeService.ListVMs`, `pkg/api/daemon/compute_vm_list.go`). `states`

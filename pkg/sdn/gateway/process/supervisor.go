@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
@@ -523,6 +524,16 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	return nil
 }
 
+// childStarting holds the gateway states a child reports before its
+// Gateway.Start has finished: STOPPED until Start begins, INITIALIZING while
+// it runs. A service health read in these states describes a start still in
+// flight, not its outcome.
+var childStarting = map[ipcv1.ProcessState]bool{
+	ipcv1.ProcessState_PROCESS_STATE_UNSPECIFIED:  true,
+	ipcv1.ProcessState_PROCESS_STATE_STOPPED:      true,
+	ipcv1.ProcessState_PROCESS_STATE_INITIALIZING: true,
+}
+
 // awaitService polls the child's control socket until the service reports
 // active, the readiness deadline passes, or the child dies.
 func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service string) error {
@@ -545,6 +556,15 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 			} else {
 				lastErr = nil
 				detail = status.GetStartError()
+				// A child answers before its Gateway.Start has run, and
+				// until Start returns every hosted service reports
+				// "not active" as its health. That is not a verdict:
+				// stopping the child here cancels the start in flight
+				// (the OVS pipeline install among it). Only a start error
+				// or the deadline below ends the wait early.
+				if detail == "" && childStarting[status.GetState()] {
+					status = nil
+				}
 				for _, svc := range status.GetServices() {
 					if svc.GetName() != service {
 						continue

@@ -15,9 +15,11 @@ package compute
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
@@ -53,6 +55,22 @@ func (h *Handlers) ensureAvailable(w http.ResponseWriter, r *http.Request) bool 
 		return false
 	}
 	return true
+}
+
+// lifecycleWriteMargin is the time a stop or reboot reply gets beyond the
+// guest's power-down window: the process exit, a reboot's start and the
+// reply itself.
+const lifecycleWriteMargin = 30 * time.Second
+
+// extendWriteDeadline lets a stop or reboot reply outlive the server's write
+// timeout. A graceful stop waits up to the guest's power-down window, which
+// is as long as the default write timeout, so without this the server closes
+// the connection before the VM has stopped and the client sees EOF.
+func (h *Handlers) extendWriteDeadline(w http.ResponseWriter, opts compute.StopOptions) {
+	deadline := time.Now().Add(opts.GuestWait() + lifecycleWriteMargin)
+	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil {
+		h.logger.Warnf("compute: cannot extend the reply deadline: %v", err)
+	}
 }
 
 // CreateVM handles POST /api/v1/compute/vms.
@@ -169,6 +187,10 @@ func (h *Handlers) StopVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Id = mux.Vars(r)["id"]
+	h.extendWriteDeadline(w, compute.StopOptions{
+		Force:   req.GetForce(),
+		Timeout: time.Duration(req.GetTimeoutSeconds()) * time.Second,
+	})
 	resp, err := h.server.StopVM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
@@ -188,6 +210,7 @@ func (h *Handlers) RebootVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Id = mux.Vars(r)["id"]
+	h.extendWriteDeadline(w, compute.StopOptions{Force: req.GetForce()})
 	resp, err := h.server.RebootVM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)

@@ -75,6 +75,23 @@ func TestStopOptionsValidate(t *testing.T) {
 	}
 }
 
+func TestStopOptionsGuestWait(t *testing.T) {
+	tests := []struct {
+		name string
+		opts StopOptions
+		want time.Duration
+	}{
+		{name: "default waits the default window", opts: StopOptions{}, want: DefaultStopTimeout},
+		{name: "timeout waits the timeout", opts: StopOptions{Timeout: 5 * time.Second}, want: 5 * time.Second},
+		{name: "force does not wait", opts: StopOptions{Force: true}, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.opts.GuestWait())
+		})
+	}
+}
+
 func TestStopWithOptions_UsesVMStopper(t *testing.T) {
 	o := &optionStopper{}
 	opts := StopOptions{Timeout: 7 * time.Second}
