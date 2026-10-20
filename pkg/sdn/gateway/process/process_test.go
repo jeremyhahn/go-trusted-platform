@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -227,6 +228,11 @@ type fakeNode struct {
 	// status question mid-flight; each holds one call.
 	holdApply  *heldCall
 	holdStatus *heldCall
+	// startingPolls, when positive, is how many more status replies come
+	// from a child whose Gateway.Start is still running; starting marks
+	// the reply being built as one of them.
+	startingPolls int
+	starting      bool
 }
 
 // heldCall holds one call to a fake in the child mid-flight, so a test can
@@ -267,7 +273,16 @@ func (f *fakeNode) appliedVersions() []string {
 	return append([]string(nil), f.applies...)
 }
 
-func (f *fakeNode) GetState() gateway.GatewayState { return gateway.GatewayStateRunning }
+// GetState reports the state of the Status reply ServiceReports just built:
+// Server.Status reads the services first, then the state.
+func (f *fakeNode) GetState() gateway.GatewayState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.starting {
+		return gateway.GatewayStateInitializing
+	}
+	return gateway.GatewayStateRunning
+}
 
 func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
 	f.mu.Lock()
@@ -278,7 +293,19 @@ func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]gateway.ServiceReport(nil), f.services...)
+	f.starting = f.startingPolls > 0
+	if !f.starting {
+		return append([]gateway.ServiceReport(nil), f.services...)
+	}
+	// Mid-Start, every hosted service reads as a handler not yet started.
+	f.startingPolls--
+	reports := make([]gateway.ServiceReport, 0, len(f.services))
+	for _, svc := range f.services {
+		reports = append(reports, gateway.ServiceReport{
+			Name: svc.Name, Health: errors.New("service not active: " + svc.Name),
+		})
+	}
+	return reports
 }
 
 func (f *fakeNode) setHealth(service string, active bool, health error) {
@@ -875,6 +902,34 @@ func TestStartService_ReportsAChildThatDidNotActivateTheService(t *testing.T) {
 	// The stop waited for the child's watch goroutine, and a restart would
 	// have run inside it, so the count is final once StartService returns.
 	assert.Equal(t, 1, launcher.launchCount(), "a process nobody wants is not restarted")
+}
+
+func TestStartService_WaitsOutAChildStillStarting(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.ReadyTimeout = 2 * time.Second })
+	// The child answers before its Gateway.Start returns, and until then
+	// the load balancer reads "service not active". Stopping the child on
+	// that reply canceled the OVS pipeline install in flight (#973).
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = 3
+
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceLoadBalancer))
+	assert.NotContains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM),
+		"a child still starting is not stopped")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestStartService_GivesUpOnAChildThatNeverFinishesStarting(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.ReadyTimeout = 200 * time.Millisecond })
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = math.MaxInt
+
+	err := supervisor.StartService(testContext(t), gateway.ServiceLoadBalancer)
+	var notActive *ErrServiceNotActiveInProcess
+	require.ErrorAs(t, err, &notActive, "the readiness deadline still bounds the wait")
+	assert.Equal(t, gateway.ServiceLoadBalancer, notActive.Service)
+	assert.Contains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM))
 }
 
 func TestStartService_AFailedStartLeavesTheProcessAnotherServiceStillWants(t *testing.T) {

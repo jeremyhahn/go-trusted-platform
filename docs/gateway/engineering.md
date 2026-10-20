@@ -1321,7 +1321,13 @@ child whose configuration enables none of its services stops with
 The child listens **before** it starts its services: a start failure is set
 with `SetStartError` and stays readable over `Status`, so the supervisor
 reports why (`ErrServiceNotActiveInProcess` with the detail) rather than a
-socket that never appeared. The child's IPC policy admits the supervisor's uid
+socket that never appeared. Listening first also means the supervisor can
+read `Status` while `Start` is still running, when every hosted service
+reports "not active" as its health; while the child's state is `STOPPED` or
+`INITIALIZING` and it has set no start error, the supervisor keeps waiting
+(up to `ReadyTimeout`) instead of taking that health as the verdict.
+Stopping the child there would cancel the start in flight, the OVS pipeline
+install among it (#973). The child's IPC policy admits the supervisor's uid
 to the control service; only the kernel-class process also admits the service
 account, and only to `InstallVPNPeer` and `RemoveVPNPeer`, so one parser cannot
 reach another's surface though they share an account, and no parser can send
