@@ -157,7 +157,8 @@ parallel surface was **collapsed into `VTPMService`**:
 │       ├── manifest.json      # Bundle metadata
 │       ├── tpm/
 │       │   ├── tpm2-00.permall   # Persistent TPM state
-│       │   └── swtpm.sock        # Runtime socket (when running)
+│       │   ├── sealed/           # Blobs of the objects SealVTPM created
+│       │   └── swtpm.sock        # Runtime socket (when running; see below)
 │       ├── ovmf/
 │       │   └── OVMF_VARS.fd      # UEFI NVRAM
 │       └── secureboot/           # If Secure Boot enabled
@@ -257,6 +258,22 @@ swtpm: it creates and persists the EK, the shared SRK (`0x81000001`) and an
 IAK (`0x81020001`). The IAK's common name is the bundle hostname; go-xkms
 refuses to create an IAK without one. The EK public key sent to the CA is
 read back from the persistent EK handle.
+
+## Runtime: Start, Seal and Restart
+
+- **Lifetime.** `Start` launches swtpm and returns; the daemon runs until
+  `Stop`, not until the request that started it ends. swtpm listens in a short
+  temporary directory when the bundle path would exceed the Unix socket path
+  limit; `GetTPMSocketPath` reports the socket of the running instance.
+- **First Start provisions.** A bundle created without EK-certificate
+  injection (template mode, or no CA) has no persistent EK. Its first `Start`
+  runs the same go-xkms provisioning flow as above (EK, SRK, IAK), because
+  quote, seal and PCR extend need those keys. A later `Start` finds the
+  persistent EK and does not provision again, so the keys survive a restart.
+- **Sealed data.** go-xkms keeps the private and public blobs of a sealed
+  object in `tpm/sealed/` of the bundle, through the SDK file key backend.
+  `UnsealVTPM` after a restart reads them from there, and an exported bundle
+  carries them.
 
 ### NV Index Locations
 

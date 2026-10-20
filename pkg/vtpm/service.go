@@ -220,7 +220,7 @@ func (s *Service) buildBundle(ctx context.Context, bundleID, bundlePath string, 
 	// Step 3: For pre-assigned mode, inject EK certificate
 	var ekCertInfo *EKCertInfo
 	if opts.Mode == BundleModePreAssigned && s.ca != nil {
-		ekCertInfo, err = s.injectEKCertificate(ctx, sw.SocketPath(), opts)
+		ekCertInfo, err = s.injectEKCertificate(ctx, sw.SocketPath(), tpmDir, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -288,13 +288,13 @@ func (s *Service) buildBundle(ctx context.Context, bundleID, bundlePath string, 
 
 // injectEKCertificate issues and injects an EK certificate into the TPM NV RAM.
 // This uses TPMOperations to create the EK and extract the public key.
-func (s *Service) injectEKCertificate(ctx context.Context, socketPath string, opts *CreateBundleOptions) (*EKCertInfo, error) {
+func (s *Service) injectEKCertificate(ctx context.Context, socketPath, tpmDir string, opts *CreateBundleOptions) (*EKCertInfo, error) {
 	s.logger.Debug("Injecting EK certificate",
 		"hostname", opts.Hostname,
 		"algorithm", opts.EKAlgorithm)
 
 	// Step 1: Create TPM operations wrapper with algorithm configuration
-	tpmOps, err := NewTPMOperations(socketPath, opts.EKAlgorithm, opts.Hostname, s.logger)
+	tpmOps, err := NewTPMOperations(socketPath, sealedDataDir(tpmDir), opts.EKAlgorithm, opts.Hostname, s.logger)
 	if err != nil {
 		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
 	}
@@ -409,7 +409,7 @@ func (s *Service) injectEKCertificateForClone(ctx context.Context, bundlePath st
 		Hostname:    hostname,
 		EKAlgorithm: algorithm,
 	}
-	ekCertInfo, err := s.injectEKCertificate(ctx, sw.SocketPath(), opts)
+	ekCertInfo, err := s.injectEKCertificate(ctx, sw.SocketPath(), tpmDir, opts)
 	if err != nil {
 		s.logger.Warn("Failed to inject EK certificate, skipping",
 			"error", err,
@@ -1103,8 +1103,16 @@ func (s *Service) Start(ctx context.Context, bundleID string) error {
 	}
 
 	// Create TPM operations wrapper for runtime operations
-	tpmOps, err := NewTPMOperations(sw.SocketPath(), ekAlgorithm, hostname, s.logger)
+	tpmOps, err := NewTPMOperations(sw.SocketPath(), sealedDataDir(tpmDir), ekAlgorithm, hostname, s.logger)
 	if err != nil {
+		sw.Stop()
+		return ErrVTPMStartFailed{BundleID: bundleID, Cause: err}
+	}
+
+	// A bundle created without EK-certificate injection is provisioned on
+	// its first Start; a restart finds the persistent EK and keeps its keys.
+	if err := tpmOps.ProvisionIfNew(); err != nil {
+		tpmOps.Close()
 		sw.Stop()
 		return ErrVTPMStartFailed{BundleID: bundleID, Cause: err}
 	}

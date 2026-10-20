@@ -18,12 +18,16 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -265,49 +269,75 @@ func (p *TPMProvider) CloseAll() error {
 // This wraps a go-xkms TrustedPlatformModule and provides operations
 // specific to vTPM bundle management.
 type TPMOperations struct {
-	tpm        xkmssdk.TrustedPlatformModule
-	socketPath string
-	algorithm  EKAlgorithm
-	logger     *logging.Logger
+	tpm         xkmssdk.TrustedPlatformModule
+	socketPath  string
+	algorithm   EKAlgorithm
+	logger      *logging.Logger
+	provisioned bool
 }
 
 // NewTPMOperations creates a new TPM operations wrapper configured for the
 // specified EK algorithm. The algorithm determines the TCG NV index used
 // for EK certificate storage (RSA: 0x01C00002, ECC: 0x01C0000A). deviceCN
 // is the common name of the IAK that Provision creates; it is the bundle
-// hostname.
-func NewTPMOperations(socketPath string, algorithm EKAlgorithm, deviceCN string, logger *logging.Logger) (*TPMOperations, error) {
-	if logger == nil {
-		logger = logging.DefaultLogger()
-	}
-
+// hostname. sealedDir is the bundle's sealed-data directory (sealedDataDir).
+func NewTPMOperations(socketPath, sealedDir string, algorithm EKAlgorithm, deviceCN string, logger *logging.Logger) (*TPMOperations, error) {
 	// Open transport to swtpm socket
 	t, err := xkmssdk.OpenUnixSocketTransport(socketPath)
 	if err != nil {
 		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
 	}
 
+	ops, err := newTPMOperations(t, socketPath, sealedDir, algorithm, deviceCN, logger)
+	if err != nil {
+		// Close the transport if it implements io.Closer
+		if closer, ok := t.(io.Closer); ok {
+			closer.Close()
+		}
+		return nil, err
+	}
+	return ops, nil
+}
+
+// newTPMOperations builds the go-xkms TPM over an open transport. The TPM keeps
+// the blobs of the objects it seals in a file store rooted at sealedDir, so a
+// later TPMOperations on the same bundle unseals them. A TPM with no persistent
+// EK opens unprovisioned (ErrTPMNotInitialized); ProvisionIfNew provisions it.
+func newTPMOperations(t transport.TPM, socketPath, sealedDir string, algorithm EKAlgorithm, deviceCN string, logger *logging.Logger) (*TPMOperations, error) {
+	if logger == nil {
+		logger = logging.DefaultLogger()
+	}
+
+	sealedStore, err := xkmssdk.NewFileStorageBackend(sealedDir)
+	if err != nil {
+		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: &WrappedError{Msg: "failed to open the sealed-data store", Err: err}}
+	}
+
 	params := &xkmssdk.TPMParams{
+		Backend:   xkmssdk.NewFileBackend(slog.Default(), sealedStore),
 		Config:    tpmOperationsConfig(socketPath, algorithm, deviceCN),
 		Logger:    nil, // Will use go-xkms's default logger
 		Transport: t,
 	}
 
 	tpm, err := xkmssdk.NewTPM2(params)
-	if err != nil && err != xkmssdk.ErrTPMNotInitialized {
-		// Close the transport if it implements io.Closer
-		if closer, ok := t.(io.Closer); ok {
-			closer.Close()
-		}
+	if err != nil && !errors.Is(err, xkmssdk.ErrTPMNotInitialized) {
 		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
 	}
 
 	return &TPMOperations{
-		tpm:        tpm,
-		socketPath: socketPath,
-		algorithm:  algorithm,
-		logger:     logger,
+		tpm:         tpm,
+		socketPath:  socketPath,
+		algorithm:   algorithm,
+		logger:      logger,
+		provisioned: err == nil,
 	}, nil
+}
+
+// sealedDataDir is the directory, inside a bundle's TPM state directory, that
+// holds the blobs of the objects the bundle's vTPM seals.
+func sealedDataDir(tpmDir string) string {
+	return filepath.Join(tpmDir, "sealed")
 }
 
 // tpmOperationsConfig builds the configuration of a bundle vTPM: an EK of
@@ -396,9 +426,21 @@ func (ops *TPMOperations) Provision(soPIN string) error {
 	if err := ops.tpm.Provision(password); err != nil {
 		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to provision TPM", Err: err}}
 	}
+	ops.provisioned = true
 
 	ops.logger.Debug("vTPM provisioned successfully")
 	return nil
+}
+
+// ProvisionIfNew provisions a vTPM that opened without a persistent EK: a
+// bundle created without EK-certificate injection reaches its first Start
+// unprovisioned, and Quote, Seal and ExtendPCR need its keys. A provisioned
+// vTPM is left as it is, so a restart keeps the keys it already has.
+func (ops *TPMOperations) ProvisionIfNew() error {
+	if ops.provisioned {
+		return nil
+	}
+	return ops.Provision("")
 }
 
 // GetEKPublicKey returns the EK public key using go-xkms.
