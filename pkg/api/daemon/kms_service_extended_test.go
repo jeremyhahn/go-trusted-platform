@@ -28,6 +28,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
 // extKMSClientMock embeds mockSDKKMSClient and overrides the key-lifecycle
@@ -137,11 +138,11 @@ func (m *extSecretsClientMock) Ensure(ctx context.Context, req *secrets.EnsureSe
 }
 
 func (m *extSecretsClientMock) GetVersion(ctx context.Context, req *secrets.GetSecretVersionRequest) (*secrets.SecretVersionInfo, error) {
-	return nil, errKMSLifecycleMock{method: "GetVersion"}
+	return nil, sdkerrors.NewNotFound("GetVersion", "secret not found")
 }
 
 func (m *extSecretsClientMock) ListVersions(ctx context.Context, secretID string) (*secrets.ListSecretVersionsResponse, error) {
-	return nil, errKMSLifecycleMock{method: "ListVersions"}
+	return nil, sdkerrors.NewNotFound("ListVersions", "secret not found")
 }
 
 func (m *extSecretsClientMock) Rotate(ctx context.Context, req *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error) {
@@ -169,7 +170,7 @@ func (m *extSecretsClientMock) GetRotationPolicy(ctx context.Context, secretID s
 	if m.getRotationPolicyFn != nil {
 		return m.getRotationPolicyFn(ctx, secretID)
 	}
-	return nil, errKMSLifecycleMock{method: "GetRotationPolicy"}
+	return nil, sdkerrors.NewNotFound("GetRotationPolicy", "rotation policy not found")
 }
 
 // requireGRPCCode asserts err is a gRPC status error with the given code.

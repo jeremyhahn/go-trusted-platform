@@ -222,15 +222,16 @@ Subs `0x01`–`0x06` take platform wire structs and are not routed by method nam
 Every secrets sub needs the scope in its row's MCP cell, the one its gRPC method
 needs; the two list subs, `0x03` and `0x08`, need `secrets:list`.
 
-**An embedded daemon cannot serve secret versions, rotate, rollback or
-status.** Seam: go-quicbaas embedded Secrets `GetVersion`, `ListVersions`,
-`Rotate`, `Rollback` and `UpdateStatus`. The pinned SDK's embedded dispatcher
+**An embedded daemon cannot serve secret versions, rotate, rollback, status
+or rotation policy.** Seam: go-quicbaas embedded Secrets `GetVersion`,
+`ListVersions`, `Rotate`, `Rollback`, `UpdateStatus`, `SetRotationPolicy` and
+`GetRotationPolicy`. The pinned SDK's embedded dispatcher
 (`sdk/go/transport/embedded/transport.go` `unaryHandlers`, v0.12.0-alpha)
 registers only `Store`, `Get`, `List`, `Delete` and `Ensure` for
 `quicbaas.Secrets`, so on an embedded daemon every transport's route for the
-other five reaches the SDK and answers its unknown-method error; its service
-also refuses a `deleted` status. A daemon on a remote quicbaas transport
-serves them.
+other seven reaches the SDK and answers its unknown-method error, classed
+`Unimplemented` by `pkg/api/errclass`; its service also refuses a `deleted`
+status. A daemon on a remote quicbaas transport serves them.
 
 **The CLI cannot reach them either** — the entire `platformctl kms secrets`
 and `kms dek` subtrees are stubs that return typed

@@ -24,8 +24,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"sync/atomic"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // MCPAdapterError represents an error from the MCP adapter
@@ -188,7 +190,12 @@ func (a *MCPAdapter) callTool(ctx context.Context, toolName string, args interfa
 		ID: atomic.AddInt64(&a.requestID, 1),
 	}
 
-	return a.doRequest(ctx, req)
+	raw, err := a.doRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// The tool output is JSON in the CallToolResult's text block.
+	return mcpwire.ToolOutputJSON(raw)
 }
 
 // ============================================================================

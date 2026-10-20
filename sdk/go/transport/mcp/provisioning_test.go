@@ -36,6 +36,8 @@ type toolCall struct {
 
 // provisioningTestServer runs a JSON-RPC MCP server that records tools/call
 // requests and answers with the supplied per-tool results.
+// toolCallResult wraps a tool's output the way platformd answers tools/call:
+// a CallToolResult with one text block holding the output's JSON.
 func provisioningTestServer(t *testing.T, results map[string]interface{}, calls *[]toolCall) *Adapter {
 	t.Helper()
 
@@ -61,8 +63,12 @@ func provisioningTestServer(t *testing.T, results map[string]interface{}, calls 
 			name, _ := params["name"].(string)
 			args, _ := params["arguments"].(map[string]interface{})
 			*calls = append(*calls, toolCall{Name: name, Arguments: args})
+			result, err := mcpwire.NewCallToolResult(results[name])
+			if err != nil {
+				t.Errorf("encode %s output: %v", name, err)
+			}
 			_ = json.NewEncoder(w).Encode(mcpwire.JSONRPCResponse{
-				JSONRPC: "2.0", ID: req.ID, Result: results[name],
+				JSONRPC: "2.0", ID: req.ID, Result: result,
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)

@@ -10,6 +10,8 @@ import (
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // ListDEKs returns the DEKs under an optional path prefix.
@@ -134,7 +136,7 @@ func (a *SecretsServerAdapter) GetSecretVersion(ctx context.Context, req *pb.Get
 		Version:  int(req.GetVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "secret version not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get secret version failed: %v", err)
 	}
 
 	return &pb.GetSecretVersionResponse{
@@ -155,7 +157,7 @@ func (a *SecretsServerAdapter) ListSecretVersions(ctx context.Context, req *pb.L
 
 	resp, err := a.client.ListVersions(ctx, req.GetSecretId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "secret versions not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "list secret versions failed: %v", err)
 	}
 
 	versions := make([]*pb.SecretVersion, 0, len(resp.Versions))
@@ -186,7 +188,7 @@ func (a *SecretsServerAdapter) RotateSecret(ctx context.Context, req *pb.RotateS
 		Metadata: req.GetMetadata(),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "secret rotation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "secret rotation failed: %v", err)
 	}
 
 	return &pb.RotateSecretResponse{
@@ -214,7 +216,7 @@ func (a *SecretsServerAdapter) RollbackSecret(ctx context.Context, req *pb.Rollb
 		TargetVersion: int(req.GetTargetVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "secret rollback failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "secret rollback failed: %v", err)
 	}
 
 	return &pb.RollbackSecretResponse{
@@ -249,7 +251,7 @@ func (a *SecretsServerAdapter) UpdateSecretStatus(ctx context.Context, req *pb.U
 		Status:   sdkStatus,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "secret status update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "secret status update failed: %v", err)
 	}
 
 	return &pb.UpdateSecretStatusResponse{

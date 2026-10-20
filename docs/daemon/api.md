@@ -93,6 +93,33 @@ but it is only reachable after unseal and carries the `ceremony` scope on every
 token-gated listener, so it cannot bootstrap a fresh platform — `platformctl
 init` does not use it.
 
+### MCP tool results (#973)
+
+A successful `tools/call` answers an MCP 2024-11-05 `CallToolResult`. The
+tool's output, the JSON object each feature's `api-reference-mcp.md` lists, is
+encoded as the text of the one `text` content block
+(`mcpwire.NewCallToolResult`, `pkg/api/mcp/server.go`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {"type": "text", "text": "{\"zones\":[\"example.internal.\"]}"}
+    ]
+  }
+}
+```
+
+A client parses the first text block as JSON to get the output. The SDK does
+this in `mcpwire.Client.CallTool`, through `mcpwire.ToolOutput`;
+`ToolOutputJSON` and `DecodeToolOutput` do it for a raw `result`. A result
+that is not a `CallToolResult`, has no text block, or whose text is not JSON
+is `ErrToolResultShape`. A result with `isError` set is `ErrToolFailed`, but
+platformd never sends one: a failed call is a JSON-RPC error carrying the
+error class (below). Before #973 the server put the bare output in `result`.
+
 ### Error classes on MCP (#505)
 
 The platform's error classes are the gRPC codes. gRPC and Unix carry them

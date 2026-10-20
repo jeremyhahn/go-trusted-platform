@@ -225,7 +225,7 @@ func (a *SecretsServerAdapter) SetRotationPolicy(ctx context.Context, req *pb.Se
 		SecretID: req.GetSecretId(),
 		Policy:   pbSecretRotationPolicyToSDK(req.GetPolicy()),
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "rotation policy update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "rotation policy update failed: %v", err)
 	}
 
 	return &pb.SetRotationPolicyResponse{
@@ -247,7 +247,7 @@ func (a *SecretsServerAdapter) GetRotationPolicy(ctx context.Context, req *pb.Ge
 
 	policy, err := a.client.GetRotationPolicy(ctx, req.GetSecretId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "rotation policy not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get rotation policy failed: %v", err)
 	}
 
 	return &pb.GetRotationPolicyResponse{
