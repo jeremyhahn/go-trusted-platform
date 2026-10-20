@@ -142,7 +142,10 @@ the reason. `Config.KVMProbe` replaces the probe in tests.
 
 The x86_64 command line is pinned by `TestBuildQEMUCommand_X86Golden` to
 what it was before the profiles existed. `DiskFormat` and `TPMDevice`
-override the profile defaults. The aarch64 profile is how the Raspberry Pi
+override the profile defaults. `NVRAMFormat: qcow2` converts the vars
+template with `qemu-img convert` to `nvram/OVMF_VARS.qcow2` instead of
+copying it raw; a guest that takes internal snapshots needs it, since savevm
+refuses a writable raw pflash. The aarch64 profile is how the Raspberry Pi
 factory image is booted without the hardware
 (`platformctl diskimage test boot`, `pkg/diskimage.Boot`):
 

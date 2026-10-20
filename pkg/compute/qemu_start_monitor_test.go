@@ -126,6 +126,10 @@ func TestStart_QEMUExitIsStartFailure(t *testing.T) {
 	instance, err := orch.Create(ctx, &entities.DeviceProfile{ID: 1, Name: "test-vm-exits"})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(instance.Config.DiskPath, []byte("disk"), 0o600))
+	// The qcow2 NVRAM is qemu-img's to make; provisioned here like the disk.
+	nvram := (&qemu.Config{WorkDir: instance.Config.WorkDir, NVRAMFormat: qemu.DiskFormatQCOW2}).GetNVRAMPath()
+	require.NoError(t, os.MkdirAll(filepath.Dir(nvram), 0o755))
+	require.NoError(t, os.WriteFile(nvram, []byte("vars"), 0o600))
 
 	err = orch.Start(ctx, instance.ID)
 

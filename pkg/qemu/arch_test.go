@@ -432,6 +432,58 @@ func TestInitializeNVRAM_AArch64UEFICopiesTheVarsPerInstance(t *testing.T) {
 	assert.NotEqual(t, cfg.OVMFVars, cfg.GetNVRAMPath(), "the template itself is never written")
 }
 
+// A qcow2 NVRAM is converted from the raw vars template and attached as
+// qcow2, so savevm finds no writable drive that cannot hold a snapshot.
+func TestInitializeNVRAM_QCOW2ConvertsTheVarsTemplate(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	cfg.WorkDir = filepath.Join(f.dir, "qcow2-work")
+	cfg.NVRAMFormat = DiskFormatQCOW2
+	vm, err := NewVM(cfg, nil)
+	require.NoError(t, err)
+	var converted []string
+	vm.convertImage = func(src, format, dst string) ([]byte, error) {
+		converted = []string{src, format, dst}
+		return nil, os.WriteFile(dst, []byte("qcow2 vars"), 0o644)
+	}
+
+	require.NoError(t, vm.initializeNVRAM())
+
+	nvram := filepath.Join(cfg.WorkDir, "nvram", "OVMF_VARS.qcow2")
+	assert.Equal(t, []string{cfg.OVMFVars, DiskFormatQCOW2, nvram}, converted)
+	assert.Contains(t, buildArgs(t, cfg, BootModeBoot), "if=pflash,unit=1,format=qcow2,file="+nvram)
+}
+
+func TestInitializeNVRAM_QCOW2ConversionFailureLeavesNoNVRAM(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	cfg.WorkDir = filepath.Join(f.dir, "qcow2-work")
+	cfg.NVRAMFormat = DiskFormatQCOW2
+	vm, err := NewVM(cfg, nil)
+	require.NoError(t, err)
+	vm.convertImage = func(_, _, dst string) ([]byte, error) {
+		if err := os.WriteFile(dst, []byte("partial"), 0o644); err != nil {
+			return nil, err
+		}
+		return []byte("qemu-img: write failed"), &MessageError{Msg: "exit status 1"}
+	}
+
+	err = vm.initializeNVRAM()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "qemu-img: write failed")
+	_, statErr := os.Stat(cfg.GetNVRAMPath())
+	assert.True(t, os.IsNotExist(statErr), "a failed conversion must not leave an NVRAM the next start would reuse")
+}
+
+func TestConfigValidate_NVRAMFormat(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	assert.Equal(t, f.path("nvram/OVMF_VARS.fd"), cfg.GetNVRAMPath(), "raw stays the default")
+
+	cfg.NVRAMFormat = "vmdk"
+	assert.ErrorIs(t, cfg.Validate(), ErrInvalidConfiguration)
+}
+
 func TestConfigKVM_FollowsTheInjectedHostArch(t *testing.T) {
 	cases := []struct {
 		arch     Arch

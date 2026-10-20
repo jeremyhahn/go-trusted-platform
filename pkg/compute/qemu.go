@@ -158,8 +158,9 @@ func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*Q
 
 // qemuBase returns the qemu.Config fields every local VM shares: the guest
 // architecture, the QEMU binary, the UEFI firmware booted from pflash, and the
-// qcow2 disk the snapshot and migration paths need on every architecture.
-// Callers fill in the per-instance fields.
+// qcow2 disk and qcow2 NVRAM the snapshot and migration paths need on every
+// architecture (savevm refuses a VM with a raw writable pflash). Callers fill
+// in the per-instance fields.
 func (c *OrchestratorConfig) qemuBase() *qemu.Config {
 	return &qemu.Config{
 		Arch:           c.Arch,
@@ -169,6 +170,7 @@ func (c *OrchestratorConfig) qemuBase() *qemu.Config {
 		OVMFCode:       c.OVMFCode,
 		OVMFCodeSecure: c.OVMFCodeSecure,
 		OVMFVars:       c.OVMFVars,
+		NVRAMFormat:    qemu.DiskFormatQCOW2,
 		SerialConsole:  false,
 		NoGraphic:      true,
 		BootOrder:      "c",

@@ -65,6 +65,11 @@ type VM struct {
 	// tool's combined output.
 	// Overridable seam for tests; defaults to runQEMUImgCreate.
 	createImage func(format, path, size string) ([]byte, error)
+
+	// convertImage writes the raw image src to dst in format and returns
+	// the tool's combined output.
+	// Overridable seam for tests; defaults to runQEMUImgConvert.
+	convertImage func(src, format, dst string) ([]byte, error)
 }
 
 // NewVM creates a new QEMU VM instance
@@ -83,9 +88,10 @@ func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 	}
 
 	return &VM{
-		config:      config,
-		logger:      logger,
-		createImage: runQEMUImgCreate,
+		config:       config,
+		logger:       logger,
+		createImage:  runQEMUImgCreate,
+		convertImage: runQEMUImgConvert,
 	}, nil
 }
 
@@ -93,6 +99,12 @@ func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 // combined output.
 func runQEMUImgCreate(format, path, size string) ([]byte, error) {
 	return exec.Command("qemu-img", "create", "-f", format, path, size).CombinedOutput()
+}
+
+// runQEMUImgConvert converts the raw image src to dst in format with
+// qemu-img and returns its combined output.
+func runQEMUImgConvert(src, format, dst string) ([]byte, error) {
+	return exec.Command("qemu-img", "convert", "-f", DiskFormatRaw, "-O", format, src, dst).CombinedOutput()
 }
 
 // CreateDisk creates a qcow2 disk image
@@ -152,9 +164,21 @@ func (vm *VM) initializeNVRAM() error {
 		return nil
 	}
 
-	// Copy OVMF_VARS template to NVRAM location
 	vm.logger.Infof("Initializing NVRAM from template: %s -> %s", vm.config.OVMFVars, nvramPath)
 
+	if format := vm.config.nvramFormat(); format != DiskFormatRaw {
+		if output, err := vm.convertImage(vm.config.OVMFVars, format, nvramPath); err != nil {
+			// A half-written file would pass for an existing NVRAM next time.
+			if rmErr := os.Remove(nvramPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				vm.logger.Warnf("cannot remove the partial NVRAM %s: %v", nvramPath, rmErr)
+			}
+			return &CommandOutputError{Msg: "failed to convert the OVMF_VARS template", Err: err, Detail: ": " + string(output)}
+		}
+		vm.logger.Infof("NVRAM initialized: %s", nvramPath)
+		return nil
+	}
+
+	// Copy OVMF_VARS template to NVRAM location
 	input, err := os.ReadFile(vm.config.OVMFVars)
 	if err != nil {
 		return &WrappedError{Msg: "failed to read OVMF_VARS template", Err: err}
