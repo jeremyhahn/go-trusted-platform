@@ -28,6 +28,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
 var errJSONSecretsList = errors.New("list failed")
@@ -214,6 +215,52 @@ func TestSecretsServerAdapter_GetSecretsByPrefix(t *testing.T) {
 	assert.Empty(t, paged.GetSecrets()["app/a"].GetData())
 	assert.True(t, paged.GetHasMore())
 	assert.Equal(t, "1", paged.GetNextCursor())
+}
+
+// unservedSecretsClient refuses the secrets methods the pinned SDK's
+// embedded transport does not route, the way that transport answers them.
+type unservedSecretsClient struct {
+	extSecretsClientMock
+}
+
+func unservedSecretsMethod(method string) error {
+	return sdkerrors.NewUnimplemented(method, "embedded: unknown method: quicbaas.Secrets/"+method)
+}
+
+func (c *unservedSecretsClient) Rotate(context.Context, *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error) {
+	return nil, unservedSecretsMethod("Rotate")
+}
+
+func (c *unservedSecretsClient) UpdateStatus(context.Context, *secrets.UpdateSecretStatusRequest) error {
+	return unservedSecretsMethod("UpdateStatus")
+}
+
+func (c *unservedSecretsClient) SetRotationPolicy(context.Context, *secrets.SetRotationPolicyRequest) error {
+	return unservedSecretsMethod("SetRotationPolicy")
+}
+
+func (c *unservedSecretsClient) GetRotationPolicy(context.Context, string) (*secrets.RotationPolicy, error) {
+	return nil, unservedSecretsMethod("GetRotationPolicy")
+}
+
+// An SDK that does not serve a secrets method answers Unimplemented on the
+// wire, not Internal or NotFound, so a caller can tell the declared gap from
+// a failure.
+func TestSecretsServerAdapter_UnservedMethodsAnswerUnimplemented(t *testing.T) {
+	ctx := context.Background()
+	adapter := NewSecretsServerAdapter(&unservedSecretsClient{}, slog.Default())
+
+	_, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: "db/pw", NewData: []byte("x")})
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "rotate: %v", err)
+
+	_, err = adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{SecretId: "db/pw", Status: pb.SecretStatus_SECRET_STATUS_DISABLED})
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "update status: %v", err)
+
+	_, err = adapter.SetRotationPolicy(ctx, &pb.SetRotationPolicyRequest{SecretId: "db/pw", Policy: &pb.SecretRotationPolicy{}})
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "set policy: %v", err)
+
+	_, err = adapter.GetRotationPolicy(ctx, &pb.GetRotationPolicyRequest{SecretId: "db/pw"})
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "get policy: %v", err)
 }
 
 func TestSecretsServerAdapter_GetSecretsByPrefix_Errors(t *testing.T) {
