@@ -799,7 +799,12 @@ calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
 which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
 persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
 certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
-is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
+is written to NV index `0x01C00002`, the RSA 2048 Low Range index of the TCG
+EK Credential Profile (§2.2.1.4) and the `tpm.ek.cert-handle` both configs
+name, so every transport's EK certificate call reads it from NV
+(`TestIntegrationConfig_EKCertIsTheSwtpmNVIndex`). With no `cert-handle`,
+go-xkms looks only in the platform certificate store, which these configs
+never fill. Provisioned this way, `platformd` opens a TPM it
 recognises as initialized and does not take its recovery path, which no
 shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting
