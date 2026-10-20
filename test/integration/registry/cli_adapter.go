@@ -288,9 +288,10 @@ func (c *CLIAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions)
 		args = append(args, "--force")
 	}
 
-	if opts.DeleteLayers {
-		args = append(args, "--delete-layers")
-	}
+	// opts.DeleteLayers has no CLI flag: `registry delete` documents only
+	// --force, --dry-run and --keep-untagged (docs/registry/cli.md §6), and
+	// the registry service has no delete-layers request, so the gRPC and MCP
+	// adapters drop it too.
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
