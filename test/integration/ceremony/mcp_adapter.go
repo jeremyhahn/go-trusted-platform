@@ -233,11 +233,11 @@ func (m *MCPAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cla
 		"nonce":     req.Nonce,
 		"signature": req.Signature,
 	}
-	resp := &ceremonysdk.ClaimCertCompleteResponse{}
-	if err := m.callTool(ctx, mcpToolClaimCertComplete, args, resp); err != nil {
+	var wire issuedCertWire
+	if err := m.callTool(ctx, mcpToolClaimCertComplete, args, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolClaimCertComplete, Err: err}
 	}
-	return resp, nil
+	return &ceremonysdk.ClaimCertCompleteResponse{Certificate: wire.CertificatePEM, Chain: wire.ChainPEM}, nil
 }
 
 // ClaimShareBegin invokes platform_ceremony_claim_share_begin.
@@ -282,11 +282,11 @@ func (m *MCPAdapter) SignCSR(ctx context.Context, req *ceremonysdk.SignCSRReques
 		"csr_pem":  req.CSRPEM,
 		"role":     string(req.Role),
 	}
-	resp := &ceremonysdk.SignCSRResponse{}
-	if err := m.callTool(ctx, mcpToolSignCSR, args, resp); err != nil {
+	var wire issuedCertWire
+	if err := m.callTool(ctx, mcpToolSignCSR, args, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolSignCSR, Err: err}
 	}
-	return resp, nil
+	return &ceremonysdk.SignCSRResponse{Certificate: wire.CertificatePEM, Chain: wire.ChainPEM}, nil
 }
 
 var _ CeremonyCommands = (*MCPAdapter)(nil)

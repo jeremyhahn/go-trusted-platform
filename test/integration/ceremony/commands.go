@@ -41,6 +41,15 @@ type CeremonyCommands interface {
 	SignCSR(ctx context.Context, req *ceremonysdk.SignCSRRequest) (*ceremonysdk.SignCSRResponse, error)
 }
 
+// issuedCertWire is the JSON a REST endpoint and an MCP tool answer for an
+// issued certificate (claim-cert complete, sign-csr): the proto's snake_case
+// field names, certificate_pem and chain_pem. The SDK response types name
+// theirs certificate and chain, so the adapters decode this and map it.
+type issuedCertWire struct {
+	CertificatePEM string `json:"certificate_pem"`
+	ChainPEM       string `json:"chain_pem"`
+}
+
 // ErrConnectionFailed indicates the adapter could not connect to platformd.
 type ErrConnectionFailed struct {
 	Protocol string
