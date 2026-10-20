@@ -149,6 +149,10 @@ tpm:
   entropy: false
   hash: SHA-256
   ek:
+    # swtpm-provision.sh writes the EK certificate to the TCG RSA 2048 EK
+    # certificate index. Without cert-handle go-xkms reads the EK
+    # certificate from the certificate store only and never finds it.
+    cert-handle: 0x01C00002
     debug: true
     handle: 0x81010001
     hash: SHA-256

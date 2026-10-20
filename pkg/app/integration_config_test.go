@@ -88,6 +88,17 @@ func TestIntegrationConfig_TPMIsHarnessSwtpm(t *testing.T) {
 	}
 }
 
+// swtpm-provision.sh runs swtpm_setup --create-ek-cert, which writes the RSA
+// EK certificate to the TCG index. The root config must name that index, or
+// go-xkms reads the EK certificate from the certificate store only and the
+// root matrix's EKCertificate calls answer not found.
+func TestIntegrationConfig_EKCertHandleIsSwtpmIndex(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+	require.NotNil(t, a.TPMConfig.EK, "tpm.ek section")
+	assert.Equal(t, vtpm.EKAlgorithmRSA.NVIndex(), a.TPMConfig.EK.CertHandle,
+		"tpm.ek.cert-handle is the index swtpm_setup writes the EK certificate to")
+}
+
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can
 // fail: a runner that serves swtpm over TCP gives the daemon no socket path.
 func TestIntegrationConfig_TCPSwtpmNotASocket(t *testing.T) {
