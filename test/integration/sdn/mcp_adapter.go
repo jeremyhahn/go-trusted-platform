@@ -868,13 +868,20 @@ func (m *MCPAdapter) PortSetState(ctx context.Context, bridgeID, portID string, 
 		args["egress_burst"] = opts.EgressBurst
 	}
 
-	var resp mcpSDNSuccessResponse
+	// The tool answers {"success": true, "port": <Port>}, the port gRPC's
+	// SetPortState answers, carrying the state just set. A follow-up
+	// sdn_get_port_state cannot stand in for it: GetPort reports every port
+	// as up.
+	var resp struct {
+		Port *platformv1.Port `json:"port"`
+	}
 	if err := m.callTool(ctx, "sdn_set_port_state", args, &resp); err != nil {
 		return nil, err
 	}
-
-	// After setting state, retrieve the current state to return accurate data.
-	return m.PortGetState(ctx, bridgeID, portID)
+	if resp.Port == nil {
+		return &PortStateResult{BridgeID: bridgeID, PortID: portID}, nil
+	}
+	return portToStateResult(resp.Port), nil
 }
 
 // PortGetStats gets statistics for a port via MCP.
