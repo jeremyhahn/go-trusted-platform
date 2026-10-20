@@ -131,6 +131,12 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 	if img.Manifest == nil {
 		return nil, ErrInvalidManifest{Reference: ref, Reason: "envelope missing manifest"}
 	}
+	// Decode the config before storing anything, so a malformed config is
+	// refused rather than persisted.
+	config, err := decodeImageConfig(ref, img.Config)
+	if err != nil {
+		return nil, err
+	}
 	if err := a.registry.Push(ctx, ref, &img, pushOptionsOf(metadata.Annotations)); err != nil {
 		if errors.As(err, &ErrImageAlreadyExists{}) {
 			return nil, grpcapi.ErrArtifactAlreadyExists{Repository: metadata.Repository, Reference: metadata.Tag}
@@ -141,6 +147,7 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 	if err != nil {
 		return nil, err
 	}
+	applyImageConfig(artifact, config)
 	return &grpcapi.RegistryPushResponse{
 		Artifact:      artifact,
 		BytesReceived: int64(len(payload)),
@@ -253,6 +260,11 @@ func (a *GRPCAdapter) Inspect(ctx context.Context, req *grpcapi.RegistryInspectR
 	if err != nil {
 		return nil, err
 	}
+	config, err := decodeImageConfig(ref, img.Config)
+	if err != nil {
+		return nil, err
+	}
+	applyImageConfig(art, config)
 	return &grpcapi.RegistryInspectResponse{
 		Detail: &grpcapi.RegistryArtifactDetail{
 			Artifact: art,
@@ -349,6 +361,36 @@ func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifes
 		UpdatedAt:   m.UpdatedAt,
 		PushedAt:    m.CreatedAt,
 	}, nil
+}
+
+// imageConfigFields are the OCI image config properties (image-spec
+// config.md) that the registry reports on an artifact.
+type imageConfigFields struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Author       string `json:"author,omitempty"`
+}
+
+// decodeImageConfig reads the reported properties from an image config
+// blob. An image without a config reports none; a config that is not
+// JSON is refused.
+func decodeImageConfig(ref string, config []byte) (imageConfigFields, error) {
+	var fields imageConfigFields
+	if len(config) == 0 {
+		return fields, nil
+	}
+	if err := json.Unmarshal(config, &fields); err != nil {
+		return fields, ErrInvalidManifest{Reference: ref, Reason: "image config is not valid JSON"}
+	}
+	return fields, nil
+}
+
+// applyImageConfig sets the artifact's OS, architecture and author from
+// the image config fields.
+func applyImageConfig(art *grpcapi.RegistryArtifact, fields imageConfigFields) {
+	art.OS = fields.OS
+	art.Architecture = fields.Architecture
+	art.Author = fields.Author
 }
 
 // mapRegistryError converts public Registry errors into the artifact-

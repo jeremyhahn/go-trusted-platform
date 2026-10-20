@@ -111,6 +111,72 @@ func TestGRPCAdapter_ManifestToArtifactWithoutAManifestCarriesNoDigest(t *testin
 	}
 }
 
+// configuredEnvelope is pushEnvelope with an image config blob attached.
+func configuredEnvelope(t *testing.T, config []byte, layers ...[]byte) []byte {
+	t.Helper()
+	var img Image
+	if err := json.Unmarshal(pushEnvelope(t, layers...), &img); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	sum := sha256.Sum256(config)
+	img.Config = config
+	img.Manifest.Config = Descriptor{
+		MediaType: "application/vnd.oci.image.config.v1+json",
+		Digest:    "sha256:" + hex.EncodeToString(sum[:]),
+		Size:      int64(len(config)),
+	}
+	data, err := json.Marshal(img)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	return data
+}
+
+func TestGRPCAdapter_InspectReportsTheConfigAndEveryLayer(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	ctx := context.Background()
+	config := []byte(`{"architecture":"amd64","os":"linux","author":"platform"}`)
+	layers := [][]byte{[]byte("layer-one"), []byte("layer-two")}
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	if _, err := a.PushStream(ctx, meta, bytes.NewReader(configuredEnvelope(t, config, layers...))); err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+
+	resp, err := a.Inspect(ctx, &grpcapi.RegistryInspectRequest{Repository: "apps/web", Reference: "v1"})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	art := resp.Detail.Artifact
+	if art.OS != "linux" || art.Architecture != "amd64" || art.Author != "platform" {
+		t.Errorf("config = os %q arch %q author %q, want linux amd64 platform", art.OS, art.Architecture, art.Author)
+	}
+	if got := len(art.Manifest.Layers); got != len(layers) {
+		t.Fatalf("inspect reports %d layers, want %d", got, len(layers))
+	}
+	if want := int64(len(layers[0]) + len(layers[1])); art.Size != want {
+		t.Errorf("size = %d, want %d", art.Size, want)
+	}
+	if art.Manifest.ConfigDigest == "" {
+		t.Error("config digest is empty")
+	}
+}
+
+func TestGRPCAdapter_PushRefusesAConfigThatIsNotJSONBeforeStoring(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	ctx := context.Background()
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	envelope := configuredEnvelope(t, []byte("not-json"), []byte("layer-one"))
+	_, err := a.PushStream(ctx, meta, bytes.NewReader(envelope))
+	if !errors.As(err, &ErrInvalidManifest{}) {
+		t.Fatalf("PushStream error = %v, want ErrInvalidManifest", err)
+	}
+	if _, err := a.Inspect(ctx, &grpcapi.RegistryInspectRequest{Repository: "apps/web", Reference: "v1"}); err == nil {
+		t.Error("Inspect found an image whose push was refused")
+	}
+}
+
 // TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest asserts a payload
 // that decodes but carries no manifest is refused with ErrInvalidManifest.
 func TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest(t *testing.T) {
