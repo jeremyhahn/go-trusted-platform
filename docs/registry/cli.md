@@ -167,6 +167,12 @@ Show registry status.
 platformctl registry status --attestation --encryption
 ```
 
+With `--output json` or `yaml` the document is flat, snake_case: `healthy`,
+`status` (`running` when healthy, else `degraded`), `version`, `endpoint`,
+`uptime_seconds`, `image_count`, `total_size` (bytes used), `storage_backend`
+(the backend the registry's storage component reports), and, when present,
+the `storage`, `attestation`, `encryption` and `metrics` objects.
+
 `--attestation` is the fastest way to confirm that a deployed registry actually
 has its gate on — it prints the effective `require_attestation`, the golden PCR
 set, the AIK allowlist and the quote freshness bound.
