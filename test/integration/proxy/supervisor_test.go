@@ -826,9 +826,30 @@ func (g *supervisedGatewayd) log(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(g.logPath)
 	if err != nil {
-		return "(log unreadable: " + err.Error() + ")"
+		return "(log unreadable: " + err.Error() + ")" + vswitchdLogTail()
 	}
-	return string(data)
+	return string(data) + vswitchdLogTail()
+}
+
+// vswitchdLogPath is where the devcontainer runner has ovs-vswitchd log.
+const vswitchdLogPath = "/var/log/openvswitch/ovs-vswitchd.log"
+
+// vswitchdLogTailLines bounds how much of the vswitchd log a failure shows.
+const vswitchdLogTailLines = 40
+
+// vswitchdLogTail returns the end of the ovs-vswitchd log. A datapath child
+// that reports ErrConfigNotApplied waited its full bound for vswitchd to
+// advance cur_cfg; only vswitchd's own log says why it did not (run 58285).
+func vswitchdLogTail() string {
+	data, err := os.ReadFile(vswitchdLogPath)
+	if err != nil {
+		return "\n(ovs-vswitchd log unreadable: " + err.Error() + ")"
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > vswitchdLogTailLines {
+		lines = lines[len(lines)-vswitchdLogTailLines:]
+	}
+	return "\n--- " + vswitchdLogPath + " (tail) ---\n" + strings.Join(lines, "\n")
 }
 
 // trafficLoad is a set of clients requesting through the proxy without
