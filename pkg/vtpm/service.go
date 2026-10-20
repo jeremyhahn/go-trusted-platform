@@ -1024,6 +1024,14 @@ func (s *Service) GetBundlePath(id string) string {
 
 // GetTPMSocketPath returns the TPM socket path for a bundle.
 func (s *Service) GetTPMSocketPath(id string) string {
+	// A running swtpm may listen in a short temp directory (Unix socket
+	// path limit), so the running instance's path is the authoritative one.
+	s.mu.RLock()
+	instance, running := s.instances[id]
+	s.mu.RUnlock()
+	if running && instance.socketPath != "" {
+		return instance.socketPath
+	}
 	return filepath.Join(s.config.BundlePath(id), "tpm", "swtpm.sock")
 }
 

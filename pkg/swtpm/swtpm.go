@@ -228,6 +228,9 @@ func (s *SWTPM) Start(ctx context.Context) error {
 	if s.cmd != nil && s.cmd.Process != nil {
 		return ErrAlreadyRunning
 	}
+	if err := ctx.Err(); err != nil {
+		return &WrappedError{Msg: "swtpm start cancelled", Err: err}
+	}
 
 	s.logger.Info("Starting swtpm daemon")
 
@@ -334,7 +337,9 @@ func (s *SWTPM) Start(ctx context.Context) error {
 	args = append(args, "--log", fmt.Sprintf("file=%s", logFile))
 	s.logFile = logFile
 
-	cmd := exec.CommandContext(ctx, "swtpm", args...)
+	// The daemon outlives the start context: a vTPM started by an API request
+	// must keep running after the request returns. Stop owns its lifetime.
+	cmd := exec.Command("swtpm", args...)
 
 	// Set process group to allow clean shutdown
 	cmd.SysProcAttr = &syscall.SysProcAttr{
