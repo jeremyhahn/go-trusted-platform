@@ -77,6 +77,39 @@ func TestGRPCAdapter_PushPullRoundTripsLayerContent(t *testing.T) {
 	}
 }
 
+// TestGRPCAdapter_PushAnswersTheManifestDigest is the regression for the
+// push response whose artifact carried no digest: the digest is the one the
+// OCI distribution endpoint serves for the stored manifest.
+func TestGRPCAdapter_PushAnswersTheManifestDigest(t *testing.T) {
+	reg := newTestRegistry(t)
+	a := NewGRPCAdapter(reg)
+	ctx := context.Background()
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	resp, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one"))))
+	if err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+	_, body, err := reg.GetManifest(ctx, "apps/web", "v1")
+	if err != nil {
+		t.Fatalf("GetManifest: %v", err)
+	}
+	if want := sha256Digest(body); resp.Artifact.Digest != want {
+		t.Errorf("push digest = %q, want the stored manifest's %q", resp.Artifact.Digest, want)
+	}
+}
+
+func TestGRPCAdapter_ManifestToArtifactWithoutAManifestCarriesNoDigest(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	artifact, err := a.manifestToArtifact("apps/web", "v1", nil)
+	if err != nil {
+		t.Fatalf("manifestToArtifact: %v", err)
+	}
+	if artifact.Digest != "" {
+		t.Errorf("digest = %q, want empty for a missing manifest", artifact.Digest)
+	}
+}
+
 // TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest asserts a payload
 // that decodes but carries no manifest is refused with ErrInvalidManifest.
 func TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest(t *testing.T) {
