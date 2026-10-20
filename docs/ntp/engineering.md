@@ -442,7 +442,7 @@ platform does not own.
 | `ErrDisabled` | — | Section absent or disabled | `Unavailable` / 503 |
 | `ErrRenderFailed` | `Cause` | Template render failed | `Internal` / 500 |
 | `ErrWriteConfigFailed` | `Path`, `Cause` | `chrony.conf` or NTS material unwritable | `Internal` / 500 |
-| `ErrUnresolvedNTSMaterial` | `Field`, `Value` | Value still a `kms://`/`secret://`/`file://` reference | `Internal` / 500 |
+| `ErrUnresolvedNTSMaterial` | `Field`, `Value` | Value still a `<scheme>://` reference (e.g. `kms://`, `file://`) | `Internal` / 500 |
 | `ErrServiceCommandFailed` | `Service`, `Action`, `Output`, `Cause` | `rc-update` / `rc-service` failed | `Internal` / 500 |
 | `ErrControlUnavailable` | `Command`, `Output`, `Cause` | `chronyc` failed — usually chronyd is down | `Unavailable` / 503 |
 | `ErrMalformedControlOutput` | `Command`, `Line`, `Want`, `Got` | CSV had too few fields | `Internal` / 500 |

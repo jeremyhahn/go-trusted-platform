@@ -27,7 +27,8 @@ func TestErrorMessagesNameTheReference(t *testing.T) {
 	}{
 		{&ErrRefInvalid{Ref: "kms://x", Reason: "bad"}, []string{"kms://x", "bad"}},
 		{&ErrSchemeUnsupported{Ref: "hunter2"}, []string{"hunter2", "not a secret reference"}},
-		{&ErrSchemeUnsupported{Ref: "env://X", Scheme: "env"}, []string{"env://X", "scheme env"}},
+		{&ErrSchemeUnsupported{Ref: "env://X", Scheme: "env"}, []string{"env://X", "scheme env", "expected kms://"}},
+		{&ErrSchemeRemoved{Ref: "old://a/b", Scheme: "old", Replacement: "kms", Cause: cause}, []string{"old://a/b", "old scheme was removed", "use kms://a/b"}},
 		{&ErrStoreUnavailable{Cause: cause}, []string{"store unavailable", "cause"}},
 		{&ErrSecretUnresolvable{Ref: "kms://x", Cause: cause}, []string{"kms://x", "cause"}},
 		{&ErrSecretEmpty{Ref: "kms://x"}, []string{"kms://x", "empty"}},
@@ -39,6 +40,7 @@ func TestErrorMessagesNameTheReference(t *testing.T) {
 		{&ErrNilDialFunc{}, []string{"nil dial"}},
 		{&ErrNilSecretsClient{}, []string{"no secrets service"}},
 		{&ErrTrustRequired{}, []string{"platform-ca-file:"}},
+		{&ErrClientIdentityRequired{}, []string{"control-plane:", "cert-file", "key-file"}},
 	}
 	for _, tc := range cases {
 		msg := tc.err.Error()
@@ -54,6 +56,7 @@ func TestErrorsUnwrapTheirCause(t *testing.T) {
 	cause := errors.New("cause")
 	for _, err := range []error{
 		&ErrStoreUnavailable{Cause: cause},
+		&ErrSchemeRemoved{Ref: "old://x", Scheme: "old", Replacement: "kms", Cause: cause},
 		&ErrSecretUnresolvable{Ref: "kms://x", Cause: cause},
 		&ErrEncodingInvalid{Ref: "kms://x", Encoding: "hex", Cause: cause},
 	} {

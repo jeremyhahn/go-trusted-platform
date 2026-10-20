@@ -848,6 +848,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	} else {
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPathWS)
 	}
+	if App != nil {
+		daemonConfig.GatewayDatapathSocket = App.SDNConfig.GatewayDatapathSocket()
+	}
 
 	// vTPM service must exist before compute so the QEMU orchestrator can be
 	// wired with the profile-aware generator. Idempotent — the call later in
@@ -1681,6 +1684,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		logger.Info("OVS socket detected, SDN service will be enabled", "path", ovsSocketPath)
 	} else {
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPath)
+	}
+	if App != nil {
+		config.GatewayDatapathSocket = App.SDNConfig.GatewayDatapathSocket()
 	}
 
 	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, config.OVSSocketPath, config.VTPMService)

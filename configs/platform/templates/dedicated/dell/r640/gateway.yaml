@@ -293,8 +293,8 @@ acme:
 # =============================================================================
 
 # The platform CA bundle, delivered by provisioning. Every platform service
-# gatewayd talks to -- the platform secret store behind every kms:// and
-# secret:// reference in this file, platformd over grpc, the proxy's mTLS
+# gatewayd talks to -- the platform secret store behind every kms://
+# reference in this file, platformd over grpc, the proxy's mTLS
 # callers, the control-plane reporter -- presents a certificate the platform
 # CA issued and is verified against this bundle. gatewayd runs no CA of its
 # own, so this file is its whole platform trust: not a strategy choice, and
@@ -638,7 +638,7 @@ control-plane:
 # =============================================================================
 # platformd does not decode this section; firstboot projects it into
 # /etc/gatewayd/config.yaml with the sections above. It says where the
-# platform secret store is, and it is what makes every kms:// and secret://
+# platform secret store is, and it is what makes every kms://
 # reference in this file resolvable — the gateway's BGP passwords and
 # TCP-AO master keys, and its ipsec/wireguard tunnel keys. Configuration
 # carries references; the values live in the store and are fetched at
@@ -648,7 +648,10 @@ control-plane:
 # switchboard. The session is verified against the platform anchor, so a
 # secret-store: without platform-ca-file: (set above) is refused
 # (secrets.ErrTrustRequired) and the gateway does not start; if you remove
-# platform-ca-file:, comment this section out too.
+# platform-ca-file:, comment this section out too. The session is mutual:
+# the gateway presents its node mTLS identity, the control-plane: cert-file
+# and key-file pair (set above), and this section has no credential of its
+# own; without that pair it is refused (secrets.ErrClientIdentityRequired).
 # Without this section a service that references a secret fails closed at
 # start rather than running with a reference where a key belongs.
 

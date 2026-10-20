@@ -48,16 +48,14 @@ func WithLoadBalancer(lb GatewayLoadBalancerInterface) GatewayServiceOption {
 	}
 }
 
-// LoadBalancer returns the load balancer backend for testing purposes.
+// LoadBalancer returns the load balancer backend every transport serves
+// the VIP verbs from; nil when none is wired. It is set only at
+// construction, so it needs no lock. A nil service has no backend.
 func (s *GatewayService) LoadBalancer() GatewayLoadBalancerInterface {
+	if s == nil {
+		return nil
+	}
 	return s.lb
-}
-
-// SetLoadBalancer sets the load balancer backend (useful for testing).
-func (s *GatewayService) SetLoadBalancer(lb GatewayLoadBalancerInterface) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.lb = lb
 }
 
 // requireLB returns an error when the load balancer backend is not

@@ -113,8 +113,10 @@ type MCPServiceProviderConfig struct {
 	// backs the proxy_* MCP tools (same instance as gRPC/REST/QUIC).
 	ProxyService *grpcapi.ProxyGRPCService
 
-	// GatewayLB serves gateway load balancer VIP tools (gateway_lb_*).
-	GatewayLB GatewayLoadBalancerInterface
+	// GatewayBackends is the shared gateway service the load balancer
+	// (gateway_lb_*), NAT64 and perf (gateway_perf_*) tools read their
+	// backend from (#660).
+	GatewayBackends GatewayBackendSource
 
 	// GatewaySnapshots serves the gateway telemetry snapshot tools
 	// (gateway_snapshot, gateway_snapshots); nil answers that no gateway
@@ -130,10 +132,6 @@ type MCPServiceProviderConfig struct {
 	// gRPC, REST and QUIC overlay services use; nil answers that the
 	// overlay service is not available.
 	Overlay OverlayControllerInterface
-
-	// GatewayPerf serves gateway performance verification tools
-	// (gateway_perf_*).
-	GatewayPerf GatewayPerfInterface
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -173,9 +171,9 @@ type MCPServiceProvider struct {
 	zoneService           gateway.ZoneService
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
-	gatewayLB             GatewayLoadBalancerInterface
-	gatewayNAT64          GatewayNAT64Interface
-	gatewayPerf           GatewayPerfInterface
+	// gatewayBackends is the shared gateway service the gateway_lb_*,
+	// gateway_nat64_* and gateway_perf_* tools read their backend from.
+	gatewayBackends GatewayBackendSource
 	// gatewaySnapshotTools serves the telemetry snapshot tools.
 	gatewaySnapshotTools
 	// gatewayStatusTools serves the gateway status and mode tools (#65).
@@ -235,8 +233,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		gatewayIPAMTools:      gatewayIPAMTools{ipam: config.IPAMService},
 		configDeliveryService: config.ConfigDeliveryService,
 		proxyService:          config.ProxyService,
-		gatewayLB:             config.GatewayLB,
-		gatewayPerf:           config.GatewayPerf,
+		gatewayBackends:       config.GatewayBackends,
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
 		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
 		gatewayBGPTools:       gatewayBGPTools{controller: config.GatewayBGP},

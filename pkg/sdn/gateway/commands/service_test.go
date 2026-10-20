@@ -36,6 +36,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
@@ -241,13 +242,68 @@ func TestServicePolicy_OnlyTheDatapathProcessAdmitsTheServiceAccount(t *testing.
 	datapath, err := process.DefinitionByName("datapath")
 	require.NoError(t, err)
 
-	parser := servicePolicy(routing, opts)
+	parser := servicePolicy(routing, opts, nil)
 	assert.Equal(t, []uint32{0}, parser.ControlUIDs)
 	assert.Empty(t, parser.DatapathUIDs, "one parser must not reach another parser's surface")
 
-	kernel := servicePolicy(datapath, opts)
+	kernel := servicePolicy(datapath, opts, nil)
 	assert.Equal(t, []uint32{0}, kernel.ControlUIDs)
 	assert.Equal(t, []uint32{1001}, kernel.DatapathUIDs)
+	assert.Empty(t, kernel.PlatformUIDs)
+}
+
+func TestServicePolicy_OnlyTheDatapathProcessAdmitsPlatformd(t *testing.T) {
+	opts := serviceOptions{supervisorUID: 0, uid: 1001, gid: 1001}
+	settings := &process.Settings{PlatformUIDs: []uint32{2002}}
+	routing, err := process.DefinitionByName("routing")
+	require.NoError(t, err)
+	datapath, err := process.DefinitionByName("datapath")
+	require.NoError(t, err)
+
+	assert.Empty(t, servicePolicy(routing, opts, settings).PlatformUIDs,
+		"a parser hosts no live service platformd reads")
+	assert.Equal(t, []uint32{2002}, servicePolicy(datapath, opts, settings).PlatformUIDs)
+}
+
+// constructOnlyOVS satisfies the runtime OVS client for a test that only
+// constructs the perf service; any call on it panics.
+type constructOnlyOVS struct{ ovs.ClientInterface }
+
+func TestDatapathServices_TheDatapathChildServesTheGatewayAndPerf(t *testing.T) {
+	datapath, err := process.DefinitionByName("datapath")
+	require.NoError(t, err)
+	gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw-test",
+		Runtime: &gateway.GatewayRuntime{OVS: constructOnlyOVS{}, Bridge: "br-test"}})
+	require.NoError(t, err)
+
+	services, err := datapathServices(datapath, gw)
+	require.NoError(t, err)
+	assert.Same(t, gw, services.LoadBalancer)
+	assert.Same(t, gw, services.NAT64)
+	assert.NotNil(t, services.Perf, "a runtime OVS client must give the child its perf service")
+}
+
+func TestDatapathServices_NoRuntimeOVSServesNoPerf(t *testing.T) {
+	datapath, err := process.DefinitionByName("datapath")
+	require.NoError(t, err)
+	gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw-test", Runtime: &gateway.GatewayRuntime{}})
+	require.NoError(t, err)
+
+	services, err := datapathServices(datapath, gw)
+	require.NoError(t, err)
+	assert.Same(t, gw, services.LoadBalancer)
+	assert.Nil(t, services.Perf, "perf without an OVS client must refuse, not panic")
+}
+
+func TestDatapathServices_AParserServesNothing(t *testing.T) {
+	routing, err := process.DefinitionByName("routing")
+	require.NoError(t, err)
+	gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw-test"})
+	require.NoError(t, err)
+
+	services, err := datapathServices(routing, gw)
+	require.NoError(t, err)
+	assert.Equal(t, ipc.Services{}, services)
 }
 
 func TestCloseGatewayRuntime_NoRuntimeIsANoOp(t *testing.T) {

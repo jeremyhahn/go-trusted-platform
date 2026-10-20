@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
@@ -41,16 +42,14 @@ func WithPerf(p GatewayPerfInterface) GatewayServiceOption {
 	}
 }
 
-// Perf returns the perf backend for testing purposes.
+// Perf returns the perf backend every transport serves the perf verbs
+// from; nil when none is wired. It is set only at construction, so it needs
+// no lock. A nil service has no backend.
 func (s *GatewayService) Perf() GatewayPerfInterface {
+	if s == nil {
+		return nil
+	}
 	return s.perf
-}
-
-// SetPerf sets the perf backend (useful for testing).
-func (s *GatewayService) SetPerf(p GatewayPerfInterface) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.perf = p
 }
 
 // requirePerf returns an error when the perf backend is not configured
@@ -69,7 +68,10 @@ func perfErrToGRPC(err error) error {
 	}
 	var countErr *perf.ErrInvalidFlowCount
 	var bridgeErr *perf.ErrBridgeUnavailable
+	var notActive *gateway.ErrServiceNotActive
 	switch {
+	case errors.As(err, &notActive):
+		return status.Error(codes.Unavailable, err.Error())
 	case errors.As(err, &countErr):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.As(err, &bridgeErr):

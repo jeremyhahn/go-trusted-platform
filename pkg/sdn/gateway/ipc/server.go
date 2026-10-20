@@ -78,6 +78,7 @@ var stateToProto = map[gateway.GatewayState]ipcv1.ProcessState{
 type Server struct {
 	ipcv1.UnimplementedProcessControlServiceServer
 	ipcv1.UnimplementedDatapathServiceServer
+	ipcv1.UnimplementedGatewayServicesServiceServer
 
 	node     Node
 	policy   Policy
@@ -85,6 +86,7 @@ type Server struct {
 	listener net.Listener
 	startErr atomic.Pointer[string]
 	vpn      atomic.Pointer[vpnPlanes]
+	services atomic.Pointer[Services]
 	// chown is os.Chown; a test replaces it to stand for a process that
 	// holds neither CAP_CHOWN nor membership of the socket group.
 	chown func(name string, uid, gid int) error
@@ -103,6 +105,7 @@ func NewServer(node Node, policy Policy) *Server {
 	)
 	ipcv1.RegisterProcessControlServiceServer(s.grpc, s)
 	ipcv1.RegisterDatapathServiceServer(s.grpc, s)
+	ipcv1.RegisterGatewayServicesServiceServer(s.grpc, s)
 	return s
 }
 

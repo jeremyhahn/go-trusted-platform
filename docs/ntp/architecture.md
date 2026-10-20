@@ -258,8 +258,8 @@ Hand edits are overwritten on the next `Apply`.
 
 3. **NTS key material and the served identity.** The NTS-KE server key is platform-CA-issued and
    referenced as a `kms://` URI resolved by the secrets engine before chronyd
-   starts. If a value still looks like a secret reference (`kms://`,
-   `secret://`, `file://`) when chronyd needs it on disk,
+   starts. If a value still looks like a secret reference (any RFC 3986
+   `<scheme>://`, e.g. `kms://` or `file://`) when chronyd needs it on disk,
    `ErrUnresolvedNTSMaterial` **fails the NTP service** rather than serving
    unauthenticated time. The key is written mode `0600`; the certificate `0644`.
    Both files are staged as a fresh temp file in the destination directory

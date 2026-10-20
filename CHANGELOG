@@ -29,3 +29,12 @@
   `PrivateKey`, read through `WithPIN` / `WithPrivateKeyPEM`. The plain field
   is read only when no enclave was supplied; a destroyed enclave fails closed
   with `memguard.ErrDestroyed`. The wire contract is unchanged.
+- BREAKING (gatewayd, #659): the `secret://` scheme is removed from gatewayd's
+  secret-store references; use `kms://` (same path, same `?enc=` and
+  `#<field>`). A `secret://` reference is now refused at service start with
+  `secrets.ErrSchemeRemoved`, which wraps the SDK secret SPI's
+  `InvalidSecretURIError` and names the `kms://` form. References resolve
+  through the stack's canonical secret-resolution SPI (`ResolverRegistry`,
+  re-exported by the go-quicbaas SDK) and fail closed. The NTP service's
+  unresolved-NTS-material guard now refuses any `<scheme>://` value instead
+  of a fixed scheme list.

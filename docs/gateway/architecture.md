@@ -420,6 +420,20 @@ cannot be forged.
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
 | `DatapathService` | `ApplyDesired` | the supervisor's uid alone: it replaces the whole desired document, firewall included |
 | `DatapathService` | `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+| `GatewayServicesService` | `LBStatus`, `ListVIPs`, `GetVIP`, `NAT64Status`, `PerfFlows`, `PerfDatapath`, `PerfConntrack` (reads); `AddVIP`, `RemoveVIP`, `SetVIPBackends` (control) | the supervisor, plus — on the kernel-class process only — the uids in `process.platform-uids` (a non-root platformd; a root platformd is the supervisor's uid already) |
+
+`GatewayServicesService` is how platformd reaches the load balancer, NAT64
+and perf (#660): every API read and every control action is a live call on
+the kernel-class `datapath` child, never the #594 `Snapshot`, which stays
+telemetry. The child serves the gateway's own load balancer and NAT64 and a
+perf service on the runtime's OVS client; any other process, or a child
+without an OVS client for perf, refuses with `ErrServiceNotActive`. A
+service's refusal comes back in the response as a `ServiceRefusal` class
+the caller rebuilds into the same typed or sentinel error
+(`loadbalancer.ErrVIPNotFound`, `*perf.ErrBridgeUnavailable`, ...), so
+every transport's error mapping is unchanged. An RPC error means the child
+did not answer: the caller gets `*ipc.ErrServiceUnreachable`, which unwraps
+to `*gateway.ErrServiceNotActive`, so the APIs answer "unavailable".
 
 The two VPN peer RPCs are the VPN `DataPlane` seam carried across the socket
 (`docs/vpn/architecture.md`): the datapath child owns the WireGuard (`!fips`)

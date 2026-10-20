@@ -16,7 +16,7 @@ package secrets
 import "strings"
 
 // ErrRefInvalid is returned when a reference is not a well-formed
-// kms:// or secret:// URI. The reference is named because it is a pointer
+// kms:// URI. The reference is named because it is a pointer
 // to a secret, never the secret.
 type ErrRefInvalid struct {
 	Ref    string
@@ -37,10 +37,27 @@ type ErrSchemeUnsupported struct {
 
 func (e *ErrSchemeUnsupported) Error() string {
 	if e.Scheme == "" {
-		return "secrets: reference " + e.Ref + ": not a secret reference (expected kms:// or secret://)"
+		return "secrets: reference " + e.Ref + ": not a secret reference (expected kms://)"
 	}
-	return "secrets: reference " + e.Ref + ": scheme " + e.Scheme + " is not supported (expected kms:// or secret://)"
+	return "secrets: reference " + e.Ref + ": scheme " + e.Scheme + " is not supported (expected kms://)"
 }
+
+// ErrSchemeRemoved reports a reference spelled with a scheme gatewayd no
+// longer accepts (#659). Cause is the SPI's InvalidSecretURIError, so a
+// caller that classifies through the SPI's types sees an invalid reference.
+type ErrSchemeRemoved struct {
+	Ref         string
+	Scheme      string
+	Replacement string
+	Cause       error
+}
+
+func (e *ErrSchemeRemoved) Error() string {
+	return "secrets: reference " + e.Ref + ": the " + e.Scheme + " scheme was removed; use " +
+		e.Replacement + strings.TrimPrefix(e.Ref, e.Scheme)
+}
+
+func (e *ErrSchemeRemoved) Unwrap() error { return e.Cause }
 
 // ErrStoreUnavailable is returned when the SDK session to the secret store
 // cannot be opened. Every consumer fails closed on it.
@@ -158,4 +175,15 @@ type ErrTrustRequired struct{}
 
 func (e *ErrTrustRequired) Error() string {
 	return "secrets: the platform CA (platform-ca-file:) is required to authenticate the secret store session"
+}
+
+// ErrClientIdentityRequired is returned when the store is configured but the
+// gateway has no node identity to present to it: the `control-plane:`
+// section's cert-file/key-file pair is unset, or the TLSFunc was handed an
+// empty certificate. The store session is mutually authenticated (#658), so
+// it is refused rather than dialled one-way.
+type ErrClientIdentityRequired struct{}
+
+func (e *ErrClientIdentityRequired) Error() string {
+	return "secrets: the node identity (control-plane: cert-file and key-file) is required to identify the gateway to the secret store"
 }

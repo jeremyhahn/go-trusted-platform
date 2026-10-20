@@ -231,7 +231,7 @@ func TestQUICZoneAdapters_CRUD(t *testing.T) {
 	ctx := context.Background()
 	adapters := map[string]quic.GatewayServiceInterface{
 		"zone": newZoneGatewayAdapter(envZoneService(t)),
-		"full": newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), envZoneService(t), nil, nil, nil),
+		"full": newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), envZoneService(t), nil, nil, nil, nil),
 	}
 	for name, a := range adapters {
 		t.Run(name, func(t *testing.T) {
@@ -272,7 +272,7 @@ func TestQUICZoneAdapters_CRUD(t *testing.T) {
 		})
 	}
 
-	none := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, nil)
+	none := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, nil, nil)
 	_, err := none.ListNetworkZones(ctx, "")
 	assert.ErrorIs(t, err, errGatewayFeatureNotConfigured)
 	_, err = none.CreateNetworkZone(ctx, &quic.CreateNetworkZoneOptions{Name: "lab"})

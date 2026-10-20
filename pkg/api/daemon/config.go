@@ -177,6 +177,12 @@ type Config struct {
 	// When set, the daemon will initialize the SDN service and register
 	// SDN, Overlay, and Gateway gRPC services.
 	OVSSocketPath string `yaml:"ovs_socket_path"`
+
+	// GatewayDatapathSocket is the control socket of gatewayd's datapath
+	// child (the gateway section's datapath-socket). When set, the daemon
+	// serves the gateway load-balancer, NAT64 and perf verbs from gatewayd
+	// over live IPC (#660); empty leaves them unavailable.
+	GatewayDatapathSocket string `yaml:"gateway_datapath_socket"`
 }
 
 // csrKMS returns the platform KMS a CSR's key is checked against before the
