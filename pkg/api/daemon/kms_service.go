@@ -530,7 +530,7 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 
 	// Convert protobuf data to SDK format
 	data := make(map[string]interface{})
-	data["_raw"] = req.GetData()
+	data[secretRawKey] = req.GetData()
 
 	sdkReq := &quicbaas.StoreSecretRequest{
 		Path:     req.GetSecretId(),
@@ -568,10 +568,9 @@ func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretR
 		return nil, status.Errorf(codes.NotFound, "secret not found: %v", err)
 	}
 
-	// Extract raw data if available
-	var data []byte
-	if rawData, ok := secret.Data["_raw"].([]byte); ok {
-		data = rawData
+	data, err := secretRawData(req.GetSecretId(), secret.Data)
+	if err != nil {
+		return nil, err
 	}
 
 	return &pb.GetSecretResponse{
@@ -588,21 +587,29 @@ func (a *SecretsServerAdapter) ListSecrets(ctx context.Context, req *pb.ListSecr
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
 	}
 
-	// ListSecretsRequest doesn't have a prefix field, use empty string
-	resp, err := a.client.List(ctx, "")
+	// ListSecretsRequest has no prefix field; GetSecretsByPrefix serves prefixes.
+	paths, err := a.listSecretPaths(ctx, "")
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list secrets failed: %v", err)
+		return nil, err
+	}
+	start, end, nextCursor, hasMore, err := paginateKMSOffset(len(paths), req.GetLimit(), req.GetCursor())
+	if err != nil {
+		return nil, err
 	}
 
-	secrets := make([]*pb.Secret, 0, len(resp.Paths))
-	for _, path := range resp.Paths {
+	secrets := make([]*pb.Secret, 0, end-start)
+	for _, path := range paths[start:end] {
 		secrets = append(secrets, &pb.Secret{
 			SecretId: path,
 		})
 	}
 
 	return &pb.ListSecretsResponse{
-		Secrets: secrets,
+		Secrets:    secrets,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+		TotalCount: int32(len(paths)),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
@@ -621,7 +628,9 @@ func (a *SecretsServerAdapter) DeleteSecret(ctx context.Context, req *pb.DeleteS
 	}
 
 	return &pb.DeleteSecretResponse{
-		SecretId: req.GetSecretId(),
+		SecretId:  req.GetSecretId(),
+		Deleted:   true,
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
