@@ -343,6 +343,7 @@ func testContextCommands(t *testing.T, ctx context.Context, cmd CLICommands, pre
 			if ctx.Name == testContextName+"-local" {
 				found = true
 				assert.Equal(t, "local", ctx.Type, "Context type should be local")
+				assert.Equal(t, addOpts.SocketPath, ctx.Target, "Local context target is its socket path")
 				break
 			}
 		}

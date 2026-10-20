@@ -424,7 +424,8 @@ func (c *CLIAdapter) ContextList(ctx context.Context) (*ContextListResult, error
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "context list", Err: err}
 	}
 
-	// Parse table output - context list outputs as table
+	// context list prints a table, columns CURRENT NAME TYPE PROTOCOL TARGET
+	// (docs/daemon/cli.md §4.6).
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	result := &ContextListResult{}
 
@@ -450,8 +451,8 @@ func (c *CLIAdapter) ContextList(ctx context.Context) (*ContextListResult, error
 			if len(fields) > offset+1 {
 				info.Type = fields[offset+1]
 			}
-			if len(fields) > offset+2 {
-				info.Target = fields[offset+2]
+			if len(fields) > offset+3 {
+				info.Target = fields[offset+3]
 			}
 
 			result.Contexts = append(result.Contexts, info)
