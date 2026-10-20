@@ -13,7 +13,10 @@
 
 package authenticode
 
-import "fmt"
+import (
+	"fmt"
+	"math/big"
+)
 
 // TimestampError reports that the RFC 3161 time-stamp authority at URL could
 // not countersign a signature: the request failed, the TSA refused it, or
@@ -65,4 +68,15 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
+}
+
+// ErrSignerCertificateNotFound indicates no certificate in the PKCS#7
+// SignedData matches the SignerInfo's issuerAndSerialNumber (RFC 5652 §5.3),
+// so the signature cannot be attributed to any embedded certificate.
+type ErrSignerCertificateNotFound struct {
+	SerialNumber *big.Int
+}
+
+func (e *ErrSignerCertificateNotFound) Error() string {
+	return fmt.Sprintf("no certificate matches the signer's issuer and serial number %v", e.SerialNumber)
 }

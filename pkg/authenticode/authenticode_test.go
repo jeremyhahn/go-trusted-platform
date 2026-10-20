@@ -2829,6 +2829,65 @@ func TestVerifyTamperedSignature(t *testing.T) {
 	require.Error(t, err)
 }
 
+// A signature whose embedded certificate no longer matches the SignerInfo's
+// issuerAndSerialNumber must not verify, nor be pinned, against that
+// certificate (RFC 5652 §5.3).
+func TestVerifyEmbeddedCertificateIssuerTampered(t *testing.T) {
+	key, cert := generateTestKey(t)
+
+	signer, err := NewSigner(context.Background(), &SignerOptions{
+		KeyStore:      &mockBackend{privateKey: key},
+		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
+		Certificate:   cert,
+		Logger:        logging.DefaultLogger(),
+	})
+	require.NoError(t, err)
+
+	output := &bytes.Buffer{}
+	err = signer.Sign(bytes.NewReader(authenticodetest.MinimalPE(authenticodetest.MachineAMD64)), output)
+	require.NoError(t, err)
+	signedData := output.Bytes()
+
+	// The first copy of the issuer Name is the embedded certificate's: the
+	// certificates precede the SignerInfos, and a TBSCertificate carries its
+	// issuer before its subject.
+	issuerAt := bytes.Index(signedData, cert.RawIssuer)
+	require.GreaterOrEqual(t, issuerAt, 0)
+	cnAt := bytes.Index(signedData[issuerAt:issuerAt+len(cert.RawIssuer)], []byte(cert.Issuer.CommonName))
+	require.GreaterOrEqual(t, cnAt, 0)
+	signedData[issuerAt+cnAt] = 'X'
+
+	var notFound *ErrSignerCertificateNotFound
+	err = signer.Verify(bytes.NewReader(signedData))
+	require.ErrorAs(t, err, &notFound)
+	require.Equal(t, cert.SerialNumber, notFound.SerialNumber)
+
+	_, err = signer.ExtractCertificate(bytes.NewReader(signedData))
+	require.ErrorAs(t, err, &notFound)
+}
+
+func TestSignerCertificateSelectsBySid(t *testing.T) {
+	_, other := generateTestKey(t)
+	_, signerCert := generateTestKey(t)
+	sid := issuerAndSerial{
+		IssuerName:   asn1.RawValue{FullBytes: signerCert.RawIssuer},
+		SerialNumber: big.NewInt(1),
+	}
+
+	// Both certificates share issuer and serial in generateTestKey, so give
+	// the decoy a different serial to tell them apart.
+	other.SerialNumber = big.NewInt(2)
+
+	got, err := signerCertificate([]*x509.Certificate{other, signerCert}, sid)
+	require.NoError(t, err)
+	require.Same(t, signerCert, got)
+
+	var notFound *ErrSignerCertificateNotFound
+	_, err = signerCertificate([]*x509.Certificate{other}, sid)
+	require.ErrorAs(t, err, &notFound)
+	require.Equal(t, big.NewInt(1), notFound.SerialNumber)
+}
+
 func TestBuildSPCContentVariants(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
