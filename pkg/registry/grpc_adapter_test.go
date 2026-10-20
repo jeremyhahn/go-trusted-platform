@@ -177,6 +177,130 @@ func TestGRPCAdapter_PushRefusesAConfigThatIsNotJSONBeforeStoring(t *testing.T) 
 	}
 }
 
+// newEncryptingTestRegistry is newTestRegistry with an image encryptor
+// over a local KMS.
+func newEncryptingTestRegistry(t *testing.T) *Registry {
+	t.Helper()
+	storage, err := NewQuicBaaSStorage(newMockStorageClient())
+	if err != nil {
+		t.Fatalf("NewQuicBaaSStorage: %v", err)
+	}
+	kms, err := NewLocalKMSClient(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalKMSClient: %v", err)
+	}
+	enc, err := NewImageEncryptor(kms)
+	if err != nil {
+		t.Fatalf("NewImageEncryptor: %v", err)
+	}
+	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage), WithEncryptor(enc))
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	return reg
+}
+
+func TestPushOptionsOf(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        PushOptions
+	}{
+		{name: "no annotations", annotations: nil, want: PushOptions{}},
+		{
+			name:        "encrypt with a key",
+			annotations: map[string]string{PushAnnotationEncrypt: "true", PushAnnotationKeyID: "k1"},
+			want:        PushOptions{Encrypt: true, KeyID: "k1"},
+		},
+		{
+			name:        "encrypt other than true is off",
+			annotations: map[string]string{PushAnnotationEncrypt: "yes"},
+			want:        PushOptions{},
+		},
+		{
+			name:        "overwrite",
+			annotations: map[string]string{regsvc.AnnotationOverwrite: "true"},
+			want:        PushOptions{AllowOverwrite: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pushOptionsOf(tt.annotations)
+			if got.Encrypt != tt.want.Encrypt || got.KeyID != tt.want.KeyID || got.AllowOverwrite != tt.want.AllowOverwrite {
+				t.Errorf("pushOptionsOf = encrypt %v key %q overwrite %v, want encrypt %v key %q overwrite %v",
+					got.Encrypt, got.KeyID, got.AllowOverwrite, tt.want.Encrypt, tt.want.KeyID, tt.want.AllowOverwrite)
+			}
+		})
+	}
+}
+
+func TestGRPCAdapter_PushWithEncryptAnnotationEncryptsTheLayers(t *testing.T) {
+	reg := newEncryptingTestRegistry(t)
+	a := NewGRPCAdapter(reg)
+	ctx := context.Background()
+	layers := [][]byte{[]byte("layer-one"), []byte("layer-two")}
+
+	meta := &grpcapi.RegistryPushMetadata{
+		Repository:  "apps/web",
+		Tag:         "v1",
+		Annotations: map[string]string{PushAnnotationEncrypt: "true", PushAnnotationKeyID: "web-key"},
+	}
+	resp, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, layers...)))
+	if err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+	if got := resp.Artifact.Annotations[ManifestAnnotationEncrypted]; got != "true" {
+		t.Errorf("encrypted annotation = %q, want true", got)
+	}
+	// The annotation records the KMS key the layers were wrapped with.
+	if resp.Artifact.Annotations[ManifestAnnotationKeyID] == "" {
+		t.Error("key-id annotation is empty on an encrypted push")
+	}
+
+	// The stored blob is ciphertext, and Pull decrypts it back.
+	stored, err := reg.storage.GetBlob(ctx, resp.Artifact.Manifest.Layers[0].Digest)
+	if err != nil {
+		t.Fatalf("GetBlob: %v", err)
+	}
+	if bytes.Contains(stored, layers[0]) {
+		t.Error("stored layer blob holds the plaintext")
+	}
+	pulled, err := reg.Pull(ctx, "apps/web:v1", PullOptions{})
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if !bytes.Equal(pulled.Layers[0].Content, layers[0]) {
+		t.Errorf("pulled layer = %q, want %q", pulled.Layers[0].Content, layers[0])
+	}
+}
+
+func TestGRPCAdapter_PushWithoutEncryptAnnotationStoresPlaintext(t *testing.T) {
+	a := NewGRPCAdapter(newEncryptingTestRegistry(t))
+	ctx := context.Background()
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	resp, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one"))))
+	if err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+	if _, ok := resp.Artifact.Annotations[ManifestAnnotationEncrypted]; ok {
+		t.Error("an unencrypted push carries the encrypted annotation")
+	}
+}
+
+func TestGRPCAdapter_PushWithEncryptAnnotationNeedsAnEncryptor(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	meta := &grpcapi.RegistryPushMetadata{
+		Repository:  "apps/web",
+		Tag:         "v1",
+		Annotations: map[string]string{PushAnnotationEncrypt: "true"},
+	}
+	if _, err := a.PushStream(context.Background(), meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one")))); err == nil {
+		t.Fatal("encrypted push succeeded on a registry with no encryptor")
+	}
+}
+
 // TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest asserts a payload
 // that decodes but carries no manifest is refused with ErrInvalidManifest.
 func TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest(t *testing.T) {

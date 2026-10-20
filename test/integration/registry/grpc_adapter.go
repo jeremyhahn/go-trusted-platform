@@ -149,6 +149,13 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 	if opts.AllowOverwrite {
 		metadata = regsvc.WithOverwrite(metadata)
 	}
+	if opts.Encrypt {
+		if metadata.Annotations == nil {
+			metadata.Annotations = make(map[string]string, 2)
+		}
+		metadata.Annotations[registry.PushAnnotationEncrypt] = "true"
+		metadata.Annotations[registry.PushAnnotationKeyID] = opts.KeyID
+	}
 	if err := stream.Send(regsvc.NewPushMetadataRequest(metadata)); err != nil {
 		return nil, err
 	}
@@ -164,6 +171,7 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		Reference: ref,
 		Digest:    resp.GetArtifact().GetDigest(),
 		Size:      resp.GetBytesReceived(),
+		Encrypted: resp.GetArtifact().GetAnnotations()[registry.ManifestAnnotationEncrypted] == "true",
 	}
 	if resp.GetTimestamp() != nil {
 		result.PushedAt = resp.GetTimestamp().AsTime()

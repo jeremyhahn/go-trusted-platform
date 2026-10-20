@@ -107,6 +107,15 @@ a live backend. They are the fault-injection points:
 7. **Concurrency is bounded by configuration, not by the caller.**
    `max_concurrent_pulls` and `max_concurrent_pushes` gate the corresponding
    paths; exceeding them blocks rather than failing.
+8. **Push options travel as push-metadata annotations, not proto fields.**
+   `overwrite`, `encrypt` (`PushAnnotationEncrypt`) and `encrypt-key-id`
+   (`PushAnnotationKeyID`) set `PushOptions` in `pushOptionsOf`; only the
+   value `"true"` turns a flag on. An encrypted push stamps the manifest with
+   `ManifestAnnotationEncrypted` and the KMS key ID
+   (`ManifestAnnotationKeyID`), which is how Push and Inspect report it. The
+   image config is decoded before anything is stored: a config that is not
+   JSON is `ErrInvalidManifest`, and Inspect reports its `os`,
+   `architecture` and `author`.
 
 ---
 

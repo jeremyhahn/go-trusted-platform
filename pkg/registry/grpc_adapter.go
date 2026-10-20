@@ -157,10 +157,23 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 
 // pushOptionsOf turns push-metadata annotations into PushOptions; the
 // overwrite annotation sets AllowOverwrite.
+// Push request annotations a transport sets on the push metadata to ask
+// for push options. They travel the way overwrite does, with no proto
+// field; PushAnnotationEncrypt is the key the REST handler already sends.
+const (
+	// PushAnnotationEncrypt is "true" to encrypt the layers on push.
+	PushAnnotationEncrypt = "encrypt"
+	// PushAnnotationKeyID names the encryption key; empty uses the
+	// registry default key.
+	PushAnnotationKeyID = "encrypt-key-id"
+)
+
 func pushOptionsOf(annotations map[string]string) PushOptions {
 	return PushOptions{
 		Annotations:    annotations,
 		AllowOverwrite: annotations[regsvc.AnnotationOverwrite] == "true",
+		Encrypt:        annotations[PushAnnotationEncrypt] == "true",
+		KeyID:          annotations[PushAnnotationKeyID],
 	}
 }
 
