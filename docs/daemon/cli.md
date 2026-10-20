@@ -143,7 +143,8 @@ long forms in scripts.**
 ### 2.4 The config file
 
 `platformctl` writes this file through `context add`, `context use` and
-`context delete`, with mode `0600`. Keys are snake_case.
+`context delete`, with mode `0600`, back to the path it was read from
+(`--config` or the default). Keys are snake_case.
 
 ```yaml
 current_context: prod
@@ -350,9 +351,11 @@ Errors: `--server is required for remote contexts`;
 `invalid context type "<t>" (must be 'local', 'remote', or 'embedded')`; an
 unknown `--protocol`.
 
-**Known defects.** The writing verbs (`add`, `use`, `delete`) always save to
-`~/.platformctl/config.yaml` and ignore `--config`. `list` and `current` always
-print a table and ignore `-o`.
+The writing verbs (`add`, `use`, `delete`) save to the file they read: the
+`--config` / `PLATFORMCTL_CONFIG` path when given, else the default (§2.4). A
+`--config` path that does not exist yet is created.
+
+**Known defect.** `list` and `current` always print a table and ignore `-o`.
 
 - **Exit:** 0; 1 on any error above.
 
