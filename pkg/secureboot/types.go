@@ -65,4 +65,6 @@ var (
 	ErrInvalidKeyType = errors.New("invalid key type")
 	// ErrWriteFailed indicates a file write operation failed
 	ErrWriteFailed = errors.New("write operation failed")
+	// ErrManagerClosed indicates the key manager was used after Close
+	ErrManagerClosed = errors.New("key manager is closed")
 )
