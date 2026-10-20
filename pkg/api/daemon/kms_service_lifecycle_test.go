@@ -22,6 +22,7 @@ import (
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"google.golang.org/grpc/codes"
 )
 
@@ -44,8 +45,10 @@ type mockSDKKMSClient struct {
 	exportKeyFn       func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
 	updateKeyStatusFn func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
 	listKeyVersionsFn func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
+	getPublicKeyFn    func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error)
 
 	lastImportReq       *kms.ImportKeyRequest
+	lastPublicKeyID     string
 	lastExportReq       *kms.ExportKeyRequest
 	lastUpdateStatusReq *kms.UpdateKeyStatusRequest
 	lastListVersionsKey string
@@ -62,6 +65,10 @@ func (m *mockSDKKMSClient) GetKey(ctx context.Context, keyID string) (*kms.KeyIn
 }
 
 func (m *mockSDKKMSClient) GetPublicKey(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+	m.lastPublicKeyID = keyID
+	if m.getPublicKeyFn != nil {
+		return m.getPublicKeyFn(ctx, keyID)
+	}
 	return nil, errKMSLifecycleMock{method: "GetPublicKey"}
 }
 
@@ -633,6 +640,102 @@ func TestKMSServerAdapterListKeyVersions(t *testing.T) {
 		t.Parallel()
 		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
 		_, err := adapter.ListKeyVersions(context.Background(), &pb.ListKeyVersionsRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestKMSServerAdapterGetPublicKey(t *testing.T) {
+	t.Parallel()
+
+	der := []byte{0x30, 0x59, 0x30, 0x13}
+	currentKey := func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+		return &kms.GetPublicKeyResponse{
+			KeyID:     keyID,
+			PublicKey: der,
+			Algorithm: kms.AlgorithmECDSAP256,
+			Version:   3,
+		}, nil
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{getPublicKeyFn: currentKey}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if mock.lastPublicKeyID != "key-1" {
+			t.Errorf("keyID = %q, want %q", mock.lastPublicKeyID, "key-1")
+		}
+		if resp.GetKeyId() != "key-1" {
+			t.Errorf("KeyId = %q, want %q", resp.GetKeyId(), "key-1")
+		}
+		if string(resp.GetPublicKey()) != string(der) {
+			t.Errorf("PublicKey = %x, want %x", resp.GetPublicKey(), der)
+		}
+		if resp.GetAlgorithm() != pb.KeyAlgorithm_KEY_ALG_ECDSA_P256 {
+			t.Errorf("Algorithm = %v, want ECDSA_P256", resp.GetAlgorithm())
+		}
+		if resp.GetVersion() != 3 {
+			t.Errorf("Version = %d, want 3", resp.GetVersion())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("CurrentVersionRequested", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{getPublicKeyFn: currentKey}, slog.Default())
+		resp, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1", Version: 3})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetVersion() != 3 {
+			t.Errorf("Version = %d, want 3", resp.GetVersion())
+		}
+	})
+
+	t.Run("OlderVersionRefused", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{getPublicKeyFn: currentKey}, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1", Version: 2})
+		assertGRPCStatusCode(t, err, codes.NotFound)
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(nil, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("UnknownKeyIsNotFound", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{
+			getPublicKeyFn: func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+				return nil, sdkerrors.NewNotFound("key", keyID)
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "missing"})
+		assertGRPCStatusCode(t, err, codes.NotFound)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1"})
 		assertGRPCStatusCode(t, err, codes.Internal)
 	})
 }

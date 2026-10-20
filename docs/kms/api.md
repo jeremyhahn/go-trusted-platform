@@ -43,7 +43,8 @@ MCP: 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
 | Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `KeyManagement.RevokeKey` | as above | `kms_revoke_key` (`kms:write`) | — |
 | Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `kms_update_key_status` (`kms:write`) | ✅ |
 | List key versions | `GET /api/v1/kms/keys/{name}/versions` | `GetKeyVersions` | as above | `kms_list_key_versions` (`kms:read`) | ✅ |
-| Export key | `GET /api/v1/kms/keys/{id}/export` (daemon) | `ExportKey` | as above | `kms_export_public_key` (`kms:read`) | ✅ |
+| Export key | `GET /api/v1/kms/keys/{id}/export` (daemon) | `ExportKey` | as above | — | ✅ |
+| Get public key | — | `KeyManagement.GetPublicKey` | — | `kms_export_public_key` (`kms:read`) | — |
 | Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `KeyManagement.GetKeyMetadata` | as above | `kms_get_key_metadata` (`kms:read`) | — |
 | Update key metadata | `PUT /api/v1/kms/keys/{name}/metadata` | `KeyManagement.UpdateKeyMetadata` | as above | `kms_update_key_metadata` (`kms:write`) | — |
 | Get key policy | `GET /api/v1/kms/keys/{name}/policy` | `KeyManagement.GetKeyPolicy` | as above | `kms_get_key_policy` (`kms:read`) | — |
@@ -55,10 +56,14 @@ MCP: 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
 `wrapping_algorithm` and `format` as their proto enum numbers, and `version`.
 A value that is not a number answers 400; an absent one leaves the default. The
 reply carries `format` and `wrapping_algorithm` as numbers and
-`wrapped_material` as base64. The MCP tool is `kms_export_public_key` — note
-the name: public key only. The gRPC RPC is `ExportKey` without that qualifier,
-which is a naming difference worth checking before assuming what crosses the
-boundary.
+`wrapped_material` as base64. The MCP tool `kms_export_public_key` is not an
+export: it returns the public key (PEM or DER) through `GetPublicKey`, not
+`ExportKey`'s wrapped material.
+
+**`GetPublicKey`** returns the DER (PKIX) public key of the current version;
+`platformctl kms key csr` reads it there. A request naming any other `version`
+is refused with NotFound, because the SDK serves only the current version. REST
+and QUIC have no public-key route yet.
 
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through

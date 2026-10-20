@@ -291,6 +291,35 @@ func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*
 	}, nil
 }
 
+// GetPublicKey returns the DER-encoded (PKIX) public key of an asymmetric
+// key. The SDK serves the current version only, so a request naming any other
+// version is refused rather than answered with the current key.
+func (a *KMSServerAdapter) GetPublicKey(ctx context.Context, req *pb.GetPublicKeyRequest) (*pb.GetPublicKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	resp, err := a.client.GetPublicKey(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "get public key failed: %v", err)
+	}
+	if req.GetVersion() != 0 && req.GetVersion() != uint64(resp.Version) {
+		return nil, status.Errorf(codes.NotFound, "public key version %d of key %s is not the current version %d",
+			req.GetVersion(), req.GetKeyId(), resp.Version)
+	}
+
+	return &pb.GetPublicKeyResponse{
+		KeyId:     resp.KeyID,
+		PublicKey: resp.PublicKey,
+		Algorithm: sdkAlgorithmToPb(resp.Algorithm),
+		Version:   uint64(resp.Version),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
 // ListKeys implements pb.KeyManagementServer.ListKeys.
 func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest) (*pb.ListKeysResponse, error) {
 	if a.client == nil {
