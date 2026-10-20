@@ -566,6 +566,8 @@ type cliInspectManifest struct {
 	Digest        string                 `json:"digest"`
 	MediaType     string                 `json:"media_type"`
 	SchemaVersion int                    `json:"schema_version"`
+	OS            string                 `json:"os"`
+	Architecture  string                 `json:"architecture"`
 	Config        cliInspectDescriptor   `json:"config"`
 	Layers        []cliInspectDescriptor `json:"layers"`
 	Annotations   map[string]string      `json:"annotations,omitempty"`
@@ -613,6 +615,7 @@ func (r *cliInspectResponse) toInspectResult() *InspectResult {
 	result := &InspectResult{
 		Reference:  m.Reference,
 		Manifest:   manifest,
+		Config:     &ImageConfig{OS: m.OS, Architecture: m.Architecture},
 		LayerCount: len(m.Layers),
 	}
 	for _, layer := range m.Layers {

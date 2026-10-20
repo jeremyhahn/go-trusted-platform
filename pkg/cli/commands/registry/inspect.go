@@ -28,6 +28,8 @@ type ImageManifest struct {
 	Digest      string            `json:"digest" yaml:"digest"`
 	MediaType   string            `json:"media_type" yaml:"media_type"`
 	SchemaVer   int               `json:"schema_version" yaml:"schema_version"`
+	OS          string            `json:"os,omitempty" yaml:"os,omitempty"`
+	Arch        string            `json:"architecture,omitempty" yaml:"architecture,omitempty"`
 	Config      *ManifestConfig   `json:"config" yaml:"config"`
 	Layers      []*LayerInfo      `json:"layers" yaml:"layers"`
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
@@ -175,6 +177,8 @@ func convertInspectDomainResponse(detail *regsvc.ArtifactDetail, ref string) *In
 
 	if detail.Artifact != nil {
 		result.Manifest.Digest = detail.Artifact.Digest
+		result.Manifest.OS = detail.Artifact.OS
+		result.Manifest.Arch = detail.Artifact.Architecture
 		result.Manifest.Annotations = detail.Artifact.Annotations
 		result.Manifest.CreatedAt = unixSeconds(detail.Artifact.CreatedAt)
 		result.Manifest.PushedAt = unixSeconds(detail.Artifact.PushedAt)

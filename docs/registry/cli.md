@@ -120,6 +120,12 @@ Inspect an image manifest.
 platformctl registry inspect registry.example.com/apps/api:1.4.2 --layers --encryption
 ```
 
+With `--output json` the document is `{"manifest": {...}}`, snake_case
+throughout: `reference`, `digest`, `media_type`, `schema_version`, `os`,
+`architecture`, `config`, `layers`, `annotations`, `signature`, `encryption`,
+`created_at` and `pushed_at` (RFC 3339). `os` and `architecture` are the
+image's platform and are omitted when the registry has none recorded.
+
 `--raw` bypasses the rendering path entirely — use it when you need the exact
 bytes the registry stored, for example to compare digests by hand.
 
