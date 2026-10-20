@@ -382,8 +382,6 @@ func TestDNSRecordGet_RefusesWhatItCannotAnswer(t *testing.T) {
 	}
 }
 
-// A name the zone holds only in another type is not found: the AAAA "www"
-// does not answer an A lookup for a name with no A record, and vice versa.
 // dns_record_get searches every record of the type: a page argument never
 // narrows the ListRecords it answers from.
 func TestDNSRecordGet_IgnoresAPage(t *testing.T) {
@@ -427,6 +425,8 @@ func TestDNSRecordList_PassesThePage(t *testing.T) {
 	assert.Equal(t, uint32(2), fake.listed.GetPagination().GetPageSize())
 }
 
+// A name the zone holds only in another type is not found: the AAAA "www"
+// does not answer an A lookup for a name with no A record, and vice versa.
 func TestDNSRecordGet_NotFoundIsTypedAndNotFoundClass(t *testing.T) {
 	registry := newDNSTestRegistry(&fakeMCPDNS{})
 
