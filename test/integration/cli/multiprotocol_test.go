@@ -469,69 +469,49 @@ func testServiceCommands(t *testing.T, ctx context.Context, cmd CLICommands) {
 		require.Error(t, err, "Service status should fail for invalid service type")
 	})
 
-	t.Run("ServiceStartStopRestart", func(t *testing.T) {
-		// Use a service that's safe to start/stop in testing
-		// This test is more about verifying the command works, not the actual service behavior
+	// start, stop and restart are refused for every service (#317,
+	// docs/daemon/cli.md §4.4): the command fails with the daemon's refusal
+	// and the service status does not change. --force does not override it.
+	t.Run("ServiceStartStopRestartRefused", func(t *testing.T) {
 		serviceType := "webservice"
 
-		// Get current status
-		statusResult, err := cmd.ServiceStatus(testCtx, serviceType)
+		statusBefore, err := cmd.ServiceStatus(testCtx, serviceType)
 		if err != nil {
 			t.Fatalf("Setup: ServiceStatus(%s) failed; platformd must serve the REST webservice: %v", serviceType, err)
 		}
+		require.NotNil(t, statusBefore.Service, "Service status should name the service")
 
-		originalStatus := ""
-		if statusResult.Service != nil {
-			originalStatus = statusResult.Service.Status
+		verbs := map[string]func() error{
+			"stop": func() error {
+				_, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{Timeout: 30})
+				return err
+			},
+			"stop --force": func() error {
+				_, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{Force: true, Timeout: 10})
+				return err
+			},
+			"start": func() error {
+				_, err := cmd.ServiceStart(testCtx, serviceType)
+				return err
+			},
+			"restart": func() error {
+				_, err := cmd.ServiceRestart(testCtx, serviceType, 30)
+				return err
+			},
 		}
 
-		// Test stop (with force and timeout)
-		stopResult, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{
-			Force:   false,
-			Timeout: 30,
-		})
-		if err != nil {
-			t.Logf("Service stop test: %v", err)
-		} else {
-			require.NotNil(t, stopResult, "Stop result should not be nil")
+		for verb, run := range verbs {
+			err := run()
+			require.Error(t, err, "service %s %s must be refused", verb, serviceType)
+			assert.Contains(t, err.Error(), "cannot be started or stopped at runtime",
+				"service %s %s must fail with the daemon's refusal", verb, serviceType)
+
+			statusAfter, err := cmd.ServiceStatus(testCtx, serviceType)
+			require.NoError(t, err, "Service status after a refused %s should succeed", verb)
+			require.NotNil(t, statusAfter.Service, "Service status should name the service")
+			assert.Equal(t, statusBefore.Service.Status, statusAfter.Service.Status,
+				"a refused %s must not change the service status", verb)
 		}
-
-		// Test start
-		startResult, err := cmd.ServiceStart(testCtx, serviceType)
-		if err != nil {
-			t.Logf("Service start test: %v", err)
-		} else {
-			require.NotNil(t, startResult, "Start result should not be nil")
-		}
-
-		// Test restart with timeout
-		restartResult, err := cmd.ServiceRestart(testCtx, serviceType, 30)
-		if err != nil {
-			t.Logf("Service restart test: %v", err)
-		} else {
-			require.NotNil(t, restartResult, "Restart result should not be nil")
-		}
-
-		// Attempt to restore original state if it was running
-		if originalStatus == "RUNNING" {
-			_, _ = cmd.ServiceStart(testCtx, serviceType)
-		}
-	})
-
-	t.Run("ServiceStopWithOptions", func(t *testing.T) {
-		serviceType := "webservice"
-
-		// Test stop with force flag
-		_, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{
-			Force:   true,
-			Timeout: 10,
-		})
-		if err != nil {
-			t.Logf("Service stop with force test: %v", err)
-		}
-
-		// Ensure service is started again for other tests
-		_, _ = cmd.ServiceStart(testCtx, serviceType)
 	})
 }
 
