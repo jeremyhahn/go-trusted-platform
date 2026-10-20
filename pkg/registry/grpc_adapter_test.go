@@ -116,6 +116,38 @@ func TestGRPCAdapter_PushRefusesAnExistingTagWithoutOverwrite(t *testing.T) {
 	}
 }
 
+// An uppercase repository breaks the OCI distribution-spec name grammar: the
+// adapter answers with the typed client error the gRPC surface maps to
+// InvalidArgument, not the registry's internal error (m779, run 58285).
+func TestGRPCAdapter_InvalidReferenceIsTheClientsError(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	ctx := context.Background()
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "Unix-1792467644-push-basic", Tag: "v1"}
+	_, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("one"))))
+	var invalid grpcapi.ErrInvalidArtifactReference
+	if !errors.As(err, &invalid) {
+		t.Fatalf("PushStream error = %v, want ErrInvalidArtifactReference", err)
+	}
+	if invalid.Reference != "Unix-1792467644-push-basic:v1" {
+		t.Errorf("Reference = %q, want the pushed reference", invalid.Reference)
+	}
+
+	_, err = a.Delete(ctx, &grpcapi.RegistryDeleteRequest{Repository: "Apps/Web", Reference: "v1"})
+	if !errors.As(err, &invalid) {
+		t.Fatalf("Delete error = %v, want ErrInvalidArtifactReference", err)
+	}
+}
+
+func TestGRPCAdapter_PullOfAnAbsentImageIsNotFound(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	_, err := a.Pull(context.Background(), &grpcapi.RegistryPullRequest{Repository: "apps/absent", Reference: "v1"})
+	var notFound grpcapi.ErrArtifactNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("Pull error = %v, want ErrArtifactNotFound", err)
+	}
+}
+
 // TestGRPCAdapter_PushOverwriteReplacesTheTag pins the overwrite annotation:
 // the adapter used to drop it, so `registry push --overwrite` and the REST
 // X-Trusted-Platform-Overwrite header were refused like a plain push.

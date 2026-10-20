@@ -2194,7 +2194,10 @@ order:
    an attestation time is refused, not dated by when it was recorded.
 5. The verdict names the device's serial whenever the device record has one.
 
-A missing record (allocation, device or verdict) is a denial. Any other read
+A missing record (allocation, device or verdict) is a denial. A platformd that
+runs no attestation reporting service answers every verdict read with
+`FailedPrecondition`: it records no verdict for any device, so that is a
+missing verdict too, not an outage. Any other read
 error is an outage (`ErrOverlayAdmissionUnavailable`). The route is refused
 for now, but the error is not a judgement on the VTEP.
 

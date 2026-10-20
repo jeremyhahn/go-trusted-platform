@@ -14,6 +14,7 @@
 package container
 
 import (
+	"errors"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"testing"
 	"time"
@@ -81,6 +82,9 @@ func TestNewCreateCommand_Flags(t *testing.T) {
 		{"workdir", "w", ""},
 		{"tpm-access", "", "false"},
 		{"start", "", "false"},
+		{"user", "u", ""},
+		{"restart", "", ""},
+		{"attest", "", "false"},
 	}
 
 	for _, tt := range tests {
@@ -161,6 +165,46 @@ func TestParseCPUCount_InvalidInput(t *testing.T) {
 			_, err := parseCPUCount(tt)
 			if err == nil {
 				t.Errorf("expected error for input %q, got nil", tt)
+			}
+		})
+	}
+}
+
+func TestParseRestartPolicy_ValidInput(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected computesvc.RestartPolicy
+	}{
+		{"", ""},
+		{"no", computesvc.RestartPolicyNo},
+		{"on-failure", computesvc.RestartPolicyOnFailure},
+		{"Always", computesvc.RestartPolicyAlways},
+		{"unless-stopped", computesvc.RestartPolicyUnlessStopped},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseRestartPolicy(tt.input)
+			if err != nil {
+				t.Fatalf("parseRestartPolicy(%q) error: %v", tt.input, err)
+			}
+			if got != tt.expected {
+				t.Errorf("parseRestartPolicy(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseRestartPolicy_InvalidInputIsAConfigError(t *testing.T) {
+	for _, input := range []string{"sometimes", "UNSPECIFIED", "on_failure"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := parseRestartPolicy(input)
+			var cfgErr ErrInvalidContainerConfig
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("parseRestartPolicy(%q) error = %v, want ErrInvalidContainerConfig", input, err)
+			}
+			if cfgErr.Field != "restart" {
+				t.Errorf("error field = %q, want %q", cfgErr.Field, "restart")
 			}
 		})
 	}

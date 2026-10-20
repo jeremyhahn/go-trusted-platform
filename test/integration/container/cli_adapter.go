@@ -148,10 +148,12 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 		return nil, ErrCommandFailed{Command: "container create", Output: "container image is required", Err: fmt.Errorf("empty image")}
 	}
 
-	args := []string{"container", "create", opts.Name, "--image", opts.Image}
+	// platformctl container create takes the name as --name, not as an
+	// argument, and each command word as its own --cmd.
+	args := []string{"container", "create", "--name", opts.Name, "--image", opts.Image}
 
-	if len(opts.Command) > 0 {
-		args = append(args, "--command", strings.Join(opts.Command, " "))
+	for _, word := range opts.Command {
+		args = append(args, "--cmd", word)
 	}
 
 	for k, v := range opts.Environment {
@@ -175,7 +177,7 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 	}
 
 	if opts.NetworkMode != "" {
-		args = append(args, "--network", opts.NetworkMode)
+		args = append(args, "--network-mode", opts.NetworkMode)
 	}
 
 	if opts.Memory > 0 {
@@ -183,7 +185,7 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 	}
 
 	if opts.CPUs > 0 {
-		args = append(args, "--cpus", strconv.FormatFloat(opts.CPUs, 'f', 2, 64))
+		args = append(args, "--cpu", strconv.FormatFloat(opts.CPUs, 'f', 2, 64))
 	}
 
 	if opts.RestartPolicy != "" {
