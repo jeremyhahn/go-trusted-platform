@@ -444,9 +444,7 @@ func TestClient_CallTool(t *testing.T) {
 			resp := JSONRPCResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Result: map[string]interface{}{
-					"success": true,
-				},
+				Result:  okToolResult(t),
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -463,10 +461,11 @@ func TestClient_CallTool(t *testing.T) {
 
 		result, err := client.CallTool(context.Background(), "test_tool", map[string]interface{}{"arg": "value"})
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if result == nil {
-			t.Error("result should not be nil")
+		fields, ok := result.(map[string]interface{})
+		if !ok || fields["ok"] != true {
+			t.Errorf("result = %v, want the tool output from the text block", result)
 		}
 	})
 }
@@ -730,7 +729,7 @@ func TestClient_ErrorHandling(t *testing.T) {
 			resp := JSONRPCResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Result:  map[string]interface{}{"success": true},
+				Result:  okToolResult(t),
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -768,7 +767,7 @@ func TestClient_Retry(t *testing.T) {
 			resp := JSONRPCResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Result:  map[string]interface{}{"success": true},
+				Result:  okToolResult(t),
 			}
 
 			w.Header().Set("Content-Type", "application/json")

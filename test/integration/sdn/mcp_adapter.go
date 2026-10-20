@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -197,18 +198,6 @@ type mcpSDNServerInfo struct {
 type mcpSDNCallToolRequest struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
-}
-
-// mcpSDNCallToolResult represents the result of tools/call.
-type mcpSDNCallToolResult struct {
-	Content []mcpSDNContent `json:"content"`
-	IsError bool            `json:"isError,omitempty"`
-}
-
-// mcpSDNContent represents content in an MCP response.
-type mcpSDNContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
 }
 
 // =============================================================================
@@ -548,40 +537,16 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 		return err
 	}
 
-	if result == nil || len(rawResult) == 0 {
-		return nil
+	// The tool output is JSON in the CallToolResult's text block.
+	var err error
+	if result == nil {
+		_, err = mcpwire.ToolOutputJSON(rawResult)
+	} else {
+		err = mcpwire.DecodeToolOutput(rawResult, result)
 	}
-
-	// Try MCP content-wrapped format first: {"content":[{"type":"text","text":"..."}],"isError":false}
-	var toolResult mcpSDNCallToolResult
-	if unmarshalErr := json.Unmarshal(rawResult, &toolResult); unmarshalErr == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			var errMsg string
-			for _, item := range toolResult.Content {
-				if item.Type == "text" {
-					errMsg = item.Text
-					break
-				}
-			}
-			return ErrMCPSDNToolCallFailed{Tool: toolName, Code: mcpSDNJSONRPCInternalError, Message: errMsg}
-		}
-
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if parseErr := json.Unmarshal([]byte(item.Text), result); parseErr != nil {
-					return ErrMCPSDNResponseParseFailed{Tool: toolName, Err: parseErr}
-				}
-				return nil
-			}
-		}
-		return nil
+	if err != nil {
+		return ErrMCPSDNResponseParseFailed{Tool: toolName, Err: err}
 	}
-
-	// Server returned result directly as a raw map (not wrapped in content items).
-	if unmarshalErr := json.Unmarshal(rawResult, result); unmarshalErr != nil {
-		return ErrMCPSDNResponseParseFailed{Tool: toolName, Err: unmarshalErr}
-	}
-
 	return nil
 }
 

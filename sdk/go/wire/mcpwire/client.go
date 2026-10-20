@@ -198,7 +198,11 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 		"arguments": arguments,
 	}
 
-	return c.call(ctx, "tools/call", params)
+	result, err := c.call(ctx, "tools/call", params)
+	if err != nil {
+		return nil, err
+	}
+	return ToolOutput(result)
 }
 
 // ListResources retrieves the list of available resources from the server.

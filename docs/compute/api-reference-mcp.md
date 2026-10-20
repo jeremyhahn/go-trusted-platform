@@ -10,7 +10,9 @@ Endpoint: `https://localhost:9445/mcp`
 The compute MCP tools manage VMs and containers. The VM lifecycle tools are
 the gRPC `ComputeService` RPCs; the other VM tools and the container tools take
 the arguments listed below. The permission each tool needs is in
-[api.md](api.md) §7.
+[api.md](api.md) §7. A tool's result is a `CallToolResult` whose text block
+holds the tool's JSON output ([daemon api.md](../daemon/api.md) §1 "MCP tool
+results").
 
 ## VM lifecycle tools
 

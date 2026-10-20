@@ -524,10 +524,17 @@ func (s *Server) handleToolsCall(ctx context.Context, req *mcpwire.JSONRPCReques
 		return s.makeErrorResponse(req.ID, toolErrorCode(err), err.Error(), name)
 	}
 
+	// tools/call answers a CallToolResult (MCP 2024-11-05, Tools, "Calling
+	// Tools"): the tool's output is the JSON in its one text block.
+	callResult, err := mcpwire.NewCallToolResult(result)
+	if err != nil {
+		return s.makeErrorResponse(req.ID, mcpwire.InternalError, err.Error(), name)
+	}
+
 	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result:  result,
+		Result:  callResult,
 	}
 }
 

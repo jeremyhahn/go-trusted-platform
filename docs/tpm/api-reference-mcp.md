@@ -756,16 +756,19 @@ is refused by `pkg/api/tpmnv` before the TPM is touched.
   "jsonrpc": "2.0",
   "id": 2,
   "result": {
-    "info": "...",
-    "manufacturer": "IFX",
-    "model": "SLB9670",
-    "firmware_version": "7.85",
-    "is_simulator": false
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"info\":\"...\",\"manufacturer\":\"IFX\",\"model\":\"SLB9670\",\"firmware_version\":\"7.85\",\"is_simulator\":false}"
+      }
+    ]
   }
 }
 ```
 
-The tool's JSON object is the `result` itself (`pkg/api/mcp/server.go`).
+The `result` is an MCP `CallToolResult`: the tool's JSON object is the text of
+its one `text` block (`pkg/api/mcp/server.go`,
+[daemon api.md](../daemon/api.md) §1 "MCP tool results").
 
 ### Tool Response (Error)
 

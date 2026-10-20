@@ -14,12 +14,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
-// toolServer answers every MCP tools/call with result, the JSON-RPC result
-// the daemon's tool registry would return.
-func toolServer(t *testing.T, result json.RawMessage) *MCPAdapter {
+// toolServer answers every MCP tools/call as platformd does: a
+// CallToolResult whose text block holds output, the tool's JSON output.
+func toolServer(t *testing.T, output json.RawMessage) *MCPAdapter {
 	t.Helper()
+	result, err := mcpwire.NewCallToolResult(output)
+	require.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})

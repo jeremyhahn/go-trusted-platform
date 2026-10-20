@@ -484,6 +484,14 @@ func translateMCPErrorToGRPC(err error) error {
 		return status.Error(statusErr.Class(), statusErr.Error())
 	}
 
+	// A malformed or failed CallToolResult is the server's answer, not a
+	// connection fault.
+	var shapeErr *mcpwire.ErrToolResultShape
+	var toolErr *mcpwire.ErrToolFailed
+	if errors.As(err, &shapeErr) || errors.As(err, &toolErr) {
+		return status.Error(codes.Internal, err.Error())
+	}
+
 	// Default to unavailable for connection issues
 	return status.Error(codes.Unavailable, err.Error())
 }

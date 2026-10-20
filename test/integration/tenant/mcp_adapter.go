@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -202,7 +203,12 @@ func (a *MCPAdapter) callTool(ctx context.Context, toolName string, args interfa
 		ID: atomic.AddInt64(&a.requestID, 1),
 	}
 
-	return a.doRequest(ctx, req)
+	raw, err := a.doRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// The tool output is JSON in the CallToolResult's text block.
+	return mcpwire.ToolOutputJSON(raw)
 }
 
 // =============================================================================

@@ -9,6 +9,7 @@
 | Protocol | JSON-RPC 2.0, `tools/call` |
 | HTTP transport | `POST https://<host>:9445/mcp` (TLS only, no plaintext mode) |
 | stdio transport | JSON-RPC over stdin/stdout |
+| Result | `CallToolResult`; the output below is its text block ([daemon api.md](../daemon/api.md) §1 "MCP tool results") |
 | Authorization | each tool requires a `dns:read`, `dns:write` or `dns:delete` scope |
 
 There are no DNS resources (`resources/read`); everything is a tool.

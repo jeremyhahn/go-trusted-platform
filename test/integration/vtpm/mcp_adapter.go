@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -465,30 +466,13 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 		return nil, ErrMCPVTPMToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
 
-	if len(rawResult) == 0 {
-		return &mcpVTPMCallToolResult{}, nil
+	// The tool output is JSON in the CallToolResult's text block.
+	output, err := mcpwire.ToolOutputJSON(rawResult)
+	if err != nil {
+		return nil, ErrMCPVTPMToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
-
-	// Try MCP content-wrapped format first
-	var toolResult mcpVTPMCallToolResult
-	if err := json.Unmarshal(rawResult, &toolResult); err == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			msg := ""
-			if len(toolResult.Content) > 0 {
-				msg = toolResult.Content[0].Text
-			}
-			return nil, ErrMCPVTPMToolCallFailed{Tool: name, Code: -1, Message: msg}
-		}
-		return &toolResult, nil
-	}
-
-	// Server returned result directly as a raw map (not wrapped in content items).
-	// Wrap it in a content item for consistent downstream handling.
-	text := string(rawResult)
 	return &mcpVTPMCallToolResult{
-		Content: []mcpVTPMContent{
-			{Type: "text", Text: text},
-		},
+		Content: []mcpVTPMContent{{Type: "text", Text: string(output)}},
 	}, nil
 }
 

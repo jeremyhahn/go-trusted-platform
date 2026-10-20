@@ -32,6 +32,9 @@ serves the `tenant_id` it is given.
 
 ## Wire conventions
 
+- A tool's result is an MCP `CallToolResult`: the JSON object below is the
+  text of its one `text` block ([daemon api.md](../daemon/api.md) §1 "MCP
+  tool results").
 - uint64 arguments (`credential_id`, `profile_id`, `revoker_id`) may be
   sent as JSON numbers **or decimal strings**; strings are the canonical
   form (JSON numbers lose precision past 2^53) and are what the SDK MCP

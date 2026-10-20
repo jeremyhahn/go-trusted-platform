@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -159,11 +160,25 @@ func (m *MCPAdapter) rpc(ctx context.Context, method string, params, out interfa
 	return nil
 }
 
-// callTool invokes tools/call and decodes the tool's result into out.
-// platformd returns the tool's value as the JSON-RPC result and a failed
-// tool as a JSON-RPC error (pkg/api/mcp/server.go handleToolsCall).
+// callTool invokes tools/call and decodes the tool's output into out.
+// platformd answers with an MCP CallToolResult whose text block holds the
+// tool's output as JSON, and a failed tool as a JSON-RPC error
+// (pkg/api/mcp/server.go handleToolsCall).
 func (m *MCPAdapter) callTool(ctx context.Context, tool string, args map[string]interface{}, out interface{}) error {
-	return m.rpc(ctx, "tools/call", map[string]interface{}{"name": tool, "arguments": args}, out)
+	var raw json.RawMessage
+	if err := m.rpc(ctx, "tools/call", map[string]interface{}{"name": tool, "arguments": args}, &raw); err != nil {
+		return err
+	}
+	var err error
+	if out == nil {
+		_, err = mcpwire.ToolOutputJSON(raw)
+	} else {
+		err = mcpwire.DecodeToolOutput(raw, out)
+	}
+	if err != nil {
+		return ErrInvalidResponse{Operation: tool, Err: err}
+	}
+	return nil
 }
 
 // mcpArtifact is an artifact as pkg/api/daemon/mcp_registry.go renders it;
