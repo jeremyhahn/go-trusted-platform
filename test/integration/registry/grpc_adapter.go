@@ -108,6 +108,18 @@ func fromArtifact(a *pb.Artifact) ImageManifest {
 		Size:        a.GetSize(),
 		Annotations: a.GetAnnotations(),
 	}
+	if manifest := a.GetManifest(); manifest != nil {
+		m.MediaType = manifest.GetMediaType()
+		m.Config = Descriptor{Digest: manifest.GetConfigDigest()}
+		for _, l := range manifest.GetLayers() {
+			m.Layers = append(m.Layers, Descriptor{
+				MediaType:   l.GetMediaType(),
+				Digest:      l.GetDigest(),
+				Size:        l.GetSize(),
+				Annotations: l.GetAnnotations(),
+			})
+		}
+	}
 	if a.GetCreatedAt() != nil {
 		m.CreatedAt = a.GetCreatedAt().AsTime()
 	}
@@ -246,10 +258,19 @@ func (g *GRPCAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, 
 	artifact := resp.GetDetail().GetArtifact()
 	manifest := fromArtifact(artifact)
 	manifest.Reference = ref
+	annotations := artifact.GetAnnotations()
 	return &InspectResult{
 		Reference: ref,
 		Manifest:  &manifest,
-		TotalSize: artifact.GetSize(),
+		Config: &ImageConfig{
+			Architecture: artifact.GetArchitecture(),
+			OS:           artifact.GetOs(),
+			Author:       artifact.GetAuthor(),
+		},
+		TotalSize:       artifact.GetSize(),
+		LayerCount:      len(manifest.Layers),
+		Encrypted:       annotations[registry.ManifestAnnotationEncrypted] == "true",
+		EncryptionKeyID: annotations[registry.ManifestAnnotationKeyID],
 	}, nil
 }
 

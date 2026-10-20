@@ -571,7 +571,7 @@ func TestRegistry_EncryptedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetManifest: %v", err)
 	}
-	if manifest.Annotations[manifestAnnotationEncrypted] != "true" {
+	if manifest.Annotations[ManifestAnnotationEncrypted] != "true" {
 		t.Errorf("expected encrypted annotation, got %v", manifest.Annotations)
 	}
 }

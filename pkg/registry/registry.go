@@ -332,8 +332,8 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 		if image.Manifest.Annotations == nil {
 			image.Manifest.Annotations = make(map[string]string)
 		}
-		image.Manifest.Annotations[manifestAnnotationEncrypted] = "true"
-		image.Manifest.Annotations[manifestAnnotationKeyID] = encImage.KeyID
+		image.Manifest.Annotations[ManifestAnnotationEncrypted] = "true"
+		image.Manifest.Annotations[ManifestAnnotationKeyID] = encImage.KeyID
 	}
 
 	for i := range image.Layers {
@@ -377,8 +377,11 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 // Annotation keys recorded on encrypted manifests. Kept namespaced so
 // they round-trip through generic OCI tooling without collision.
 const (
-	manifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
-	manifestAnnotationKeyID     = "org.letstrust.registry.key-id"
+	// ManifestAnnotationEncrypted is "true" on a manifest whose layers
+	// were encrypted on push.
+	ManifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
+	// ManifestAnnotationKeyID names the key the layers were encrypted with.
+	ManifestAnnotationKeyID = "org.letstrust.registry.key-id"
 )
 
 // Pull retrieves a container image from the registry. The manifest is
@@ -440,7 +443,7 @@ func (r *Registry) Pull(ctx context.Context, ref string, opts PullOptions) (*Ima
 	}
 
 	encrypted := manifest.Annotations != nil &&
-		manifest.Annotations[manifestAnnotationEncrypted] == "true"
+		manifest.Annotations[ManifestAnnotationEncrypted] == "true"
 	if encrypted && r.encryptor == nil {
 		return nil, ErrEncryptionNotConfigured{Reference: ref}
 	}
