@@ -113,6 +113,10 @@ func runNTPScenario(t *testing.T, ctx context.Context, cmd NTPCommands) {
 			assertStatusIsCoherent(t, cmd.Name(), status)
 		case IsNotConfigured(err):
 			t.Fatalf("missing prerequisite: %v", ErrNTPNotConfigured{Transport: cmd.Name(), Err: err})
+		case IsStepRefused(err):
+			// chronyd runs without control of the clock (-x): the step is
+			// the documented conflict, not chronyd being unavailable.
+			t.Logf("%s: chronyd refused the step (expected contract): %v", cmd.Name(), err)
 		case IsNoReachableSource(err):
 			// The documented conflict contract: a step with nothing to
 			// step towards is refused rather than moving the clock on

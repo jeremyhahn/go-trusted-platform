@@ -132,6 +132,17 @@ func IsNoReachableSource(err error) bool {
 	return false
 }
 
+// stepRefusedMarker is the substring every transport carries when chronyd
+// answers a step but cannot make it, because it does not control the clock
+// (the devcontainer starts it with -x). Like a step with no reachable source
+// it is a conflict (REST 409), not a failure of the wiring.
+const stepRefusedMarker = "refused the step"
+
+// IsStepRefused reports whether err is chronyd's step refusal.
+func IsStepRefused(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), stepRefusedMarker)
+}
+
 // ShortContext derives a bounded per-call context.
 func ShortContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, 30*time.Second)
