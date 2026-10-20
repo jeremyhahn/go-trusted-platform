@@ -442,6 +442,8 @@ type CAServiceInterface interface {
 	SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
 	// Revoke revokes a certificate.
 	Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
+	// Renew replaces a certificate with one on re-keyed material.
+	Renew(ctx context.Context, existing *x509.Certificate, opts issuance.RenewOptions) (*x509.Certificate, error)
 	// CertificateStore returns the certificate store.
 	CertificateStore() xkmssdk.CertStore
 	// CABundle returns the CA bundle.
@@ -900,45 +902,12 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Build a new certificate request based on the existing certificate
-	caReq := &quicbaasca.CACertificateRequest{
-		Subject: quicbaasca.CASubject{
-			CommonName:         existingCert.Subject.CommonName,
-			Organization:       h.firstOrEmpty(existingCert.Subject.Organization),
-			OrganizationalUnit: h.firstOrEmpty(existingCert.Subject.OrganizationalUnit),
-			Country:            h.firstOrEmpty(existingCert.Subject.Country),
-			Province:           h.firstOrEmpty(existingCert.Subject.Province),
-			Locality:           h.firstOrEmpty(existingCert.Subject.Locality),
-			Address:            h.firstOrEmpty(existingCert.Subject.StreetAddress),
-			PostalCode:         h.firstOrEmpty(existingCert.Subject.PostalCode),
-		},
-		Valid:       req.ValidDays,
-		IsCA:        existingCert.IsCA,
-		MaxPathLen:  existingCert.MaxPathLen,
-		KeyUsage:    existingCert.KeyUsage,
-		ExtKeyUsage: existingCert.ExtKeyUsage,
+	renewOpts := issuance.RenewOptions{
+		ValidDays:    req.ValidDays,
+		PreserveSANs: req.PreserveSANs,
 	}
-
-	// Handle SANs based on request flags
-	if req.PreserveSANs {
-		if len(existingCert.DNSNames) > 0 || len(existingCert.IPAddresses) > 0 ||
-			len(existingCert.EmailAddresses) > 0 || len(existingCert.URIs) > 0 {
-			caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
-				DNS:   existingCert.DNSNames,
-				Email: existingCert.EmailAddresses,
-			}
-			for _, ip := range existingCert.IPAddresses {
-				caReq.SANS.IPs = append(caReq.SANS.IPs, ip.String())
-			}
-			for _, uri := range existingCert.URIs {
-				caReq.SANS.URIs = append(caReq.SANS.URIs, uri.String())
-			}
-		}
-	}
-
-	// Apply new SANs if provided
 	if req.NewSANs != nil {
-		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
+		renewOpts.NewSANs = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   req.NewSANs.DNS,
 			IPs:   req.NewSANs.IPs,
 			Email: req.NewSANs.Email,
@@ -946,32 +915,7 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Set key attributes
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           existingCert.Subject.CommonName,
-		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyType:      xkmssdk.KeyTypeTLS,
-	}
-
-	// Supersede the existing certificate before issuing the renewal. The
-	// non-nil keyAttrs signals DeleteKeys=true, which is what removes the old
-	// cert-store entry (and the leaf's CN-namespaced key) — without it
-	// IssueCertificate still fails with ErrCertificateAlreadyExists.
-	oldKeyAttrs := &xkmssdk.KeyAttributes{
-		CN:           existingCert.Subject.CommonName,
-		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyType:      xkmssdk.KeyTypeTLS,
-	}
-	if revokeErr := h.ca.Revoke(r.Context(), existingCert, oldKeyAttrs); revokeErr != nil {
-		h.logger.Error("Failed to revoke old certificate during renewal", "error", revokeErr, "serial", serial)
-		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: revokeErr})
-		return
-	}
-
-	// Issue the renewed certificate
-	newCert, err := h.ca.IssueCertificate(r.Context(), caReq)
+	newCert, err := h.ca.Renew(r.Context(), existingCert, renewOpts)
 	if err != nil {
 		h.logger.Error("Failed to renew certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: err})

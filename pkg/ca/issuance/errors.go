@@ -149,3 +149,24 @@ type SignCSRScopeError struct {
 func (e *SignCSRScopeError) Error() string {
 	return "signing a CSR requires a platform token granting " + SignCSRScope + ": " + e.Reason
 }
+
+// RenewStoresUnavailableError is a CA without the key or certificate store a
+// renewal re-keys and replaces the certificate in.
+type RenewStoresUnavailableError struct{}
+
+func (e *RenewStoresUnavailableError) Error() string {
+	return "CA key or certificate store is not available"
+}
+
+// RenewError is a renewal step the CA failed.
+type RenewError struct {
+	// Step names what the renewal was doing.
+	Step string
+	Err  error
+}
+
+func (e *RenewError) Error() string {
+	return "failed to " + e.Step + ": " + e.Err.Error()
+}
+
+func (e *RenewError) Unwrap() error { return e.Err }

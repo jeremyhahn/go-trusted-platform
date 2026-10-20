@@ -157,6 +157,11 @@ exists.
    before it has any; it must remain reachable without credentials.
 4. **Revocation is durable and one-way.** There is no unrevoke RPC.
 5. **ACME rate limiting is a security control**, not a courtesy.
+6. **Every transport renews through `issuance.Renew`** (`pkg/ca/issuance/renew.go`):
+   revoke without deleting the key, rotate the key under its name, remove the
+   old certificate, issue on the rotated key. A revoke with `DeleteKeys` leaves
+   the name reserved in the SDK KMS, and the issue then fails with
+   `already_exists`.
 
 ## 8. Test strategy
 
