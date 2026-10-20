@@ -1905,18 +1905,34 @@ func TestGetUsage_NoUsageTracker(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "test-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
 	// GetUsage degrades gracefully when the optional quota subsystem is
 	// not wired: it returns an empty usage snapshot (no error) so that
 	// dashboards and admin tools can still render the page.
-	usage, err := manager.GetUsage(ctx, "test-tenant")
+	usage, err := manager.GetUsage(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("expected no error when usage tracker not configured, got %v", err)
 	}
 	if usage == nil {
 		t.Fatal("expected non-nil usage snapshot")
 	}
-	if usage.TenantID != "test-tenant" {
-		t.Errorf("expected TenantID test-tenant, got %q", usage.TenantID)
+	if usage.TenantID != created.ID {
+		t.Errorf("expected TenantID %s, got %q", created.ID, usage.TenantID)
+	}
+}
+
+func TestGetUsage_NoUsageTracker_TenantNotFound(t *testing.T) {
+	manager, _ := newTestManager(t)
+
+	_, err := manager.GetUsage(context.Background(), "missing-tenant")
+
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrTenantNotFound, got %v", err)
 	}
 }
 
@@ -1974,18 +1990,90 @@ func TestCheckQuota_Exceeded(t *testing.T) {
 	}
 }
 
-func TestCheckQuota_NoQuotaEnforcer(t *testing.T) {
+// newTenantWithQuotas creates a tenant on an enforcer-less manager, the
+// IAM-only wiring platformd uses, so CheckQuota reads the entity quotas.
+func newTenantWithQuotas(t *testing.T) (*Manager, *TenantEntity) {
+	t.Helper()
 	manager, _ := newTestManager(t)
+
+	created, err := manager.CreateTenant(context.Background(), &CreateTenantRequest{
+		Name: "test-tenant",
+		ComputeQuota: &ComputeQuota{
+			MaxVMs:  10,
+			UsedVMs: 8,
+		},
+		NetworkQuota: &NetworkQuota{MaxBandwidthMbps: 100},
+		StorageQuota: &StorageQuota{MaxSnapshots: 4},
+	})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	return manager, created
+}
+
+func TestCheckQuota_NoQuotaEnforcer_WithinLimits(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
 	ctx := context.Background()
 
-	err := manager.CheckQuota(ctx, "test-tenant", quota.ResourceVMs, 1)
-	if err == nil {
-		t.Fatal("expected error when quota enforcer not configured")
+	checks := map[quota.ResourceType]int64{
+		quota.ResourceVMs:       2,
+		quota.ResourceBandwidth: 100,
+		quota.ResourceSnapshots: 4,
 	}
+	for resource, amount := range checks {
+		if err := manager.CheckQuota(ctx, created.ID, resource, amount); err != nil {
+			t.Errorf("CheckQuota(%s, %d): expected no error, got %v", resource, amount, err)
+		}
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_Exceeded(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
+
+	err := manager.CheckQuota(context.Background(), created.ID, quota.ResourceVMs, 3)
+
+	var exceeded ErrQuotaExceeded
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected ErrQuotaExceeded, got %v", err)
+	}
+	if exceeded.Requested != 3 || exceeded.Available != 2 {
+		t.Errorf("expected requested 3 available 2, got requested %d available %d",
+			exceeded.Requested, exceeded.Available)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_UnsetLimitExceeded(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
+
+	// No container limit was set, so none are available.
+	err := manager.CheckQuota(context.Background(), created.ID, quota.ResourceContainers, 1)
+
+	var exceeded ErrQuotaExceeded
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected ErrQuotaExceeded, got %v", err)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_TenantNotFound(t *testing.T) {
+	manager, _ := newTestManager(t)
+
+	err := manager.CheckQuota(context.Background(), "missing-tenant", quota.ResourceVMs, 1)
+
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrTenantNotFound, got %v", err)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_UntrackedResource(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
+
+	// The entity tracks volume capacity in GB, not a volume count.
+	err := manager.CheckQuota(context.Background(), created.ID, quota.ResourceVolumes, 1)
 
 	var invalidReq ErrInvalidRequest
 	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
 	}
 }
 

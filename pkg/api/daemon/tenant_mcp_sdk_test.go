@@ -269,10 +269,10 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 				require.Equal(t, h.id(parityTenantA), r.GetTenantId())
 				require.Equal(t, "vms", r.GetResource())
 				require.Equal(t, int64(1), r.GetAmount())
-				// The harness manager has no quota enforcer, so the answer is
-				// "not available" with its reason.
-				require.False(t, r.GetAvailable())
-				require.Contains(t, r.GetMessage(), "quota enforcer not configured")
+				// The harness manager has no quota enforcer, so the tenant's
+				// own quota answers.
+				require.True(t, r.GetAvailable(), r.GetMessage())
+				require.Equal(t, "quota available", r.GetMessage())
 			},
 		},
 		{

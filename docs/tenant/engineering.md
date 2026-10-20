@@ -134,7 +134,13 @@ unusual; compare it with `errors.Is` like any other sentinel.
    and resumption are state changes only. Traffic enforcement for a tenant
    arrives with its VRF.
 3. **Quota checks precede allocation.** `CheckQuota` exists as its own RPC so a
-   caller can ask before acting.
+   caller can ask before acting. An exceeded quota is an answer
+   (`available: false` with the reason); any other failure, such as an unknown
+   tenant, is an error on every transport. Without a quota enforcer (the
+   IAM-only manager platformd runs) the tenant's own quotas, set by
+   `CreateTenant` and `UpdateQuotas`, are the limits; `volumes` is refused
+   there because the entity tracks volume capacity in GB, not a count.
+   `GetUsage` likewise refuses an unknown tenant.
 4. **DEK rotation does not re-encrypt tenant data.** `RotateTenantDEK` returns
    `DEKRotationResult`; the DEK is rewrapped, not the data.
 5. **Suspension is reversible; deletion is not.** See §2.
