@@ -27,121 +27,62 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 )
 
-// CLI response wrapper types that match protobuf JSON output structure.
-// Protobuf uses snake_case JSON tags and integer enum values with encoding/json.
+// The vtpm CLI prints the SDK domain types of sdk/go/services/vtpm with
+// --output json: enums are strings and times are RFC 3339. The adapter decodes
+// that document as-is and converts it to the pkg/vtpm types the suite asserts.
 
-// cliBundle matches the protobuf Bundle JSON output (uses snake_case JSON tags)
-type cliBundle struct {
-	ID             string                 `json:"id"`
-	Mode           int                    `json:"mode"` // Protobuf enum: 1=template, 2=pre-assigned
-	Manifest       *cliManifest           `json:"manifest"`
-	TPMState       *cliTPMState           `json:"tpm_state"`
-	OVMFState      *cliOVMFState          `json:"ovmf_state"`
-	SecureBootKeys *cliSecureBootKeyPaths `json:"secure_boot_keys"`
-	CreatedAt      *cliTimestamp          `json:"created_at"`
-	ClonedFrom     string                 `json:"cloned_from,omitempty"`
-}
-
-type cliManifest struct {
-	Version           string            `json:"version"`
-	ID                string            `json:"id"`
-	Mode              int               `json:"mode"` // Protobuf enum: 1=template, 2=pre-assigned
-	Hostname          string            `json:"hostname"`
-	EKAlgorithm       int               `json:"ek_algorithm"` // Protobuf enum: 1=RSA, 2=ECC
-	SecureBootEnabled bool              `json:"secure_boot_enabled"`
-	CreatedAt         *cliTimestamp     `json:"created_at"`
-	ClonedFrom        string            `json:"cloned_from,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
-}
-
-type cliTPMState struct {
-	StateDir string `json:"state_dir"`
-}
-
-type cliOVMFState struct {
-	NVRAMFile string `json:"nvram_file"`
-}
-
-type cliSecureBootKeyPaths struct {
-	Dir     string `json:"dir"`
-	PKKey   string `json:"pk_key"`
-	PKCert  string `json:"pk_crt"`
-	KEKKey  string `json:"kek_key"`
-	KEKCert string `json:"kek_crt"`
-	DBKey   string `json:"db_key"`
-	DBCert  string `json:"db_crt"`
-}
-
-// cliTimestamp handles protobuf timestamp JSON format (either string or {seconds, nanos})
-type cliTimestamp struct {
-	Seconds int64 `json:"seconds,omitempty"`
-	Nanos   int32 `json:"nanos,omitempty"`
-}
-
-func (t *cliTimestamp) ToTime() time.Time {
-	if t == nil {
-		return time.Time{}
-	}
-	return time.Unix(t.Seconds, int64(t.Nanos))
-}
-
-// bundleModeFromInt converts protobuf BundleMode int to vtpm.BundleMode
-func bundleModeFromInt(mode int) vtpm.BundleMode {
+// bundleModeFromCLI converts an SDK domain bundle mode to vtpm.BundleMode.
+func bundleModeFromCLI(mode vtpmsvc.BundleMode) vtpm.BundleMode {
 	switch mode {
-	case 1:
+	case vtpmsvc.BundleModeTemplate:
 		return vtpm.BundleModeTemplate
-	case 2:
+	case vtpmsvc.BundleModePreAssigned:
 		return vtpm.BundleModePreAssigned
 	default:
 		return vtpm.BundleMode("")
 	}
 }
 
-// ekAlgorithmFromInt converts protobuf EKAlgorithm int to vtpm.EKAlgorithm
-func ekAlgorithmFromInt(alg int) vtpm.EKAlgorithm {
-	switch alg {
-	case 1:
-		return vtpm.EKAlgorithmRSA
-	case 2:
-		return vtpm.EKAlgorithmECC
-	default:
-		return vtpm.EKAlgorithm("")
+// timeFromCLI returns the time a CLI document carries, or the zero time.
+func timeFromCLI(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
 	}
+	return *t
 }
 
-// toVTPMBundle converts a CLI bundle to vtpm.Bundle
-func (b *cliBundle) toVTPMBundle() *vtpm.Bundle {
+// bundleFromCLI converts an SDK domain bundle to vtpm.Bundle.
+func bundleFromCLI(b *vtpmsvc.Bundle) *vtpm.Bundle {
 	if b == nil {
 		return nil
 	}
 	bundle := &vtpm.Bundle{
 		ID:         b.ID,
-		Mode:       bundleModeFromInt(b.Mode),
+		Mode:       bundleModeFromCLI(b.Mode),
 		ClonedFrom: b.ClonedFrom,
-	}
-	if b.CreatedAt != nil {
-		bundle.CreatedAt = b.CreatedAt.ToTime()
+		CreatedAt:  timeFromCLI(b.CreatedAt),
 	}
 	if b.Manifest != nil {
 		bundle.Manifest = &vtpm.Manifest{
-			Version:           b.Manifest.Version,
-			ID:                b.Manifest.ID,
-			Mode:              bundleModeFromInt(b.Manifest.Mode),
+			ID:                b.ID,
+			Mode:              bundle.Mode,
 			Hostname:          b.Manifest.Hostname,
-			EKAlgorithm:       ekAlgorithmFromInt(b.Manifest.EKAlgorithm),
+			EKAlgorithm:       vtpm.EKAlgorithm(b.Manifest.EKAlgorithm),
 			SecureBootEnabled: b.Manifest.SecureBootEnabled,
 			ClonedFrom:        b.Manifest.ClonedFrom,
 			Labels:            b.Manifest.Labels,
-		}
-		if b.Manifest.CreatedAt != nil {
-			bundle.Manifest.CreatedAt = b.Manifest.CreatedAt.ToTime()
+			Checksums:         b.Manifest.Checksums,
+			CreatedAt:         timeFromCLI(b.Manifest.CreatedAt),
 		}
 	}
 	if b.TPMState != nil {
 		bundle.TPMState = &vtpm.TPMState{
-			StateDir: b.TPMState.StateDir,
+			StateDir:     b.TPMState.StateDir,
+			PermallFile:  b.TPMState.PermallFile,
+			VolatileFile: b.TPMState.VolatileFile,
 		}
 	}
 	if b.OVMFState != nil {
@@ -163,61 +104,21 @@ func (b *cliBundle) toVTPMBundle() *vtpm.Bundle {
 	return bundle
 }
 
-// cliTemplate matches the protobuf Template JSON output (uses snake_case JSON tags)
-type cliTemplate struct {
-	ID                string        `json:"id"`
-	Description       string        `json:"description,omitempty"`
-	EKAlgorithm       int           `json:"ek_algorithm"` // Protobuf enum: 1=RSA, 2=ECC
-	SecureBootEnabled bool          `json:"secure_boot_enabled"`
-	TPMStateDir       string        `json:"tpm_state_dir"`
-	NVRAMPath         string        `json:"nvram_path"`
-	SecureBootKeysDir string        `json:"secure_boot_keys_dir"`
-	CreatedAt         *cliTimestamp `json:"created_at"`
-}
-
-func (t *cliTemplate) toVTPMTemplate() *vtpm.Template {
+// templateFromCLI converts an SDK domain template to vtpm.Template.
+func templateFromCLI(t *vtpmsvc.Template) *vtpm.Template {
 	if t == nil {
 		return nil
 	}
-	template := &vtpm.Template{
+	return &vtpm.Template{
 		ID:                t.ID,
 		Description:       t.Description,
-		EKAlgorithm:       ekAlgorithmFromInt(t.EKAlgorithm),
+		EKAlgorithm:       vtpm.EKAlgorithm(t.EKAlgorithm),
 		SecureBootEnabled: t.SecureBootEnabled,
 		TPMStateDir:       t.TPMStateDir,
 		NVRAMPath:         t.NVRAMPath,
 		SecureBootKeysDir: t.SecureBootKeysDir,
+		CreatedAt:         timeFromCLI(t.CreatedAt),
 	}
-	if t.CreatedAt != nil {
-		template.CreatedAt = t.CreatedAt.ToTime()
-	}
-	return template
-}
-
-// CLI response wrappers that match protobuf JSON output
-type cliCreateBundleResponse struct {
-	Bundle *cliBundle `json:"bundle"`
-}
-
-type cliGetBundleResponse struct {
-	Bundle *cliBundle `json:"bundle"`
-}
-
-type cliListBundlesResponse struct {
-	Bundles []*cliBundle `json:"bundles"`
-	Total   int          `json:"total"`
-}
-
-type cliCreateTemplateResponse struct {
-	Template *cliTemplate `json:"template"`
-}
-
-type cliListTemplatesResponse struct {
-	Templates []*cliTemplate `json:"templates"`
-}
-
-type cliCloneTemplateResponse struct {
-	Bundle *cliBundle `json:"bundle"`
 }
 
 // CLI response wrappers for runtime TPM operations
@@ -352,7 +253,7 @@ func (a *CLIAdapter) CreateBundle(ctx context.Context, opts CreateBundleOptions)
 		return nil, err
 	}
 
-	var resp cliCreateBundleResponse
+	var resp vtpmsvc.CreateBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "CreateBundle",
@@ -361,7 +262,7 @@ func (a *CLIAdapter) CreateBundle(ctx context.Context, opts CreateBundleOptions)
 		}
 	}
 
-	return &CreateBundleResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &CreateBundleResult{Bundle: bundleFromCLI(resp.Bundle)}, nil
 }
 
 // GetBundle retrieves a bundle by its ID.
@@ -373,7 +274,7 @@ func (a *CLIAdapter) GetBundle(ctx context.Context, opts GetBundleOptions) (*Get
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
+	var resp vtpmsvc.GetBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "GetBundle",
@@ -382,7 +283,7 @@ func (a *CLIAdapter) GetBundle(ctx context.Context, opts GetBundleOptions) (*Get
 		}
 	}
 
-	return &GetBundleResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &GetBundleResult{Bundle: bundleFromCLI(resp.Bundle)}, nil
 }
 
 // DeleteBundle removes a bundle.
@@ -416,7 +317,7 @@ func (a *CLIAdapter) ListBundles(ctx context.Context, opts ListBundlesOptions) (
 		return nil, err
 	}
 
-	var resp cliListBundlesResponse
+	var resp vtpmsvc.ListBundlesResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "ListBundles",
@@ -427,12 +328,12 @@ func (a *CLIAdapter) ListBundles(ctx context.Context, opts ListBundlesOptions) (
 
 	bundles := make([]*vtpm.Bundle, 0, len(resp.Bundles))
 	for _, b := range resp.Bundles {
-		bundles = append(bundles, b.toVTPMBundle())
+		bundles = append(bundles, bundleFromCLI(b))
 	}
 
 	return &ListBundlesResult{
 		Bundles: bundles,
-		Total:   resp.Total,
+		Total:   int(resp.Total),
 	}, nil
 }
 
@@ -464,7 +365,7 @@ func (a *CLIAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpti
 		return nil, err
 	}
 
-	var resp cliCreateTemplateResponse
+	var resp vtpmsvc.CreateTemplateResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "CreateTemplate",
@@ -473,7 +374,7 @@ func (a *CLIAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpti
 		}
 	}
 
-	return &CreateTemplateResult{Template: resp.Template.toVTPMTemplate()}, nil
+	return &CreateTemplateResult{Template: templateFromCLI(resp.Template)}, nil
 }
 
 // GetTemplate retrieves a template by its ID.
@@ -487,7 +388,7 @@ func (a *CLIAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (
 		return nil, err
 	}
 
-	var resp cliListTemplatesResponse
+	var resp vtpmsvc.ListTemplatesResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "GetTemplate",
@@ -498,7 +399,7 @@ func (a *CLIAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (
 
 	for _, t := range resp.Templates {
 		if t.ID == opts.ID {
-			return &GetTemplateResult{Template: t.toVTPMTemplate()}, nil
+			return &GetTemplateResult{Template: templateFromCLI(t)}, nil
 		}
 	}
 
@@ -530,7 +431,7 @@ func (a *CLIAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOption
 		return nil, err
 	}
 
-	var resp cliListTemplatesResponse
+	var resp vtpmsvc.ListTemplatesResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "ListTemplates",
@@ -541,7 +442,7 @@ func (a *CLIAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOption
 
 	templates := make([]*vtpm.Template, 0, len(resp.Templates))
 	for _, t := range resp.Templates {
-		templates = append(templates, t.toVTPMTemplate())
+		templates = append(templates, templateFromCLI(t))
 	}
 
 	return &ListTemplatesResult{
@@ -563,7 +464,7 @@ func (a *CLIAdapter) CloneTemplate(ctx context.Context, opts CloneTemplateOption
 		return nil, err
 	}
 
-	var resp cliCloneTemplateResponse
+	var resp vtpmsvc.CloneResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "CloneTemplate",
@@ -572,7 +473,7 @@ func (a *CLIAdapter) CloneTemplate(ctx context.Context, opts CloneTemplateOption
 		}
 	}
 
-	return &CloneTemplateResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &CloneTemplateResult{Bundle: bundleFromCLI(resp.Bundle)}, nil
 }
 
 // ============================================================================
@@ -621,7 +522,7 @@ func (a *CLIAdapter) ImportBundle(ctx context.Context, opts ImportBundleOptions)
 	}
 
 	// Import response uses same structure as create
-	var resp cliCreateBundleResponse
+	var resp vtpmsvc.ImportBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "ImportBundle",
@@ -630,7 +531,7 @@ func (a *CLIAdapter) ImportBundle(ctx context.Context, opts ImportBundleOptions)
 		}
 	}
 
-	return &ImportBundleResult{Bundle: resp.Bundle.toVTPMBundle()}, nil
+	return &ImportBundleResult{Bundle: bundleFromCLI(resp.Bundle)}, nil
 }
 
 // ValidateBundle validates bundle integrity.
@@ -644,7 +545,7 @@ func (a *CLIAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOpti
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
+	var resp vtpmsvc.GetBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return &ValidateBundleResult{
 			Valid:  false,
@@ -672,7 +573,7 @@ func (a *CLIAdapter) GetBundlePath(ctx context.Context, opts GetBundlePathOption
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
+	var resp vtpmsvc.GetBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "GetBundlePath",
@@ -702,7 +603,7 @@ func (a *CLIAdapter) GetTPMSocketPath(ctx context.Context, opts GetTPMSocketPath
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
+	var resp vtpmsvc.GetBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "GetTPMSocketPath",
@@ -732,7 +633,7 @@ func (a *CLIAdapter) GetNVRAMPath(ctx context.Context, opts GetNVRAMPathOptions)
 		return nil, err
 	}
 
-	var resp cliGetBundleResponse
+	var resp vtpmsvc.GetBundleResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: "GetNVRAMPath",
