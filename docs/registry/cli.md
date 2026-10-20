@@ -50,6 +50,7 @@ List images in the registry.
 |---|---|---|---|---|
 | `--repository` | `-r` | string | `""` | Filter by repository name |
 | `--prefix` | `-p` | string | `""` | Filter by repository or tag prefix |
+| `--limit` | `-l` | int | `50` | Maximum number of images to return |
 | `--cursor` | | string | `""` | Pagination cursor for the next page |
 | `--sort-by` | | string | `name` | Sort field: `name`, `size`, `created`, `pushed` |
 | `--sort-desc` | | bool | `false` | Reverse sort order |

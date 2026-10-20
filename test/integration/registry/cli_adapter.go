@@ -239,7 +239,7 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, e
 	}
 
 	if opts.TagPrefix != "" {
-		args = append(args, "--tag-prefix", opts.TagPrefix)
+		args = append(args, "--prefix", opts.TagPrefix)
 	}
 
 	if opts.Limit > 0 {
@@ -251,7 +251,7 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, e
 	}
 
 	if opts.IncludeEncrypted {
-		args = append(args, "--include-encrypted")
+		args = append(args, "--show-encrypted")
 	}
 
 	if opts.SortBy != "" {
