@@ -79,7 +79,9 @@ Key wiring facts:
   nor `podman` on `PATH` (the SDK's `ContainerRuntimeNotAvailableError`), the
   orchestrator still starts, so the compute API stays served, but every
   container create and start is refused with
-  `MeasuredRuntimeUnavailableError`, which names the missing runtimes.
+  `MeasuredRuntimeUnavailableError`, which names the missing runtimes. The
+  refusal answers before the instance lookup, so a start of an instance the
+  host never created is refused too, not reported as not found.
   Every other trust-stack failure stops the orchestrator from starting.
 - `container.NewSDKContainerAttestor` builds the SDK's runtime attestor over
   the platform's host TPM. `container.NewFleetContainerAttestor` wraps it with
