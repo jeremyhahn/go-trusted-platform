@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -28,12 +29,12 @@ const (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], goCommand{}, os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], goCommand{}, time.Now(), os.Stdout, os.Stderr))
 }
 
 // run checks every module directory given. A goCommand with no path takes
 // its path from the -go flag.
-func run(args []string, src moduleSource, stdout, stderr io.Writer) int {
+func run(args []string, src moduleSource, now time.Time, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("depscheck", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	goPath := flags.String("go", "go", "the go command")
@@ -50,7 +51,7 @@ func run(args []string, src moduleSource, stdout, stderr io.Writer) int {
 	}
 	var findings []finding
 	for _, dir := range flags.Args() {
-		found, err := checkModule(src, dir, *firstParty)
+		found, err := checkModule(src, dir, *firstParty, now)
 		if err != nil {
 			fmt.Fprintf(stderr, "%s\n", err)
 			return exitLookup
@@ -61,7 +62,7 @@ func run(args []string, src moduleSource, stdout, stderr io.Writer) int {
 }
 
 // checkModule assesses the dependencies of the go.mod in dir.
-func checkModule(src moduleSource, dir, firstParty string) ([]finding, error) {
+func checkModule(src moduleSource, dir, firstParty string, now time.Time) ([]finding, error) {
 	goproxy, err := src.GoProxy(dir)
 	if err != nil {
 		return nil, err
@@ -93,7 +94,7 @@ func checkModule(src moduleSource, dir, firstParty string) ([]finding, error) {
 	findings := make([]finding, 0, len(deps))
 	for _, dep := range deps {
 		mod, listed := listing[dep.Module]
-		findings = append(findings, assess(dep, mod, listed, firstParty))
+		findings = append(findings, assess(dep, mod, listed, firstParty, now))
 	}
 	return findings, nil
 }
@@ -112,6 +113,8 @@ func report(findings []finding, stdout, stderr io.Writer) int {
 		case f.Unused:
 			fmt.Fprintf(stdout, "%s:%d: note: replace of %s applies to no module in the build list\n", d.File, d.Line, d.Module)
 		case !f.Behind:
+		case d.Reason == "" && f.Fresh:
+			fmt.Fprintf(stdout, "%s:%d: fresh: %s %s, latest %s released %s, under 7 days: reported, not failed\n", d.File, d.Line, d.Path, d.Version, f.Latest, f.Released.UTC().Format(time.DateOnly))
 		case d.Reason == "":
 			fmt.Fprintf(stderr, "%s:%d: %s %s is behind latest %s and its %s line carries no reason comment\n", d.File, d.Line, d.Path, d.Version, f.Latest, d.Kind)
 			undocumented++

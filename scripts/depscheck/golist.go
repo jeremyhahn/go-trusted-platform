@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // listedModule is the part of one `go list -m -u -versions -json` entry
@@ -19,8 +20,15 @@ type listedModule struct {
 	Versions []string
 	// Update is the go command's own "latest release" answer: set only when
 	// it is newer than Version.
-	Update *struct{ Version string }
+	Update *moduleUpdate
 	Error  *struct{ Err string }
+}
+
+// moduleUpdate is the go command's latest release. Time is when it was
+// released; it is zero when the go command does not print it.
+type moduleUpdate struct {
+	Version string
+	Time    time.Time
 }
 
 // moduleSource answers the two questions deps-check asks the go command.
