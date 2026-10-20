@@ -605,7 +605,8 @@ func (g *supervisedGatewayd) bridge(t *testing.T) bridgeState {
 // bridgeState is the suite bridge's flows and groups, sorted, each flow's
 // counters dropped and its gateway cookie cut to the owner id, so two dumps
 // of the same programming compare equal whichever generation stamped it.
-// generations is the set of full gateway cookies the flows carried.
+// generations is the set of full gateway cookies the flows carried that hold
+// a drawn generation; an owner's fixed cookie (low 32 bits zero) is not one.
 type bridgeState struct {
 	rules       []string
 	generations map[uint64]bool
@@ -666,7 +667,13 @@ func (s bridgeState) addFlow(line string) (string, error) {
 				return "", &bridgeDumpError{Line: line, Cause: err}
 			}
 			if owner := cookie & ovs.OwnerCookieMask; owner != 0 {
-				s.generations[cookie] = true
+				// ovs.NewGenerationCookie never draws generation 0, so a
+				// cookie with empty low bits is an owner's fixed cookie
+				// (the base pipeline, the ND punts): the same on every
+				// start, and no generation of the killed child's.
+				if cookie&^ovs.OwnerCookieMask != 0 {
+					s.generations[cookie] = true
+				}
 				field = fmt.Sprintf("owner=0x%x", owner)
 			}
 		}
@@ -765,6 +772,33 @@ func TestParseBridgeComparesProgrammingNotGenerations(t *testing.T) {
 	}
 	if len(first.rules) != 3 {
 		t.Errorf("rules = %v, want two flows and one group", first.rules)
+	}
+}
+
+// TestParseBridgeLeavesFixedCookiesOutOfTheGenerations pins what a
+// generation is: an owner's cookie with a generation drawn in its low 32
+// bits. The base pipeline (gateway.CookiePipeline) and the overlay's ND
+// punts (modes.OverlayNDCookie) stamp one fixed cookie on every start, so
+// a relaunched datapath re-installs the very cookie its predecessor left.
+// Counted as a generation, that cookie would read as the predecessor's
+// forever and datapathReconciled could never turn true.
+func TestParseBridgeLeavesFixedCookiesOutOfTheGenerations(t *testing.T) {
+	const header = "OFPST_FLOW reply (OF1.3) (xid=0x2):\n"
+	state, err := parseBridge(header+
+		" cookie=0xf1be000000000000, duration=1.5s, table=0, n_packets=4, n_bytes=240, priority=0 actions=resubmit(,10)\n"+
+		" cookie=0xf1be000600000000, duration=1.5s, table=0, n_packets=0, n_bytes=0, priority=200,icmp6,icmp_type=135 actions=CONTROLLER:65535\n"+
+		" cookie=0xf1be000300000007, duration=1.5s, table=0, n_packets=0, n_bytes=0, priority=100,tcp,nw_dst=10.100.0.20,tp_dst=80 actions=group:1\n",
+		"")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := map[uint64]bool{0xf1be000300000007: true}; !maps.Equal(state.generations, want) {
+		t.Errorf("generations = %v, want %v: a fixed cookie carries no generation", state.generations, want)
+	}
+	for _, rule := range state.rules {
+		if strings.Contains(rule, "cookie=") {
+			t.Errorf("rule %q keeps a raw gateway cookie, want it cut to the owner", rule)
+		}
 	}
 }
 
