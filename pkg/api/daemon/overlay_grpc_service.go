@@ -58,6 +58,7 @@ type OverlayService struct {
 	platformv1.UnimplementedOverlayServiceServer
 
 	controller OverlayControllerInterface
+	ipsec      overlayIPsec
 	mu         sync.RWMutex
 }
 
@@ -90,6 +91,12 @@ func (s *OverlayService) SetController(ctrl OverlayControllerInterface) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.controller = ctrl
+}
+
+func (s *OverlayService) SetIPsec(sec overlayIPsec) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ipsec = sec
 }
 
 // ListVTEPs returns all known VTEP endpoints.
@@ -472,6 +479,10 @@ func (s *OverlayService) GetOverlayStatus(ctx context.Context, req *platformv1.G
 		tunnelCount = uint32(len(state.Tunnels))
 		remoteMACCount = uint32(len(state.RemoteMACs))
 	}
+	var unpeeredVTEPs uint32
+	if s.ipsec != nil {
+		unpeeredVTEPs = uint32(len(s.ipsec.Status().UnpeeredVTEPs))
+	}
 
 	return &platformv1.GetOverlayStatusResponse{
 		Status: &platformv1.OverlayStatus{
@@ -484,6 +495,7 @@ func (s *OverlayService) GetOverlayStatus(ctx context.Context, req *platformv1.G
 			Healthy:        healthy,
 			VxlanPort:      vxlanPort,
 			UnderlayMtu:    underlayMTU,
+			UnpeeredVteps:  unpeeredVTEPs,
 		},
 	}, nil
 }

@@ -14,7 +14,8 @@ The overlay MCP tools mirror the overlay CLI/gRPC surface.
 ### overlay_status
 
 Get the current status of the overlay network including node ID, VTEP
-IP, and counts of VTEPs, VNIs, tunnels, and remote MACs.
+IP, and counts of VTEPs, VNIs, tunnels, remote MACs, and IPsec
+`unpeered_vteps`.
 
 No arguments.
 

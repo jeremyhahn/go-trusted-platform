@@ -103,6 +103,12 @@ type PreFetchConfig struct {
 	// SkipKernel leaves the kernel package out of the prefetch: the media
 	// carries a platform-built kernel instead (InstallerOverrides.KernelArtifactsDir).
 	SkipKernel bool
+
+	// PlatformAPKDir, when set, is the build/docker/strongswan-builder output
+	// the media carries the overlay's IPsec packages from: the platform-built
+	// apks are copied from it, and the packages they need from the mirror are
+	// prefetched with them. See PlatformPackages.
+	PlatformAPKDir string
 }
 
 // defaultKernelPackage is the Alpine kernel package the platform installs
@@ -132,6 +138,9 @@ type apkPackageEntry struct {
 	// checksum, soname versions, etc.) which apk's signature/dependency
 	// resolver verifies byte-for-byte.
 	RawBlock string
+	// LocalPath is where a platform-built apk lives on the build host
+	// (PreFetchConfig.PlatformAPKDir); empty for a package of the mirror.
+	LocalPath string
 }
 
 // PreFetchBuilder handles pre-fetching of APK packages for air-gapped installation.
@@ -350,6 +359,11 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		}
 	}
 
+	// Add the overlay's IPsec transport when the media carries it
+	if config.PlatformAPKDir != "" {
+		packages = append(packages, PlatformPackages()...)
+	}
+
 	// Add user-specified extra packages
 	packages = append(packages, config.ExtraPackages...)
 
@@ -544,6 +558,11 @@ func (b *PreFetchBuilder) GenerateAPKINDEX(ctx context.Context, packagesDir stri
 			if isFIPSChecksumRefusal(err) {
 				return err
 			}
+			// Nor is skipping a platform-built package: the install config
+			// asks for it by name, so the media would not install.
+			if b.isPlatformAPK(apkFile) {
+				return &ErrPlatformAPKInvalid{Path: apkFile, Reason: "cannot be indexed", Err: err}
+			}
 			b.logger.Warn("[PREFETCH] Failed to extract metadata from package",
 				"file", apkFile, "error", err)
 			continue
@@ -657,6 +676,12 @@ func (b *PreFetchBuilder) loadPackageIndex(ctx context.Context) error {
 		// Continue without community repo - not all packages may be available
 	}
 
+	if b.config.PlatformAPKDir != "" {
+		if err := b.loadPlatformIndex(); err != nil {
+			return err
+		}
+	}
+
 	b.logger.Info("[PREFETCH] Package index loaded", "packages", len(b.packageIndex))
 
 	return nil
@@ -679,7 +704,12 @@ func (b *PreFetchBuilder) downloadAndParseIndex(ctx context.Context, indexURL st
 		return &MessageError{Msg: fmt.Sprintf("failed to download APKINDEX: HTTP %d", resp.StatusCode)}
 	}
 
-	gzReader, err := gzip.NewReader(resp.Body)
+	return b.parseIndexArchive(resp.Body)
+}
+
+// parseIndexArchive parses the APKINDEX inside an APKINDEX.tar.gz stream.
+func (b *PreFetchBuilder) parseIndexArchive(r io.Reader) error {
+	gzReader, err := gzip.NewReader(r)
 	if err != nil {
 		return err
 	}
@@ -948,6 +978,11 @@ func (b *PreFetchBuilder) downloadPackage(ctx context.Context, pkg *apkPackageEn
 		b.logger.Debug("[PREFETCH] Package already exists, skipping",
 			"package", pkg.Name)
 		return nil
+	}
+
+	// A platform-built apk comes from the builder output, not a mirror.
+	if pkg.LocalPath != "" {
+		return copyLocalPackage(pkg.LocalPath, destPath)
 	}
 
 	// Try main repository first, then community

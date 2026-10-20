@@ -207,6 +207,7 @@ type OverlayStatusResponse struct {
 	VNICount       uint32    `json:"vni_count"`
 	TunnelCount    uint32    `json:"tunnel_count"`
 	RemoteMACCount uint32    `json:"remote_mac_count"`
+	UnpeeredVTEPs  uint32    `json:"unpeered_vteps"`
 	Healthy        bool      `json:"healthy"`
 	Timestamp      time.Time `json:"timestamp"`
 }

@@ -17,7 +17,7 @@ operation.
 
 | Sub-opcode | Operation | Description |
 |-----------|-----------|-------------|
-| `0x01` | Status | Overlay status (node ID, VTEP, counts, health) |
+| `0x01` | Status | Overlay status (node ID, VTEP, counts, IPsec unpeered VTEPs, health) |
 | `0x02` | ListVTEPs | List all known VTEPs |
 | `0x03` | GetVTEP | Get VTEP by ID |
 | `0x04` | ListVNIs | List configured VNIs |
@@ -43,6 +43,7 @@ type OverlayStatusInfo struct {
     VNICount     int    `codec:"vni_count"`
     TunnelCount  int    `codec:"tunnel_count"`
     MACCount     int    `codec:"mac_count"`
+    UnpeeredVTEPs int    `codec:"unpeered_vteps"`
     UplinkIface  string `codec:"uplink_iface,omitempty"`
     MTU          int    `codec:"mtu"`
     EncapType    string `codec:"encap_type"`

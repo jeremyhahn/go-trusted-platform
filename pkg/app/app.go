@@ -1367,9 +1367,18 @@ func (app *App) GetInstallerConfig() (*installer.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	osConfig := app.OSConfig
+	if osConfig != nil {
+		copied := *osConfig
+		copied.OverlayIPsecEnabled = app.SDNConfig != nil &&
+			app.SDNConfig.Overlay != nil &&
+			app.SDNConfig.Overlay.IPsec != nil &&
+			app.SDNConfig.Overlay.IPsec.Enabled
+		osConfig = &copied
+	}
 	return &installer.Config{
 		Disk:                  app.DiskConfig,
-		OS:                    app.OSConfig,
+		OS:                    osConfig,
 		Network:               app.NetworkConfig,
 		Plan:                  plan,
 		UKI:                   app.UKIConfig,

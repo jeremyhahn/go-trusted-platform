@@ -1,0 +1,64 @@
+# Trusted Platform PKCS#11 module host: the glibc root filesystem whose
+# p11-kit server hosts the go-xkms PKCS#11 module, and the OpenRC service that
+# runs it. charon (musl) cannot dlopen the Go c-shared module, so it loads
+# p11-kit-client.so and reaches the module through this server.
+#
+# Built by build/docker/strongswan-builder (see its README.md) from the
+# root filesystem archive `make ipsec-module-host` exports
+# (build/docker/strongswan-builder/modulehost/Dockerfile). The archive is
+# opaque to abuild -- one file, not scanned for shared-library dependencies,
+# which would be glibc's and could never be met on Alpine -- and the service
+# unpacks it on the node.
+#
+# pkgver is templated from the builder Makefile (XKMS_VERSION, the go-xkms
+# release the module is built from).
+pkgname=trusted-platform-p11-host
+pkgver=@P11_HOST_VERSION@
+pkgrel=0
+pkgdesc="glibc p11-kit server hosting the go-xkms PKCS#11 module for the Trusted Platform overlay"
+url="https://github.com/jeremyhahn/go-xkms"
+arch="x86_64 aarch64"
+# The module (go-xkms) and the Ubuntu root filesystem it runs in, whose
+# packages carry their own licenses under /usr/share/doc/*/copyright.
+license="AGPL-3.0-or-later GPL-2.0-or-later LGPL-2.1-or-later"
+# p11-kit-server is the client side: p11-kit-client.so, at the same 0.26 the
+# host's server is.
+depends="p11-kit-server>=0.26"
+options="!check !tracedeps"
+# The p11-kit server's own unprivileged user (the pre-install creates it).
+pkgusers="xkms-p11"
+pkggroups="xkms-p11"
+install="$pkgname.pre-install"
+subpackages="$pkgname-openrc"
+# rootfs is the archive; the extension keeps abuild from unpacking it into
+# $srcdir.
+source="modulehost.rootfs
+	xkms-p11-kit.initd
+	xkms-p11-kit.confd
+	p11-kit-pin-check
+	socket-takeover
+	"
+builddir="$srcdir"
+
+build() {
+	return 0
+}
+
+package() {
+	# The root filesystem records the p11-kit it holds (the Dockerfile that
+	# builds it refuses anything older than 0.26 as well). Read it back and
+	# check it again here: this is the archive the nodes will run.
+	local _ver
+	_ver=$(tar -xOf "$srcdir"/modulehost.rootfs usr/share/xkms/p11-kit.version) || {
+		error "modulehost.rootfs has no usr/share/xkms/p11-kit.version"
+		return 1
+	}
+	"$srcdir"/p11-kit-pin-check "$_ver" || return 1
+
+	install -Dm644 "$srcdir"/modulehost.rootfs "$pkgdir"/usr/share/xkms-p11-host/rootfs.tar
+	sha256sum "$srcdir"/modulehost.rootfs | cut -d' ' -f1 > "$pkgdir"/usr/share/xkms-p11-host/rootfs.tar.sha256
+	install -Dm755 "$srcdir"/p11-kit-pin-check "$pkgdir"/usr/libexec/xkms-p11-host/p11-kit-pin-check
+	install -Dm755 "$srcdir"/socket-takeover "$pkgdir"/usr/libexec/xkms-p11-host/socket-takeover
+	install -Dm755 "$srcdir"/xkms-p11-kit.initd "$pkgdir"/etc/init.d/xkms-p11-kit
+	install -Dm644 "$srcdir"/xkms-p11-kit.confd "$pkgdir"/etc/conf.d/xkms-p11-kit
+}

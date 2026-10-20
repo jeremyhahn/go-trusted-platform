@@ -161,6 +161,13 @@ type ISOBuildConfig struct {
 	// Empty means the autoinstall repo setup falls back to the public
 	// Alpine mirror (dl-cdn) at install time.
 	APKMirror string `yaml:"apk-mirror,omitempty" json:"apk_mirror,omitempty"`
+
+	// PlatformAPKDir is the build/docker/strongswan-builder output (make
+	// strongswan-build) whose apks the media carries and installs for the
+	// overlay's IPsec transport. Empty builds media without them. Every
+	// medium built from this configuration -- the ISO, the factory image and
+	// the netboot sets -- takes them from here.
+	PlatformAPKDir string `yaml:"platform-apk-dir,omitempty" json:"platform_apk_dir,omitempty"`
 }
 
 // IsDynamicConfigMode returns true when the ISO should fetch config from a
@@ -168,6 +175,13 @@ type ISOBuildConfig struct {
 func (c *ISOBuildConfig) IsDynamicConfigMode() bool {
 	return c.ConfigServerURL != "" && c.PlatformConfigFile == "" &&
 		c.InstallConfig == nil && c.ConfigFile == "" && c.Profile == ""
+}
+
+// fetchesInstallConfig reports whether media built with this config server
+// and platform config file embeds no install configuration and leaves the
+// node to fetch one from the server at boot (Customizer.GenerateInstallConfig).
+func fetchesInstallConfig(configServerURL, platformConfigFile string) bool {
+	return configServerURL != "" && platformConfigFile == ""
 }
 
 // DefaultISOBuildConfig returns default configuration
@@ -284,7 +298,7 @@ func (c *ISOBuildConfig) Validate() error {
 		}
 	}
 
-	return nil
+	return c.ValidatePlatformAPKDir()
 }
 
 // GetInstallConfig returns or generates install config

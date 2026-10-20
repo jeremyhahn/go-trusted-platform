@@ -322,7 +322,7 @@ general switch-configuration API.
 | Unit | `pkg/sdn/**/*_test.go`, `pkg/switch/*_test.go` | State machine transitions, config validation, flow generation, IPAM allocation |
 | Integration | `test/integration/sdn/`, `test/integration/network/` | OVS bridges, flows, port auth against a real datapath |
 | Unit, real GoBGP | `pkg/sdn/bgp/rtc_dynamic_gobgp_test.go` | RT-Constrain filtering of EVPN routes; dynamic neighbours admitted only from the fabric prefix (§9.4) |
-| Integration | `test/integration/ipsec/` (`make integration-test-ipsec`) | musl charon peers in netns, IKEv2 through the go-xkms PKCS#11 module, ESP checked with `ip xfrm` (§9.3) |
+| Integration | `test/integration/ipsec/` (`make integration-test-ipsec`) | musl charon peers in netns, IKEv2 through the go-xkms PKCS#11 module, ESP checked with `ip xfrm`; the fail-closed floor, eviction and IKE limiter on a real kernel (§9.3) |
 
 `pkg/sdn/netlink` is excluded from `make test` and needs `make integration-test`.
 `noop.go` in `pkg/switch/` is the fixture that lets switch-dependent paths run
@@ -434,9 +434,9 @@ README carries the detail.
     connections must say `auth = pubkey`.
 - **Privilege.** charon is built `--with-user=strongswan --with-group=strongswan
   --with-capabilities=libcap`. It starts as root, then runs as `strongswan`
-  with `CapEff=0x1000` (`CAP_NET_ADMIN` only), as the suite measures. The VICI
-  socket is `strongswan:strongswan` with mode 0660. The plan wants 0600 and
-  owned by platformd's user; that is #709's to configure.
+  with `CapEff=0x1000` (`CAP_NET_ADMIN` only), as the suite measures. The vici
+  plugin creates the socket as `strongswan` (0660); the packaged service
+  re-owns it to the platform user at 0600 (§9.6).
 - **Plugin load order.** charon loads its plugins, the PKCS#11 provider
   included, *before* it drops root. A provider that authenticates its caller
   at `C_Initialize` therefore sees uid 0. The node-local xkms server's
@@ -487,12 +487,10 @@ relying on undefined register contents for the second, so it is not an option.
 
 The plan's fallback as written ("`p11-kit server` hosting the module") does not
 work on musl either: p11-kit's server is a musl process that dlopens the
-module. It works only when the server is a glibc process. Which glibc host a
-node runs (a glibc p11-kit bundle beside the musl userland, or a Go p11-kit RPC
-server inside go-xkms with no C module at all) is an architecture decision for
-the owner. charon's side is the same either way: `pkcs11 { modules { xkms {
-path = /usr/lib/pkcs11/p11-kit-client.so } } }`, plus `P11_KIT_SERVER_ADDRESS`
-in `/etc/conf.d/charon`.
+module. It works only when the server is a glibc process. #709 packages that
+host as a glibc root filesystem beside the musl userland (§9.6). charon's side
+is `pkcs11 { modules { xkms { path = /usr/lib/pkcs11/p11-kit-client.so } } }`,
+plus `P11_KIT_SERVER_ADDRESS` in `/etc/conf.d/charon`.
 
 Three defects stood between that path and a working IKE_AUTH:
 
@@ -501,7 +499,7 @@ Three defects stood between that path and a working IKE_AUTH:
    server it does not fail; it silently corrupts byte-array attributes:
    `CKA_ID 01` arrives as `01000000`, labels disappear and key usage becomes
    `none`. 0.26.2 (Ubuntu 26.04) and 0.26.5 (sid) servers are correct. The
-   suite's module host is Ubuntu 26.04 for this reason.
+   module host is Ubuntu 26.04 for this reason, and §9.6 enforces the pin.
 2. **go-xkms: offline mode could not be initialized again after
    `C_Finalize`.** p11-kit's server initializes, finalizes and initializes
    every provider, so the second `C_Initialize` returned
@@ -532,11 +530,10 @@ server (plan §5.2), which this spike does not have yet.
 ### 9.3 The ipsec integration suite
 
 `make integration-test-ipsec` (devcontainer, `test/integration/ipsec/`) builds
-the apks, two Alpine root filesystems with the apks installed through apk (with
-their signatures checked) and a glibc module-host root filesystem (Ubuntu
-26.04, p11-kit 0.26.2, the module). Each peer runs in its own network namespace
-with charon started by the packaged OpenRC service, and has its own module host
-and token:
+the apks (charon and the module host, §9.6) and two Alpine root filesystems with
+the apks installed through apk (with their signatures checked). Each peer runs in
+its own network namespace with charon and the module host started by the
+packaged OpenRC services, and has its own token:
 
 1. The P-256 IKE key is generated **on the token** through
    `p11-kit-client.so`, the same path charon uses.
@@ -546,9 +543,12 @@ and token:
 
 | Test | Proves |
 |---|---|
-| `TestESPTransportThroughPKCS11Module` | <ul><li>both peers sign IKE_AUTH with the token key (`ECDSA_WITH_SHA*_DER`) and verify each other</li><li>the IKE SA uses the ML-KEM-768 hybrid</li><li>`ip xfrm state` holds one inbound and one outbound transport-mode `rfc4106(gcm(aes))` SA with a 16-byte ICV, ESN and `replay_window 1024`</li><li>the SPIs agree crosswise and a ping is carried by the SAs (packet counters)</li><li>the policies require ESP</li><li>charon runs as `strongswan` with `CAP_NET_ADMIN` only, and the VICI socket mode is 0660</li></ul> |
+| `TestESPTransportThroughPKCS11Module` | <ul><li>both peers sign IKE_AUTH with the token key (`ECDSA_WITH_SHA*_DER`) and verify each other</li><li>the IKE SA uses the ML-KEM-768 hybrid</li><li>`ip xfrm state` holds one inbound and one outbound transport-mode `rfc4106(gcm(aes))` SA with a 16-byte ICV, ESN and `replay_window 1024`</li><li>the SPIs agree crosswise and a ping is carried by the SAs (packet counters)</li><li>the policies require ESP</li><li>charon runs as `strongswan` with `CAP_NET_ADMIN` only, and the VICI socket is mode 0600 owned by the platform user; the p11-kit socket is mode 0660, group `strongswan`</li></ul> |
 | `TestUntrustedPeerIsRefused` | a peer certified by another CA is refused (`AUTHENTICATION_FAILED`) and no SA reaches the kernel |
-| `TestSuiteInARM64VM` | the two tests above, cross-compiled for arm64, pass inside an aarch64 VM (`qemu-system-aarch64`, TCG, Alpine `linux-virt` 6.12): arm64 charon, arm64 p11-kit-client, arm64 module host, real aarch64 XFRM |
+| `TestFloorLeavesNoCleartextPath` | with no charon running, VXLAN and BGP do not cross the [fail-closed floor](overlay/architecture.md#fail-closed-floor) in any direction: to and from the node, and routed through it into and out of the fabric. ESP routed through the node, into and out of the fabric, does not cross it either, so the two forward layers agree. The nftables filter alone, the XFRM block policies alone (whose forward block covers only what is routed out through the fabric interface) and both together are each checked against a positive control on the same flows |
+| `TestEvictedPeerIsDroppedBeforeESP` | an evicted peer's ESP (in and out) and IKE stop at the filter, although both are accepted before the eviction and again once it is lifted |
+| `TestIKELimiterHoldsWithAFullMeter` | with the IKE meter full (65535 sources), IKE from one more source is dropped while a source already in the meter is still admitted |
+| `TestSuiteInARM64VM` | the first two tests above, cross-compiled for arm64, pass inside an aarch64 VM (`qemu-system-aarch64`, TCG, Alpine `linux-virt` 6.12): arm64 charon, arm64 p11-kit-client, arm64 module host, real aarch64 XFRM |
 
 **Why a VM for arm64.** qemu-user cannot stand in for it, and a qemu upgrade
 does not change that:
@@ -680,6 +680,117 @@ lack is the hardening.
 - `linux-rpi` has no module signing, lockdown or core scheduling. A Pi that
   needs them needs a platform-built kernel, as the virt kernel already is
   for the QEMU stand-in.
+
+### 9.6 Packaging on a node (#709)
+
+Two apks and their OpenRC subpackages, built by one `abuild` run in
+`build/docker/strongswan-builder` into one signed repository per architecture:
+
+| Package | Carries |
+|---|---|
+| `trusted-platform-strongswan` | charon, swanctl, `strongswan.d/trusted-platform.conf` and `strongswan.d/charon/pkcs11.conf`; depends on `p11-kit-server>=0.26` for `p11-kit-client.so` |
+| `trusted-platform-strongswan-openrc` | the `charon` service and `/etc/conf.d/charon` |
+| `trusted-platform-p11-host` | the glibc module-host root filesystem as one archive (`/usr/share/xkms-p11-host/rootfs.tar`, with its sha256) and `p11-kit-pin-check`; creates the `xkms-p11` user the server runs as; depends on `p11-kit-server>=0.26` |
+| `trusted-platform-p11-host-openrc` | the `xkms-p11-kit` service and `/etc/conf.d/xkms-p11-kit` |
+
+**Settings** (`/etc/strongswan.d/trusted-platform.conf`):
+
+- `make_before_break = yes`, so a rekey installs the new SA before the old one
+  goes;
+- `cookie_threshold` and `init_limit_half_open`, the half-open IKE_SA limits
+  that bound a flood of IKE_SA_INITs;
+- the plugin set of §9.1 and nothing else (`load` is templated from the
+  builder Makefile's `STRONGSWAN_PLUGINS`, the same list the package step
+  checks);
+- the VICI socket at the fixed path `/run/charon.vici`, which `swanctl` reads
+  as well.
+
+**`charon` service.** `need`s `net` and `xkms-p11-kit`, so charon never starts
+without its key store. charon drops to `strongswan` and runs under
+`socket-takeover` (below), which gives the vici plugin's socket to the account
+platformd runs as (`CHARON_VICI_USER`/`CHARON_VICI_GROUP`, default `root:root`:
+the installer runs platformd as root) at mode 0600 once charon has handed it to
+`strongswan`. The VICI dialer refuses a socket its own uid does not own, so
+the two accounts change together. A respawned charon recreates the
+socket and the takeover runs again with it, so the window is that of one start,
+not one health-check interval. The service refuses to start when that user or
+group does not exist, and its start waits for the first takeover (owner and
+mode 0600 both, since charon creates the socket as root first). The installer
+adds `xkms-p11-kit` and `charon` to the default runlevel whenever their
+`-openrc` packages are installed, and both generated platformd scripts start
+`after charon`, so platformd finds the socket served at boot.
+
+**`xkms-p11-kit` service.** Unpacks the root filesystem under
+`/var/lib/xkms-p11-host` (again whenever the apk brings a different archive),
+bind-mounts `/proc`, `/dev`, `/run/p11-kit` and the node's `/var/lib/xkms`
+into it and runs `p11-kit server` in a chroot, which hosts
+`libxkms_pkcs11.so` on `/run/p11-kit/xkms.sock`. The server runs under
+`socket-takeover` too, which sets the socket to mode 0660, owner `xkms-p11`,
+group `strongswan` (`XKMS_P11_SOCKET_GROUP`), after every (re)start.
+
+The server runs as `xkms-p11`, the apk's own system user, which owns
+`/var/lib/xkms` (0700) and `/run/p11-kit` and nothing else. The service keeps
+root for the mounts, the chroot and the handover, and the server drops to the
+user inside the chroot with `setpriv` (no new privileges, no supplementary
+groups). `command_user` cannot do this: it drops before `chroot` runs.
+
+The server exports one token, `pkcs11:token=trusted-platform-ipsec`, not every
+token the module has. A token's label is blank until it is initialized, so an
+uninitialized token is invisible through the socket, and nothing in charon's
+group can initialize it and become its SO. An operator labels it, as root,
+with the service stopped:
+
+```sh
+install -m 0600 /dev/stdin /run/xkms-p11-kit.so-pin   # the SO PIN, root's
+rc-service xkms-p11-kit init_token
+```
+
+`init_token` refuses a PIN file that is not root's with mode 0600. It loads the
+module directly in the chroot as `xkms-p11`, labels the token, and removes the
+file once that succeeds. The user PIN and the IKE key are then set through the
+socket.
+
+**`socket-takeover`.** Both services run their daemon through this wrapper,
+which supervise-daemon starts again on each respawn. It removes a stale socket,
+starts a detached watcher and `exec`s the daemon, so supervise-daemon signals
+and reaps the daemon itself. The watcher waits until the socket exists and is
+owned by the daemon's own user, then sets the mode and hands it over, mode
+first. The wait is bounded (`CHARON_TAKEOVER_TRIES`, 10 s;
+`XKMS_P11_TAKEOVER_TRIES`, 30 s, for the slow first module load): a daemon that
+never serves the socket, or whose socket cannot be handed over, is stopped so
+supervise-daemon restarts it.
+
+**The version pin.** A 0.26 client against an older server corrupts CKA_ID
+(§9.2), so the 0.26 minimum is enforced four times, and none can be configured
+away: the `p11-kit-server>=0.26` dependency of both apks, the module-host
+Dockerfile (`dpkg --compare-versions ... ge 0.26`), the module-host `APKBUILD`
+(`p11-kit-pin-check` on the version recorded in the archive) and the service
+start (the same check on the unpacked root filesystem).
+
+**The module host archive** comes from `make ipsec-module-host`
+(`build/docker/strongswan-builder/modulehost/Dockerfile`, the module built
+against glibc). `make strongswan-build` takes it, and `XKMS_VERSION` (the
+go-xkms release, which becomes the apk's version), as inputs.
+
+**Media.** `pkg/iso` `PlatformPackages()` names the four built apks and
+`p11-kit-server` from the Alpine mirror. `--platform-apk-dir` on
+`platformctl iso create` and `platformctl diskimage create` points at the
+builder's output; the install media, the factory image and the netboot sets all
+get them through the one `StageInstallMedia` hook, into the offline
+`apks-prefetch` repository. Without the flag the media carry none of them.
+`pkg/iso` fails the build when the directory lacks an apk, the index does not
+list it, or an apk is not the one its index entry describes: its size against
+`S:`, every gzip stream against its CRC, and its control segment against `C:`
+(`verifyPlatformAPK`). `GenerateAPKINDEX` skips a malformed mirror apk but
+fails on a platform-built one, which the install asks for by name. The flag is
+refused without pre-fetch and for media that fetches its install config from a
+config server (`ValidatePlatformAPKDir`), the two cases in which a node could
+not install the packages. The builder containers run without host bind
+mounts (`pkg/diskimage/runner`, `build/docker/run-builder.sh`), so the
+directory is copied in, not mounted. `TestPlatformPackages_MatchTheBuilder` and
+`pkg/arch/ipsec_packaging_test.go` fail when the apk names, socket paths,
+plugin placeholders or the pin differ between the builder, the services, the
+media and the suite.
 
 ## 10. Related
 

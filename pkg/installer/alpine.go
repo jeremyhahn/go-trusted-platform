@@ -922,7 +922,7 @@ func (ai *alpineInstaller) SetRootPassword(ctx context.Context, rootPath, passwo
 	return nil
 }
 
-// EnableServices enables essential OpenRC services for the default runlevel
+// EnableServices adds the installed openRCServices to their runlevels.
 func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) error {
 	ai.logger.Info("[ALPINE] Enabling essential OpenRC services")
 
@@ -937,73 +937,83 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 		ai.logger.Warn("[ALPINE] Failed to configure kernel modules", "error", err)
 	}
 
-	// List of essential services to enable in the default runlevel.
-	// Each entry is skipped if its /etc/init.d file isn't present, so
-	// the list can safely contain services whose packages are only
-	// conditionally installed (ssh, OVS). The OVS trio must be
-	// enabled in boot runlevel (not default) so the datapath module
-	// and ovsdb-server are ready before platformd tries to speak
-	// OVSDB in initSDN.
-	defaultServices := []string{
-		"networking", // Network configuration
-		"chronyd",    // Time synchronization (chrony is a mandatory package)
-		"local",      // Local startup scripts
-		"sshd",       // SSH server (if installed)
-	}
-
-	// OVS services: ovs-modules loads the openvswitch kernel module,
-	// ovsdb-server serves the OVSDB socket platformd talks to, and
-	// ovs-vswitchd is the dataplane daemon. These go into the `boot`
-	// runlevel so they're up before `default` services (networking,
-	// platformd) that depend on the bridge being present.
-	bootServices := []string{
-		"ovs-modules",
-		"ovsdb-server",
-		"ovs-vswitchd",
-	}
-	for _, service := range bootServices {
-		servicePath := filepath.Join(rootPath, "etc", "init.d", service)
-		if _, err := os.Stat(servicePath); os.IsNotExist(err) {
-			ai.logger.Debug("[ALPINE] OVS service not found, skipping",
-				"service", service)
-			continue
-		}
-		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", service, "boot")
+	for _, svc := range installedServices(rootPath, ai.config != nil && ai.config.OverlayIPsecEnabled) {
+		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", svc.name, svc.runlevel)
 		if output, err := cmd.CombinedOutput(); err != nil {
-			ai.logger.Warn("[ALPINE] Failed to enable OVS service",
-				"service", service,
-				"error", err,
-				"output", string(output))
-			continue
-		}
-		ai.logger.Info("[ALPINE] Enabled OVS service (boot runlevel)", "service", service)
-	}
-
-	// Enable each service in the default runlevel
-	for _, service := range defaultServices {
-		// Check if service exists before trying to enable it
-		servicePath := filepath.Join(rootPath, "etc", "init.d", service)
-		if _, err := os.Stat(servicePath); os.IsNotExist(err) {
-			ai.logger.Debug("[ALPINE] Service not found, skipping", "service", service)
-			continue
-		}
-
-		// Enable the service using rc-update
-		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", service, "default")
-		if output, err := cmd.CombinedOutput(); err != nil {
+			enableErr := &ErrOpenRCServiceEnable{
+				Service:  svc.name,
+				Runlevel: svc.runlevel,
+				Output:   string(output),
+				Err:      err,
+			}
+			if svc.name == "charon" || svc.name == "xkms-p11-kit" {
+				ai.logger.Error(enableErr, "[ALPINE] Failed to enable overlay IPsec service",
+					"service", svc.name,
+					"runlevel", svc.runlevel,
+					"output", string(output))
+				return enableErr
+			}
 			ai.logger.Warn("[ALPINE] Failed to enable service",
-				"service", service,
-				"error", err,
+				"service", svc.name,
+				"runlevel", svc.runlevel,
+				"error", enableErr,
 				"output", string(output))
 			// Don't fail installation if service enablement fails
 			continue
 		}
-
-		ai.logger.Info("[ALPINE] Enabled service", "service", service)
+		ai.logger.Info("[ALPINE] Enabled service", "service", svc.name, "runlevel", svc.runlevel)
 	}
 
 	ai.logger.Info("[ALPINE] OpenRC services enabled successfully")
 	return nil
+}
+
+// openRCService is a service EnableServices adds to a runlevel.
+type openRCService struct {
+	name     string
+	runlevel string
+}
+
+// openRCServices are the services EnableServices adds, in order. Each is
+// added only if its /etc/init.d script is installed, so the list can name
+// services whose packages are installed only on some nodes (ssh, OVS, the
+// overlay's IPsec services).
+//
+// The OVS trio goes into the boot runlevel: ovs-modules loads the openvswitch
+// kernel module, ovsdb-server serves the OVSDB socket platformd talks to in
+// initSDN, and ovs-vswitchd is the dataplane, so the bridge is up before the
+// default runlevel's services (networking, platformd) need it.
+//
+// xkms-p11-kit and charon, from the -openrc packages of the overlay's IPsec
+// transport (pkg/iso PlatformPackages), go into the default runlevel only
+// when overlay IPsec is enabled so the VICI socket exists after every boot.
+// charon needs xkms-p11-kit, its key store, and platformd starts after charon.
+var openRCServices = []openRCService{
+	{name: "ovs-modules", runlevel: "boot"},
+	{name: "ovsdb-server", runlevel: "boot"},
+	{name: "ovs-vswitchd", runlevel: "boot"},
+	{name: "networking", runlevel: "default"},
+	{name: "chronyd", runlevel: "default"}, // chrony is a mandatory package
+	{name: "local", runlevel: "default"},
+	{name: "sshd", runlevel: "default"},
+	{name: "xkms-p11-kit", runlevel: "default"},
+	{name: "charon", runlevel: "default"},
+}
+
+// installedServices returns the openRCServices whose init scripts are
+// installed under rootPath.
+func installedServices(rootPath string, overlayIPsecEnabled bool) []openRCService {
+	var installed []openRCService
+	for _, svc := range openRCServices {
+		if (svc.name == "charon" || svc.name == "xkms-p11-kit") && !overlayIPsecEnabled {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(rootPath, "etc", "init.d", svc.name)); err != nil {
+			continue
+		}
+		installed = append(installed, svc)
+	}
+	return installed
 }
 
 // configureConsole creates console configuration files for the installed system.

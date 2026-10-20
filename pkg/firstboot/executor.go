@@ -1276,8 +1276,8 @@ directory="/var/lib/trusted-platform"
 start_stop_daemon_args="--stdout /var/log/trusted-platform/platformd.log --stderr /var/log/trusted-platform/platformd.log"
 
 depend() {
-    need net
-    after firewall
+    need networking
+    after firewall charon
 }
 
 start_pre() {

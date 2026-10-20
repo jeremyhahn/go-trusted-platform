@@ -136,6 +136,22 @@ type WrappedError struct {
 	Err error
 }
 
+// ErrOpenRCServiceEnable reports an OpenRC service that could not be enabled.
+type ErrOpenRCServiceEnable struct {
+	Service  string
+	Runlevel string
+	Output   string
+	Err      error
+}
+
+func (e *ErrOpenRCServiceEnable) Error() string {
+	return "installer: failed to enable OpenRC service " + e.Service + " in " + e.Runlevel
+}
+
+func (e *ErrOpenRCServiceEnable) Unwrap() error {
+	return e.Err
+}
+
 // Error implements the error interface.
 func (e *WrappedError) Error() string {
 	return e.Msg + ": " + e.Err.Error()

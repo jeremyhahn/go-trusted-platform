@@ -1,0 +1,60 @@
+#!/bin/sh
+# socket-takeover SOCKET READY_OWNER OWNER:GROUP MODE COMMAND [ARG...]
+#
+# Runs a daemon under supervise-daemon and hands its Unix socket to the user
+# that must own it after every (re)start. supervise-daemon runs this script as
+# the service's command, so a respawn runs it again: the takeover follows each
+# restart at once, not at the next health check.
+#
+# The script removes a socket left by a daemon that died, then execs COMMAND.
+# The daemon keeps this process, so supervise-daemon signals and reaps it
+# directly. Before the exec it starts a detached watcher. The watcher waits for
+# SOCKET to be a socket owned by READY_OWNER, the daemon's sign that it is done
+# with it, then sets MODE and gives it to OWNER:GROUP. The mode is set first,
+# so the new group never sees the daemon's wider mode.
+#
+# The wait is bounded: SOCKET_TAKEOVER_TRIES tenths of a second, 100 by
+# default. A daemon that has not served the socket by then is stopped, and so
+# is one whose socket cannot be taken over, so supervise-daemon starts it
+# again. The watcher gives up when the daemon exits.
+
+set -u
+
+if [ $# -lt 5 ]; then
+	echo "usage: socket-takeover SOCKET READY_OWNER OWNER:GROUP MODE COMMAND [ARG...]" >&2
+	exit 2
+fi
+socket=$1
+ready=$2
+owner=$3
+mode=$4
+shift 4
+tries=${SOCKET_TAKEOVER_TRIES:-100}
+daemon=$$
+
+# A socket left by a daemon that died must not look like a live one.
+rm -f "$socket" || exit 1
+
+watch() {
+	local n=0
+	until [ -S "$socket" ] && [ "$(stat -c %U "$socket" 2>/dev/null)" = "$ready" ]; do
+		kill -0 "$daemon" 2>/dev/null || return 0
+		n=$((n + 1))
+		if [ "$n" -gt "$tries" ]; then
+			echo "socket-takeover: $socket was not served by $ready" >&2
+			kill -TERM "$daemon"
+			return 1
+		fi
+		sleep 0.1
+	done
+	if ! chmod "$mode" "$socket" || ! chown -h "$owner" "$socket"; then
+		echo "socket-takeover: could not give $socket to $owner" >&2
+		kill -TERM "$daemon"
+		return 1
+	fi
+}
+
+# The subshell exits at once and is reaped here, before the exec; the watcher
+# it leaves is not the daemon's child, so the daemon never has to reap it.
+(watch </dev/null &)
+exec "$@"

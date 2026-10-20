@@ -168,7 +168,7 @@ gRPC `OverlayService`. QUIC overlay operations are sub-opcodes under the
 
 | Capability | REST | gRPC / Unix | QUIC (under `0x2E`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| Overlay status | `GET /api/v1/overlay/status` | `GetOverlayStatus` | `OpOverlayStatus` (`0x01`) | `overlay_status` | ✅ |
+| Overlay status | `GET /api/v1/overlay/status` | `GetOverlayStatus` | `OpOverlayStatus` (`0x01`) | `overlay_status` | ✅; includes IPsec `unpeered_vteps` |
 | List VTEPs | `GET /api/v1/overlay/vteps` | `ListVTEPs` | `OpOverlayListVTEPs` (`0x02`) | `overlay_vtep_list` | ✅ |
 | Get VTEP | `GET /api/v1/overlay/vteps/{nodeId}` | `GetVTEP` | `OpOverlayGetVTEP` (`0x03`) | `overlay_vtep_get` | ✅ |
 | List VNIs | `GET /api/v1/overlay/vnis` | `ListVNIs` | `OpOverlayListVNIs` (`0x04`) | `overlay_vni_list` | ✅ |

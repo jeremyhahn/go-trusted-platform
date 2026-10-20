@@ -56,3 +56,14 @@ func TestIsFIPSChecksumRefusal_Discriminates(t *testing.T) {
 		t.Error("an ordinary extraction failure must remain skippable, not abort the build")
 	}
 }
+
+// TestVerifyPlatformAPKRefusedUnderFIPS: the platform apks cannot be checked
+// against their C: checksum either, so a FIPS build refuses them with the
+// same typed error rather than copying them unchecked.
+func TestVerifyPlatformAPKRefusedUnderFIPS(t *testing.T) {
+	err := verifyPlatformAPK(&apkPackageEntry{LocalPath: "/builder/x86_64/trusted-platform-p11-host-1.0.0-r0.apk"})
+
+	if !isFIPSChecksumRefusal(err) {
+		t.Fatalf("expected ErrFIPSAPKChecksumUnavailable, got %T: %v", err, err)
+	}
+}

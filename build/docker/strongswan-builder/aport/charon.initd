@@ -7,21 +7,73 @@
 # CAP_NET_ADMIN, for kernel-netlink (the package is built
 # --with-user=strongswan --with-group=strongswan --with-capabilities=libcap).
 # charon writes its own /run/charon.pid, so this script does not give it one.
+#
+# The VICI socket (/run/charon.vici, set in strongswan.d/trusted-platform.conf)
+# is the control plane: whoever can connect to it can load credentials and
+# bring tunnels up or down. charon hands it to its own user at mode 0660.
+# charon runs under socket-takeover, which gives the socket to the account
+# platformd runs as, at mode 0600, as soon as charon has handed it over, on the
+# first start and on every respawn. platformd runs as root on the nodes the
+# installer builds, so the owner is root:root unless /etc/conf.d/charon names
+# another account (CHARON_VICI_USER, CHARON_VICI_GROUP); platformd refuses a
+# socket its own uid does not own.
+#
+# The IKE key lives behind PKCS#11 in the module host, so charon starts only
+# after it (xkms-p11-kit, from trusted-platform-p11-host).
+
+vici_socket="/run/charon.vici"
+charon_user="strongswan"
+vici_user="${CHARON_VICI_USER:-root}"
+vici_group="${CHARON_VICI_GROUP:-root}"
 
 description="strongSwan charon IKEv2 daemon"
 supervisor="supervise-daemon"
-command="/usr/lib/strongswan/charon"
-command_args="${CHARON_OPTS}"
+command="/usr/lib/strongswan/socket-takeover"
+command_args="${vici_socket} ${charon_user} ${vici_user}:${vici_group} 0600 /usr/lib/strongswan/charon ${CHARON_OPTS}"
 respawn_delay="${CHARON_RESPAWN_DELAY:-2}"
 respawn_max="${CHARON_RESPAWN_MAX:-10}"
 respawn_period="${CHARON_RESPAWN_PERIOD:-60}"
+healthcheck_timer="${CHARON_HEALTHCHECK_INTERVAL:-30}"
+# How long the takeover waits for charon's socket, in tenths of a second.
+export SOCKET_TAKEOVER_TRIES="${CHARON_TAKEOVER_TRIES:-100}"
 extra_started_commands="reload"
 description_reload="Reload strongswan.conf and the swanctl configuration"
 
 depend() {
-	need net
+	need net xkms-p11-kit
 	after firewall
 	provide ipsec
+}
+
+start_pre() {
+	if ! id "${vici_user}" >/dev/null 2>&1 || ! grep -q "^${vici_group}:" /etc/group; then
+		eerror "VICI socket owner ${vici_user}:${vici_group} does not exist (CHARON_VICI_USER, CHARON_VICI_GROUP in /etc/conf.d/${RC_SVCNAME})"
+		return 1
+	fi
+}
+
+# start_post waits for the first takeover, so services that need charon start
+# only once platformd can reach it. It waits a little longer than the takeover
+# does. The mode is part of the test: charon creates the socket as root before
+# it hands it to strongswan, so with the root default the owner alone would
+# match too early.
+start_post() {
+	local tries=0
+	while [ "$(stat -c '%U:%G %a' "${vici_socket}" 2>/dev/null)" != "${vici_user}:${vici_group} 600" ]; do
+		tries=$((tries + 1))
+		if [ "${tries}" -gt $((SOCKET_TAKEOVER_TRIES + 20)) ]; then
+			eerror "charon did not serve ${vici_socket}"
+			return 1
+		fi
+		sleep 0.1
+	done
+}
+
+# healthcheck runs every CHARON_HEALTHCHECK_INTERVAL seconds under
+# supervise-daemon. It asks charon for its statistics, which fails if it no
+# longer answers VICI.
+healthcheck() {
+	/usr/sbin/swanctl --stats >/dev/null
 }
 
 reload() {

@@ -242,6 +242,7 @@ Build:
 | `--work-dir` | string | `work` | Working directory |
 | `--debug` / `--verbose` | bool | `false` | Output verbosity |
 | `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install. **Unavailable in a `fips`-tagged build** — see the note below |
+| `--platform-apk-dir` | string | `""` | strongSwan builder output (`make strongswan-build`; one `x86_64/` and `aarch64/` directory each) whose apks go into the offline repository and are installed for the overlay's IPsec transport. Requires `--pre-fetch` and an embedded platform config; empty = the media carry none of them. See below |
 
 Dynamic configuration and trust bootstrap:
 
@@ -289,6 +290,25 @@ Two ways to proceed:
 **`--pre-fetch` defaults to `true` and should stay that way** for BMC virtual
 media, air-gapped and PXE installs. `--pre-fetch=false` is only safe when the
 install network is known to permit outbound HTTPS to the Alpine CDN.
+
+**`--platform-apk-dir`** adds `trusted-platform-strongswan`,
+`trusted-platform-strongswan-openrc`, `trusted-platform-p11-host`,
+`trusted-platform-p11-host-openrc` (from the directory, signed by the builder's
+key) and `p11-kit-server` (from the Alpine mirror) to the offline repository.
+The build fails with `ErrPlatformAPKMissing` when the directory lacks one of
+them or its index does not list it, and with `ErrPlatformAPKInvalid` when an
+apk is not the one its index entry describes (size, gzip CRCs, or the `C:`
+checksum of its control segment) or the media's APKINDEX cannot list it. The
+flag is refused with `ErrPlatformAPKDirUnusable` together with
+`--pre-fetch=false` (the packages are in no Alpine mirror) and with
+`--config-server` when no `--platform-config` is embedded (the node then
+installs what the server's configuration names, not these packages). A
+`--config` file's value is used unless the flag is given.
+`platformctl diskimage create` takes the same flag, with the same
+`--pre-fetch` rule; the factory image and the netboot sets carry the same
+packages. The
+services they install are described in
+[`docs/sdn/engineering.md`](../sdn/engineering.md) §9.6.
 
 **`--overrides` requires `--platform-config`** — it is a merge onto a template,
 so without a template it fails with `ErrOverridesWithoutTemplate`.

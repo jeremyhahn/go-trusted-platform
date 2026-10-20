@@ -429,6 +429,10 @@ type OSConfig struct {
 	// built into the kernel (e.g., igb, ixgbe for Intel NICs).
 	KernelModules []string `yaml:"kernel-modules,omitempty" json:"kernel_modules,omitempty"`
 
+	// OverlayIPsecEnabled mirrors sdn.overlay.ipsec.enabled for the target
+	// platform configuration. It gates the OpenRC IPsec services.
+	OverlayIPsecEnabled bool `yaml:"-" json:"-"`
+
 	// IMA (Integrity Measurement Architecture) configuration
 	IMA *IMAConfig `yaml:"ima,omitempty" json:"ima,omitempty"`
 

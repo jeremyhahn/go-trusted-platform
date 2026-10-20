@@ -1,10 +1,10 @@
 #!/bin/sh
 # PID 1 of the ipsec suite's aarch64 VM (vm_test.go, TestSuiteInARM64VM).
 #
-# The suite's arm64 inputs arrive as read-only virtio disks holding the raw
-# tarballs -- /dev/vda the peer root filesystem, /dev/vdb the module host --
-# and, over the 9p share "suite", the suite's own test binary cross-compiled
-# for arm64. (Disks, because a 200 MB tarball read over 9p under TCG takes
+# The suite's arm64 inputs arrive as a read-only virtio disk holding the raw
+# peer root filesystem tarball (/dev/vda, with the module host inside it) and,
+# over the 9p share "suite", the suite's own test binary cross-compiled for
+# arm64. (A disk, because a 200 MB tarball read over 9p under TCG takes
 # minutes and from a virtio disk seconds.) This script runs the binary's
 # IPsec tests on the VM's real aarch64 kernel, prints the result marker the
 # host waits for, and powers off. As PID 1, this shell also reaps the
@@ -23,16 +23,15 @@ ip link set lo up
 rc=1
 if modprobe virtio_blk && modprobe 9pnet_virtio && modprobe 9p && mkdir -p /suite &&
     mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 suite /suite &&
-    [ -b /dev/vda ] && [ -b /dev/vdb ]; then
+    [ -b /dev/vda ]; then
     echo "ipsec vm: $(uname -m) $(uname -r)"
     IPSEC_ROOTFS_ARM64=/dev/vda \
-    IPSEC_MODULE_HOST_ARM64=/dev/vdb \
     IPSEC_WORK_DIR=/tmp/ipsec \
         /suite/ipsec-arm64.test -test.v -test.count=1 -test.timeout=20m \
         -test.run '^(TestESPTransportThroughPKCS11Module|TestUntrustedPeerIsRefused)$'
     rc=$?
 else
-    echo "ipsec vm: the suite share or the input disks are missing"
+    echo "ipsec vm: the suite share or the input disk is missing"
 fi
 echo "IPSEC-VM-RESULT rc=$rc"
 sync

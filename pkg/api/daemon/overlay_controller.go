@@ -38,7 +38,7 @@ import (
 // The controller is started synchronously. Start() only registers the local VTEP
 // in memory and launches lightweight background goroutines, so it does not block
 // daemon startup.
-func buildOverlayController(ctx context.Context, a *app.App, ovsSocketPath string, logger *logging.Logger) (*overlay.Controller, error) {
+func buildOverlayController(ctx context.Context, a *app.App, ovsSocketPath string, logger *logging.Logger, observers ...overlay.VTEPObserver) (*overlay.Controller, error) {
 	cfg := &overlay.Config{
 		NodeID:       a.Hostname,
 		StateBackend: overlay.DefaultStateBackend,
@@ -78,7 +78,13 @@ func buildOverlayController(ctx context.Context, a *app.App, ovsSocketPath strin
 	// StateBackend (memory), intervals.
 	cfg.ApplyDefaults()
 
-	ctrl, err := overlay.New(cfg)
+	options := make([]overlay.Option, 0, len(observers))
+	for _, observer := range observers {
+		if observer != nil {
+			options = append(options, overlay.WithVTEPObserver(observer))
+		}
+	}
+	ctrl, err := overlay.New(cfg, options...)
 	if err != nil {
 		return nil, err
 	}

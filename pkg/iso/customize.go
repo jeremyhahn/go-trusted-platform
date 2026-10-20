@@ -1159,6 +1159,8 @@ func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
 		FilesystemLVM: c.config.RootFS.Type == "lvm",
 		IMAEnabled:    false,
 		ExtraPackages: append([]string(nil), c.config.Installer.ExtraPackages...),
+
+		PlatformAPKDir: c.config.Installer.PlatformAPKDir,
 	}
 
 	// Check if mirror is empty and set default
@@ -5524,7 +5526,7 @@ func validateBinary(path string, want elf.Machine) error {
 func (c *Customizer) GenerateInstallConfig() error {
 	// In dynamic config mode, skip generating install config - the device will
 	// fetch its configuration from the server at boot time.
-	if c.config.Platform.ConfigServerURL != "" && c.config.Platform.ConfigFile == "" {
+	if fetchesInstallConfig(c.config.Platform.ConfigServerURL, c.config.Platform.ConfigFile) {
 		c.logger.Info("Dynamic config mode: skipping install config generation",
 			"server", c.config.Platform.ConfigServerURL)
 		return nil
@@ -5645,7 +5647,7 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 		Version:            c.config.Alpine.Version,
 		Architecture:       string(c.config.architecture()),
 		KernelPackage:      c.config.Installer.KernelPackage,
-		Packages:           append([]string(nil), c.config.Installer.ExtraPackages...),
+		Packages:           c.config.Installer.installPackages(),
 		Hostname:           hostname,
 		Mirror:             c.config.Alpine.Mirror,
 		FilesystemType:     config.Disk.RootFilesystem,

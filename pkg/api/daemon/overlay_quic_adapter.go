@@ -30,7 +30,8 @@ import (
 // controller.  Controller errors are mapped to the quic sentinel errors so
 // that the QUIC handler's overlayErrorResponse emits the correct status byte.
 type overlayControllerQUICAdapter struct {
-	ctrl OverlayControllerInterface
+	ctrl  OverlayControllerInterface
+	ipsec overlayIPsec
 }
 
 // Compile-time check.
@@ -39,8 +40,12 @@ var _ quic.OverlayServiceInterface = (*overlayControllerQUICAdapter)(nil)
 // newOverlayControllerQUICAdapter wraps a non-nil overlay controller as a
 // quic.OverlayServiceInterface.  Callers must pass nil to quic.NewOverlayHandler
 // directly when no controller is available; they should not wrap nil here.
-func newOverlayControllerQUICAdapter(ctrl OverlayControllerInterface) *overlayControllerQUICAdapter {
-	return &overlayControllerQUICAdapter{ctrl: ctrl}
+func newOverlayControllerQUICAdapter(ctrl OverlayControllerInterface, sec ...overlayIPsec) *overlayControllerQUICAdapter {
+	adapter := &overlayControllerQUICAdapter{ctrl: ctrl}
+	if len(sec) > 0 {
+		adapter.ipsec = sec[0]
+	}
+	return adapter
 }
 
 // =============================================================================
@@ -78,6 +83,10 @@ func (a *overlayControllerQUICAdapter) Status(ctx context.Context) (*quic.Overla
 		tunnelCount = len(state.Tunnels)
 		macCount = len(state.RemoteMACs)
 	}
+	var unpeeredVTEPs int
+	if a.ipsec != nil {
+		unpeeredVTEPs = len(a.ipsec.Status().UnpeeredVTEPs)
+	}
 
 	healthStatus := "degraded"
 	if a.ctrl.IsRunning() {
@@ -85,19 +94,20 @@ func (a *overlayControllerQUICAdapter) Status(ctx context.Context) (*quic.Overla
 	}
 
 	return &quic.OverlayStatusInfo{
-		Enabled:      true,
-		NodeID:       nodeID,
-		Mode:         "vxlan",
-		LocalVTEP:    localVTEP,
-		VXLANPort:    vxlanPort,
-		VTEPCount:    vtepCount,
-		VNICount:     vniCount,
-		TunnelCount:  tunnelCount,
-		MACCount:     macCount,
-		UplinkIface:  underlayIface,
-		MTU:          mtu,
-		EncapType:    encapType,
-		HealthStatus: healthStatus,
+		Enabled:       true,
+		NodeID:        nodeID,
+		Mode:          "vxlan",
+		LocalVTEP:     localVTEP,
+		VXLANPort:     vxlanPort,
+		VTEPCount:     vtepCount,
+		VNICount:      vniCount,
+		TunnelCount:   tunnelCount,
+		MACCount:      macCount,
+		UnpeeredVTEPs: unpeeredVTEPs,
+		UplinkIface:   underlayIface,
+		MTU:           mtu,
+		EncapType:     encapType,
+		HealthStatus:  healthStatus,
 	}, nil
 }
 

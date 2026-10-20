@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -305,6 +306,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Overlay != nil {
+		if err := c.Overlay.IPsec.Validate(); err != nil {
+			return err
+		}
+	}
+
 	c.resolvedZones = resolved
 	c.plan = plan
 	return nil
@@ -547,6 +554,10 @@ type OverlayConfig struct {
 	// present and sufficient for single-node and test environments. Production
 	// deployments should set this to the uplink interface (e.g., "eth0", "bond0").
 	UnderlayInterface string `yaml:"underlay-interface,omitempty" json:"underlay_interface,omitempty" mapstructure:"underlay-interface"`
+
+	// IPsec protects the underlay with host-to-host transport SAs between
+	// VTEPs and fails closed without them (docs/sdn/overlay/).
+	IPsec *ipsec.Config `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
 }
 
 // GatewayConfig configures the SDN gateway node.

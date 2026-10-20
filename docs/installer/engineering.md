@@ -579,6 +579,14 @@ carry, laid down by the installer and firstboot (#66):
 | `/etc/gatewayd/config.yaml` (0600) | firstboot (`renderGatewaydConfig`) | the `gateway:`, `proxy:`, `trust:`, `sdn:`, `control-plane:` sections of the platform config |
 | `/etc/gatewayd/{client.pem,client-key.pem,cp-ca.pem}` | **operator** (not produced by the repo yet — #149, #431) | control-plane reporter mTLS identity; absent ⇒ reporter rendered disabled |
 
+Nodes installed from media built with `--platform-apk-dir` carry the overlay's
+IPsec packages (#709). `EnableServices` adds every service of its list whose
+`/etc/init.d` script is installed (`openRCServices`, `pkg/installer/alpine.go`),
+so on these nodes `xkms-p11-kit` and `charon` join the default runlevel and the
+VICI socket exists after every boot. Both generated platformd scripts start
+`after charon`, and platformd runs as root, the socket's default owner
+([sdn engineering](../sdn/engineering.md) §9.6).
+
 ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 `pkg/firstboot/strategy.go`):
 

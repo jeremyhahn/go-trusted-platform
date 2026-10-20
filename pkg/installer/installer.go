@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -420,6 +421,10 @@ func (i *installer) Install(ctx context.Context) (err error) {
 	// Step 10: Enable essential OpenRC services in the default runlevel
 	// (Note: Console configuration is now handled by OS-specific installer)
 	if err := i.osInstaller.EnableServices(ctx, "/mnt"); err != nil {
+		var openRCErr *ErrOpenRCServiceEnable
+		if errors.As(err, &openRCErr) {
+			return err
+		}
 		i.logger.Warn("[INSTALLER] Failed to enable OpenRC services", "error", err)
 		// Don't fail installation if service enablement fails
 	}
@@ -3415,7 +3420,7 @@ BASE_ARGS="%s"
 
 depend() {
     need localmount networking ovsdb-server ovs-vswitchd
-    after tpm-firstboot-seal
+    after tpm-firstboot-seal charon
     keyword -shutdown
 }
 

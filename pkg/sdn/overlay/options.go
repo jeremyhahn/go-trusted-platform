@@ -83,6 +83,13 @@ func WithIPAM(allocator ipam.Allocator) Option {
 	}
 }
 
+// WithVTEPObserver sets the observer notified when remote VTEPs are learned.
+func WithVTEPObserver(observer VTEPObserver) Option {
+	return func(c *Controller) {
+		c.vtepObserver = observer
+	}
+}
+
 // WithStateManager sets the state manager.
 func WithStateManager(state *StateManager) Option {
 	return func(c *Controller) {
