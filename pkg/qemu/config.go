@@ -55,6 +55,11 @@ type Config struct {
 	// whether KVM can accelerate the guest. Empty means runtime.GOARCH.
 	HostArch string `yaml:"-" json:"-" mapstructure:"-"`
 
+	// KVMProbe reports why the host's KVM device cannot be used, or nil
+	// when it can. Nil means probeKVMDevice, which opens /dev/kvm
+	// read-write; tests inject one so they never touch the host.
+	KVMProbe func() error `yaml:"-" json:"-" mapstructure:"-"`
+
 	// Firmware is the firmware image for architectures that take one as
 	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead,
 	// and so does aarch64 when Firmware is empty and OVMFCode is set: it

@@ -88,10 +88,28 @@ and exits 0.
 | `--no-color` | | `false` | `NO_COLOR` |
 
 `--transport` takes `unix`, `grpc`, `rest`, `quic`, `mcp` or `embedded`. Every
-implemented verb opens an SDK client on that transport and fails with exit 1
-when no daemon is reachable — including `crypto hash` and `crypto random`, which
-run server-side. No implemented verb works offline. The not-implemented verbs
-never open a client.
+implemented verb opens an SDK client and fails with exit 1 when no daemon is
+reachable — including `crypto hash` and `crypto random`, which run server-side.
+No implemented verb works offline. The not-implemented verbs never open a
+client.
+
+**Two connections.** Most verbs call platformd's `KeyManagementService` on the
+`--transport` connection (`Client.KMS()`). The verbs that platform service has
+no RPC for open the CLI's quicbaas client (`Client.QuicBaaS()`) instead: `kms
+status`, `key algorithms`, `key csr` (its public key; the signature goes
+through platformd), `key policy`, `key metadata` and `key revoke`.
+`--transport` does not select that connection. Its address and transport
+follow the rules in [barrier cli.md §2](../barrier/cli.md#2-where-the-verbs-go):
+a local context dials `/run/quicbaas.sock` unless `quicbaas_addr` or
+`PLATFORMCTL_QUICBAAS_ADDR` says otherwise. Under embedded quicbaas (the daemon
+default) there is no quicbaasd and nothing serves that socket; platformd serves
+the `quicbaas.kms.v1` services on its own TCP and Unix listeners
+([api.md §1](api.md#1-the-six-transports)). The quicbaas SDK requires TLS on
+every transport, its Unix one included, and platformd's Unix socket is plaintext
+gRPC authenticated by peer credentials, so the two cannot meet there. Point
+`quicbaas_addr` at platformd's TCP gRPC listener with `quicbaas_transport: grpc`
+and give the context the TLS files that verify it (`quicbaas_ca_cert`, and for
+mTLS `quicbaas_client_cert` and `quicbaas_client_key`).
 
 **Output format.** `--output` selects `table`, `json` or `yaml`. Verbs that
 declare their own `-o, --output` (an output *file*) shadow it: on `crypto

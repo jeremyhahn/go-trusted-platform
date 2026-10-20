@@ -275,6 +275,12 @@ changing, validate before applying, roll back if wrong.
 | `0x0A` | `StatusUnavailable` | 503 |
 | `0x0B` | `StatusNotImplemented` | 501 |
 
+A typed refusal carries its error text as the response payload, as the gRPC
+status message and the REST body do, so a client tells one refusal from another
+with the same status byte. The ceremony, PIV, LUKS and FIDO2 category handlers
+share one table for this (`phase35QUICRefusals`, `pkg/api/daemon/phase35_quic.go`);
+an untyped failure is `StatusInternalError` with no payload.
+
 ### Category opcodes — read this before writing any QUIC client
 
 The opcode is a **single byte** with a **two-level extension**: certain values

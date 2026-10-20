@@ -95,12 +95,16 @@ service DeviceService {
 
   // Template operations. CreateTemplate stores a device template — the
   // blueprint CreateProfileFromTemplate turns into a profile. It is not a
-  // vTPM template (VTPMService.CreateTemplate). The remaining template
-  // reads and writes (get, update, delete, list) stay on the REST surface
-  // (pkg/webservice/v1/device/template_handlers.go). Device-template
-  // messages carry a `DeviceTemplate…` prefix so their names cannot
-  // collide with vtpm.proto's template messages.
+  // vTPM template (VTPMService.CreateTemplate). Device-template messages
+  // carry a `DeviceTemplate…` prefix so their names cannot collide with
+  // vtpm.proto's template messages.
   rpc CreateTemplate(DeviceTemplateCreateRequest) returns (DeviceTemplateCreateResponse);
+  rpc GetTemplate(DeviceTemplateGetRequest) returns (DeviceTemplateGetResponse);
+  rpc ListTemplates(DeviceTemplateListRequest) returns (DeviceTemplateListResponse);
+  // UpdateTemplate replaces the stored template whose id the request
+  // carries; it fails NOT_FOUND when no template has that id.
+  rpc UpdateTemplate(DeviceTemplateUpdateRequest) returns (DeviceTemplateUpdateResponse);
+  rpc DeleteTemplate(DeviceTemplateDeleteRequest) returns (DeviceTemplateDeleteResponse);
   rpc CreateProfileFromTemplate(CreateProfileFromTemplateRequest) returns (CreateProfileResponse);
 
   // Profile lookup by device identity
@@ -618,6 +622,42 @@ message DeviceTemplateCreateRequest {
 message DeviceTemplateCreateResponse {
   Status status = 1;
   DeviceTemplate template = 2;
+}
+
+message DeviceTemplateGetRequest {
+  uint64 id = 1;
+}
+
+message DeviceTemplateGetResponse {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateListRequest {
+  PaginationRequest pagination = 1;
+}
+
+message DeviceTemplateListResponse {
+  repeated DeviceTemplate templates = 1;
+  PaginationResponse pagination = 2;
+}
+
+// DeviceTemplateUpdateRequest carries the template to store; its id names
+// the template to replace and is required.
+message DeviceTemplateUpdateRequest {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateUpdateResponse {
+  Status status = 1;
+  DeviceTemplate template = 2;
+}
+
+message DeviceTemplateDeleteRequest {
+  uint64 id = 1;
+}
+
+message DeviceTemplateDeleteResponse {
+  Status status = 1;
 }
 
 

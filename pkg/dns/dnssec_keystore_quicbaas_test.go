@@ -15,12 +15,14 @@ package dns
 
 import (
 	"context"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
+	"math/big"
 	"testing"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -221,19 +223,40 @@ func TestQuicBaaSKMSKeyStore_UnavailablePublicKeyDeletesTheKey(t *testing.T) {
 }
 
 func TestQuicBaaSKMSKeyStore_FailedDNSKEYBuildDeletesTheKey(t *testing.T) {
-	// X25519 parses as a PKIX public key but cannot be a DNSKEY.
-	x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	publicDER, err := x509.MarshalPKIXPublicKey(x25519.PublicKey())
-	require.NoError(t, err)
-	k := &fakeKMS{publicDER: publicDER}
+	k := &fakeKMS{publicDER: dsaPublicKeyDER(t)}
 	kv := &fakeKV{}
 	store := newTestKeyStore(t, k, kv)
 
-	_, err = store.GenerateKSK(context.Background(), "tenant", "example.com.", dns.ECDSAP256SHA256)
+	_, err := store.GenerateKSK(context.Background(), "tenant", "example.com.", dns.ECDSAP256SHA256)
 
 	var dnssecErr *DNSSECError
 	require.ErrorAs(t, err, &dnssecErr)
+	var unsupported *MessageError
+	require.ErrorAs(t, err, &unsupported, "the key parses and fails in buildDNSKEY")
 	assert.Len(t, k.deleted, 1, "the KMS key is deleted when its DNSKEY cannot be built")
 	assert.Empty(t, kv.puts, "the metadata is written only after the DNSKEY is built")
+}
+
+// dsaPublicKeyDER returns a DSA SubjectPublicKeyInfo (RFC 3279 §2.3.2) with
+// toy parameters. It parses as a PKIX public key but no DNSKEY carries DSA,
+// and building it takes no key generation, so it is also usable under
+// GODEBUG=fips140=only, where X25519 is refused.
+func dsaPublicKeyDER(t *testing.T) []byte {
+	t.Helper()
+	params, err := asn1.Marshal(struct{ P, Q, G *big.Int }{big.NewInt(23), big.NewInt(11), big.NewInt(4)})
+	require.NoError(t, err)
+	y, err := asn1.Marshal(big.NewInt(8))
+	require.NoError(t, err)
+	der, err := asn1.Marshal(struct {
+		Algorithm pkix.AlgorithmIdentifier
+		PublicKey asn1.BitString
+	}{
+		Algorithm: pkix.AlgorithmIdentifier{
+			Algorithm:  asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 1}, // id-dsa
+			Parameters: asn1.RawValue{FullBytes: params},
+		},
+		PublicKey: asn1.BitString{Bytes: y, BitLength: 8 * len(y)},
+	})
+	require.NoError(t, err)
+	return der
 }

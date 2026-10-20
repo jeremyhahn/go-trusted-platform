@@ -29,6 +29,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -49,10 +51,8 @@ func NewRESTAdapter() *RESTAdapter {
 	}
 
 	return &RESTAdapter{
-		baseURL: "http://" + endpoint,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		baseURL:    helpers.RESTBaseURL(endpoint),
+		httpClient: helpers.NewHTTPClient(30 * time.Second),
 	}
 }
 

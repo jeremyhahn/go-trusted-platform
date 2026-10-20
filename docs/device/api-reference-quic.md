@@ -97,6 +97,10 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 | `0x27` | Create a device template ([api.md §4](api.md#4-device-templates)); not a vTPM template | `DeviceTemplateCreateRequest` | `DeviceTemplateCreateResponse` |
 | `0x28` | Build and save a profile from a stored device template | `CreateProfileFromTemplateRequest` | `CreateProfileResponse` |
 | `0x29` | Find the profile whose match rules fit a MAC, serial or model; no match is status `NotFound` | `FindMatchingProfileRequest` | `FindMatchingProfileResponse` |
+| `0x2A` | Get a device template; an unknown id is status `NotFound` | `DeviceTemplateGetRequest` | `DeviceTemplateGetResponse` |
+| `0x2B` | List device templates, paged by `pagination` | `DeviceTemplateListRequest` | `DeviceTemplateListResponse` |
+| `0x2C` | Replace a stored device template; a zero id is status `0x09`, an unknown id `NotFound` | `DeviceTemplateUpdateRequest` | `DeviceTemplateUpdateResponse` |
+| `0x2D` | Delete a device template; an unknown id is status `NotFound` | `DeviceTemplateDeleteRequest` | `DeviceTemplateDeleteResponse` |
 
 Sub-opcodes `0x23` and `0x24` are exempt from token authentication: a
 diskless node holds no token, and the service authenticates every request
@@ -123,6 +127,10 @@ The SDK adapter emits this framing automatically for
 `DeviceService/DisableDevice`,
 `DeviceService/EnableDevice`,
 `DeviceService/CreateTemplate`,
+`DeviceService/GetTemplate`,
+`DeviceService/ListTemplates`,
+`DeviceService/UpdateTemplate`,
+`DeviceService/DeleteTemplate`,
 `DeviceService/CreateProfileFromTemplate` and
 `DeviceService/FindMatchingProfile`.
 
@@ -140,9 +148,9 @@ the catalogs is refused, so a new sub-opcode without an entry fails closed.
 
 | Scope | Opcodes |
 |-------|---------|
-| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`; sub-opcode `0x29` |
-| `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28` |
-| `device:delete` | `0x31`, `0x39` |
+| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`; sub-opcodes `0x29`, `0x2A`, `0x2B` |
+| `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28`, `0x2C` |
+| `device:delete` | `0x31`, `0x39`; sub-opcode `0x2D` |
 
 The boot sub-opcodes `0x23` and `0x24` are pre-auth (above), and the other
 `0xCF` sub-ranges carry no scope. Config delivery (`0x01`–`0x07`)

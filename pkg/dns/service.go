@@ -318,11 +318,21 @@ func (s *Service) Zone(ctx context.Context, zoneName string) (*entities.Zone, er
 	return zone, nil
 }
 
+// InternalDomain returns the internal server's zone name, or "" when no
+// internal server is configured.
 func (s *Service) InternalDomain() string {
+	if s.params.Config.InternalServer == nil {
+		return ""
+	}
 	return s.params.Config.InternalServer.Zone.Name
 }
 
+// PublicDomain returns the public server's zone name, or "" when no public
+// server is configured.
 func (s *Service) PublicDomain() string {
+	if s.params.Config.PublicServer == nil {
+		return ""
+	}
 	return s.params.Config.PublicServer.Zone.Name
 }
 

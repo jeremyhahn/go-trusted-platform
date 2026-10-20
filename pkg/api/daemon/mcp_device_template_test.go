@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -93,6 +95,68 @@ func TestMCPDeviceTemplateCreate_Errors(t *testing.T) {
 		count, err := svcs.templates.Count(ctx)
 		require.NoError(t, err)
 		assert.Zero(t, count)
+	})
+}
+
+func TestMCPDeviceTemplateGetListUpdateDelete(t *testing.T) {
+	registry, svcs := newMCPDeviceTemplateRegistry(t)
+	ctx := context.Background()
+	stored := storeTestTemplate(t, svcs, "edge")
+	id := strconv.FormatUint(stored.ID, 10)
+
+	got, err := registry.ExecuteTool(ctx, "device_template_get", map[string]interface{}{"id": id})
+	require.NoError(t, err)
+	assert.Equal(t, stored.ID, toolResultID(t, got))
+
+	listed, err := registry.ExecuteTool(ctx, "device_template_list", map[string]interface{}{})
+	require.NoError(t, err)
+	page := listed.(map[string]interface{})
+	assert.Equal(t, 1, page["total"])
+	require.Len(t, page["templates"], 1)
+
+	_, err = registry.ExecuteTool(ctx, "device_template_update", map[string]interface{}{
+		"id":   id,
+		"name": "edge-v2",
+		"role": "gateway",
+	})
+	require.NoError(t, err)
+	reread, err := svcs.templates.Get(ctx, stored.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "edge-v2", reread.Name)
+	assert.Equal(t, entities.DeviceRoleGateway, reread.Role)
+	assert.True(t, stored.CreatedAt.Equal(reread.CreatedAt), "an update keeps the creation time")
+
+	_, err = registry.ExecuteTool(ctx, "device_template_delete", map[string]interface{}{"id": id})
+	require.NoError(t, err)
+	_, err = svcs.templates.Get(ctx, stored.ID)
+	require.Error(t, err, "the deleted template is still stored")
+}
+
+func TestMCPDeviceTemplateGetListUpdateDelete_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("NoTemplateService", func(t *testing.T) {
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+		var unavailable ErrServiceNotAvailable
+		_, err := provider.DeviceTemplateGet(ctx, 1)
+		require.ErrorAs(t, err, &unavailable)
+		_, _, err = provider.DeviceTemplateList(ctx, 1, 10)
+		require.ErrorAs(t, err, &unavailable)
+		_, err = provider.DeviceTemplateUpdate(ctx, &entities.DeviceTemplate{ID: 1, Name: "edge"})
+		require.ErrorAs(t, err, &unavailable)
+		require.ErrorAs(t, provider.DeviceTemplateDelete(ctx, 1), &unavailable)
+	})
+
+	t.Run("UnknownTemplateIsNotFound", func(t *testing.T) {
+		svcs := newRealTemplateServices(t)
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{DeviceTemplateService: svcs.templates})
+		const absent = uint64(4242)
+		_, err := provider.DeviceTemplateGet(ctx, absent)
+		assert.Equal(t, codes.NotFound, status.Code(err), "get: %v", err)
+		_, err = provider.DeviceTemplateUpdate(ctx, &entities.DeviceTemplate{ID: absent, Name: "edge"})
+		assert.Equal(t, codes.NotFound, status.Code(err), "update: %v", err)
+		err = provider.DeviceTemplateDelete(ctx, absent)
+		assert.Equal(t, codes.NotFound, status.Code(err), "delete: %v", err)
 	})
 }
 

@@ -106,7 +106,7 @@ func extract7z(ctx context.Context, isoPath, destDir string) error {
 
 	// Execute: 7z x <iso> -o<destdir>
 	cmd := exec.CommandContext(ctx, "7z", "x", isoPath, "-o"+destDir)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr // tool chatter is diagnostics; stdout carries the verb's result
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
@@ -129,7 +129,7 @@ func extractBsdtar(ctx context.Context, isoPath, destDir string) error {
 
 	// Execute: bsdtar -xf <iso> -C <destdir>
 	cmd := exec.CommandContext(ctx, "bsdtar", "-xf", isoPath, "-C", destDir)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr // tool chatter is diagnostics; stdout carries the verb's result
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
@@ -155,7 +155,7 @@ func extractOsirrox(ctx context.Context, isoPath, destDir string) error {
 		"-osirrox", "on",
 		"-indev", isoPath,
 		"-extract", "/", destDir)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr // tool chatter is diagnostics; stdout carries the verb's result
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {

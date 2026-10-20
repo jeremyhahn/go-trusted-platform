@@ -190,12 +190,22 @@ declare -A TARGET_NO_DAEMON=(
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
 # FIPS_MODULE_SIGNING_KEY).
+# tpm runs last: its Clear case issues TPM2_Clear on the shared daemon's
+# swtpm (docs/tpm/security.md), which flushes the owner-hierarchy SRKs that
+# seal the daemon's platform-policy key passwords. After it the daemon can
+# no longer sign a TLS handshake, so every gRPC, QUIC and MCP dial a later
+# suite makes ends in "tls: internal error" (vtpm, #949).
+# compute is not in the list: it drives VMs, and the shared daemon serves the
+# container orchestrator the container suite needs (one orchestrator serves
+# both), so it answers every VM spec "not supported" (#949). `all` ends with
+# it, after tpm, on a fresh swtpm and a platformd started on the local QEMU
+# provider, as the compute target does.
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
-    root acme attestation authenticode ca ceremony cli compute
+    root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm vpn vtpm
+    secrets tenant vpn vtpm tpm
 )
 
 RUN_TARGET="all"
@@ -313,8 +323,38 @@ restore_workspace_ownership() {
 # chronyd paths (start_chronyd): the Debian chrony package's defaults, which
 # pkg/ntp DefaultPaths also renders and drives.
 CHRONYD_CONF="/etc/chrony/chrony.conf"
-CHRONYD_SOCK="/run/chrony/chronyd.sock"
-CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+CHRONYD_RUN_DIR="/run/chrony"
+CHRONYD_SOCK="${CHRONYD_RUN_DIR}/chronyd.sock"
+CHRONYD_PID_FILE="${CHRONYD_RUN_DIR}/chronyd.pid"
+# The reference chronyd (start_ntp_reference) that serves the config's
+# loopback upstream. Its files sit beside the daemon chronyd's under their
+# own names. A config under /run/chrony-reference/ failed with "Could not
+# open ... Permission denied" although root wrote it and the container is
+# privileged: only a mandatory access control profile refuses root there,
+# and the chrony package's AppArmor profile for /usr/sbin/chronyd (loaded on
+# the CI host, so it confines chronyd in this container too) allows reads
+# of /etc/chrony/ and writes to /run/chrony/ only. That left the daemon's
+# chronyd with no source and the ntp component degraded (#949).
+NTP_REFERENCE_CONF="/etc/chrony/reference.conf"
+NTP_REFERENCE_PID_FILE="${CHRONYD_RUN_DIR}/reference.pid"
+
+# stop_platformd stops platformd and the chronyd pair start_platformd starts
+# with it (the daemon's chronyd and its loopback reference).
+stop_platformd() {
+    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
+        kill "$PLATFORMD_PID" 2>/dev/null || true
+        wait "$PLATFORMD_PID" 2>/dev/null || true
+    fi
+    PLATFORMD_PID=""
+
+    if [ -f "${CHRONYD_PID_FILE}" ]; then
+        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
+    fi
+    if [ -f "${NTP_REFERENCE_PID_FILE}" ]; then
+        kill "$(cat "${NTP_REFERENCE_PID_FILE}")" 2>/dev/null || true
+    fi
+}
 
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
@@ -325,23 +365,14 @@ cleanup() {
     echo ""
     echo "=== Cleaning up integration test environment ==="
 
-    # Stop platformd
-    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
-        kill "$PLATFORMD_PID" 2>/dev/null || true
-        wait "$PLATFORMD_PID" 2>/dev/null || true
-    fi
+    # Stop platformd and its chronyd
+    stop_platformd
 
     # Stop vBMC
     if [ -n "$VBMC_PID" ] && kill -0 "$VBMC_PID" 2>/dev/null; then
         echo "Stopping vBMC (PID: $VBMC_PID)..."
         kill "$VBMC_PID" 2>/dev/null || true
         wait "$VBMC_PID" 2>/dev/null || true
-    fi
-
-    # Stop chronyd
-    if [ -f "${CHRONYD_PID_FILE}" ]; then
-        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -579,6 +610,39 @@ compile_check() {
 # vBMC Setup (bmc integration target only)
 # =============================================================================
 
+# build_gatewayd builds gatewayd into /tmp beside platformd, once per run.
+build_gatewayd() {
+    if [ -x /tmp/gatewayd ] && [ -n "${GATEWAYD_PATH:-}" ]; then
+        return 0
+    fi
+    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/gatewayd ./cmd/gatewayd/; then
+        echo "FATAL: gatewayd build failed"
+        exit 1
+    fi
+    export GATEWAYD_PATH=/tmp/gatewayd
+    echo "gatewayd built: ${GATEWAYD_PATH}"
+}
+
+# prepare_iso_customize builds what `platformctl iso customize` stages from
+# beside platformd and fails without (pkg/iso/customize.go StageMedia):
+# platform-initrd, which dracut calls at boot to unlock the root, and gatewayd,
+# which the gateway-role single-node template the iso suite bakes in needs
+# (pkg/iso/gatewayd.go). platform-initrd comes from its own make target, which
+# owns its build tags; GOFLAGS=-buildvcs=false for the reason build_binaries
+# gives.
+prepare_iso_customize() {
+    echo "=== Preparing iso customize binaries ==="
+    if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
+        platform-initrd PLATFORM_INITRD=/tmp/platform-initrd; then
+        echo "FATAL: platform-initrd build failed"
+        exit 1
+    fi
+    echo "platform-initrd built: /tmp/platform-initrd"
+    build_gatewayd
+}
+
 # prepare_gatewayd_supervision readies the proxy suite's supervised-process
 # tests (#557): it builds gatewayd, which those tests run as a real
 # `gatewayd serve` with the `process:` section on, and delegates the memory
@@ -589,14 +653,7 @@ compile_check() {
 # the step docker-in-docker takes for the same reason.
 prepare_gatewayd_supervision() {
     echo "=== Preparing gatewayd supervision ==="
-    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
-        -ldflags "${LDFLAGS}" \
-        -o /tmp/gatewayd ./cmd/gatewayd/; then
-        echo "FATAL: gatewayd build failed"
-        exit 1
-    fi
-    export GATEWAYD_PATH=/tmp/gatewayd
-    echo "gatewayd built: ${GATEWAYD_PATH}"
+    build_gatewayd
 
     local root=/sys/fs/cgroup
     if [ ! -f "${root}/cgroup.controllers" ]; then
@@ -748,13 +805,25 @@ TRUSTEOF
 # host's kernel clock, and no suite may move it. A config without an ntp:
 # section renders nothing, and chronyd is not started. The paths are set
 # beside cleanup(), which stops chronyd.
+#
+# The daemon's chronyd consumes 127.0.0.1, which start_ntp_reference serves,
+# and the runner waits for it to synchronise: an unsynchronised clock is the
+# documented degraded `ntp` health component (docs/health/api.md), and a
+# degraded component makes the aggregate health answer of every transport
+# not-healthy, so every suite that asserts a healthy platform would fail.
 start_chronyd() {
     if [ ! -f "${CHRONYD_CONF}" ]; then
         echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
         return 0
     fi
+    # chronyd drops to _chrony and opens its command socket only when the
+    # socket's directory is owned by that user and closed to others; a
+    # root-owned 0755 directory leaves it running with "Disabled command
+    # socket", so every chronyc poll platformd makes fails (#949).
+    # The reference chronyd keeps its pid file in the same directory.
+    install -d -m 0750 -o _chrony -g _chrony "${CHRONYD_RUN_DIR}"
+    start_ntp_reference
     echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
-    mkdir -p "$(dirname "${CHRONYD_SOCK}")"
     if ! chronyd -x -f "${CHRONYD_CONF}"; then
         echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
         return 0
@@ -762,11 +831,44 @@ start_chronyd() {
     for _ in $(seq 1 10); do
         if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
             echo "chronyd ready"
+            # waitsync <tries> <max-correction> <max-skew> <interval>: 30
+            # one-second polls; 0 leaves the correction and skew unbounded.
+            if chronyc -n -h "${CHRONYD_SOCK}" waitsync 30 0 0 1 >/dev/null 2>&1; then
+                echo "chronyd synchronised to the reference"
+            else
+                echo "WARNING: chronyd did not synchronise to the reference within 30s; the ntp health component stays degraded"
+            fi
             return 0
         fi
         sleep 1
     done
     echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
+# start_ntp_reference runs a second chronyd as the harness's time source: it
+# serves its own clock on 127.0.0.1:123 as a local stratum-8 reference, which
+# the daemon's consume-mode chronyd (rendered with `port 0`, so the two never
+# share a port) synchronises to. Like the daemon's chronyd it runs with -x and
+# never moves the clock the container shares with the CI host, and it has no
+# command socket (`cmdport 0`, `bindcmdaddress /`), so every chronyc call the
+# daemon makes still reaches the daemon's chronyd.
+start_ntp_reference() {
+    echo "=== Starting the reference chronyd on 127.0.0.1:123 ==="
+    cat > "${NTP_REFERENCE_CONF}" << NTPREFEOF
+bindaddress 127.0.0.1
+allow 127.0.0.1
+local stratum 8
+cmdport 0
+bindcmdaddress /
+pidfile ${NTP_REFERENCE_PID_FILE}
+NTPREFEOF
+    # Without the reference the daemon's chronyd never synchronises, the ntp
+    # component stays degraded and every transport's aggregate health is
+    # not-healthy, so the suites would fail far from this cause.
+    if ! chronyd -x -f "${NTP_REFERENCE_CONF}"; then
+        echo "FATAL: the reference chronyd failed to start on ${NTP_REFERENCE_CONF}; the daemon's chronyd has no source"
+        exit 1
+    fi
 }
 
 start_platformd() {
@@ -1118,6 +1220,12 @@ else
     fi
 fi
 
+# The iso suite's customize step stages platform-initrd and gatewayd from
+# beside /tmp/platformd.
+if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "all" ]; then
+    prepare_iso_customize
+fi
+
 # Phase 3: Configure environment for test adapters
 setup_env_vars
 
@@ -1226,6 +1334,18 @@ if [ "$RUN_TARGET" = "all" ]; then
         run_test "$target"
         record_result "$target" "$?"
     done
+
+    # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
+    # one) and platformd on the local QEMU provider.
+    echo "=== compute: restarting platformd on the local QEMU provider ==="
+    stop_platformd
+    if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
+        run_test compute
+        record_result compute "$?"
+    else
+        echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
+        record_result compute 1
+    fi
 else
     run_test "$RUN_TARGET"
     record_result "$RUN_TARGET" "$?"

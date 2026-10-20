@@ -114,6 +114,13 @@ type Options struct {
 	// "embedded". Empty defers to the go-quicbaas SDK auto-detection
 	// rules (HTTP URLs -> REST, .sock paths -> Unix, otherwise gRPC).
 	QuicBaaSTransport string
+
+	// QuicBaaSTLSConfig is the TLS configuration of the quicbaasd
+	// connection. The go-quicbaas SDK refuses every transport without
+	// TLS, the Unix one included (gRPC over TLS on the socket), so a
+	// QuicBaaSAddr without it fails with ErrQuicBaaSTLSNotConfigured.
+	// TLSConfig is not reused: it belongs to the platformd connection.
+	QuicBaaSTLSConfig *tls.Config
 }
 
 // Option is a functional option for configuring Options.
@@ -249,6 +256,15 @@ func WithQuicBaaSAddr(addr string) Option {
 func WithQuicBaaSTransport(transport string) Option {
 	return func(o *Options) {
 		o.QuicBaaSTransport = transport
+	}
+}
+
+// WithQuicBaaSTLSConfig sets the TLS configuration of the quicbaasd
+// connection: the CA that verifies quicbaasd and, for mTLS, the client
+// certificate. It is required whenever WithQuicBaaSAddr is set.
+func WithQuicBaaSTLSConfig(cfg *tls.Config) Option {
+	return func(o *Options) {
+		o.QuicBaaSTLSConfig = cfg
 	}
 }
 

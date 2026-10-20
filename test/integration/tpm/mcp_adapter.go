@@ -379,14 +379,15 @@ func (m *MCPAdapter) Info(ctx context.Context) (*InfoResult, error) {
 	}
 
 	var resp struct {
-		Info         string `json:"info"`
-		Version      string `json:"version"`
-		Manufacturer string `json:"manufacturer"`
-		Model        string `json:"model"`
-		FWVersion    string `json:"fw_version"`
-		IsSimulator  bool   `json:"is_simulator"`
-		FIPSMode     bool   `json:"fips_mode"`
-		MaxNVRAMSize uint32 `json:"max_nvram_size"`
+		Info            string   `json:"info"`
+		Version         string   `json:"version"`
+		Manufacturer    string   `json:"manufacturer"`
+		Model           string   `json:"model"`
+		FirmwareVersion string   `json:"firmware_version"`
+		IsSimulator     bool     `json:"is_simulator"`
+		FIPSMode        bool     `json:"fips_mode"`
+		MaxNVRAMSize    uint32   `json:"max_nvram_size"`
+		PCRBanks        []string `json:"pcr_banks"`
 	}
 
 	if err := json.Unmarshal(data, &resp); err != nil {
@@ -398,13 +399,14 @@ func (m *MCPAdapter) Info(ctx context.Context) (*InfoResult, error) {
 		IsSimulator:  resp.IsSimulator,
 		FIPSMode:     resp.FIPSMode,
 		MaxNVRAMSize: resp.MaxNVRAMSize,
+		PCRBanks:     resp.PCRBanks,
 	}
 
 	if resp.Manufacturer != "" {
 		ir.Manufacturer = &ManufacturerInfo{
 			Name:            resp.Manufacturer,
 			Model:           resp.Model,
-			FirmwareVersion: resp.FWVersion,
+			FirmwareVersion: resp.FirmwareVersion,
 		}
 	}
 
@@ -793,7 +795,7 @@ func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // =============================================================================
 
 // EventLog reads the TPM event log via MCP.
-func (m *MCPAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (m *MCPAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	result, err := m.callTool(ctx, MCPToolTPMEventLog, nil)
 	if err != nil {
 		return nil, err

@@ -64,6 +64,17 @@ Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.
 
+`GenerateKey` on every transport: the request's `name` is the key ID.
+`key_spec.exportable` and `key_spec.deletion_protection` are set at generation;
+a delete of a deletion-protected key is refused with FailedPrecondition.
+`description` and `tags` are recorded as key metadata right after the generate,
+and the reply's `metadata` is what the KMS recorded, read back, never an echo
+of the request. `owner` cannot be set: the SDK `GenerateKeyRequest` and
+`UpdateKeyMetadataRequest` have no owner field (go-quicbaas
+`sdk/go@v0.12.0-alpha` `client/kms/client.go:100` and `:431`), so the reply
+carries the owner the KMS recorded. A key whose metadata cannot be recorded
+fails the request with the metadata error's class; the key itself exists.
+
 `POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
 (`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
 `ECDSA-P384`, `ED25519`; underscores are accepted for dashes) and `usage` as

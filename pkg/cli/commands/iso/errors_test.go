@@ -21,38 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestErrDaemonConnectionRequired(t *testing.T) {
-	tests := []struct {
-		name     string
-		command  string
-		expected string
-	}{
-		{
-			name:     "with command name",
-			command:  "iso build",
-			expected: "daemon connection required for 'iso build' command - dual-mode will be added later",
-		},
-		{
-			name:     "empty command",
-			command:  "",
-			expected: "daemon connection required for '' command - dual-mode will be added later",
-		},
-		{
-			name:     "special characters",
-			command:  "test --flag=value",
-			expected: "daemon connection required for 'test --flag=value' command - dual-mode will be added later",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrDaemonConnectionRequired{Command: tt.command}
-			assert.Equal(t, tt.expected, err.Error())
-			assert.True(t, errors.As(err, &ErrDaemonConnectionRequired{}))
-		})
-	}
-}
-
 func TestErrInvalidArchitecture(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -302,7 +270,6 @@ func TestErrVolumeLabelTooLong(t *testing.T) {
 
 func TestErrorsImplementErrorInterface(t *testing.T) {
 	// Verify all error types implement the error interface
-	var _ error = ErrDaemonConnectionRequired{}
 	var _ error = ErrInvalidArchitecture{}
 	var _ error = ErrInvalidPlatformType{}
 	var _ error = ErrISONotFound{}
@@ -340,11 +307,6 @@ func TestErrorMessagesContainContext(t *testing.T) {
 		err         error
 		mustContain []string
 	}{
-		{
-			name:        "ErrDaemonConnectionRequired",
-			err:         ErrDaemonConnectionRequired{Command: "iso build"},
-			mustContain: []string{"daemon", "iso build"},
-		},
 		{
 			name:        "ErrInvalidArchitecture",
 			err:         ErrInvalidArchitecture{Architecture: "arm32", Valid: []string{"x86_64"}},

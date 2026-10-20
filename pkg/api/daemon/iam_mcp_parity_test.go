@@ -99,6 +99,28 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	return answers
 }
 
+// The create request carries only an email; the SDK refuses an empty
+// username, so the service derives it from the email's local part.
+func TestIAMGRPCService_CreateUserDerivesUsernameFromEmail(t *testing.T) {
+	iam := newMemIAM()
+	svc := wiredIAMGRPCService(iam)
+	ctx := context.Background()
+
+	_, err := svc.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
+	require.NoError(t, err)
+
+	stored, err := iam.User().Get(ctx, "acme", "alice@acme.test")
+	require.NoError(t, err)
+	assert.Equal(t, "alice", stored.Username)
+}
+
+func TestIAMGRPCService_CreateUserWithoutEmailIsRefused(t *testing.T) {
+	svc := wiredIAMGRPCService(newMemIAM())
+
+	_, err := svc.CreateUser(context.Background(), &platformv1.CreateIAMUserRequest{TenantId: "acme"})
+	require.Error(t, err)
+}
+
 func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []proto.Message {
 	admin, err := c.CreateRole(ctx, &platformv1.CreateIAMRoleRequest{
 		TenantId: "acme", Id: "admin", Name: "Admin", Description: "all of it", Permissions: []string{"iam:read", "iam:write"},
@@ -437,7 +459,7 @@ func newMCPTestDaemon(t *testing.T, socketPath string) *Daemon {
 func TestCreateMCPServer_HandsTheIAMClientsToTheProvider(t *testing.T) {
 	ctx := context.Background()
 	iam := newMemIAM()
-	_, err := iam.User().Create(ctx, "acme", &sdkiam.CreateUserRequest{Email: "alice@acme.test"})
+	_, err := iam.User().Create(ctx, "acme", &sdkiam.CreateUserRequest{Username: "alice", Email: "alice@acme.test"})
 	require.NoError(t, err)
 	_, err = iam.Role().Create(ctx, "acme", &sdkiam.CreateRoleRequest{ID: "reader", Permissions: []string{"device:read"}})
 	require.NoError(t, err)

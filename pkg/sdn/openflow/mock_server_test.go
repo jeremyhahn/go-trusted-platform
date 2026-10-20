@@ -434,10 +434,12 @@ func (s *mockOFServer) handleFeaturesRequest(header *Header) {
 	}
 
 	if s.sendWrongFeaturesType {
-		// Send wrong message type
+		// Answer with another reply type on the request's xid. Not an echo
+		// request: the client answers those itself and never hands them to
+		// the waiting request, so the handshake would only time out.
 		reply := &Header{
 			Version: DefaultVersion,
-			Type:    OFPTEchoRequest, // Wrong type
+			Type:    OFPTBarrierReply, // Wrong type
 			Length:  HeaderSize,
 			Xid:     header.Xid,
 		}

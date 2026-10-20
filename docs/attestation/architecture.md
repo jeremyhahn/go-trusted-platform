@@ -591,8 +591,10 @@ the event reader, the SDN enrollment hook) on top.
 When the backend is absent the RPCs are still registered and answer
 `FailedPrecondition` ("attestation service backend is not configured"); that
 happens only when the store cannot be opened (`ErrAttestationStoreUnavailable`,
-logged, startup continues). A node with no TPM still gets the backend: manifest
-operations work, and quote production answers `ErrTPMSessionNotConfigured`.
+logged, startup continues). A node with no TPM still gets the backend: stored
+manifests can be read, verified and deleted, and quote production answers
+`ErrTPMSessionNotConfigured`. `BuildManifest` answers that error on every node,
+TPM or not ([engineering](engineering.md) §3a).
 Before #544 the daemon-only path never built the backend, so every attestation
 RPC on it answered `FailedPrecondition`.
 

@@ -17,7 +17,19 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
+
+// IsNotFound reports whether err is the refusal a go-quicbaas KV read
+// returns for a missing entity. A KV Get never answers a miss with
+// Found=false: remote transports return an SDK error with CodeNotFound, and
+// the embedded transport returns the go-qrdb DatabaseError with ErrNotFound,
+// which the SDK's errors.IsNotFound does not recognise.
+func IsNotFound(err error) bool {
+	return baaserrors.IsNotFound(err) || quicbaas.IsDatabaseErrorCode(err, quicbaas.ErrNotFound)
+}
 
 // ErrNotFound is returned when an entity is not found in the database.
 type ErrNotFound struct {

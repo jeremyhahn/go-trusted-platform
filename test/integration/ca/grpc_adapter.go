@@ -431,6 +431,10 @@ func (g *GRPCAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 		}
 	}
 
+	if err := result.setIssuerFromData("gRPC"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 

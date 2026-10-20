@@ -18,11 +18,13 @@ package attestation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	attestsvc "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/service"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -73,6 +75,11 @@ func TestAttestationMultiProtocol(t *testing.T) {
 func testVMAttestation(t *testing.T, ctx context.Context, adapter AttestationCommands) {
 	testID := uuid.New().String()[:8]
 
+	// VM attestation is a declared MISSING capability: the daemon holds no
+	// TPM session for a guest's vTPM, so CollectVMAttestation produces no
+	// evidence and every transport must say why instead of answering an
+	// empty quote (docs/attestation/engineering.md, the TPM-session table).
+
 	t.Run("GenerateVMQuote", func(t *testing.T) {
 		vmID := GenerateTestVMID(testID)
 		nonce := GenerateTestNonce()
@@ -92,153 +99,94 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter AttestationCom
 			}
 			return
 		}
-		if err != nil {
-			t.Fatalf("GenerateVMQuote failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("GenerateVMQuote returned nil result")
-		}
-
-		if len(result.QuoteData) == 0 {
-			t.Error("QuoteData is empty")
-		}
-
-		if len(result.Signature) == 0 {
-			t.Error("Signature is empty")
-		}
-
-		if len(result.PCRDigest) == 0 {
-			t.Error("PCRDigest is empty")
-		}
-
-		if len(result.AIKPublicKey) == 0 {
-			t.Error("AIKPublicKey is empty")
+		expectVMAttestationRefused(t, adapter, "GenerateVMQuote", err)
+		if result != nil {
+			t.Errorf("GenerateVMQuote returned a result alongside its refusal: %+v", result)
 		}
 	})
 
 	t.Run("GetVMAttestation", func(t *testing.T) {
 		vmID := GenerateTestVMID(testID + "-attest")
-		nonce := GenerateTestNonce()
-
-		opts := GetVMAttestationOptions{
-			VMID:          vmID,
-			Nonce:         nonce,
-			PCRIndices:    DefaultPCRIndices(),
-			HashAlgorithm: DefaultHashAlgorithm(),
-		}
-
-		result, err := adapter.GetVMAttestation(ctx, opts)
-		if err != nil {
-			t.Fatalf("GetVMAttestation failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("GetVMAttestation returned nil result")
-		}
-
-		if result.AttestationID == "" {
-			t.Error("AttestationID is empty")
-		}
-
-		if result.VMID != vmID {
-			t.Errorf("VMID mismatch: got %s, want %s", result.VMID, vmID)
-		}
-
-		if result.HostID == "" {
-			t.Error("HostID is empty")
-		}
-
-		if len(result.QuoteData) == 0 {
-			t.Error("QuoteData is empty")
-		}
-
-		if len(result.PCRs) == 0 {
-			t.Error("PCRs list is empty")
+		result, err := adapter.GetVMAttestation(ctx, vmAttestationOptions(vmID, GenerateTestNonce()))
+		expectVMAttestationRefused(t, adapter, "GetVMAttestation", err)
+		if result != nil {
+			t.Errorf("GetVMAttestation returned a result alongside its refusal: %+v", result)
 		}
 	})
 
 	t.Run("VerifyVMAttestation", func(t *testing.T) {
-		vmID := GenerateTestVMID(testID + "-verify")
-		nonce := GenerateTestNonce()
-
-		// First generate an attestation
-		attestOpts := GetVMAttestationOptions{
-			VMID:          vmID,
-			Nonce:         nonce,
-			PCRIndices:    DefaultPCRIndices(),
-			HashAlgorithm: DefaultHashAlgorithm(),
-		}
-
-		attestResult, err := adapter.GetVMAttestation(ctx, attestOpts)
-		if err != nil {
-			t.Fatalf("GetVMAttestation failed: %v", err)
-		}
-
-		// Now verify its quote under its AIK
-		verifyResult, err := adapter.VerifyVMAttestation(ctx, attestResult.VerifyOptions(nonce))
-		if expectNoVerifySurface(t, adapter, err) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("VerifyVMAttestation failed: %v", err)
-		}
-
-		if verifyResult == nil {
-			t.Fatal("VerifyVMAttestation returned nil result")
-		}
-
-		if !verifyResult.Valid {
-			t.Errorf("Attestation should be valid, errors: %v", verifyResult.Errors)
-		}
-
-		if !verifyResult.NonceMatch {
-			t.Error("Nonce should match")
-		}
-
-		if !verifyResult.SignatureValid {
-			t.Error("Signature should be valid")
-		}
+		testVMVerifyRefused(t, ctx, adapter, GenerateTestVMID(testID+"-verify"))
 	})
 
 	t.Run("VerifyVMAttestation_InvalidNonce", func(t *testing.T) {
-		vmID := GenerateTestVMID(testID + "-invalid")
-		nonce := GenerateTestNonce()
-
-		attestOpts := GetVMAttestationOptions{
-			VMID:          vmID,
-			Nonce:         nonce,
-			PCRIndices:    DefaultPCRIndices(),
-			HashAlgorithm: DefaultHashAlgorithm(),
-		}
-
-		attestResult, err := adapter.GetVMAttestation(ctx, attestOpts)
-		if err != nil {
-			t.Fatalf("GetVMAttestation failed: %v", err)
-		}
-
-		// Verify with wrong nonce
-		wrongNonce := GenerateTestNonce()
-		verifyResult, err := adapter.VerifyVMAttestation(ctx, attestResult.VerifyOptions(wrongNonce))
-		if expectNoVerifySurface(t, adapter, err) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("VerifyVMAttestation failed: %v", err)
-		}
-
-		if verifyResult.Valid {
-			t.Error("Attestation should be invalid with wrong nonce")
-		}
-
-		if verifyResult.NonceMatch {
-			t.Error("Nonce should not match")
-		}
+		testVMVerifyRefused(t, ctx, adapter, GenerateTestVMID(testID+"-invalid"))
 	})
 }
 
+// vmAttestationOptions is the GetVMAttestation request every VM subtest sends.
+func vmAttestationOptions(vmID string, nonce []byte) GetVMAttestationOptions {
+	return GetVMAttestationOptions{
+		VMID:          vmID,
+		Nonce:         nonce,
+		PCRIndices:    DefaultPCRIndices(),
+		HashAlgorithm: DefaultHashAlgorithm(),
+	}
+}
+
+// testVMVerifyRefused covers the verify subtests while VM attestation is
+// MISSING: the evidence a verify would judge cannot be collected, so the
+// collect step must be refused with its reason. Over QUIC the verify call
+// itself has no surface, which is checked on its own.
+func testVMVerifyRefused(t *testing.T, ctx context.Context, adapter AttestationCommands, vmID string) {
+	t.Helper()
+	nonce := GenerateTestNonce()
+
+	attestResult, err := adapter.GetVMAttestation(ctx, vmAttestationOptions(vmID, nonce))
+	expectVMAttestationRefused(t, adapter, "GetVMAttestation", err)
+	if attestResult != nil {
+		t.Errorf("GetVMAttestation returned a result alongside its refusal: %+v", attestResult)
+	}
+
+	if adapter.Name() == "QUIC" {
+		_, err := adapter.VerifyVMAttestation(ctx, VerifyVMAttestationOptions{ExpectedNonce: nonce})
+		expectNoVerifySurface(t, adapter, err)
+	}
+}
+
+// expectVMAttestationRefused asserts that a VM evidence call was refused with
+// the reason the transport is documented to carry. Every transport that
+// reaches the attestation service carries ErrTPMSessionNotConfigured for
+// CollectVMAttestation, QUIC's OpAttestVMWorkload (0x7F) included: the daemon
+// serves it from the same gRPC servicer (docs/attestation/api.md §2).
+func expectVMAttestationRefused(t *testing.T, adapter AttestationCommands, op string, err error) {
+	t.Helper()
+	expectTPMSessionRefusal(t, adapter, op, "CollectVMAttestation", err)
+}
+
+// expectTPMSessionRefusal asserts op answered the service's
+// ErrTPMSessionNotConfigured for serviceOp. platformctl carries neither the
+// VM-attestation nor the manifest verbs (docs/attestation/cli.md §6), so over
+// the CLI the call must name that absence instead.
+func expectTPMSessionRefusal(t *testing.T, adapter AttestationCommands, op, serviceOp string, err error) {
+	t.Helper()
+	if adapter.Name() == "CLI" {
+		var noSurface surface.ErrNoSurface
+		if !errors.As(err, &noSurface) {
+			t.Errorf("%s over CLI: got %v, want surface.ErrNoSurface (docs/attestation/cli.md §6)", op, err)
+		}
+		return
+	}
+	want := attestsvc.ErrTPMSessionNotConfigured{Op: serviceOp}.Error()
+	if err == nil {
+		t.Fatalf("%s over %s succeeded, want refusal %q", op, adapter.Name(), want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("%s over %s: got %q, want it to carry %q", op, adapter.Name(), err.Error(), want)
+	}
+}
+
 // expectNoVerifySurface reports whether adapter serves no quote verification
-// (QUIC: the attestation handlers are not constructed in production, #386).
+// (QUIC: no attestation opcode verifies VM evidence, docs/attestation/api.md §2).
 // There it asserts the call answered surface.ErrNoSurface.
 func expectNoVerifySurface(t *testing.T, adapter AttestationCommands, err error) bool {
 	t.Helper()
@@ -256,6 +204,11 @@ func expectNoVerifySurface(t *testing.T, adapter AttestationCommands, err error)
 // Manifest Tests
 // =============================================================================
 
+// testManifest drives the manifest surface. The daemon owns no TPM session
+// that can sign a manifest, so BuildManifest refuses on every transport and
+// no manifest is ever stored to verify or fetch back
+// (docs/attestation/engineering.md §3a); the reads are exercised on ids the
+// daemon has never stored.
 func testManifest(t *testing.T, ctx context.Context, adapter AttestationCommands) {
 	testID := uuid.New().String()[:8]
 
@@ -273,28 +226,9 @@ func testManifest(t *testing.T, ctx context.Context, adapter AttestationCommands
 		}
 
 		result, err := adapter.BuildManifest(ctx, opts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("BuildManifest returned nil result")
-		}
-
-		if result.ManifestID == "" {
-			t.Error("ManifestID is empty")
-		}
-
-		if result.HostID != hostID {
-			t.Errorf("HostID mismatch: got %s, want %s", result.HostID, hostID)
-		}
-
-		if len(result.MerkleRoot) == 0 {
-			t.Error("MerkleRoot is empty")
-		}
-
-		if result.VMCount != 1 {
-			t.Errorf("VMCount mismatch: got %d, want 1", result.VMCount)
+		expectTPMSessionRefusal(t, adapter, "BuildManifest", "BuildManifest", err)
+		if result != nil {
+			t.Errorf("BuildManifest over %s returned a manifest alongside its refusal", adapter.Name())
 		}
 	})
 
@@ -314,92 +248,28 @@ func testManifest(t *testing.T, ctx context.Context, adapter AttestationCommands
 		}
 
 		result, err := adapter.BuildManifest(ctx, opts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		if result.ContainerCount != 1 {
-			t.Errorf("ContainerCount mismatch: got %d, want 1", result.ContainerCount)
+		expectTPMSessionRefusal(t, adapter, "BuildManifest", "BuildManifest", err)
+		if result != nil {
+			t.Errorf("BuildManifest over %s returned a manifest alongside its refusal", adapter.Name())
 		}
 	})
 
-	t.Run("VerifyManifest", func(t *testing.T) {
-		// Build a manifest; every transport's build signs it.
-		hostID := GenerateTestHostID(testID + "-verify")
-		hostAttest := CreateTestHostAttestation(hostID)
-
-		buildOpts := BuildManifestOptions{
-			HostID:          hostID,
-			HostAttestation: hostAttest,
-			HashAlgorithm:   DefaultHashAlgorithm(),
-		}
-
-		buildResult, err := adapter.BuildManifest(ctx, buildOpts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		// Verify the manifest
+	t.Run("VerifyManifest_NotFound", func(t *testing.T) {
 		verifyOpts := VerifyManifestOptions{
-			ManifestID:     buildResult.ManifestID,
-			ExpectedHostID: hostID,
+			ManifestID:     "non-existent-manifest-" + testID,
+			ExpectedHostID: GenerateTestHostID(testID + "-verify"),
 		}
 
 		verifyResult, err := adapter.VerifyManifest(ctx, verifyOpts)
-		if err != nil {
-			t.Fatalf("VerifyManifest failed: %v", err)
+		if adapter.Name() == "CLI" {
+			var noSurface surface.ErrNoSurface
+			if !errors.As(err, &noSurface) {
+				t.Errorf("VerifyManifest over CLI: got %v, want surface.ErrNoSurface (docs/attestation/cli.md §6)", err)
+			}
+			return
 		}
-
-		if !verifyResult.Valid {
-			t.Errorf("Manifest should be valid, errors: %v", verifyResult.Errors)
-		}
-
-		if !verifyResult.SignatureValid {
-			t.Error("Signature should be valid")
-		}
-
-		if !verifyResult.MerkleRootValid {
-			t.Error("MerkleRoot should be valid")
-		}
-
-		if !verifyResult.HostIDMatch {
-			t.Error("HostID should match")
-		}
-	})
-
-	t.Run("GetManifest", func(t *testing.T) {
-		// Build a manifest
-		hostID := GenerateTestHostID(testID + "-get")
-		hostAttest := CreateTestHostAttestation(hostID)
-
-		buildOpts := BuildManifestOptions{
-			HostID:          hostID,
-			HostAttestation: hostAttest,
-			HashAlgorithm:   DefaultHashAlgorithm(),
-			Version:         "1.0.0",
-		}
-
-		buildResult, err := adapter.BuildManifest(ctx, buildOpts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		// Get it back
-		getOpts := GetManifestOptions{
-			ManifestID: buildResult.ManifestID,
-		}
-
-		getResult, err := adapter.GetManifest(ctx, getOpts)
-		if err != nil {
-			t.Fatalf("GetManifest failed: %v", err)
-		}
-
-		if getResult.ManifestID != buildResult.ManifestID {
-			t.Errorf("ManifestID mismatch: got %s, want %s", getResult.ManifestID, buildResult.ManifestID)
-		}
-
-		if getResult.HostID != hostID {
-			t.Errorf("HostID mismatch: got %s, want %s", getResult.HostID, hostID)
+		if err == nil && verifyResult != nil && verifyResult.Valid {
+			t.Errorf("VerifyManifest over %s reported a never-stored manifest valid", adapter.Name())
 		}
 	})
 

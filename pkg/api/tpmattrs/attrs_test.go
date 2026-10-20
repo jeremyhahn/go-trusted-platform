@@ -41,6 +41,10 @@ type fakeTPM struct {
 	propsErr              error
 	ek, srk, iak          *xkmssdk.KeyAttributes
 	ekErr, srkErr, iakErr error
+
+	banks       []xkmssdk.PCRBank
+	banksErr    error
+	readPCRList []uint
 }
 
 func (f *fakeTPM) SupportedAlgorithms() ([]string, error) { return f.algorithms, f.algErr }
@@ -150,4 +154,32 @@ func TestReadPlatform_LeavesWhatTheTPMCannotReportEmpty(t *testing.T) {
 
 	assert.Equal(t, Platform{Device: "/dev/tpmrm0"}, got,
 		"a refused read is false or empty, never the value returned beside the error")
+}
+
+func (f *fakeTPM) ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error) {
+	f.readPCRList = pcrList
+	return f.banks, f.banksErr
+}
+
+func TestActivePCRBanks_NamesEachAllocatedBankOnce(t *testing.T) {
+	tpm := &fakeTPM{banks: []xkmssdk.PCRBank{
+		{Algorithm: "SHA1"},
+		{Algorithm: "SHA256"},
+		{Algorithm: "sha256"},
+		{Algorithm: ""},
+		{Algorithm: "SHA384"},
+	}}
+
+	got := ActivePCRBanks(tpm)
+
+	assert.Equal(t, []string{"sha1", "sha256", "sha384"}, got,
+		"lower-case, in TPM order, without duplicates or unnamed banks")
+	assert.Equal(t, []uint{0}, tpm.readPCRList, "PCR 0 is held by every allocated bank")
+}
+
+func TestActivePCRBanks_RefusedReadReportsNoBanks(t *testing.T) {
+	tpm := &fakeTPM{banks: []xkmssdk.PCRBank{{Algorithm: "SHA256"}}, banksErr: errRefused}
+
+	assert.Empty(t, ActivePCRBanks(tpm),
+		"a refused read reports no banks, never the banks returned beside the error")
 }

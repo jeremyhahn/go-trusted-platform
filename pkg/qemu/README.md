@@ -129,12 +129,16 @@ the profile supplies the rest:
 | | `x86_64` (default) | `aarch64` |
 |---|---|---|
 | binary | `qemu-system-x86_64` | `qemu-system-aarch64` |
-| machine / CPU | `q35` (`smm=on` with Secure Boot) / `host` | `virt,gic-version=3` / `cortex-a72`; under KVM `virt,gic-version=host` / `host`, so a GICv2-only host such as the Raspberry Pi 4 boots |
+| machine / CPU | `q35` (`smm=on` with Secure Boot) / `host` under KVM, `max` under TCG | `virt,gic-version=3` / `cortex-a72`; under KVM `virt,gic-version=host` / `host`, so a GICv2-only host such as the Raspberry Pi 4 boots |
 | firmware | OVMF in two pflash drives, NVRAM copied from `OVMFVars` | `Firmware` (U-Boot `u-boot.bin`) as `-bios`; no NVRAM file |
 | disk | AHCI (`ide-hd`), `qcow2` | `virtio-blk-pci`, `raw` |
 | TPM front-end | `tpm-tis` | `tpm-tis-device` |
 | boot modes | install (ISO on AHCI), boot, pxe | boot, pxe (install is refused: there is no aarch64 ISO) |
 | KVM | `EnableKVM` on an amd64 host | `EnableKVM` on an arm64 host; elsewhere TCG |
+
+KVM also needs `/dev/kvm` to open read-write. When `EnableKVM` is set but it
+does not (no device, or no access), the guest runs TCG and one warning names
+the reason. `Config.KVMProbe` replaces the probe in tests.
 
 The x86_64 command line is pinned by `TestBuildQEMUCommand_X86Golden` to
 what it was before the profiles existed. `DiskFormat` and `TPMDevice`

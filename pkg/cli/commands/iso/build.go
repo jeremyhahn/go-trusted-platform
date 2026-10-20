@@ -14,10 +14,19 @@
 package iso
 
 import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 )
+
+// maxVolumeLabelLength is the ISO 9660 volume identifier limit.
+const maxVolumeLabelLength = 32
 
 // buildFlags holds flags for the build command
 type buildFlags struct {
@@ -25,13 +34,20 @@ type buildFlags struct {
 	output      string
 	volumeID    string
 	generateSum bool
-	configFile  string
-	workDir     string
 	debug       bool
-	verbose     bool
 }
 
-// newBuildCommand creates the build subcommand for building final bootable ISO
+// buildResult is what `iso build` prints (docs/installer/cli.md §4).
+type buildResult struct {
+	Success      bool   `json:"success" yaml:"success"`
+	OutputISO    string `json:"output_iso" yaml:"output_iso"`
+	SHA256       string `json:"sha256" yaml:"sha256"`
+	SizeBytes    int64  `json:"size_bytes" yaml:"size_bytes"`
+	ChecksumFile string `json:"checksum_file,omitempty" yaml:"checksum_file,omitempty"`
+	Message      string `json:"message" yaml:"message"`
+}
+
+// newBuildCommand creates the build command
 func newBuildCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	flags := &buildFlags{}
 
@@ -48,6 +64,8 @@ The resulting ISO can boot via:
 - UEFI (using grub EFI bootloader)
 - USB/HDD (via isohybrid MBR)
 
+The local --output flag names the ISO file, so the result prints as text.
+
 Examples:
   # Build ISO with default settings
   platformctl iso build --iso-dir work/iso --output platform.iso
@@ -58,7 +76,7 @@ Examples:
   # Build without checksum
   platformctl iso build --iso-dir work/iso --output platform.iso --checksum=false`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBuild(getFlags(), flags)
+			return runBuild(cmd.Context(), getFlags(), flags, cmd.OutOrStdout())
 		},
 	}
 
@@ -66,13 +84,8 @@ Examples:
 	cmd.Flags().StringVar(&flags.sourceDir, "iso-dir", "", "Source directory containing ISO contents (required)")
 	cmd.Flags().StringVar(&flags.output, "output", "", "Output ISO file path (required)")
 	cmd.Flags().StringVar(&flags.volumeID, "label", "TRUSTED_PLATFORM", "ISO volume label (max 32 chars)")
-	cmd.Flags().BoolVar(&flags.generateSum, "checksum", true, "Generate SHA256 checksum file")
-
-	// Common flags
-	cmd.Flags().StringVar(&flags.configFile, "config", "", "Path to ISO build configuration file")
-	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Working directory for ISO operations")
+	cmd.Flags().BoolVar(&flags.generateSum, "checksum", true, "Write <output>.sha256 beside the ISO")
 	cmd.Flags().BoolVar(&flags.debug, "debug", false, "Enable debug output")
-	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "Enable verbose output")
 
 	// Mark required flags
 	cli.MarkFlagsRequired(cmd, "iso-dir")
@@ -81,9 +94,46 @@ Examples:
 	return cmd
 }
 
-// runBuild executes the build command
-func runBuild(commonFlags *cli.CommonFlags, flags *buildFlags) error {
-	// ISO build requires App initialization which needs daemon connection
-	// Dual-mode will be added later to support local-only operations
-	return ErrDaemonConnectionRequired{Command: "iso build"}
+// runBuild masters the ISO with xorriso from an extracted, customized tree.
+func runBuild(ctx context.Context, commonFlags *cli.CommonFlags, flags *buildFlags, out io.Writer) error {
+	info, err := os.Stat(flags.sourceDir)
+	if err != nil || !info.IsDir() {
+		return ErrDirectoryNotFound{Path: flags.sourceDir}
+	}
+	if len(flags.volumeID) > maxVolumeLabelLength {
+		return ErrVolumeLabelTooLong{Label: flags.volumeID, MaxLength: maxVolumeLabelLength}
+	}
+
+	builder := pkgiso.NewBuilder(newVerbLogger(flags.debug))
+	isoConfig := &pkgiso.ISOConfig{
+		ISODir:    flags.sourceDir,
+		OutputISO: flags.output,
+		VolumeID:  flags.volumeID,
+		Debug:     flags.debug,
+	}
+	if err := builder.BuildISO(ctx, isoConfig); err != nil {
+		return ErrBuildFailed{Reason: err.Error()}
+	}
+
+	sum, size, err := fileDigest(flags.output)
+	if err != nil {
+		return err
+	}
+
+	result := buildResult{
+		Success:   true,
+		OutputISO: flags.output,
+		SHA256:    sum,
+		SizeBytes: size,
+		Message:   "ISO built from " + flags.sourceDir,
+	}
+	if flags.generateSum {
+		result.ChecksumFile = flags.output + ".sha256"
+		line := sum + "  " + filepath.Base(flags.output) + "\n"
+		if err := os.WriteFile(result.ChecksumFile, []byte(line), 0o644); err != nil {
+			return &WrappedError{Msg: "failed to write checksum file", Err: err}
+		}
+	}
+
+	return printResult(out, commonFlags, result)
 }

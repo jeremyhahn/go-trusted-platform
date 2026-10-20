@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -60,10 +61,8 @@ func NewRESTAdapter() *RESTAdapter {
 // NewRESTAdapterWithConfig creates a REST adapter with explicit configuration.
 func NewRESTAdapterWithConfig(baseURL string, timeout time.Duration) *RESTAdapter {
 	return &RESTAdapter{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		baseURL:    baseURL,
+		httpClient: helpers.NewHTTPClient(timeout),
 	}
 }
 
@@ -75,16 +74,15 @@ func (r *RESTAdapter) Name() string {
 // Setup initializes the REST client with base URL from environment or default.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
 	endpoints := GetServiceEndpoints()
-	r.baseURL = "http://" + endpoints.PlatformAPI
+	r.baseURL = helpers.RESTBaseURL(endpoints.PlatformAPI)
 
 	// Check for explicit override via environment variable
 	if envURL := os.Getenv("PLATFORM_API_URL"); envURL != "" {
-		r.baseURL = envURL
+		r.baseURL = helpers.RESTBaseURL(envURL)
 	}
 
-	r.httpClient = &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// The REST listener is mTLS: present the runner's client certificate.
+	r.httpClient = helpers.NewHTTPClient(30 * time.Second)
 
 	// Verify connectivity by checking backend status
 	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)

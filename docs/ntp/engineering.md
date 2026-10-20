@@ -649,9 +649,19 @@ transport. The devcontainer is Debian without OpenRC, so platformd's
 `rc-update add chronyd` fails and is logged; the runner
 (`run-integration-tests.sh` `start_chronyd`) then starts `chronyd -x` on the
 rendered file. `-x` keeps chronyd off the system clock, which the container
-shares with the CI host. Nothing serves NTP on the loopback, so no source is
-ever reachable and `Step` always returns the documented `ErrNoReachableSource`
-refusal: no suite can move a clock.
+shares with the CI host. Before it, `start_ntp_reference` starts a second
+`chronyd -x` that serves the loopback upstream as a `local stratum 8` reference
+with no command socket, and the runner waits (`chronyc waitsync`) until the
+daemon's chronyd has synchronised to it. The reference's config is
+`/etc/chrony/reference.conf` and its pid file `/run/chrony/reference.pid`: the
+chrony AppArmor profile loaded on the CI host also confines chronyd in the
+privileged container and lets it read only `/etc/chrony/` and write only
+`/run/chrony/`, so a config elsewhere fails with `Permission denied` even for
+root. A reference that does not start stops the run (`FATAL`). Without that source the clock never
+converged, the `ntp` component stayed degraded, and every transport's aggregate
+health answered not-healthy (#949). Both chronyds run `-x`, so a `Step` the ntp
+suite issues moves only chronyd's view, never the clock: no suite can move a
+clock.
 
 **Fault-injection seams.** `WithRunner` fakes `chronyc`/`rc-service` output
 (including malformed CSV and non-zero exit), `WithFileSystem` keeps rendering

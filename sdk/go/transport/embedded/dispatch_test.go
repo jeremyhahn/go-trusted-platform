@@ -55,7 +55,7 @@ func TestBuildHandlerMap_FullRegistry(t *testing.T) {
 	registry := fullTestRegistry()
 	m := buildHandlerMap(registry)
 
-	// All 20 services registered should yield 360 handlers (320 base +
+	// All 20 services registered should yield 364 handlers (320 base +
 	// 6 gateway load balancer VIP methods + 3 gateway perf methods +
 	// 4 IPAM pool CRUD + 4 network zone CRUD - 2 retired tenant VLAN/bridge
 	// methods, #708 + gateway.GetNAT64Status, #601 + ca.SignCSR, #691 + 6 device
@@ -65,13 +65,14 @@ func TestBuildHandlerMap_FullRegistry(t *testing.T) {
 	// compute SuspendVM and ResumeVM, #704 + tpm.GetCapabilities,
 	// GetPlatformAttributes, ExtendPCR, MakeCredential and
 	// ActivateCredential, #704 + compute GetSnapshot, #704 + compute
-	// PrepareMigration and FinalizeMigration, #704 = 360).
+	// PrepareMigration and FinalizeMigration, #704 + device template Get,
+	// List, Update and Delete, #949 = 364).
 	if len(m) < 300 {
 		t.Errorf("expected at least 300 handlers for full registry, got %d", len(m))
 	}
 
-	if len(m) != 360 {
-		t.Errorf("expected exactly 360 handlers for full registry, got %d", len(m))
+	if len(m) != 364 {
+		t.Errorf("expected exactly 364 handlers for full registry, got %d", len(m))
 	}
 }
 

@@ -29,6 +29,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -89,11 +91,11 @@ func NewRESTAdapter() *RESTAdapter {
 		endpoint = DefaultPlatformAPIEndpoint
 	}
 
+	// The REST listener is mTLS: keep the endpoint's scheme (a bare
+	// host:port gets https://) and present the runner's client certificate.
 	return &RESTAdapter{
-		baseURL: "http://" + endpoint,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		baseURL:    helpers.RESTBaseURL(endpoint),
+		httpClient: helpers.NewHTTPClient(30 * time.Second),
 	}
 }
 

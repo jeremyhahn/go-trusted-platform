@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -1019,9 +1020,12 @@ func testCARevokeCertificate(t *testing.T, ctx context.Context, adapter Protocol
 	require.NoError(t, err, "Issue prerequisite certificate")
 	require.NotNil(t, issueResult)
 	require.NotNil(t, issueResult.Certificate)
+	require.NotEmpty(t, issueResult.Certificate.Serial, "issued certificate must carry its serial")
 
+	// docs/ca/api.md: every transport revokes a certificate by its serial.
 	result, err := cmd.RevokeCertificate(ctx, ca.RevokeCertificateOptions{
 		CommonName: cn,
+		Serial:     issueResult.Certificate.Serial,
 		Reason:     ca.RevocationReasonSuperseded,
 	})
 	if missing := surfaceMissing(adapter, "CA", "RevokeCertificate", err); missing != nil {
@@ -1085,49 +1089,71 @@ func testDNSService(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	})
 }
 
-func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// setupMatrixDNSZone creates a zone of its own for one DNS leg and returns the
+// zone name with a deferable cleanup. The platform resolver answers from the
+// zones it serves (docs/dns/), so every leg resolves records it created rather
+// than names such as "localhost" no zone carries.
+func setupMatrixDNSZone(t *testing.T, ctx context.Context, cmd dns.DNSCommands, adapter ProtocolAdapter) (string, func()) {
+	t.Helper()
+	zoneName := fmt.Sprintf("matrix-%d.test.", time.Now().UnixNano())
+	_, err := cmd.CreateZone(ctx, dns.CreateZoneOptions{Name: zoneName, TTL: 3600})
+	if missing := surfaceMissing(adapter, "DNS", "CreateZone", err); missing != nil {
+		t.Fatal(missing)
+	}
+	require.NoError(t, err, "DNS CreateZone prerequisite should succeed")
+	return zoneName, func() {
+		if _, err := cmd.DeleteZone(ctx, zoneName); err != nil {
+			t.Errorf("DNS DeleteZone %s cleanup failed: %v", zoneName, err)
+		}
+	}
+}
+
+// testDNSResolveRecord adds one record of recordType to a fresh zone and
+// resolves it back over the adapter's transport.
+func testDNSResolveRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter, recordType, value string) {
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	result, err := cmd.Resolve(ctx, "localhost", "A")
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	name := "resolve." + zoneName
+	_, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
+		Name:       name,
+		RecordType: recordType,
+		Value:      value,
+		TTL:        300,
+	})
+	if missing := surfaceMissing(adapter, "DNS", "AddRecord", err); missing != nil {
+		t.Fatal(missing)
+	}
+	require.NoError(t, err, "DNS AddRecord %s prerequisite should succeed", recordType)
+
+	result, err := cmd.Resolve(ctx, name, recordType)
 	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
 		t.Fatal(missing)
 	}
-	require.NoError(t, err, "DNS Resolve A should succeed")
-	require.NotNil(t, result, "Resolve A result should not be nil")
+	require.NoError(t, err, "DNS Resolve %s should succeed", recordType)
+	require.NotNil(t, result, "Resolve %s result should not be nil", recordType)
+	assert.Equal(t, recordType, result.RecordType, "resolved record type")
+	// A TXT value may come back in its quoted presentation form.
+	assert.Contains(t, strings.Join(result.Values, " "), value, "resolved %s values", recordType)
+}
+
+func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+	testDNSResolveRecord(t, ctx, adapter, "A", "10.20.30.40")
 }
 
 func testDNSResolveAAAA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := createDNSAdapter(adapter.Name())
-	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
-
-	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
-	defer cmd.Teardown()
-
-	result, err := cmd.Resolve(ctx, "localhost", "AAAA")
-	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err, "DNS Resolve AAAA should succeed")
-	require.NotNil(t, result, "Resolve AAAA result should not be nil")
+	testDNSResolveRecord(t, ctx, adapter, "AAAA", "2001:db8::40")
 }
 
 func testDNSResolveTXT(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := createDNSAdapter(adapter.Name())
-	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
-
-	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
-	defer cmd.Teardown()
-
-	result, err := cmd.Resolve(ctx, "localhost", "TXT")
-	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err, "DNS Resolve TXT should succeed")
-	require.NotNil(t, result, "Resolve TXT result should not be nil")
+	testDNSResolveRecord(t, ctx, adapter, "TXT", "matrix-txt-value")
 }
 
 func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1137,8 +1163,12 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	recordName := fmt.Sprintf("matrix-test-%d.example.com", time.Now().UnixNano())
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	recordName := "create." + zoneName
 	result, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
 		Name:       recordName,
 		RecordType: "A",
 		Value:      "10.0.0.1",
@@ -1149,9 +1179,6 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	}
 	require.NoError(t, err, "DNS AddRecord should succeed")
 	require.NotNil(t, result, "AddRecord result should not be nil")
-
-	// Cleanup
-	_, _ = cmd.DeleteRecord(ctx, recordName, "A")
 }
 
 func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1161,8 +1188,12 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	recordName := fmt.Sprintf("matrix-del-%d.example.com", time.Now().UnixNano())
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	recordName := "delete." + zoneName
 	_, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
 		Name:       recordName,
 		RecordType: "A",
 		Value:      "10.0.0.2",
@@ -1179,6 +1210,9 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	}
 	require.NoError(t, err, "DNS DeleteRecord should succeed")
 	require.NotNil(t, result, "DeleteRecord result should not be nil")
+
+	_, err = cmd.Resolve(ctx, recordName, "A")
+	require.Error(t, err, "a deleted record no longer resolves")
 }
 
 // =============================================================================
@@ -1493,7 +1527,7 @@ func testKMSCreateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-key-%d", time.Now().UnixNano())
 	result, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt", Name: "Matrix Test Key",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt", Name: "Matrix Test Key",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1508,7 +1542,7 @@ func testKMSGetKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-getkey-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1541,7 +1575,7 @@ func testKMSSign(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-sign-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
+		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1565,7 +1599,7 @@ func testKMSVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-verify-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
+		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1599,7 +1633,7 @@ func testKMSEncrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-encrypt-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1623,7 +1657,7 @@ func testKMSDecrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-decrypt-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1655,7 +1689,7 @@ func testKMSRotateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-rotate-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1677,7 +1711,7 @@ func testKMSDeleteKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-delkey-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1741,8 +1775,9 @@ func setupSDNAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-br-%d", time.Now().UnixNano()%100000)
-	result, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Test Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-br")
+	bridgeID := opts.BridgeID
+	result, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1753,8 +1788,9 @@ func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 
 func testSDNGetNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-get-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Get Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-get")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1781,8 +1817,9 @@ func testSDNListNetworks(t *testing.T, ctx context.Context, adapter ProtocolAdap
 
 func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-del-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Delete Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-del")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1798,8 +1835,9 @@ func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 
 func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-route-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Route Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-route")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1819,8 +1857,9 @@ func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testSDNRemoveRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-rmrt-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix RemoveRoute Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-rmrt")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}

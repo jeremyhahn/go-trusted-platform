@@ -93,10 +93,15 @@ type memUsers struct {
 }
 
 func (u memUsers) Create(_ context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error) {
+	// The real SDK refuses a create without a username
+	// (INVALID_INPUT: iam.user.Create: username is required); so does the fake.
+	if req.Username == "" {
+		return nil, errMemUsernameRequired{}
+	}
 	u.m.mu.Lock()
 	defer u.m.mu.Unlock()
 	user := &sdkiam.User{
-		ID: req.Email, TenantID: tenantID, Email: req.Email, DisplayName: req.DisplayName,
+		ID: req.Email, TenantID: tenantID, Username: req.Username, Email: req.Email, DisplayName: req.DisplayName,
 		Roles: req.Roles, Groups: req.Groups, Metadata: req.Metadata,
 		CreatedAt: memIAMCreated, UpdatedAt: memIAMCreated,
 	}
@@ -104,6 +109,11 @@ func (u memUsers) Create(_ context.Context, tenantID string, req *sdkiam.CreateU
 	copied := *user
 	return &copied, nil
 }
+
+// errMemUsernameRequired is the fake's refusal of a create with no username.
+type errMemUsernameRequired struct{}
+
+func (errMemUsernameRequired) Error() string { return "iam.user.Create: username is required" }
 
 func (u memUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
 	u.m.mu.Lock()

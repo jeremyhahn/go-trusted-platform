@@ -346,7 +346,15 @@ every key except `cold-start` and `barrier-gate` (each needs the shared
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`).
+`ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
+daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
+which flushes the SRKs sealing the daemon's platform-policy key passwords, so
+no gRPC, QUIC or MCP handshake succeeds after it. `compute` is not in the
+list: one orchestrator serves both VMs and containers, and the shared daemon
+runs the container orchestrator the `container` suite needs, which refuses
+every VM spec. The run ends by stopping the shared daemon, restarting swtpm
+fresh and running `compute` on a `platformd` started on the `local-qemu`
+provider, as `make integration-test-compute` does.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
@@ -832,6 +840,21 @@ matched now.
 Do not add a phrase list to a suite. If a transport lacks an operation, make
 its adapter return `ErrNoSurface`. If the server refuses for a deployment
 reason, match its sentinel with `IsDeclaredRefusal`.
+
+An upstream defect in the pinned go-quicbaas SDK is declared with
+`helpers.DeclaredGap` (`test/integration/helpers/declaredgap.go`), which names
+the go-quicbaas issue that fixes it. The subtest asserts the typed refusal
+(`Unserved`: the embedded transport's `UnknownMethodError`; `Mistyped`: its
+`InvalidRequestTypeError`) or the recorded behaviour (`Defect`), then returns
+before its success path. When a pin bump carries the fix, the assertion fails
+with the issue's name; deleting the gap check restores the success path. The
+quicbaas and sdk suites declare seven today: embedded `quicbaas.Batch/Execute`
+unrouted (go-quicbaas #1533), embedded Transaction request type mismatch
+(#1319), embedded KV List ignoring `PageSize` (#1534), embedded
+`quicbaas.Ollama` unrouted (#1535), embedded `quicbaas.Vector` unrouted in
+the pinned SDK (#1404, fixed on go-quicbaas main), embedded
+`quicbaas.ParameterStore` unrouted in the pinned SDK and in v0.14.0-alpha, and
+the embedded transport dispatching a KV `Put` on an already-cancelled context.
 
 ## Best Practices
 

@@ -18,6 +18,8 @@ import (
 	"errors"
 	"testing"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -269,5 +271,42 @@ func TestAllErrors_ImplementError(t *testing.T) {
 	for _, err := range errs {
 		// Just verify they don't panic when calling Error()
 		assert.NotEmpty(t, err.Error())
+	}
+}
+
+// TestIsNotFound_MissFromEveryTransport covers the refusal a KV Get returns
+// for a missing entity. The embedded transport returns the go-qrdb
+// DatabaseError, which the SDK's errors.IsNotFound does not match; a read
+// after Delete reported "still present" until IsNotFound accepted it.
+func TestIsNotFound_MissFromEveryTransport(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"embedded transport", quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "service.Get", "kv/x not found: 42")},
+		{"remote transport", baaserrors.NewNotFound("kv.Get", "kv/x not found")},
+		{"wrapped embedded", &ErrOperationFailed{Operation: "get", Cause: quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "service.Get", "missing")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.True(t, IsNotFound(tt.err))
+		})
+	}
+}
+
+func TestIsNotFound_OtherErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"nil", nil},
+		{"embedded internal", quicbaas.NewDatabaseError(quicbaas.ErrInternal, "service.Get", "raft unavailable")},
+		{"remote invalid input", baaserrors.NewInvalidInput("kv.Get", "entity type is required")},
+		{"untyped text", errors.New("not found")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, IsNotFound(tt.err))
+		})
 	}
 }

@@ -136,6 +136,16 @@ fields. Parse the structured fields. If the underlying `FixedProperties` read
 fails the call still succeeds with the text fallback and empty structured
 fields — check for an empty `Manufacturer` before trusting them.
 
+**`Info` reports the TPM version and the allocated PCR banks on every
+transport.** The version is `TPM_VERSION_2_0` on gRPC/Unix and REST and the
+string `"2.0"` (`tpmattrs.Version`) on QUIC (`version`), MCP (`version`) and
+`platformctl tpm info -o json`. The PCR banks come from one reader,
+`tpmattrs.ActivePCRBanks`, which reads PCR 0 of every bank the TPM allocates:
+`PcrBanks` (`PCR_BANK_SHA1`, `PCR_BANK_SHA256`, ...) on gRPC/Unix and REST, and
+lower-case hash names (`sha1`, `sha256`, ...) in `pcr_banks` on QUIC, MCP and
+the CLI. Like the `FixedProperties` fields this read fails soft: a TPM that
+refuses it returns an empty bank list and the call still succeeds.
+
 **`Info` also publishes the configured SRK handles**, so a client probes the real
 handle instead of assuming the default. Every transport carries the same two
 keys, as `0x%08X` strings, built by `tpmsrk.InfoProperties`: `platform_srk_handle`
@@ -578,11 +588,11 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x02` | `StatusNotFound` | 404 | `NotFound` | upstream error text matching `not found` / `does not exist` / `no such` |
 | `0x03` | `StatusUnauthorized` | 401 | `Unauthenticated` | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | `Internal` | `ErrTPM2OperationFailed`, `ErrTPM2EncodingFailed`, anything unclassified |
-| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | upstream text matching `already exists` / `duplicate` |
+| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | `tpmek.ErrEKExists` (Create EK at an occupied EK handle); upstream text matching `already exists` / `duplicate` |
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| — | — | — | `FailedPrecondition` | upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrEKTemplateUnavailable` (Create EK with EK attributes that carry no creation template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line

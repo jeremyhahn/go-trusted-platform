@@ -50,7 +50,7 @@ to `--verbose` and `-p` to `--path`. **Use long forms in scripts.**
 | `install system`, `install uki`, `install uki-rebuild` | **No.** They run entirely locally — on install media, or on the node itself. |
 | `wipe` | **No.** |
 | `iso create`, `iso test *`, `iso module-signing-key` | **No.** They run locally. |
-| `iso download`, `iso extract`, `iso customize`, `iso build`, `iso profile *` | **They currently do nothing.** See §4. |
+| `iso download`, `iso extract`, `iso customize`, `iso build`, `iso profile *` | **No.** They run locally through `pkg/iso` and `pkg/installer`. See §4. |
 | `platform-initrd boot`, `platform-initrd recovery` | **No.** They run before userspace exists. |
 
 ---
@@ -348,6 +348,7 @@ Flags shared by `install`, `firstboot`, `boot` and `all`:
 | `--u2f-device` | string | `""` | Host hidraw device for U2F passthrough |
 | `--qemu-binary` | string | `""` | Custom QEMU binary |
 | `--network` | string | `""` | `user`, `bridge`, `none`; empty auto-detects |
+| `--timeout` | duration | `0` (none) | Bound on each VM run (e.g. `45m`); see below |
 
 `--work-dir` holds the artefacts (disk, NVRAM, TPM state, logs) and may be as
 deep as you like. The VM's runtime unix sockets (QMP, console) do **not** live
@@ -370,6 +371,13 @@ platformctl iso test all
 **`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
 script reboots, QEMU exits non-zero, and the harness treats that as success if
 the disk exists and exceeds 100 MB.
+
+**A VM test waits until the guest powers off.** Interactively you end it with
+Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
+QEMU, stops the software TPM and fails with `ErrVMTimeout`, naming the
+timeout. A run cut off this way never counts as an install, whatever the disk
+size. A guest with no autoinstaller (a stock Alpine ISO) sits at its login
+prompt and never powers off, so it always ends at the timeout.
 
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them
@@ -440,44 +448,76 @@ platformctl iso module-signing-key --out /secure/keys/module-signing-key.pem
 kernels that were already built. The key lives outside the repository and
 outside any build context; back it up.
 
-### 3.4 The verbs that are stubs
+### 3.4 The step verbs
 
-`download`, `extract`, `customize`, `build`, and all four `profile` verbs parse
-their flags and then return
-`ErrDaemonConnectionRequired{Command: "iso <verb>"}` —
-*"daemon connection required for '…' command - dual-mode will be added later"*.
-Their flags are documented in §4 because they define the intended surface and
-because a reader will otherwise assume the commands work.
+`download`, `extract`, `customize` and `build` are the four steps `iso create`
+runs, exposed one at a time; the four `profile` verbs read and render the
+built-in installation profiles. All eight run locally — no daemon, no
+network beyond the Alpine mirror `download` fetches from. Their flags and
+output are in §4.
 
 ---
 
-## 4. Stub verbs — flags as declared
+## 4. Step and profile verbs
 
-These commands do not execute today. Recorded so the eventual implementation
-does not quietly change the surface. See [api.md](api.md) §4.
+Each verb prints one result object in the selected `--output` format and exits
+non-zero on failure (§7). Stdout carries only that object: progress lines and
+the output of the tools a verb runs (`7z`, `bsdtar`, `xorriso`, the build
+container) go to stderr.
 
-**`iso download`** — `--url` (`""`), `--version` (`3.22.2`), `--mirror`
-(`http://mirror.cs.odu.edu/alpine`), `--arch` (`x86_64`), `--force` (`false`),
-`--verify` (**`true`**), `--resume` (**`true`**), plus `--config`, `--work-dir`
-(`work`), `--debug`, `--verbose`.
+**`--output` is shadowed on three verbs.** `iso create --output` and
+`iso build --output` (the ISO path) and `iso profile generate --output` / `-o`
+(the config file) replace the global `--output` / `-o`, so those verbs always
+print in the default format — `table`, which renders a result object as YAML.
+Parse their output as YAML. `iso create` prints `success`, `output_iso`,
+`sha256`, `size_bytes` and `message`.
 
-**`iso extract`** — `--iso` (**required**), `--output-dir` (`""` → `work/iso`),
-`--force`, plus the common four.
+**`iso download`** — `--url` (`""`; must name an ISO file and overrides
+`--version`/`--mirror`/`--arch`), `--version` (`3.22.2`), `--mirror`
+(`http://mirror.cs.odu.edu/alpine`), `--arch` (`x86_64` or `aarch64`),
+`--force` (`false`; removes the existing ISO first), `--verify` (**`true`**),
+`--resume` (**`true`**), `--work-dir` (`work`; the ISO lands here), `--debug`.
+Prints `success`, `iso_path`, `sha256`, `size_bytes`, `verified`, `message`.
+
+**`iso extract`** — `--iso` (**required**), `--output-dir` (`""` →
+`<work-dir>/iso`), `--force` (`false`; without it a non-empty output directory
+is refused), `--work-dir` (`work`), `--debug`. Prints `success`, `output_dir`,
+`file_count`, `message`.
 
 **`iso customize`** — `--iso-dir` (**required**), `--overlay`, `--keys-dir`,
-`--platformd-binary`, `--autoinstall` (`false`), `--modify-initramfs` (`false`),
-plus the common four.
+`--platformd-binary` (`""` → `platformd` beside `platformctl`),
+`--platform-config` (platform config baked into the ISO; **required** unless
+the `--config` file names a config server), `--config` (ISO build
+configuration file), `--work-dir` (`work`), `--debug`. `platform-initrd` and
+`gatewayd` are taken from beside `platformd`; `gatewayd` is required when the
+platform config enables the gateway role, as
+`configs/platform/templates/single-node/default.yaml` does. Prints `success`,
+`iso_dir`, `message`.
 
 **`iso build`** — `--iso-dir` (**required**), `--output` (**required**),
-`--label` (`TRUSTED_PLATFORM`, max 32 chars), `--checksum` (**`true`**), plus
-the common four.
+`--label` (`TRUSTED_PLATFORM`; longer than 32 characters is refused),
+`--checksum` (**`true`**; writes `<output>.sha256`), `--debug`. Prints
+`success`, `output_iso`, `sha256`, `size_bytes`, `checksum_file` (omitted
+without `--checksum`), `message`.
 
-**`iso profile`** — group persistent flag `--no-color`. Verbs: `list` (alias
-`ls`), `show <profile-name>`, `validate <config-file>`, `generate`. `generate`
-takes `--profile` / `-p` (**required**), `--output` / `-o` (default stdout),
-`--device` (override the disk device), `--interactive` / `-i` (marked *future*
-in the flag help). The four built-in profile names are `dev`, `production`,
-`production-hs`, `fips` ([engineering.md](engineering.md) §2).
+**`iso profile`** — verbs `list` (alias `ls`), `show <profile-name>`,
+`validate <config-file>`, `generate`. The four built-in profile names are
+`dev`, `production`, `production-hs`, `fips` ([engineering.md](engineering.md)
+§2); every Secure Boot profile carries the canonical platform PK/KEK/DB key
+URIs (`kms://platform/secureboot/{pk,kek,db}`,
+[docs/firmware/secure-boot.md](../firmware/secure-boot.md)), so a generated
+config validates as-is.
+
+- `list` prints `success`, `profiles` (each `name`, `description`,
+  `secure_boot`, `tpm_unseal`, `luks`, `fips`, `lockdown`), `message`.
+- `show` prints `success`, `profile` (the same summary), `yaml` (the rendered
+  install config), `message`. An unknown name fails.
+- `validate` loads the file as an install config and prints `success`,
+  `valid`, `errors`, `message`. An invalid config prints `valid: false` with
+  its errors **and** exits non-zero; a missing file fails without a result.
+- `generate` takes `--profile` / `-p` (**required**), `--output` / `-o`
+  (`""`: the YAML is printed only) and `--device` (overrides the disk device).
+  It prints `success`, `output_file`, `yaml`, `message`.
 
 ---
 

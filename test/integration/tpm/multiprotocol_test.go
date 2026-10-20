@@ -151,7 +151,7 @@ func testTPMLifecycle(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	})
 
 	t.Run("SRKCreateRSA", func(t *testing.T) {
-		testSRKCreate(t, testCtx, cmd, "RSA-2048", true)
+		testSRKCreate(t, testCtx, cmd, "RSA-2048")
 	})
 
 	t.Run("SRKDelete", func(t *testing.T) {
@@ -170,7 +170,7 @@ func testTPMLifecycle(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	}
 
 	t.Run("SRKCreateECDSA", func(t *testing.T) {
-		testSRKCreate(t, testCtx, cmd, "ECDSA-P256", false)
+		testSRKCreate(t, testCtx, cmd, "ECDSA-P256")
 	})
 
 	if !t.Run("ClearBeforeProvision", func(t *testing.T) {
@@ -310,19 +310,18 @@ func testSRKInfo(t *testing.T, ctx context.Context, cmd TPMCommands) {
 }
 
 // testSRKCreate creates the SRK on a TPM whose SSRK handle is free.
-func testSRKCreate(t *testing.T, ctx context.Context, cmd TPMCommands, algorithm string, policy bool) {
+func testSRKCreate(t *testing.T, ctx context.Context, cmd TPMCommands, algorithm string) {
 	opts := SRKCreateOptions{
 		Algorithm:  algorithm,
-		Handle:     ssrkHandle,
 		Persistent: true,
-		Policy:     policy,
+		Parent:     ekHandle,
 	}
 
 	result, err := cmd.SRKCreate(ctx, opts)
 	require.NoError(t, err, "SRK create %s should succeed", algorithm)
 	require.NotNil(t, result, "Result should not be nil")
 	assert.True(t, result.Success, "SRK creation should be successful")
-	assert.NotZero(t, result.Handle, "Handle should be set")
+	assert.Equal(t, ssrkHandle, result.Handle, "SRK should persist at the configured SSRK handle")
 }
 
 // =============================================================================
@@ -406,22 +405,17 @@ func testEventLog(t *testing.T, ctx context.Context, cmd TPMCommands) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	t.Run("ReadEventLogNonExistent", func(t *testing.T) {
-		_, err := cmd.EventLog(testCtx, "/tmp/nonexistent_event_log")
-		// Should fail gracefully for non-existent path
-		require.Error(t, err, "EventLog should fail for non-existent path")
-	})
-
-	t.Run("ReadEventLogDefaultPath", func(t *testing.T) {
-		// This may fail on systems without TPM or in containers
-		result, err := cmd.EventLog(testCtx, "/sys/kernel/security/tpm0/binary_bios_measurements")
+	// GetEventLog takes no path on any transport (docs/tpm/api.md §5): the
+	// daemon reads its own TPM's binary_bios_measurements. A swtpm has no
+	// firmware log, so the only acceptable failure names that file; an
+	// unknown flag or a decode fault is a harness or surface defect.
+	t.Run("ReadEventLog", func(t *testing.T) {
+		result, err := cmd.EventLog(testCtx)
 		if err != nil {
-			// Expected on systems without TPM access
-			t.Logf("EventLog read failed (expected in containers): %v", err)
+			require.ErrorContains(t, err, "binary_bios_measurements",
+				"EventLog may fail only because the daemon's TPM has no measurements log")
 			return
 		}
-
-		// If successful, verify the result structure
 		require.NotNil(t, result, "Result should not be nil")
 	})
 }

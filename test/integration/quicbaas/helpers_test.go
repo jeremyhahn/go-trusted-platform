@@ -26,6 +26,7 @@ package quicbaas_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -200,6 +201,15 @@ func assertHealthClient(t *testing.T, sdk quicbaassdk.Client) {
 // generateTestKey generates a unique key for testing.
 func generateTestKey(prefix string) string {
 	return prefix + "_" + time.Now().Format("20060102150405.000000000")
+}
+
+// entityIDs hands out KV entity IDs. The SDK documents a PutResponse ID as one
+// that "may be auto-generated if not provided", which the embedded transport
+// does not do, so a test that needs distinct entities names each one's ID.
+var entityIDs atomic.Uint64
+
+func nextEntityID() uint64 {
+	return entityIDs.Add(1)
 }
 
 // generateTestValue generates test data.

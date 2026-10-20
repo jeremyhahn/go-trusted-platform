@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -304,16 +305,17 @@ func (g *GRPCAdapter) Status(ctx context.Context, name string, enabled bool) (*S
 		return nil, ErrGRPCCallFailed{Method: "UpdateSecretStatus", Err: err}
 	}
 
-	statusStr := "disabled"
-	if resp.Status == pb.SecretStatus_SECRET_STATUS_ENABLED {
-		statusStr = "enabled"
-	}
-
 	return &StatusResult{
 		SecretID:  resp.SecretId,
-		Status:    statusStr,
+		Status:    secretStatusName(resp.GetStatus()),
 		Timestamp: grpcUnixToTime(resp.Timestamp),
 	}, nil
+}
+
+// secretStatusName is the enum name without its SECRET_STATUS_ prefix, e.g.
+// "ENABLED", the form the REST API reports.
+func secretStatusName(status pb.SecretStatus) string {
+	return strings.TrimPrefix(status.String(), "SECRET_STATUS_")
 }
 
 // Policy retrieves the rotation policy for a secret via gRPC.

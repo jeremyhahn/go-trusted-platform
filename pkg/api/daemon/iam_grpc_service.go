@@ -97,6 +97,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -199,7 +200,10 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
+	// The request carries no username; the SDK refuses an empty one, so it
+	// is derived from the email exactly as the REST handler derives it.
 	sdkReq := &sdkiam.CreateUserRequest{
+		Username:    restiam.UsernameFromEmail(req.GetEmail()),
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
 		Roles:       req.GetRoles(),

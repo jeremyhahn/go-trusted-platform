@@ -429,6 +429,18 @@ func registerDeviceHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.DeviceService_CreateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateTemplate(ctx, req.(*platformv1.DeviceTemplateCreateRequest))
 	}
+	m[platformv1.DeviceService_GetTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetTemplate(ctx, req.(*platformv1.DeviceTemplateGetRequest))
+	}
+	m[platformv1.DeviceService_ListTemplates_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListTemplates(ctx, req.(*platformv1.DeviceTemplateListRequest))
+	}
+	m[platformv1.DeviceService_UpdateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateTemplate(ctx, req.(*platformv1.DeviceTemplateUpdateRequest))
+	}
+	m[platformv1.DeviceService_DeleteTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteTemplate(ctx, req.(*platformv1.DeviceTemplateDeleteRequest))
+	}
 	m[platformv1.DeviceService_CreateProfileFromTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateProfileFromTemplate(ctx, req.(*platformv1.CreateProfileFromTemplateRequest))
 	}

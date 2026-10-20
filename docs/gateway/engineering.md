@@ -1405,7 +1405,15 @@ because a cgroup holding processes cannot enable controllers for its children.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
-choice, not a documented contract. **BGP graceful restart** is not proven
+choice, not a documented contract. The supervisor dials a child's socket
+right after exec, before the child listens. With gRPC's default reconnect
+backoff (1s, growing 1.6x) a child that listened a few seconds late was not
+reached until the next retry at 2.6s, 5.2s or 9.3s, which is how the
+datapath relaunch overran this bound (#955). `ipc.Dial` retries a refused
+local socket within 200ms instead
+(`TestDial_ReachesASocketThatListensAfterARefusedConnect`), and the
+supervisor logs `process answering` with the time each child took to
+answer. **BGP graceful restart** is not proven
 here, because this suite has no BGP peer. It has its own test instead:
 `TestBGPGracefulRestart_UpstreamKeepsTheGatewaysRoutes`
 (`make integration-test-sdn`) runs the platform speaker against a GoBGP

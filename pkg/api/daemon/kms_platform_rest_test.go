@@ -44,6 +44,15 @@ func TestPlatformKMSRESTFacadeGenerateKey(t *testing.T) {
 				got = req
 				return &kms.GenerateKeyResponse{KeyID: "key-1", Version: 1, Algorithm: req.Algorithm}, nil
 			},
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{
+					KeyID:     req.KeyID,
+					Algorithm: kms.AlgorithmECDSAP256,
+					Version:   1,
+					Tags:      req.Tags,
+					Owner:     "kms-recorded-owner",
+				}, nil
+			},
 		}, &platformMockCryptoClient{})
 
 		resp, err := facade.GenerateKey(ctx, &restapi.KMSGenerateKeyServiceRequest{
@@ -67,7 +76,7 @@ func TestPlatformKMSRESTFacadeGenerateKey(t *testing.T) {
 		if resp.Key.Algorithm != int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256) {
 			t.Errorf("unexpected algorithm: %d", resp.Key.Algorithm)
 		}
-		if resp.Metadata.Owner != "rest-owner" || resp.Metadata.Tags["proto"] != "rest" {
+		if resp.Metadata.Owner != "kms-recorded-owner" || resp.Metadata.Tags["proto"] != "rest" {
 			t.Errorf("unexpected metadata: %+v", resp.Metadata)
 		}
 	})

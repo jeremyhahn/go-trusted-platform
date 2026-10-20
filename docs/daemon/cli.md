@@ -164,7 +164,9 @@ contexts:
       token: <bearer-token>            # optional; REST, MCP and QUIC
 ```
 
-`local` also accepts `grpc_addr`, `quicbaas_addr` and `quicbaas_transport`;
+`local` also accepts `grpc_addr`, `quicbaas_addr`, `quicbaas_transport` and the
+quicbaas connection's TLS files `quicbaas_ca_cert`, `quicbaas_client_cert` and
+`quicbaas_client_key`;
 `remote` also accepts `protocol`, `quicbaas_addr` and `quicbaas_transport`.
 
 **The `context` verbs always write `~/.platformctl/config.yaml`,** whatever

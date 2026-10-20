@@ -114,6 +114,9 @@ func (g *GRPCAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "CreateZone", Err: err}
 	}
+	if resp.Zone == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "CreateZone", Field: "zone"}
+	}
 
 	return &CreateZoneResult{
 		Name:      resp.Zone.Name,
@@ -133,6 +136,9 @@ func (g *GRPCAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 	resp, err := g.dns.GetZone(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetZone", Err: err}
+	}
+	if resp.Zone == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GetZone", Field: "zone"}
 	}
 
 	result := &GetZoneResult{
@@ -172,6 +178,9 @@ func (g *GRPCAdapter) UpdateZone(ctx context.Context, zoneName string, opts Upda
 	resp, err := g.dns.UpdateZone(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "UpdateZone", Err: err}
+	}
+	if resp.Zone == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "UpdateZone", Field: "zone"}
 	}
 
 	return &UpdateZoneResult{
@@ -719,6 +728,17 @@ func (e ErrGRPCCallFailed) Error() string {
 
 func (e ErrGRPCCallFailed) Unwrap() error {
 	return e.Err
+}
+
+// ErrGRPCMissingInResponse indicates a successful gRPC reply (over TCP or
+// the Unix socket) without a field the call always returns.
+type ErrGRPCMissingInResponse struct {
+	Method string
+	Field  string
+}
+
+func (e ErrGRPCMissingInResponse) Error() string {
+	return "gRPC " + e.Method + " response carries no " + e.Field
 }
 
 // ErrRecordNotFound indicates a record was not found.

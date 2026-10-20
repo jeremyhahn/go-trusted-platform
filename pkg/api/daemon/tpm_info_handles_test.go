@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,6 +44,11 @@ func (h *handlesTPM) PlatformSRKAttributes() (*xkmssdk.KeyAttributes, error) {
 	return h.psrk, nil
 }
 
+// ReadPCRs refuses, so Info must still answer without PCR banks.
+func (h *handlesTPM) ReadPCRs(_ []uint) ([]xkmssdk.PCRBank, error) {
+	return nil, errors.New("PCR read refused")
+}
+
 func tpmWithHandles(platform, ssrk uint32) *handlesTPM {
 	return &handlesTPM{
 		cfg: &xkmssdk.TPMConfig{
@@ -65,6 +71,7 @@ func TestTPMGRPCService_Info_PublishesConfiguredSRKHandles(t *testing.T) {
 	assert.Equal(t, "0x81000005", resp.Properties["platform_srk_handle"])
 	assert.Equal(t, "0x81000007", resp.Properties["ssrk_handle"])
 	assert.Equal(t, "handles-tpm", resp.Properties["info"], "the text report must survive")
+	assert.Empty(t, resp.PcrBanks, "a refused PCR read leaves the banks empty and fails nothing")
 }
 
 func TestTPMGRPCService_Info_PublishesDefaultSRKHandlesWithoutConfig(t *testing.T) {
@@ -107,6 +114,20 @@ func TestMCPServiceProvider_TPMInfo_PublishesConfiguredSRKHandles(t *testing.T) 
 	assert.Equal(t, "0x81000005", result["platform_srk_handle"])
 	assert.Equal(t, "0x81000007", result["ssrk_handle"])
 	assert.Equal(t, "handles-tpm", result["info"])
+	assert.Equal(t, "2.0", result["version"])
+	assert.Empty(t, result["pcr_banks"], "a refused PCR read leaves the banks empty and fails nothing")
+}
+
+func TestMCPServiceProvider_TPMInfo_ReportsActivePCRBanks(t *testing.T) {
+	p := &MCPServiceProvider{tpm2Service: &infoOnlyTPM{info: "mock-tpm-info"}}
+
+	got, err := p.TPMInfo(context.Background())
+	require.NoError(t, err)
+
+	result, ok := got.(map[string]interface{})
+	require.True(t, ok, "TPMInfo returns a map, got %T", got)
+	assert.Equal(t, []string{"sha1", "sha256"}, result["pcr_banks"])
+	assert.Equal(t, "2.0", result["version"])
 }
 
 func TestMCPServiceProvider_TPMInfo_UnavailableWithoutService(t *testing.T) {

@@ -14,7 +14,9 @@
 package platform
 
 import (
+	"crypto/tls"
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -109,6 +111,66 @@ func TestPlatformClient_InitQuicBaaSClient_UnsupportedTransport(t *testing.T) {
 	}
 	if c.quicbaas != nil {
 		t.Error("an unsupported transport must not create a client")
+	}
+}
+
+// TestWithQuicBaaSTLSConfig verifies the option stores the quicbaasd TLS
+// configuration apart from the platformd one.
+func TestWithQuicBaaSTLSConfig(t *testing.T) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13}
+	o := NewOptions(WithQuicBaaSTLSConfig(cfg))
+	if o.QuicBaaSTLSConfig != cfg {
+		t.Errorf("QuicBaaSTLSConfig = %p, want %p", o.QuicBaaSTLSConfig, cfg)
+	}
+	if o.TLSConfig != nil {
+		t.Error("the quicbaasd TLS configuration must not become the platformd one")
+	}
+}
+
+// TestPlatformClient_InitQuicBaaSClient_TLSReachesSDK verifies the TLS
+// configuration is handed to the go-quicbaas SDK: its Unix transport
+// refuses to build without one, so a client exists only if it arrived.
+func TestPlatformClient_InitQuicBaaSClient_TLSReachesSDK(t *testing.T) {
+	c := &platformClient{}
+	c.initQuicBaaSClient(&Options{
+		QuicBaaSAddr:      filepath.Join(t.TempDir(), "quicbaas.sock"),
+		QuicBaaSTransport: "unix",
+		QuicBaaSTLSConfig: &tls.Config{MinVersion: tls.VersionTLS13},
+	})
+	t.Cleanup(func() {
+		if c.quicbaas != nil {
+			if err := c.quicbaas.Close(); err != nil {
+				t.Errorf("close: %v", err)
+			}
+		}
+	})
+
+	q, err := c.QuicBaaS()
+	if err != nil {
+		t.Fatalf("QuicBaaS() = %v, want a client built with the TLS configuration", err)
+	}
+	if q == nil {
+		t.Fatal("QuicBaaS() returned a nil client")
+	}
+}
+
+// TestPlatformClient_InitQuicBaaSClient_WithoutTLS verifies a quicbaasd
+// address without a TLS configuration is refused with the typed error
+// before the go-quicbaas SDK is called.
+func TestPlatformClient_InitQuicBaaSClient_WithoutTLS(t *testing.T) {
+	c := &platformClient{}
+	c.initQuicBaaSClient(&Options{QuicBaaSAddr: "/run/quicbaas.sock", QuicBaaSTransport: "unix"})
+
+	_, err := c.QuicBaaS()
+	var initFailed ErrQuicBaaSInitFailed
+	if !errors.As(err, &initFailed) {
+		t.Fatalf("err = %v, want ErrQuicBaaSInitFailed", err)
+	}
+	if !errors.As(err, new(ErrQuicBaaSTLSNotConfigured)) {
+		t.Errorf("err = %v, want it to wrap ErrQuicBaaSTLSNotConfigured", err)
+	}
+	if c.quicbaas != nil {
+		t.Error("a connection without TLS must not create a client")
 	}
 }
 

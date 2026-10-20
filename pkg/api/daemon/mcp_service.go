@@ -38,6 +38,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -65,7 +66,7 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
-	// DeviceTemplateService backs device_template_create and
+	// DeviceTemplateService backs the device_template_* tools and
 	// profile_create_from_template; nil answers that no template service
 	// is configured.
 	DeviceTemplateService device.DeviceTemplateService
@@ -2853,7 +2854,9 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 	}
 
 	result := map[string]interface{}{
-		"info": info,
+		"info":      info,
+		"version":   tpmattrs.Version,
+		"pcr_banks": tpmattrs.ActivePCRBanks(p.tpm2Service),
 	}
 	for key, value := range tpmsrk.InfoProperties(p.tpm2Service) {
 		result[key] = value
@@ -2988,12 +2991,8 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	ekAttrs, err := tpmek.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateEK(ekAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 
