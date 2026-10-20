@@ -86,5 +86,6 @@ func TestNewTPMOperations_RefusesAnEmptySealedDataDir(t *testing.T) {
 }
 
 func TestSealedDataDir_IsInsideTheTPMStateDir(t *testing.T) {
-	assert.Equal(t, filepath.Join("/bundles/b1/tpm", "sealed"), sealedDataDir("/bundles/b1/tpm"))
+	stateDir := filepath.Join(string(filepath.Separator), "bundles", "b1", "tpm")
+	assert.Equal(t, filepath.Join(stateDir, "sealed"), sealedDataDir(stateDir))
 }
