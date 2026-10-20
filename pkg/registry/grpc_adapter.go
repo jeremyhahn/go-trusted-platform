@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -43,6 +44,26 @@ import (
 type GRPCAdapter struct {
 	registry *Registry
 	clock    func() time.Time
+	// startedAt is when the adapter was built; Status measures uptime from it.
+	startedAt time.Time
+}
+
+// Status component and detail names the registry reports, so clients can
+// read the storage backend from the storage component's details.
+const (
+	StatusComponentStorage = "storage"
+	StatusDetailBackend    = "backend"
+	StorageBackendQuicBaaS = "quicbaas"
+)
+
+// buildVersion is the module version the daemon was built from, or "dev"
+// for a build without one.
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" {
+		return "dev"
+	}
+	return info.Main.Version
 }
 
 // NewGRPCAdapter returns an adapter ready to be plugged into
@@ -51,7 +72,7 @@ func NewGRPCAdapter(r *Registry) *GRPCAdapter {
 	if r == nil {
 		return nil
 	}
-	return &GRPCAdapter{registry: r, clock: time.Now}
+	return &GRPCAdapter{registry: r, clock: time.Now, startedAt: time.Now().UTC()}
 }
 
 // refOf joins Repository + Tag into the colon-delimited reference
@@ -262,26 +283,29 @@ func (a *GRPCAdapter) Delete(ctx context.Context, req *grpcapi.RegistryDeleteReq
 // Status reports a synthetic health view. A real-storage probe lands
 // alongside the cluster-wide forwarder.
 func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusResponse, error) {
+	resp := &grpcapi.RegistryStatusResponse{
+		Health:    grpcapi.RegistryHealthStatusHealthy,
+		Version:   buildVersion(),
+		StartedAt: a.startedAt,
+		Timestamp: a.clock().UTC(),
+	}
+	storage := &grpcapi.RegistryComponentHealth{
+		Name:      StatusComponentStorage,
+		Status:    grpcapi.RegistryHealthStatusHealthy,
+		LastCheck: resp.Timestamp,
+		Details:   map[string]string{StatusDetailBackend: StorageBackendQuicBaaS},
+	}
+	resp.Components = []*grpcapi.RegistryComponentHealth{storage}
+
 	manifests, err := a.registry.List(ctx, RegistryListOptions{Limit: 0})
 	if err != nil {
-		return &grpcapi.RegistryStatusResponse{
-			Health:    grpcapi.RegistryHealthStatusUnhealthy,
-			Timestamp: a.clock().UTC(),
-			Components: []*grpcapi.RegistryComponentHealth{{
-				Name:    "storage",
-				Status:  grpcapi.RegistryHealthStatusUnhealthy,
-				Message: err.Error(),
-			}},
-		}, nil
+		resp.Health = grpcapi.RegistryHealthStatusUnhealthy
+		storage.Status = grpcapi.RegistryHealthStatusUnhealthy
+		storage.Message = err.Error()
+		return resp, nil
 	}
-	return &grpcapi.RegistryStatusResponse{
-		Health: grpcapi.RegistryHealthStatusHealthy,
-		Storage: &grpcapi.RegistryStorageStats{
-			ArtifactCount: int64(len(manifests)),
-		},
-		Timestamp: a.clock().UTC(),
-		StartedAt: a.clock().UTC(),
-	}, nil
+	resp.Storage = &grpcapi.RegistryStorageStats{ArtifactCount: int64(len(manifests))}
+	return resp, nil
 }
 
 // manifestToArtifact projects an ImageManifest into the artifact

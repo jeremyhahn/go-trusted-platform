@@ -270,6 +270,12 @@ func (g *GRPCAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	if healthy {
 		result.Status = "running"
 	}
+	for _, c := range resp.GetComponents() {
+		if c.GetName() == registry.StatusComponentStorage {
+			result.StorageBackend = c.GetDetails()[registry.StatusDetailBackend]
+			result.StorageStatus = c.GetStatus().String()
+		}
+	}
 	if resp.GetStartedAt() != nil && resp.GetTimestamp() != nil {
 		result.Uptime = resp.GetTimestamp().AsTime().Sub(resp.GetStartedAt().AsTime())
 	}

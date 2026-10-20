@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
@@ -211,5 +212,59 @@ func TestGRPCAdapter_PushOverwriteReplacesTheTag(t *testing.T) {
 	}
 	if len(pulled.Layers) != 1 || !bytes.Equal(pulled.Layers[0].Content, []byte("two")) {
 		t.Fatalf("pulled layers = %+v, want the overwriting layer %q", pulled.Layers, "two")
+	}
+}
+
+func TestGRPCAdapter_StatusMeasuresUptimeFromTheAdapterStart(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	started := a.startedAt
+	a.clock = func() time.Time { return started.Add(5 * time.Second) }
+
+	first, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	second, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !second.StartedAt.Equal(first.StartedAt) || !second.StartedAt.Equal(started) {
+		t.Fatalf("StartedAt moved between calls: %v then %v, want %v", first.StartedAt, second.StartedAt, started)
+	}
+	if uptime := second.Timestamp.Sub(second.StartedAt); uptime <= 0 {
+		t.Fatalf("uptime = %v, want > 0", uptime)
+	}
+	if second.Health != grpcapi.RegistryHealthStatusHealthy {
+		t.Fatalf("Health = %v, want healthy", second.Health)
+	}
+	if second.Version == "" {
+		t.Fatal("Version is empty")
+	}
+	if len(second.Components) != 1 || second.Components[0].Name != StatusComponentStorage ||
+		second.Components[0].Details[StatusDetailBackend] != StorageBackendQuicBaaS {
+		t.Fatalf("Components = %+v, want the storage component naming the quicbaas backend", second.Components)
+	}
+}
+
+func TestGRPCAdapter_StatusReportsUnconfiguredStorageAsUnhealthy(t *testing.T) {
+	reg, err := NewRegistry(validTestConfig(), testLogger())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	resp, err := NewGRPCAdapter(reg).Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if resp.Health != grpcapi.RegistryHealthStatusUnhealthy {
+		t.Fatalf("Health = %v, want unhealthy", resp.Health)
+	}
+	if len(resp.Components) != 1 || resp.Components[0].Status != grpcapi.RegistryHealthStatusUnhealthy ||
+		resp.Components[0].Message == "" {
+		t.Fatalf("Components = %+v, want an unhealthy storage component with the cause", resp.Components)
+	}
+	if resp.Version == "" || resp.StartedAt.IsZero() {
+		t.Fatalf("Version %q / StartedAt %v must be set on the unhealthy path too", resp.Version, resp.StartedAt)
 	}
 }
