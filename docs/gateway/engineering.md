@@ -1776,6 +1776,10 @@ that failed to reverse-translate replies would fail the test. It asserts a TCP
 exchange through a VIP, that a backend stays reachable directly on its service
 port, a hairpin handshake in which the backend sees the VIP as its peer, and
 distribution, stickiness, prober-driven failover and fail-closed behaviour.
+After the prober rebuilds the group, the test runs `ovs-appctl revalidator/wait`
+before it dials: the kernel keeps the megaflows that selected the old backend
+until a revalidator pass drops them, and an OpenFlow barrier does not wait for
+that.
 
 ## 5a. The overlay mode handler in `modes/`
 

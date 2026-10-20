@@ -506,6 +506,10 @@ func TestGroupLoadBalancer(t *testing.T) {
 			}
 			return healthy == 1
 		})
+		// The rebuilt group is installed, but the kernel still caches the
+		// megaflows that selected backend-1 until a revalidator pass drops
+		// them; an OpenFlow barrier does not wait for that.
+		runCmd(t, "ovs-appctl", "revalidator/wait")
 
 		for i := 0; i < 8; i++ {
 			id, dialErr := dialVIPAndIdentify(t, 5*time.Second)
@@ -529,6 +533,8 @@ func TestGroupLoadBalancer(t *testing.T) {
 			}
 			return true
 		})
+		// As above: drop the cached megaflows that still select backend-2.
+		runCmd(t, "ovs-appctl", "revalidator/wait")
 
 		_, dialErr := dialVIPAndIdentify(t, 2*time.Second)
 		require.Error(t, dialErr, "new connections must fail with zero healthy backends")
