@@ -30,6 +30,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -2373,32 +2374,65 @@ func testPlatformConfiguration(t *testing.T, ctx context.Context, adapter Protoc
 // Service Tests - PXE
 // =============================================================================
 
+// errPXENotConfigured is the refusal platformd's PXE service answers on every
+// call. PXE is a gateway-role service and the platformd config has no pxe:
+// section, so platformd builds the service with no backend
+// (pkg/api/daemon/daemon.go) and each RPC answers Unavailable with
+// SERVICE_NOT_CONFIGURED and this detail, which every transport relays.
+var errPXENotConfigured = errors.New("PXE service is not configured on this node")
+
+// pxeOperation is one PXE call the matrix drives against platformd.
+type pxeOperation struct {
+	name string
+	call func(ctx context.Context, cmd pxe.PXECommands) error
+}
+
+// pxeMatrixDeviceID names a device no node has registered.
+const pxeMatrixDeviceID = "pxe-matrix-unregistered-device"
+
+var pxeOperations = []pxeOperation{
+	{name: "GetStatus", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.GetStatus(ctx)
+		return err
+	}},
+	{name: "RegisterDevice", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.RegisterDevice(ctx, pxe.RegisterDeviceOptions{
+			MACAddress: pxe.GenerateTestMAC("matrix"),
+			PortID:     pxe.GenerateTestPortID("matrix"),
+		})
+		return err
+	}},
+	{name: "ListDevices", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.ListDevices(ctx, pxe.ListDevicesOptions{})
+		return err
+	}},
+	{name: "GetDevice", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.GetDevice(ctx, pxeMatrixDeviceID)
+		return err
+	}},
+	{name: "RemoveDevice", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.RemoveDevice(ctx, pxeMatrixDeviceID)
+		return err
+	}},
+}
+
+// testPXEService asserts that every PXE operation answers the declared
+// not-configured refusal: platformd serves the PXE surface on every
+// transport but never runs a PXE backend.
 func testPXEService(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	t.Run("GetBootConfig", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXEGetBootConfig(t, testCtx, adapter)
-	})
-	t.Run("SetBootConfig", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXESetBootConfig(t, testCtx, adapter)
-	})
-	t.Run("ListBootImages", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXEListBootImages(t, testCtx, adapter)
-	})
-	t.Run("UploadBootImage", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-		defer cancel()
-		testPXEUploadBootImage(t, testCtx, adapter)
-	})
-	t.Run("DeleteBootImage", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXEDeleteBootImage(t, testCtx, adapter)
-	})
+	for _, op := range pxeOperations {
+		t.Run(op.name, func(t *testing.T) {
+			testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			cmd := setupPXEAdapter(t, testCtx, adapter)
+			err := op.call(testCtx, cmd)
+			if missing := surfaceMissing(adapter, "PXE", op.name, err); missing != nil {
+				t.Fatal(missing)
+			}
+			require.Truef(t, surface.IsDeclaredRefusal(err, errPXENotConfigured),
+				"PXE %s over %s: want the not-configured refusal, got %v", op.name, protocolName(adapter), err)
+		})
+	}
 }
 
 func setupPXEAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter) pxe.PXECommands {
@@ -2408,60 +2442,6 @@ func setupPXEAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	helpers.RequireAdapterSetup(t, "PXE", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
-}
-
-func testPXEGetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.GetStatus(ctx)
-	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-}
-
-func testPXESetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	mac := fmt.Sprintf("00:11:22:33:%02x:%02x", time.Now().UnixNano()%256, (time.Now().UnixNano()/256)%256)
-	result, err := cmd.RegisterDevice(ctx, pxe.RegisterDeviceOptions{MACAddress: mac, PortID: "test-port"})
-	if missing := surfaceMissing(adapter, "PXE", "RegisterDevice", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	if result.ID != "" {
-		_, _ = cmd.RemoveDevice(ctx, result.ID)
-	}
-}
-
-func testPXEListBootImages(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.ListDevices(ctx, pxe.ListDevicesOptions{})
-	if missing := surfaceMissing(adapter, "PXE", "ListDevices", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-}
-
-func testPXEUploadBootImage(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.GetStatus(ctx)
-	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-}
-
-func testPXEDeleteBootImage(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.GetStatus(ctx)
-	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
 }
 
 // =============================================================================
