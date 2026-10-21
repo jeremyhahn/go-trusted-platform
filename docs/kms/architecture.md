@@ -37,7 +37,7 @@ The evidence is the package tree: **there is no `pkg/kms` in this repository**
 | **Handling key bytes in this layer** | This repository sits above Layer 3, so it uses the stack's owned key abstractions rather than coding protected memory itself. Key bytes never enter this layer. `ExportKey`'s CLI counterpart being unimplemented is the conservative side to be wrong on. |
 | **Re-encrypting data on key rotation** | Rotation would become an outage proportional to data volume, so it would not happen. `Rewrap` re-encrypts to the latest key version and leaves plaintext alone. |
 | **Treating AEAD invocation limits as advisory** | AES-GCM nonce reuse is a break, not a degradation. Limits are tracked per key with a dedicated CLI subtree, and exceeding one surfaces as `StatusResourceExhausted` rather than being silently ignored. |
-| **Shipping the CLI's secrets subtree half-working** | The stubs return typed errors and have tests that assert the refusal. A half-working secrets store would be worse than an absent one, because callers would trust it. |
+| **Shipping the CLI's secrets subtree half-working** | The stubs return typed errors and have tests that assert the refusal. A half-working secrets store would be worse than an absent one, because callers would trust it. The `kms dek` subtree has left this row: every verb calls the SDK DEK client, and an option the SDK cannot serve (`dek list --cursor`) refuses with `ErrDEKSDKGap` naming the missing field ([cli.md](cli.md) §7). |
 
 ## Component boundaries
 

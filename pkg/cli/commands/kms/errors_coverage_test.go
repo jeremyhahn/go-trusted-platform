@@ -30,7 +30,12 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrInvalidKeyUsage", ErrInvalidKeyUsage{Usage: "bad"}, "bad"},
 
 		// dek.go
-		{"ErrDEKNotImplemented", ErrDEKNotImplemented{}, "not yet implemented"},
+		{"ErrDEKOperationFailed", ErrDEKOperationFailed{Verb: "get", Path: "/t/a", Err: errors.New("boom")}, "dek get /t/a failed: boom"},
+		{"ErrDEKOperationFailed no path", ErrDEKOperationFailed{Verb: "list", Err: errors.New("boom")}, "dek list failed: boom"},
+		{"ErrDEKSDKGap", ErrDEKSDKGap{Option: "list --cursor", Missing: "ListDEKsRequest.Cursor"}, "no ListDEKsRequest.Cursor"},
+		{"ErrDEKServiceUnavailable", ErrDEKServiceUnavailable{}, "DEK service is not available"},
+		{"ErrDEKClearSafetyNotConfirmed", ErrDEKClearSafetyNotConfirmed{Path: "/t/a"}, "pass --force"},
+		{"ErrInvalidDEKLimit", ErrInvalidDEKLimit{Limit: -1}, "invalid --limit -1"},
 
 		// key_algorithms.go
 

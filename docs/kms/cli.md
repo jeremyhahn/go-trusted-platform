@@ -560,24 +560,51 @@ platformctl kms crypto batch encrypt --key-id tenant-a-kek --input items.json -o
 
 ---
 
-## 7. `kms dek` and `kms secrets` — not implemented
+## 7. `kms dek` and `kms secrets`
 
-Every leaf under both groups exits 1 with `ErrDEKNotImplemented` or
+**`kms dek` calls platformd** through the go-quicbaas SDK DEK client
+(`Security().DEK()`). `-o json` prints snake_case fields; times are RFC 3339
+and omitted when unset.
+
+| Verb | Arguments | Flags (type, default) | SDK call | JSON |
+|---|---|---|---|---|
+| `dek create` | `<path>` | none | `CreateDEK`, algorithm `AES-256-GCM` (the transports' default) | the DEK |
+| `dek get` | `<path>` | none | `GetDEK` | the DEK |
+| `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`, must be > 0), `--cursor` | `ListDEKs` | `deks`, `total_count` |
+| `dek delete` | `<path>` | `--force` (bool, bypass deletion protection) | `DeleteDEK` | `path`, `deleted` |
+| `dek rotate` | `<path>` | none | `RotateDEK` (foreground) | `path`, `old_version`, `new_version` |
+| `dek status` | `<path>` | none | `GetDEKStatus` | the DEK plus `reencryption` when present |
+| `dek set-default` | `<path>` | none | `SetDefaultDEK` | `path`, `previous_default` |
+| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) | `SetDEKSafety` | success line |
+| `dek clear-safety` | `<path>` | `--force` (bool, required) | `ClearDEKSafety` | success line |
+
+The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
+`created_at`, `rotated_at`, `usage_count`, `bytes_used`, `max_usage_count`,
+`max_bytes_used`, `warning_percent`, `description`, `backend_type`.
+
+- `dek create` has no algorithm, description or limit flags. Set limits
+  afterwards with `dek set-safety`. The gRPC, QUIC, MCP and REST transports
+  accept those fields on create (see [api.md](api.md) §4).
+- `dek list --cursor` exits 1 with `ErrDEKSDKGap`: the SDK's
+  `ListDEKsRequest` has no cursor, so `ListDEKs` cannot page.
+- `dek set-default` takes no version. `SetDefaultDEK(path)` makes the DEK at
+  `<path>` the default for its level; the SDK has no per-version call.
+- `dek clear-safety` without `--force` exits 1 with
+  `ErrDEKClearSafetyNotConfirmed` and makes no call.
+- An SDK failure is `ErrDEKOperationFailed{Verb, Path, Err}`.
+
+```bash
+platformctl kms dek create /tenant/myapp/default -o json
+platformctl kms dek set-safety /tenant/myapp/default --max-operations 1000000
+platformctl kms dek list --prefix /tenant/myapp --recursive -o json
+```
+
+**`kms secrets` is not implemented.** Every leaf exits 1 with
 `ErrSecretsNotImplemented` after parsing. Arguments are enforced (exit 1 on the
-wrong count). The `dek` help points at `kms crypto datakey`, which works; the
-`secrets` help points at `kms crypto encrypt|decrypt`.
+wrong count). The `secrets` help points at `kms crypto encrypt|decrypt`.
 
 | Verb | Arguments | Flags declared (type, default) |
 |---|---|---|
-| `dek create` | `<path>` | none |
-| `dek get` | `<path>` | none |
-| `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`), `--cursor` |
-| `dek delete` | `<path>` | `--force` (bool) |
-| `dek rotate` | `<path>` | none |
-| `dek status` | `<path>` | none |
-| `dek set-default` | `<path> <version>` | none |
-| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) |
-| `dek clear-safety` | `<path>` | `--force` (bool) |
 | `secrets store` | `<name>` | `--value`, `--description` |
 | `secrets get` | `<name>` | `--version` (int64, `0`) |
 | `secrets list` | — | `--prefix`, `--limit` (int32, `100`), `--cursor` |
@@ -621,14 +648,13 @@ On 2026-10-11 that names exactly these leaves:
 | Error | Verbs |
 |---|---|
 | `ErrSecretsNotImplemented` | every `kms secrets` leaf (§7) |
-| `ErrDEKNotImplemented` | every `kms dek` leaf (§7) |
 | `ErrKeyImportNotImplemented` | `kms key import` |
 | `ErrKeyExportNotImplemented` | `kms key export` |
 | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
 | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
 Counting the string `(not yet implemented)` instead overcounts: it also appears
-in the `Short` text of the groups (`dek`, `secrets`, `secrets policy`, `secrets
+in the `Short` text of the groups (`secrets`, `secrets policy`, `secrets
 prefix`) and in test files.
 
 ---
