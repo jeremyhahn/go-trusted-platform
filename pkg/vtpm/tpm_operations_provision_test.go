@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +58,54 @@ func TestTPMOperations_ProvisionIfNew_KeepsAProvisionedTPM(t *testing.T) {
 	restartedEK, err := restarted.GetEKPublicKey()
 	require.NoError(t, err)
 	assert.Equal(t, firstEK, restartedEK, "a restart must not re-provision the EK")
+}
+
+// A bundle created with EK-certificate injection is provisioned at create, so
+// its Start opens a vTPM that already holds the IAK. ProvisionIfNew loads that
+// IAK, so Quote signs with it; without it Quote fails "tpm: not initialized".
+func TestTPMOperations_ProvisionIfNew_LoadsTheIAKOfAProvisionedTPM(t *testing.T) {
+	tpmTransport := newSimulatorTransport(t)
+	created, err := newTPMOperations(tpmTransport, "", t.TempDir(), EKAlgorithmRSA, "vm-01", nil)
+	require.NoError(t, err)
+	require.NoError(t, created.Provision(""))
+
+	started, err := newTPMOperations(tpmTransport, "", t.TempDir(), EKAlgorithmRSA, "vm-01", nil)
+	require.NoError(t, err)
+	require.NoError(t, started.ProvisionIfNew())
+
+	quote, err := started.Quote([]byte("0123456789abcdef"), []int{0, 7})
+	require.NoError(t, err)
+	assert.NotEmpty(t, quote.Signature)
+}
+
+// A vTPM whose EK is persistent but whose IAK is gone cannot quote: Start
+// refuses it with a typed error instead of starting an instance whose every
+// Quote fails.
+func TestTPMOperations_ProvisionIfNew_RefusesAProvisionedTPMWithoutAnIAK(t *testing.T) {
+	tpmTransport := newSimulatorTransport(t)
+	created, err := newTPMOperations(tpmTransport, "", t.TempDir(), EKAlgorithmRSA, "vm-01", nil)
+	require.NoError(t, err)
+	require.NoError(t, created.Provision(""))
+	_, err = tpm2.EvictControl{
+		Auth:             tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
+		ObjectHandle:     &tpm2.NamedHandle{Handle: tpm2.TPMHandle(0x81020001), Name: iakName(t, tpmTransport)},
+		PersistentHandle: tpm2.TPMHandle(0x81020001),
+	}.Execute(tpmTransport)
+	require.NoError(t, err)
+
+	started, err := newTPMOperations(tpmTransport, "", t.TempDir(), EKAlgorithmRSA, "vm-01", nil)
+	require.NoError(t, err)
+
+	err = started.ProvisionIfNew()
+	var notProvisioned ErrVTPMAttestationKeyMissing
+	require.ErrorAs(t, err, &notProvisioned)
+}
+
+func iakName(t *testing.T, tpmTransport transport.TPM) tpm2.TPM2BName {
+	t.Helper()
+	pub, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(0x81020001)}.Execute(tpmTransport)
+	require.NoError(t, err)
+	return pub.Name
 }
 
 // Seal keeps the sealed object's blobs in the bundle's sealed-data store, so a
