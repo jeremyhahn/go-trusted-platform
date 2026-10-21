@@ -364,6 +364,15 @@ func (e ErrRESTServerNotRunning) Error() string {
 	return "REST server is not running"
 }
 
+// ErrRESTRoutesUnavailable is returned by Daemon.MountRESTRoutes when the
+// daemon built no REST route table (EnableREST and RESTRoutesOnly both off),
+// or when it is given no router to mount on.
+type ErrRESTRoutesUnavailable struct{}
+
+func (e ErrRESTRoutesUnavailable) Error() string {
+	return "daemon REST routes are unavailable: no route table or no target router"
+}
+
 // ErrRESTServerAlreadyRunning is returned when attempting to start an already running REST server
 type ErrRESTServerAlreadyRunning struct{}
 
