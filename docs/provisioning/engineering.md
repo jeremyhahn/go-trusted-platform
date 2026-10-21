@@ -182,8 +182,17 @@ reachable by unidentified machines and is rate-limited for that reason.
 - `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
   protocol adapters commented out**: a multi-protocol conformance test that
   exercises the CLI alone.
+- The PXE suite's CLI leg asserts a declared gap, never a skip: there is no
+  `platformctl pxe` group, PXE device lifecycle is API-only
+  (`docs/daemon/cli.md:223`). `testPXEProtocol` routes the `*CLIAdapter` into
+  `assertPXECLIGap`, which runs the real binary once and requires the
+  unknown-command non-zero exit, and checks the CLI adapter methods return
+  the typed `ErrCLIPXENotImplemented` refusal. When a `platformctl pxe`
+  group is added (the department question on #975 question 2), the leg flips:
+  `assertPXECLIGap` is deleted, the CLI branch in `testPXEProtocol` drops, and
+  the adapter drives the group.
 
-Both are recorded here rather than left to be rediscovered.
+All three are recorded here rather than left to be rediscovered.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
