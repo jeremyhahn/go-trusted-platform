@@ -112,6 +112,11 @@ func (s *DeviceGRPCService) CreateDevice(
 	if req.GetDevice() == nil {
 		return nil, status.Error(codes.InvalidArgument, "device is required")
 	}
+	// The serial is what enrollment matches a TPM against, so a device
+	// without one could never be claimed; REST and MCP refuse it too.
+	if req.GetDevice().GetSerial() == "" {
+		return nil, status.Error(codes.InvalidArgument, device.ErrDeviceSerialRequired{}.Error())
+	}
 
 	device := s.pbToDevice(req.GetDevice())
 
