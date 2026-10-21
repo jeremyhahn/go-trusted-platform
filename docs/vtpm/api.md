@@ -105,6 +105,11 @@ index and the SDK leaves a zero value out of the request; an absent
 `pkg/webservice/v1/rest/vtpm/runtime.go` and call the same `vtpm.VTPMService`
 as gRPC and QUIC.
 
+The daemon REST server (`pkg/api/rest/vtpm_handlers.go`) answers the same
+routes with a flat body. Its start and stop replies are `bundle_id`, `action`,
+`success` and `message`; start adds `running` and `socket_path`, the socket a
+guest VM attaches to.
+
 Six operations (get state, verify quote, get EK, get AK, create AK, get random)
 are **QUIC-only** — no gRPC, no REST, no MCP.
 
