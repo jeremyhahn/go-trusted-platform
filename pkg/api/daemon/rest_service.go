@@ -1103,6 +1103,12 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	return w.Writer.Write(b)
 }
 
+// Unwrap returns the wrapped writer, so http.ResponseController reaches the
+// connection through the middleware (a stop route moves its write deadline).
+func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -1111,6 +1117,12 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+// Unwrap returns the wrapped writer, so http.ResponseController reaches the
+// connection through the middleware (a stop route moves its write deadline).
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // Utility functions

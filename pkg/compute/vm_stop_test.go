@@ -92,6 +92,23 @@ func TestStopOptionsGuestWait(t *testing.T) {
 	}
 }
 
+func TestStopOptionsReplyWindow(t *testing.T) {
+	tests := []struct {
+		name string
+		opts StopOptions
+		want time.Duration
+	}{
+		{name: "default outlasts the default window", opts: StopOptions{}, want: DefaultStopTimeout + stopReplyMargin},
+		{name: "timeout outlasts the timeout", opts: StopOptions{Timeout: MaxStopTimeout}, want: MaxStopTimeout + stopReplyMargin},
+		{name: "force keeps only the margin", opts: StopOptions{Force: true}, want: stopReplyMargin},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.opts.ReplyWindow())
+		})
+	}
+}
+
 func TestStopWithOptions_UsesVMStopper(t *testing.T) {
 	o := &optionStopper{}
 	opts := StopOptions{Timeout: 7 * time.Second}

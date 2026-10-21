@@ -64,6 +64,19 @@ func (opts StopOptions) GuestWait() time.Duration {
 	}
 }
 
+// stopReplyMargin is the time a stop or reboot gets beyond the guest's
+// power-down window to answer: the process exit, a reboot's start and the
+// reply itself.
+const stopReplyMargin = 30 * time.Second
+
+// ReplyWindow is the longest a stop or reboot with these options takes to
+// answer: GuestWait plus the margin for the process exit, a reboot's start
+// and the reply. A transport whose write timeout is shorter moves the reply's
+// write deadline to this window, so a graceful stop is not cut off.
+func (opts StopOptions) ReplyWindow() time.Duration {
+	return opts.GuestWait() + stopReplyMargin
+}
+
 // Validate refuses a negative or over-long timeout, and a timeout on a
 // forced stop, which does not wait for the guest at all.
 func (opts StopOptions) Validate() error {

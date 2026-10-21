@@ -198,7 +198,9 @@ transport ([api.md §2](api.md#2-vm-lifecycle)). An unknown state, any
 
 `vm_stop` and `vm_reboot` honour `force` and `timeout_seconds` as `StopVM` and
 `RebootVM` do ([api.md](api.md) §2): `force` with a timeout, or a timeout over
-3600, is invalid argument. The service does not yet read `delete_disks`, on
+3600, is invalid argument. A graceful stop may run past the server's 30-second
+`RequestTimeout`; the reply still answers, because the write deadline restarts
+once the reply is ready. The service does not yet read `delete_disks`, on
 any transport.
 
 ### vm_migration_prepare

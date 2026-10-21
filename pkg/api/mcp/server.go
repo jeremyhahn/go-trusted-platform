@@ -402,6 +402,17 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	// Handle request
 	resp := s.handleRequest(ctx, &req)
 
+	// The server's write timeout bounds writing the reply, not the call: a
+	// graceful VM stop waits up to the guest's power-down window, as long as
+	// the timeout itself, so the deadline restarts once the reply is ready
+	// (docs/compute/api.md). Without this the stop completes and its reply is
+	// dropped with the connection.
+	if s.config.RequestTimeout > 0 {
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.config.RequestTimeout)); err != nil {
+			s.logger.Warnf("Cannot restart the reply's write deadline: %v", err)
+		}
+	}
+
 	// Write response
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

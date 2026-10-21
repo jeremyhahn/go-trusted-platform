@@ -57,17 +57,12 @@ func (h *Handlers) ensureAvailable(w http.ResponseWriter, r *http.Request) bool 
 	return true
 }
 
-// lifecycleWriteMargin is the time a stop or reboot reply gets beyond the
-// guest's power-down window: the process exit, a reboot's start and the
-// reply itself.
-const lifecycleWriteMargin = 30 * time.Second
-
 // extendWriteDeadline lets a stop or reboot reply outlive the server's write
 // timeout. A graceful stop waits up to the guest's power-down window, which
 // is as long as the default write timeout, so without this the server closes
 // the connection before the VM has stopped and the client sees EOF.
 func (h *Handlers) extendWriteDeadline(w http.ResponseWriter, opts compute.StopOptions) {
-	deadline := time.Now().Add(opts.GuestWait() + lifecycleWriteMargin)
+	deadline := time.Now().Add(opts.ReplyWindow())
 	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil {
 		h.logger.Warnf("compute: cannot extend the reply deadline: %v", err)
 	}
