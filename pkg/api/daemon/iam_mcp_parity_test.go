@@ -443,6 +443,44 @@ func TestIAMGRPCService_WrapError(t *testing.T) {
 	}
 }
 
+// upstreamTestCode and upstreamTestError have the shape of the QuicBaaS
+// server's structured error, which the embedded transport hands through
+// untranslated and which the platform may not import.
+type upstreamTestCode string
+
+func (c upstreamTestCode) String() string { return string(c) }
+
+type upstreamTestError struct {
+	Code upstreamTestCode
+	Op   string
+	Err  error
+}
+
+func (e *upstreamTestError) Error() string { return e.Op + ": " + e.Code.String() }
+func (e *upstreamTestError) Unwrap() error { return e.Err }
+
+// An invalid role permission refused by the in-process server is the
+// caller's fault: InvalidArgument, never Internal (#973 CreateRole).
+func TestIAMGRPCService_WrapError_UpstreamServerError(t *testing.T) {
+	svc := NewIAMGRPCService(slog.Default(), nil, nil)
+	invalid := &upstreamTestError{Code: "invalid_input", Op: "iam.role.qrdb.create"}
+	cases := map[string]struct {
+		err  error
+		want codes.Code
+	}{
+		"invalid input":         {&upstreamTestError{Code: "invalid_input", Op: "api.create role", Err: invalid}, codes.InvalidArgument},
+		"wrapped invalid input": {&upstreamTestError{Code: "storage", Op: "api", Err: invalid}, codes.InvalidArgument},
+		"not found":             {&upstreamTestError{Code: "not_found", Op: "api.get role"}, codes.NotFound},
+		"already exists":        {&upstreamTestError{Code: "already_exists", Op: "api.create role"}, codes.AlreadyExists},
+		"unclassified code":     {&upstreamTestError{Code: "split_brain", Op: "api"}, codes.Internal},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, status.Code(svc.wrapError(tc.err)))
+		})
+	}
+}
+
 // newMCPTestDaemon is a daemon whose MCP server is not yet created, built
 // the way TestCreateMCPServer_SkipIAMValidationIsTheOnlyOptOut builds it.
 func newMCPTestDaemon(t *testing.T, socketPath string) *Daemon {

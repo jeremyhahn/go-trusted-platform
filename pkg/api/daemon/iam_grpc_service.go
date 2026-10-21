@@ -91,7 +91,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -2027,7 +2029,64 @@ func (s *IAMGRPCService) wrapError(err error) error {
 	if code, ok := sdkErrorCodes[sdkerrors.Code(err)]; ok {
 		return status.Error(code, err.Error())
 	}
+	if code, ok := upstreamErrorCode(err); ok {
+		return status.Error(code, err.Error())
+	}
 	return status.Error(codes.Internal, err.Error())
+}
+
+// upstreamErrorCodes maps the code name a QuicBaaS server error carries to its
+// gRPC code, by the same categories as sdkErrorCodes.
+var upstreamErrorCodes = map[string]codes.Code{
+	"invalid_input":       codes.InvalidArgument,
+	"validation":          codes.InvalidArgument,
+	"out_of_range":        codes.OutOfRange,
+	"not_found":           codes.NotFound,
+	"already_exists":      codes.AlreadyExists,
+	"conflict":            codes.Aborted,
+	"unauthorized":        codes.Unauthenticated,
+	"forbidden":           codes.PermissionDenied,
+	"not_allowed":         codes.PermissionDenied,
+	"cross_tenant_access": codes.PermissionDenied,
+	"precondition_failed": codes.FailedPrecondition,
+	"rate_limited":        codes.ResourceExhausted,
+	"resource_exhausted":  codes.ResourceExhausted,
+	"unavailable":         codes.Unavailable,
+	"timeout":             codes.DeadlineExceeded,
+	"deadline_exceeded":   codes.DeadlineExceeded,
+	"canceled":            codes.Canceled,
+	"unimplemented":       codes.Unimplemented,
+	"not_implemented":     codes.Unimplemented,
+}
+
+// upstreamErrorCode classifies an error the embedded SDK transport hands
+// through untranslated: the in-process QuicBaaS server answers with its own
+// structured error ("api.create role: invalid_input: ..."), not an SDK
+// QBError, so sdkerrors.Code reports CodeUnknown for it. The platform may not
+// import that error type (SDK Consumption Invariant), so the code is read from
+// the exported Code field every error in the chain may carry, by its name.
+func upstreamErrorCode(err error) (codes.Code, bool) {
+	for ; err != nil; err = errors.Unwrap(err) {
+		value := reflect.ValueOf(err)
+		if value.Kind() == reflect.Pointer {
+			value = value.Elem()
+		}
+		if value.Kind() != reflect.Struct {
+			continue
+		}
+		field := value.FieldByName("Code")
+		if !field.IsValid() || !field.CanInterface() {
+			continue
+		}
+		name, ok := field.Interface().(fmt.Stringer)
+		if !ok {
+			continue
+		}
+		if code, ok := upstreamErrorCodes[name.String()]; ok {
+			return code, true
+		}
+	}
+	return codes.Unknown, false
 }
 
 // =============================================================================
