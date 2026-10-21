@@ -665,12 +665,23 @@ func installWaitResult(ctx context.Context, waitErr error, diskPath string, logg
 	if err := vmDeadlineError(ctx); err != nil {
 		return err
 	}
+	// The autoinstaller powers the guest off whether the install passed or
+	// failed (its inittab ends with /sbin/poweroff -f), so a clean exit is
+	// an install only when the disk was written, like a reboot.
+	var size int64
+	if info, err := os.Stat(diskPath); err == nil {
+		size = info.Size()
+	}
+	written := size > minInstalledDiskSize
 	if waitErr != nil {
-		if info, diskErr := os.Stat(diskPath); diskErr == nil && info.Size() > 100*1024*1024 {
+		if written {
 			logger.Info("Installation completed successfully (VM rebooted)")
 			return nil
 		}
 		return &WrappedError{Msg: "VM execution failed", Err: waitErr}
+	}
+	if !written {
+		return ErrInstallDiskNotWritten{Disk: diskPath, Size: size, MinSize: minInstalledDiskSize}
 	}
 
 	logger.Info("Installation completed successfully")
@@ -695,6 +706,10 @@ func testVMError(timeout time.Duration, msg string, err error) error {
 	}
 	return &WrappedError{Msg: msg, Err: err}
 }
+
+// minInstalledDiskSize is the disk size above which a finished install VM
+// counts as having installed: the empty qcow2 it starts from is far smaller.
+const minInstalledDiskSize = 100 * 1024 * 1024
 
 // bootConsoleLogName is the guest console log a headless boot test writes
 // in --work-dir; bootConsoleTailLines is how much of it a failure reports.

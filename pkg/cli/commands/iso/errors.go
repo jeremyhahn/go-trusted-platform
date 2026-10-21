@@ -58,6 +58,20 @@ func (e ErrVMTimeout) Error() string {
 	return fmt.Sprintf("the VM did not power off within --timeout %s; QEMU and the software TPM were stopped", e.Timeout)
 }
 
+// ErrInstallDiskNotWritten is returned when the install guest powered off
+// but left its disk at MinSize bytes or less. The autoinstaller powers off
+// after a failed install too, so a clean exit alone is not an install.
+type ErrInstallDiskNotWritten struct {
+	Disk    string
+	Size    int64
+	MinSize int64
+}
+
+func (e ErrInstallDiskNotWritten) Error() string {
+	return fmt.Sprintf("the install guest powered off but %s holds %d bytes (an install writes over %d): the install failed; the installer console says why",
+		e.Disk, e.Size, e.MinSize)
+}
+
 // ErrBootTimeout is returned when `iso test boot` (or `firstboot`) is still
 // running when its --timeout expires. ConsoleTail holds the last lines of
 // the guest serial console log, so the failure shows where the boot stopped.

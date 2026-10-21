@@ -97,9 +97,22 @@ func TestInstallWaitResult_ExitWithoutInstalledDiskFails(t *testing.T) {
 	assert.NotErrorIs(t, err, context.DeadlineExceeded)
 }
 
-func TestInstallWaitResult_PowerOffSucceeds(t *testing.T) {
-	err := installWaitResult(context.Background(), nil, filepath.Join(t.TempDir(), "missing.qcow2"), logging.DefaultLogger())
+func TestInstallWaitResult_PowerOffWithInstalledDiskSucceeds(t *testing.T) {
+	err := installWaitResult(context.Background(), nil, installedDisk(t), logging.DefaultLogger())
 	assert.NoError(t, err)
+}
+
+// The autoinstaller powers off after a failed install too: a clean exit
+// that left the disk empty is not an install (#973 run 59851, 22 s install).
+func TestInstallWaitResult_PowerOffWithoutInstalledDiskFails(t *testing.T) {
+	disk := filepath.Join(t.TempDir(), "missing.qcow2")
+	err := installWaitResult(context.Background(), nil, disk, logging.DefaultLogger())
+
+	var notWritten ErrInstallDiskNotWritten
+	require.ErrorAs(t, err, &notWritten)
+	assert.Equal(t, disk, notWritten.Disk)
+	assert.Zero(t, notWritten.Size)
+	assert.Contains(t, err.Error(), "the install failed")
 }
 
 func TestInstallWaitResult_InterruptKeepsDiskCheck(t *testing.T) {
