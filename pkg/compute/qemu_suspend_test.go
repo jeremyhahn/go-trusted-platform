@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -274,6 +275,86 @@ func TestStop_StoppedVMIsRefused(t *testing.T) {
 
 	err := orch.Stop(context.Background(), "vm1")
 	assert.ErrorIs(t, err, ErrInstanceNotRunning)
+}
+
+// stopUnblockedWithin bounds how long a call made while another VM's stop
+// waits for its guest may take before the test calls it blocked.
+const stopUnblockedWithin = 5 * time.Second
+
+// TestStop_GuestWaitDoesNotBlockOtherCalls: a graceful stop waits for the
+// guest without the instance lock, so get, list and create answer while it
+// waits, and the VM reads stopping until its exit is recorded.
+func TestStop_GuestWaitDoesNotBlockOtherCalls(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	qi := insertVMInstance(t, orch, "vm1", true, &InstanceConfig{})
+
+	exited := make(chan struct{})
+	qi.waitGroup.Add(1)
+	go func() {
+		defer qi.waitGroup.Done()
+		<-exited
+		orch.recordExit("vm1", qi)
+	}()
+
+	waiting := make(chan struct{})
+	release := make(chan struct{})
+	orig := stopVMProcess
+	stopVMProcess = func(*qemuInstance, StopOptions) error {
+		close(waiting)
+		<-release
+		close(exited)
+		return nil
+	}
+	t.Cleanup(func() { stopVMProcess = orig })
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- orch.Stop(context.Background(), "vm1") }()
+	<-waiting
+
+	type answer struct {
+		listErr error
+		got     *Instance
+		getErr  error
+	}
+	others := make(chan answer, 1)
+	go func() {
+		var a answer
+		_, a.listErr = orch.List(context.Background(), nil)
+		a.got, a.getErr = orch.Get(context.Background(), "vm1")
+		// Create takes the orchestrator's write lock.
+		insertVMInstance(t, orch, "vm2", false, &InstanceConfig{})
+		others <- a
+	}()
+	select {
+	case a := <-others:
+		require.NoError(t, a.listErr)
+		require.NoError(t, a.getErr)
+		assert.Equal(t, StateStopping, a.got.State)
+	case <-time.After(stopUnblockedWithin):
+		close(release)
+		t.Fatal("get, list or create blocked behind a stop waiting for its guest")
+	}
+
+	close(release)
+	require.NoError(t, <-stopped)
+	assertVMState(t, orch, qi, StateStopped)
+}
+
+// TestStop_ExitDuringFailedStopIsStopped: a stop whose process call fails
+// after the guest has exited leaves the VM stopped, not in error.
+func TestStop_ExitDuringFailedStopIsStopped(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	qi := insertVMInstance(t, orch, "vm1", true, &InstanceConfig{})
+
+	orig := stopVMProcess
+	stopVMProcess = func(inst *qemuInstance, _ StopOptions) error {
+		orch.recordExit("vm1", inst)
+		return errFakeQMP
+	}
+	t.Cleanup(func() { stopVMProcess = orig })
+
+	require.NoError(t, orch.Stop(context.Background(), "vm1"))
+	assertVMState(t, orch, qi, StateStopped)
 }
 
 func TestDelete_SuspendedVMIsStoppedFirst(t *testing.T) {
