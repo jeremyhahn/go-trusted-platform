@@ -121,7 +121,7 @@ func runTemplateCreate(flags *cli.CommonFlags, id, description string, secureBoo
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 
@@ -190,7 +190,7 @@ Examples:
 func runTemplateList(flags *cli.CommonFlags) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 
@@ -284,7 +284,7 @@ func runTemplateDelete(flags *cli.CommonFlags, templateID string, force bool) er
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 

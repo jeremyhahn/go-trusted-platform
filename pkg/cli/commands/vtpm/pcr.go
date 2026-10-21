@@ -109,7 +109,7 @@ func runPCRExtend(flags *cli.CommonFlags, bundleID string, pcrIndex int32, data 
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 
@@ -186,7 +186,7 @@ func runPCRRead(flags *cli.CommonFlags, bundleID string, pcrIndex int32) error {
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 

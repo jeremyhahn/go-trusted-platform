@@ -80,7 +80,7 @@ func runList(flags *cli.CommonFlags, mode string, limit, offset int32) error {
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 
