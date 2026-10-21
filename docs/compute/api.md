@@ -342,7 +342,10 @@ running, or an orchestrator without snapshots, is FailedPrecondition. The
 snapshot's id is its name. `GetSnapshot` answers the one entry of
 `ListSnapshots` with that id (`GetSnapshotResponse.snapshot`), so it fails
 exactly as `ListSnapshots` does, and an id the list does not hold is NotFound
-(`ErrVMSnapshotNotFound`).
+(`ErrVMSnapshotNotFound`). `DeleteSnapshot` looks the snapshot up the same way
+before it deletes: QEMU's `delvm` answers success for a name no disk holds, so
+without the lookup a deleted snapshot would delete again
+(`QEMUOrchestrator.DeleteSnapshot`, `pkg/compute/qemu_snapshot.go`).
 
 The Go SDK carries the snapshot verbs over every transport, returning the
 client's typed error (`ErrCreateSnapshotFailed`, ...,
