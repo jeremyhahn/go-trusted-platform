@@ -1464,7 +1464,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	// Create REST server if enabled and not overridden by option
-	if config.EnableREST && daemon.restServer == nil {
+	switch {
+	case config.EnableREST && daemon.restServer == nil:
 		restServer, restErr := newRESTServer(config, service, logger.Slog())
 		if restErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: restErr}
@@ -1475,7 +1476,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer = restServer
 		restServer.SetIDevIDService(idevidService)
 		logger.Info("REST server created", "addr", config.RESTListenAddr)
-	} else if !config.EnableREST && config.RESTRoutesOnly {
+	case !config.EnableREST && config.RESTRoutesOnly:
 		// Build the route table only: no listener starts, and the
 		// webservice listener mounts the daemon-owned groups through
 		// MountRESTRoutes (docs/daemon/architecture.md). daemon.restServer
@@ -1489,7 +1490,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer = restServer
 		restServer.SetIDevIDService(idevidService)
 		logger.Info("REST route table created without a listener")
-	} else if !config.EnableREST {
+	case !config.EnableREST:
 		logger.Info("REST server not enabled")
 	}
 
