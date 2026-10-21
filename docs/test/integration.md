@@ -507,7 +507,9 @@ The Makefile automatically handles:
   adapters call. gRPC (10443), QUIC (9444), MCP (9445) and the Unix socket stay
   on the daemon. A daemon-only harness answers 404 on every webservice route;
   `TestIntegrationConfig_ServesRESTThroughWebservice` (`pkg/app`) checks the
-  section against the runner's `PLATFORMD_REST_PORT`.
+  section against the runner's `PLATFORMD_REST_PORT`, and the `restroutes`
+  smoke suite fails on a bare router 404 or when `/api/v1/platform/health`
+  or `/api/v1/dns/zones` does not answer 200.
 - Config file: `test/integration/config.yaml`. Its `dns:` section gives
   platformd an internal CoreDNS server on port 9053 seeded with zone
   `integration.internal.`, so the daemon builds a DNS backend and the dns
