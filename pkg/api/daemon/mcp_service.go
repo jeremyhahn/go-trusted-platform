@@ -830,10 +830,8 @@ func (p *MCPServiceProvider) DeviceList(ctx context.Context, filter map[string]s
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
 
-	query := datastore.PageQuery{
-		PageSize:  100,
-		SortOrder: datastore.SortAscending,
-	}
+	query := datastore.NewPageQuery()
+	query.PageSize = 100
 	result, err := p.deviceService.Page(ctx, query)
 	if err != nil {
 		return nil, deviceStatusError(err)
