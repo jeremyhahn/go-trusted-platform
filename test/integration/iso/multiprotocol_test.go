@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -238,7 +239,14 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	if customized == nil || !customized.Success {
 		t.Fatalf("missing prerequisite: customizing the ISO fixture reported no success: %+v", customized)
 	}
-	result, err := cmd.Build(ctx, BuildOptions{SourceDir: isoDir, Output: isoPath, VolumeID: "TEST_ISO"})
+	// The customized EFI GRUB finds its root by volume label: without --config,
+	// iso customize bakes the default output label into it, so the build must
+	// write that label or the guest stops at the GRUB menu with no kernel.
+	result, err := cmd.Build(ctx, BuildOptions{
+		SourceDir: isoDir,
+		Output:    isoPath,
+		VolumeID:  pkgiso.DefaultISOBuildConfig().OutputLabel,
+	})
 	if err != nil {
 		t.Fatalf("missing prerequisite: building the ISO fixture: %v", err)
 	}
@@ -798,6 +806,7 @@ type recordingISOCommands struct {
 	ISOCommands
 	calls     []string
 	customize CustomizeOptions
+	build     BuildOptions
 }
 
 func (r *recordingISOCommands) Customize(_ context.Context, opts CustomizeOptions) (*CustomizeResult, error) {
@@ -808,6 +817,7 @@ func (r *recordingISOCommands) Customize(_ context.Context, opts CustomizeOption
 
 func (r *recordingISOCommands) Build(_ context.Context, opts BuildOptions) (*BuildResult, error) {
 	r.calls = append(r.calls, "build")
+	r.build = opts
 	if err := os.WriteFile(opts.Output, []byte("iso"), 0o600); err != nil {
 		return nil, err
 	}
@@ -843,6 +853,21 @@ func TestEnsureBuiltISO_CustomizesBeforeBuilding(t *testing.T) {
 	assert.Equal(t, extractedISODir(workDir), cmd.customize.ISODir)
 	assert.Equal(t, "platformd", filepath.Base(cmd.customize.PlatformdPath))
 	assert.True(t, FileExists(cmd.customize.PlatformConfig))
+}
+
+// TestEnsureBuiltISO_BuildsWithTheLabelGRUBSearches pins the fixture's volume
+// label to the one iso customize bakes into the EFI GRUB (no --config, so the
+// default output label). A different label leaves the guest's GRUB with
+// "no such device" and no kernel to boot.
+func TestEnsureBuiltISO_BuildsWithTheLabelGRUBSearches(t *testing.T) {
+	workDir := fixtureWorkDir(t)
+	cmd := &recordingISOCommands{}
+
+	ensureBuiltISO(t, context.Background(), cmd, workDir)
+
+	assert.Empty(t, cmd.customize.ConfigFile)
+	assert.Equal(t, "TRUSTED_PLATFORM", cmd.build.VolumeID)
+	assert.Equal(t, pkgiso.DefaultISOBuildConfig().OutputLabel, cmd.build.VolumeID)
 }
 
 func TestEnsureBuiltISO_ReusesAnExistingISO(t *testing.T) {

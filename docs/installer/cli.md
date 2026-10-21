@@ -502,7 +502,11 @@ platform config enables the gateway role, as
 `--label` (`TRUSTED_PLATFORM`; longer than 32 characters is refused),
 `--checksum` (**`true`**; writes `<output>.sha256`), `--debug`. Prints
 `success`, `output_iso`, `sha256`, `size_bytes`, `checksum_file` (omitted
-without `--checksum`), `message`.
+without `--checksum`), `message`. On a customized tree `--label` must be the
+label `iso customize` baked into the EFI GRUB, which finds its root with
+`search --label`: the `--config` file's `output-label`, `TRUSTED_PLATFORM`
+without one. Any other label leaves the guest at the GRUB menu with
+`no such device` and no kernel to load.
 
 **`iso profile`** — verbs `list` (alias `ls`), `show <profile-name>`,
 `validate <config-file>`, `generate`. The four built-in profile names are
