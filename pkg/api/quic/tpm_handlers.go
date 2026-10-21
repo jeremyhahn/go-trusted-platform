@@ -662,18 +662,15 @@ func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *quicwir
 
 // handleCreateSRK creates a Storage Root Key.
 func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(h.tpm)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	if err := h.tpm.CreateSRK(srkAttrs); err != nil {
-		return h.tpmErrorResponse(err)
-	}
-
-	return h.encodeResponse(&TPM2StatusResponse{
-		Success:   true,
-		Message:   fmt.Sprintf("SRK created at handle 0x%08X", srkAttrs.TPMAttributes.Handle),
+	return h.encodeResponse(&TPM2KeyResponse{
+		Handle:    uint32(srkAttrs.TPMAttributes.Handle),
+		PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
+		Algorithm: srkAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().Unix(),
 	})
 }

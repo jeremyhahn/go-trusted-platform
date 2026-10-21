@@ -3043,12 +3043,8 @@ func (p *MCPServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, err
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateSRK(srkAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 

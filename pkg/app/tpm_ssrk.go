@@ -13,13 +13,12 @@
 package app
 
 import (
-	"crypto/x509"
 	"errors"
 	"fmt"
 
 	libtpm2 "github.com/google/go-tpm/tpm2"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 )
 
 // SSRKProbeError is returned when the Shared SRK handle cannot be read for a
@@ -52,17 +51,6 @@ func (e *SSRKCreateError) Error() string {
 // Unwrap returns the underlying cause.
 func (e *SSRKCreateError) Unwrap() error { return e.Cause }
 
-// SSRKAlgorithmError is returned when tpm.ssrk names a key algorithm a
-// storage root key cannot use (only RSA and ECC have a TCG SRK template).
-type SSRKAlgorithmError struct {
-	Algorithm string
-}
-
-// Error returns the error message.
-func (e *SSRKAlgorithmError) Error() string {
-	return fmt.Sprintf("app: tpm.ssrk algorithm %q has no SRK template (RSA or ECC)", e.Algorithm)
-}
-
 // ensureSSRK creates the Shared SRK (tpm.ssrk) at its configured persistent
 // handle when the TPM holds nothing there. Operator seal/unseal, SRK info and
 // vTPM bundle sealing all parent on it (docs/tpm/engineering.md §4).
@@ -86,82 +74,9 @@ func (app *App) ensureSSRK() error {
 	if !errors.Is(err, libtpm2.TPMRCHandle) && !errors.Is(err, libtpm2.TPMRCValue) {
 		return &SSRKProbeError{Handle: cfg.Handle, Cause: err}
 	}
-
-	attrs, err := ssrkKeyAttributes(cfg)
-	if err != nil {
-		return &SSRKCreateError{Handle: cfg.Handle, Cause: err}
-	}
-	// CreateSRK salts its session with the parent only when bus encryption
-	// is on; the EK is that parent.
-	if app.TPMConfig.EncryptSession {
-		ekAttrs, ekErr := app.TPM.EKAttributes()
-		if ekErr != nil {
-			return &SSRKCreateError{Handle: cfg.Handle, Cause: ekErr}
-		}
-		attrs.Parent = ekAttrs
-	}
-	if err := app.TPM.CreateSRK(attrs); err != nil {
+	if _, err := tpmsrk.Persist(app.TPM, cfg, app.TPMConfig.EncryptSession); err != nil {
 		return &SSRKCreateError{Handle: cfg.Handle, Cause: err}
 	}
 	app.Logger.Info("Shared SRK created", "handle", fmt.Sprintf("0x%08X", cfg.Handle))
 	return nil
-}
-
-// ssrkKeyAttributes builds the Shared SRK's key attributes from its config:
-// the TCG SRK template of the configured algorithm (RSA unless the config
-// names ECC), persisted under the owner hierarchy, with no platform policy
-// (SRKConfig cannot express one). Empty passwords stay nil so the TPM's
-// empty default auth is used.
-func ssrkKeyAttributes(cfg *xkmssdk.SRKConfig) (*xkmssdk.KeyAttributes, error) {
-	algorithm := x509.RSA
-	template := xkmssdk.RSASRKTemplate
-	if cfg.KeyAlgorithm != "" {
-		parsed, err := xkmssdk.ParseKeyAlgorithm(cfg.KeyAlgorithm)
-		if err != nil {
-			return nil, err
-		}
-		algorithm = parsed
-	} else if cfg.RSAConfig == nil && cfg.ECCConfig != nil {
-		algorithm = x509.ECDSA
-	}
-	switch algorithm {
-	case x509.RSA:
-	case x509.ECDSA:
-		template = libtpm2.ECCSRKTemplate
-	default:
-		return nil, &SSRKAlgorithmError{Algorithm: cfg.KeyAlgorithm}
-	}
-
-	var password, hierarchyAuth xkmssdk.Password
-	var err error
-	if cfg.Password != "" {
-		if password, err = xkmssdk.NewPassword([]byte(cfg.Password)); err != nil {
-			return nil, err
-		}
-	}
-	if cfg.HierarchyAuth != "" {
-		if hierarchyAuth, err = xkmssdk.NewPassword([]byte(cfg.HierarchyAuth)); err != nil {
-			return nil, err
-		}
-	}
-
-	cn := cfg.CN
-	if cn == "" {
-		cn = "shared-srk"
-	}
-	return &xkmssdk.KeyAttributes{
-		CN:           cn,
-		Debug:        cfg.Debug,
-		KeyAlgorithm: algorithm,
-		KeyType:      xkmssdk.KeyTypeStorage,
-		Password:     password,
-		StoreType:    xkmssdk.StoreTPM2,
-		TPMAttributes: &xkmssdk.TPMAttributes{
-			Handle:        xkmssdk.TPMHandle(cfg.Handle),
-			HandleType:    xkmssdk.TPMHTPersistent,
-			Hierarchy:     xkmssdk.TPMRHOwner,
-			HierarchyAuth: hierarchyAuth,
-			Template:      template,
-		},
-	}, nil
 }

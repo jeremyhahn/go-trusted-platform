@@ -584,11 +584,24 @@ func TestTPM2Handler_HandleGetSRK(t *testing.T) {
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
+// newSSRKMockTPM is a mock whose tpm.ssrk names the Shared SRK handle and
+// whose handles read back empty, as they do after TPM2_Clear.
+func newSSRKMockTPM() *mockTPM {
+	mock := newMockTPM()
+	mock.config.SSRK = &xkmssdk.SRKConfig{Handle: 0x81000001}
+	return mock
+}
+
+// CreateSRK answers with the key, so a client reads the handle the Shared
+// SRK was persisted at.
 func TestTPM2Handler_HandleCreateSRK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
+	h.SetTPM2Service(newSSRKMockTPM())
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateSRK}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	key := decodeKeyResponse(t, resp)
+	assert.Equal(t, uint32(0x81000001), key.Handle)
+	assert.Equal(t, x509.RSA.String(), key.Algorithm)
 }
 
 func TestTPM2Handler_HandleDeleteSRK(t *testing.T) {
@@ -1266,8 +1279,8 @@ func TestTPM2Handler_HandleGetSRK_Error(t *testing.T) {
 
 func TestTPM2Handler_HandleCreateSRK_Error(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	mock := newMockTPM()
-	mock.createSRKErr = errors.New("SRK already exists")
+	mock := newSSRKMockTPM()
+	mock.createSRKErr = errors.New("TPM_RC_BAD_AUTH")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateSRK}})
 	assert.NotEqual(t, quicwire.StatusOK, resp.Status)

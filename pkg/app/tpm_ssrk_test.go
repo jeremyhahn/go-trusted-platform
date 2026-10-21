@@ -13,7 +13,6 @@
 package app
 
 import (
-	"crypto/x509"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
@@ -109,45 +108,4 @@ func TestEnsureSSRK_NoSSRKConfigured(t *testing.T) {
 	require.NoError(t, a.ensureSSRK(), "no tpm.ssrk means nothing to create")
 	a.TPMConfig.SSRK = &xkmssdk.SRKConfig{}
 	require.NoError(t, a.ensureSSRK(), "a zero handle means nothing to create")
-}
-
-func TestSSRKKeyAttributes(t *testing.T) {
-	rsa, err := ssrkKeyAttributes(&xkmssdk.SRKConfig{
-		Handle:        uint32(harnessSSRKHandle),
-		RSAConfig:     &xkmssdk.RSAConfig{KeySize: 2048},
-		HierarchyAuth: harnessSOPIN,
-	})
-	require.NoError(t, err)
-	require.Equal(t, x509.RSA, rsa.KeyAlgorithm)
-	require.Equal(t, "shared-srk", rsa.CN)
-	require.Equal(t, tpm2.TPMAlgRSA, rsa.TPMAttributes.Template.Type)
-	require.Equal(t, harnessSSRKHandle, rsa.TPMAttributes.Handle)
-	require.Equal(t, tpm2.TPMHTPersistent, rsa.TPMAttributes.HandleType)
-	require.Equal(t, tpm2.TPMHandle(tpm2.TPMRHOwner), rsa.TPMAttributes.Hierarchy)
-	require.Equal(t, harnessSOPIN, string(rsa.TPMAttributes.HierarchyAuth.Bytes()))
-	require.Nil(t, rsa.Password, "an empty password stays nil")
-	require.Empty(t, rsa.TPMAttributes.Template.AuthPolicy.Buffer, "the SSRK carries no platform policy")
-
-	ecc, err := ssrkKeyAttributes(&xkmssdk.SRKConfig{
-		CN:        "ssrk",
-		Handle:    uint32(harnessSSRKHandle),
-		ECCConfig: &xkmssdk.ECCConfig{Curve: "P-256"},
-		Password:  "srk-pin",
-	})
-	require.NoError(t, err)
-	require.Equal(t, x509.ECDSA, ecc.KeyAlgorithm)
-	require.Equal(t, "ssrk", ecc.CN)
-	require.Equal(t, tpm2.TPMAlgECC, ecc.TPMAttributes.Template.Type)
-	require.Equal(t, "srk-pin", string(ecc.Password.Bytes()))
-	require.Nil(t, ecc.TPMAttributes.HierarchyAuth, "an empty hierarchy auth stays nil")
-}
-
-func TestSSRKKeyAttributes_BadAlgorithm(t *testing.T) {
-	_, err := ssrkKeyAttributes(&xkmssdk.SRKConfig{KeyAlgorithm: "not-an-algorithm"})
-	require.Error(t, err)
-
-	_, err = ssrkKeyAttributes(&xkmssdk.SRKConfig{KeyAlgorithm: "Ed25519"})
-	var algErr *SSRKAlgorithmError
-	require.ErrorAs(t, err, &algErr)
-	require.Equal(t, "Ed25519", algErr.Algorithm)
 }

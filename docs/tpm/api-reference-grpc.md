@@ -280,7 +280,11 @@ message GetSRKResponse {
 
 ### CreateSRK
 
-Creates a new Storage Root Key under the EK.
+Creates the Shared SRK that `tpm.ssrk` configures and persists it at its
+handle (`0x81000001` by default). The key is built from the configuration, not
+read back from the handle, so it works on a cleared TPM. With
+`encrypt-sessions` on, the EK salts the session. An occupied handle is
+`AlreadyExists`; a `tpm.ssrk` without a handle is `FailedPrecondition`.
 
 **Request:**
 ```protobuf

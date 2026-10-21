@@ -454,13 +454,8 @@ func (s *TPMGRPCService) CreateSRK(
 
 	s.logger.Debug("TPM CreateSRK request received")
 
-	srkAttrs, err := tpm.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(tpm)
 	if err != nil {
-		s.logger.Slog().Error("Failed to get SRK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	if err := tpm.CreateSRK(srkAttrs); err != nil {
 		s.logger.Slog().Error("TPM CreateSRK failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}

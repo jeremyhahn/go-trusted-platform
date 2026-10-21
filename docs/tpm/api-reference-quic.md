@@ -321,6 +321,29 @@ type TPM2StatusResponse struct {
 }
 ```
 
+### CreateSRK (0x0A)
+
+**Request Payload:**
+```messagepack
+{}
+```
+
+The Shared SRK is created from `tpm.ssrk` and persisted at its handle; it is
+never read back from the handle first, so it works on a cleared TPM. An
+occupied handle is refused with `StatusAlreadyExists` (0x06); a `tpm.ssrk`
+with no handle is refused with `StatusInvalidRequest` (0x01, gRPC
+`FailedPrecondition`).
+
+**Response Payload:**
+```go
+type TPM2KeyResponse struct {
+    Handle    uint32 `codec:"handle"`
+    PublicKey []byte `codec:"public_key"`
+    Algorithm string `codec:"algorithm"`
+    Timestamp int64  `codec:"timestamp"`
+}
+```
+
 ### Quote (0x0F)
 
 **Request Payload:**
