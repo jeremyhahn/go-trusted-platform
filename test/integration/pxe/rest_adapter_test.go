@@ -58,6 +58,72 @@ func TestPXERESTGRPCParity(t *testing.T) {
 	t.Run("FilteredListDevices", func(t *testing.T) {
 		testFilteredListParity(t, ctx, rest, grpc)
 	})
+	t.Run("StopThenStartOverREST", func(t *testing.T) {
+		testStopStartParity(t, ctx, rest, grpc)
+	})
+}
+
+// testStopStartParity stops the running PXE service over REST, requires gRPC
+// to see it stopped and both transports to refuse a second stop alike, starts
+// it again over REST, and requires the restarted service to list the same
+// devices over REST and gRPC, including one registered before the stop.
+func testStopStartParity(t *testing.T, ctx context.Context, rest, grpc *SDKAdapter) {
+	device, err := grpc.RegisterDevice(ctx, DefaultRegisterOptions(fmt.Sprintf("rest-restart-%d", time.Now().UnixNano())))
+	require.NoError(t, err, "Setup: RegisterDevice should succeed")
+	t.Cleanup(func() {
+		if err := CleanupDevice(context.Background(), grpc, device.ID); err != nil {
+			t.Logf("Warning: cleanup of device %s failed: %v", device.ID, err)
+		}
+	})
+	requireServiceRunning(t, ctx, grpc, true)
+
+	_, err = rest.pxe.StopService(ctx, &platformv1.StopPXEServiceRequest{})
+	require.NoError(t, err, "REST: StopService on the running service should succeed")
+	// The suite shares one platformd: leave its PXE service running even
+	// when a step below fails.
+	t.Cleanup(func() { restartPXEService(t, grpc) })
+	requireServiceRunning(t, ctx, grpc, false)
+
+	for _, adapter := range []*SDKAdapter{rest, grpc} {
+		_, err := adapter.pxe.StopService(ctx, &platformv1.StopPXEServiceRequest{})
+		require.Error(t, err, "%s: StopService on a stopped service should be refused", adapter.Name())
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err),
+			"%s: StopService on a stopped service should answer FailedPrecondition", adapter.Name())
+	}
+
+	_, err = rest.pxe.StartService(ctx, &platformv1.StartPXEServiceRequest{})
+	require.NoError(t, err, "REST: StartService on the stopped service should succeed")
+	requireServiceRunning(t, ctx, grpc, true)
+
+	opts := ListDevicesOptions{MACAddress: device.MACAddress, Limit: parityListLimit}
+	restIDs := listDeviceIDs(t, ctx, rest, opts)
+	grpcIDs := listDeviceIDs(t, ctx, grpc, opts)
+	assert.ElementsMatch(t, grpcIDs, restIDs, "REST and gRPC should return the same devices")
+	assert.Contains(t, restIDs, device.ID, "the restarted service should list the device registered before the stop")
+}
+
+// requireServiceRunning requires GetStatus over adapter to report running.
+func requireServiceRunning(t *testing.T, ctx context.Context, adapter *SDKAdapter, running bool) {
+	t.Helper()
+	result, err := adapter.GetStatus(ctx)
+	require.NoError(t, err, "%s: GetStatus should succeed", adapter.Name())
+	require.Equal(t, running, result.Running, "%s: GetStatus should report running=%t", adapter.Name(), running)
+}
+
+// restartPXEService starts the PXE service over adapter if it is stopped.
+func restartPXEService(t *testing.T, adapter *SDKAdapter) {
+	ctx := context.Background()
+	result, err := adapter.GetStatus(ctx)
+	if err != nil {
+		t.Errorf("%s: GetStatus failed while restoring the PXE service: %v", adapter.Name(), err)
+		return
+	}
+	if result.Running {
+		return
+	}
+	if _, err := adapter.pxe.StartService(ctx, &platformv1.StartPXEServiceRequest{}); err != nil {
+		t.Errorf("%s: StartService failed while restoring the PXE service: %v", adapter.Name(), err)
+	}
 }
 
 // testStartServiceParity starts the already-running PXE service over both

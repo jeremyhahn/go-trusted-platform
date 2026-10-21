@@ -168,12 +168,14 @@ reachable by unidentified machines and is rate-limited for that reason.
   platformd the suite fails at adapter setup on every transport, so it is
   kept out of `make integration-test`'s default set and runs by name with
   `make integration-test-pxe`.
-- Over REST the suite drives thirteen of the fourteen PXEService RPCs: the
-  twelve `PXECommands` methods in `TestPXEMultiProtocol`, and `StartService`
-  in `TestPXERESTGRPCParity` (`rest_adapter_test.go`), which refuses it on
-  the running service with `FailedPrecondition` over REST and gRPC alike and
-  checks that every `ListDevices` filter returns the same devices on both.
-  `StopService` is not driven yet. `pxe.Service.Start` runs a fresh
+- Over REST the suite drives all fourteen PXEService RPCs: the twelve
+  `PXECommands` methods in `TestPXEMultiProtocol`, and `StartService` and
+  `StopService` in `TestPXERESTGRPCParity` (`rest_adapter_test.go`). It
+  refuses `StartService` on the running service with `FailedPrecondition`
+  over REST and gRPC alike, checks that every `ListDevices` filter returns
+  the same devices on both, then stops the service over REST, starts it
+  again over REST, and requires both transports to list the same devices
+  from the restarted service. `pxe.Service.Start` runs a fresh
   `ipxe.Server` on each start (the server is single-use, `pkg/ipxe/server.go`)
   under a context of its own, so a stopped service starts again and the
   server outlives the `StartService` request.
