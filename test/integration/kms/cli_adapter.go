@@ -96,6 +96,70 @@ func (e ErrCLIOutputParseFailed) Error() string {
 	return fmt.Sprintf("failed to parse CLI output for %s: %v (output: %s)", e.Operation, e.Err, e.Output)
 }
 
+// ErrCLIFieldDecodeFailed is returned when a field of the CLI's JSON output
+// is not in its documented encoding (base64, Unix seconds or RFC 3339).
+type ErrCLIFieldDecodeFailed struct {
+	Operation string
+	Field     string
+	Value     string
+	Err       error
+}
+
+func (e ErrCLIFieldDecodeFailed) Error() string {
+	return fmt.Sprintf("failed to decode %s.%s %q: %v", e.Operation, e.Field, e.Value, e.Err)
+}
+
+func (e ErrCLIFieldDecodeFailed) Unwrap() error {
+	return e.Err
+}
+
+const (
+	// cliOutputEnv selects platformctl's output format (docs/kms/cli.md §3).
+	cliOutputEnv = "PLATFORMCTL_OUTPUT"
+
+	// cliTimestampUnset is the crypto verbs' timestamp when the server set
+	// none.
+	cliTimestampUnset = "-"
+)
+
+// decodeCLIBase64 decodes a base64 field of the CLI's JSON output.
+func decodeCLIBase64(operation, field, value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, ErrCLIFieldDecodeFailed{Operation: operation, Field: field, Value: value, Err: err}
+	}
+	return decoded, nil
+}
+
+// parseCLIUnixTimestamp reads a crypto verb's timestamp: Unix seconds, or
+// "-" when unset, which reads as the zero time.
+func parseCLIUnixTimestamp(operation, value string) (time.Time, error) {
+	if value == "" || value == cliTimestampUnset {
+		return time.Time{}, nil
+	}
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return time.Time{}, ErrCLIFieldDecodeFailed{Operation: operation, Field: "timestamp", Value: value, Err: err}
+	}
+	return time.Unix(seconds, 0), nil
+}
+
+// parseCLIRFC3339 reads a metadata or policy timestamp: RFC 3339, or empty
+// when unset, which reads as the zero time.
+func parseCLIRFC3339(operation, field, value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, ErrCLIFieldDecodeFailed{Operation: operation, Field: field, Value: value, Err: err}
+	}
+	return parsed, nil
+}
+
 // ErrCLIBinaryNotFound is returned when the platformctl binary cannot be found.
 type ErrCLIBinaryNotFound struct {
 	Path string
@@ -200,8 +264,8 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // runVerifyCommand runs a verify verb and checks that its exit status matches
 // the verdict it printed. A failed verification prints the verdict and exits
 // non-zero, so it is returned as a result rather than as a command failure.
-func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, result any, valid func() bool, args ...string) error {
-	stdout, runErr := c.runCommandStdout(ctx, args...)
+func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, stdin []byte, result any, valid func() bool, args ...string) error {
+	stdout, runErr := c.runCommandInput(ctx, stdin, args...)
 	if err := json.Unmarshal(stdout, result); err != nil {
 		if runErr != nil {
 			return runErr
@@ -217,6 +281,15 @@ func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, res
 // runCommandStdout runs the CLI and returns its stdout even when the command
 // fails, alongside ErrCLICommandFailed.
 func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]byte, error) {
+	return c.runCommandInput(ctx, nil, args...)
+}
+
+// runCommandInput runs platformctl with stdin as the command's standard
+// input (none when nil) and returns its stdout. JSON is selected through
+// PLATFORMCTL_OUTPUT, never --output: the crypto verbs declare their own
+// -o/--output (an output file) that shadows the global flag
+// (docs/kms/cli.md §3).
+func (c *CLIAdapter) runCommandInput(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	// Create context with timeout if not already set
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -224,13 +297,9 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 		defer cancel()
 	}
 
-	// Build command with common flags
-	fullArgs := []string{
-		"--output", "json",
-	}
-
 	// platformctl has no --socket flag; the harness socket reaches it through
 	// the config file Setup wrote (#540).
+	var fullArgs []string
 	if c.configPath != "" {
 		fullArgs = append(fullArgs, "--config", c.configPath)
 	}
@@ -238,6 +307,10 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
+	cmd.Env = append(os.Environ(), cliOutputEnv+"=json")
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -400,11 +473,8 @@ func (c *CLIAdapter) KeyDelete(ctx context.Context, keyID string, opts KeyDelete
 
 // KeyRotate rotates an existing key via CLI.
 func (c *CLIAdapter) KeyRotate(ctx context.Context, keyID string, retainOldVersion bool) (*KeyRotateResult, error) {
-	args := []string{"kms", "key", "rotate", keyID}
-
-	if retainOldVersion {
-		args = append(args, "--retain-old")
-	}
+	// --retain-old defaults to true, so the value is always spelled out.
+	args := []string{"kms", "key", "rotate", keyID, "--retain-old=" + strconv.FormatBool(retainOldVersion)}
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
@@ -446,16 +516,15 @@ func (c *CLIAdapter) KeyVersions(ctx context.Context, keyID string, opts KeyVers
 
 // KeyStatus updates the status of a key via CLI.
 func (c *CLIAdapter) KeyStatus(ctx context.Context, keyID string, version uint64, enabled bool) (*KeyStatusResult, error) {
-	args := []string{"kms", "key", "status", keyID}
+	action := "disable"
+	if enabled {
+		action = "enable"
+	}
+
+	args := []string{"kms", "key", "status", action, keyID}
 
 	if version > 0 {
 		args = append(args, "--version", strconv.FormatUint(version, 10))
-	}
-
-	if enabled {
-		args = append(args, "--enable")
-	} else {
-		args = append(args, "--disable")
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -479,17 +548,22 @@ func (c *CLIAdapter) KeyRevoke(ctx context.Context, keyID string, reason string)
 		args = append(args, "--reason", reason)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// revoke prints only a success line (docs/kms/cli.md §5), so the
+	// resulting status is read back from the key's metadata.
+	if _, err := c.runCommand(ctx, args...); err != nil {
+		return nil, err
+	}
+
+	metadata, err := c.KeyMetadata(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliKeyRevokeResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "KeyRevoke", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &KeyRevokeResult{
+		KeyID:     metadata.KeyID,
+		Status:    metadata.Status,
+		RevokedAt: metadata.UpdatedAt,
+	}, nil
 }
 
 // KeyMetadata retrieves key metadata via CLI.
@@ -506,7 +580,7 @@ func (c *CLIAdapter) KeyMetadata(ctx context.Context, keyID string) (*KeyMetadat
 		return nil, ErrCLIOutputParseFailed{Operation: "KeyMetadata", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // KeyMetadataUpdate updates key metadata via CLI.
@@ -529,17 +603,23 @@ func (c *CLIAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts K
 		args = append(args, "--remove-tag", tag)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// update prints a success line ahead of its JSON, so the stored
+	// metadata is read back with `metadata get` instead.
+	if _, err := c.runCommand(ctx, args...); err != nil {
+		return nil, err
+	}
+
+	metadata, err := c.KeyMetadata(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliKeyMetadataUpdateResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "KeyMetadataUpdate", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &KeyMetadataUpdateResult{
+		KeyID:     metadata.KeyID,
+		Name:      metadata.Name,
+		UpdatedAt: metadata.UpdatedAt,
+		Tags:      metadata.Tags,
+	}, nil
 }
 
 // KeyPolicy retrieves key policy via CLI.
@@ -556,7 +636,7 @@ func (c *CLIAdapter) KeyPolicy(ctx context.Context, keyID string) (*KeyPolicyRes
 		return nil, ErrCLIOutputParseFailed{Operation: "KeyPolicy", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // KeyPolicySet sets key policy via CLI.
@@ -584,24 +664,29 @@ func (c *CLIAdapter) KeyPolicySet(ctx context.Context, keyID string, opts KeyPol
 	}
 
 	if opts.MaxUsageCount > 0 {
-		args = append(args, "--max-usage-count", strconv.FormatUint(opts.MaxUsageCount, 10))
+		args = append(args, "--max-usage", strconv.FormatUint(opts.MaxUsageCount, 10))
 	}
 
 	if opts.RequireMFA {
 		args = append(args, "--require-mfa")
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// policy set prints only a success line (docs/kms/cli.md §5), so the
+	// stored policy is read back with `policy get`.
+	if _, err := c.runCommand(ctx, args...); err != nil {
+		return nil, err
+	}
+
+	policy, err := c.KeyPolicy(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliKeyPolicySetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "KeyPolicySet", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &KeyPolicySetResult{
+		KeyID:         policy.KeyID,
+		PolicyVersion: policy.Version,
+		UpdatedAt:     policy.UpdatedAt,
+	}, nil
 }
 
 // KeyAlgorithms lists supported algorithms via CLI.
@@ -629,21 +714,16 @@ func (c *CLIAdapter) KeyAlgorithms(ctx context.Context) (*KeyAlgorithmsResult, e
 func (c *CLIAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOptions) (*CryptoEncryptResult, error) {
 	args := []string{"kms", "crypto", "encrypt", "--key-id", opts.KeyID}
 
-	// Encode plaintext as base64 for CLI input
-	plaintext := base64.StdEncoding.EncodeToString(opts.Plaintext)
-	args = append(args, "--data", plaintext, "--base64")
-
 	if len(opts.Context) > 0 {
-		aad := base64.StdEncoding.EncodeToString(opts.Context)
-		args = append(args, "--aad", aad)
+		args = append(args, "--context", string(opts.Context))
 	}
 
 	if len(opts.Nonce) > 0 {
-		nonce := base64.StdEncoding.EncodeToString(opts.Nonce)
-		args = append(args, "--nonce", nonce)
+		args = append(args, "--nonce", base64.StdEncoding.EncodeToString(opts.Nonce))
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The plaintext travels raw on stdin.
+	output, err := c.runCommandInput(ctx, opts.Plaintext, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -660,25 +740,21 @@ func (c *CLIAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOption
 func (c *CLIAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOptions) (*CryptoDecryptResult, error) {
 	args := []string{"kms", "crypto", "decrypt", "--key-id", opts.KeyID}
 
-	// Encode ciphertext as base64 for CLI input
-	ciphertext := base64.StdEncoding.EncodeToString(opts.Ciphertext)
-	args = append(args, "--data", ciphertext, "--base64")
-
 	if len(opts.Nonce) > 0 {
-		nonce := base64.StdEncoding.EncodeToString(opts.Nonce)
-		args = append(args, "--nonce", nonce)
+		args = append(args, "--nonce", base64.StdEncoding.EncodeToString(opts.Nonce))
 	}
 
 	if len(opts.Context) > 0 {
-		aad := base64.StdEncoding.EncodeToString(opts.Context)
-		args = append(args, "--aad", aad)
+		args = append(args, "--context", string(opts.Context))
 	}
 
 	if opts.KeyVersion > 0 {
-		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
+		args = append(args, "--key-version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The ciphertext travels base64 on stdin (--base64-input defaults on).
+	ciphertext := []byte(base64.StdEncoding.EncodeToString(opts.Ciphertext))
+	output, err := c.runCommandInput(ctx, ciphertext, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -695,15 +771,12 @@ func (c *CLIAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOption
 func (c *CLIAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*CryptoSignResult, error) {
 	args := []string{"kms", "crypto", "sign", "--key-id", opts.KeyID}
 
-	// Encode message as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	args = append(args, "--data", message, "--base64")
-
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The message travels raw on stdin.
+	output, err := c.runCommandInput(ctx, opts.Message, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -718,43 +791,37 @@ func (c *CLIAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*C
 
 // CryptoVerify verifies a signature via CLI.
 func (c *CLIAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions) (*CryptoVerifyResult, error) {
-	args := []string{"kms", "crypto", "verify", "--key-id", opts.KeyID}
-
-	// Encode message and signature as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	signature := base64.StdEncoding.EncodeToString(opts.Signature)
-	args = append(args, "--data", message, "--signature", signature, "--base64")
+	args := []string{"kms", "crypto", "verify", "--key-id", opts.KeyID,
+		"--signature", base64.StdEncoding.EncodeToString(opts.Signature)}
 
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
 	if opts.KeyVersion > 0 {
-		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
+		args = append(args, "--key-version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
+	// The message travels raw on stdin.
 	var result cliCryptoVerifyResponse
 	valid := func() bool { return result.Valid }
-	if err := c.runVerifyCommand(ctx, "CryptoVerify", &result, valid, args...); err != nil {
+	if err := c.runVerifyCommand(ctx, "CryptoVerify", opts.Message, &result, valid, args...); err != nil {
 		return nil, err
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // CryptoHash computes a cryptographic hash via CLI.
 func (c *CLIAdapter) CryptoHash(ctx context.Context, data []byte, algorithm string) (*CryptoHashResult, error) {
-	args := []string{"kms", "crypto", "hash"}
-
-	// Encode data as base64 for CLI input
-	encoded := base64.StdEncoding.EncodeToString(data)
-	args = append(args, "--data", encoded, "--base64")
+	args := []string{"kms", "crypto", "hash", "--format", "base64"}
 
 	if algorithm != "" {
 		args = append(args, "--algorithm", algorithm)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The data travels raw on stdin.
+	output, err := c.runCommandInput(ctx, data, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -771,15 +838,12 @@ func (c *CLIAdapter) CryptoHash(ctx context.Context, data []byte, algorithm stri
 func (c *CLIAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*CryptoHMACResult, error) {
 	args := []string{"kms", "crypto", "hmac", "generate", "--key-id", opts.KeyID}
 
-	// Encode message as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	args = append(args, "--data", message, "--base64")
-
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The message travels raw on stdin.
+	output, err := c.runCommandInput(ctx, opts.Message, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -794,28 +858,25 @@ func (c *CLIAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*C
 
 // CryptoVerifyHMAC verifies an HMAC via CLI.
 func (c *CLIAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMACOptions) (*CryptoVerifyHMACResult, error) {
-	args := []string{"kms", "crypto", "hmac", "verify", "--key-id", opts.KeyID}
-
-	// Encode message and HMAC as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	hmac := base64.StdEncoding.EncodeToString(opts.HMAC)
-	args = append(args, "--data", message, "--hmac", hmac, "--base64")
+	args := []string{"kms", "crypto", "hmac", "verify", "--key-id", opts.KeyID,
+		"--hmac", base64.StdEncoding.EncodeToString(opts.HMAC)}
 
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
 	if opts.KeyVersion > 0 {
-		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
+		args = append(args, "--key-version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
+	// The message travels raw on stdin.
 	var result cliCryptoVerifyHMACResponse
 	valid := func() bool { return result.Valid }
-	if err := c.runVerifyCommand(ctx, "CryptoVerifyHMAC", &result, valid, args...); err != nil {
+	if err := c.runVerifyCommand(ctx, "CryptoVerifyHMAC", opts.Message, &result, valid, args...); err != nil {
 		return nil, err
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // CryptoRandom generates random bytes via CLI.
@@ -1387,47 +1448,40 @@ func (r *cliKeyStatusResponse) toResult() *KeyStatusResult {
 	}
 }
 
-type cliKeyRevokeResponse struct {
-	KeyID     string `json:"key_id,omitempty"`
-	Status    string `json:"status,omitempty"`
-	RevokedAt int64  `json:"revoked_at,omitempty"`
-}
-
-func (r *cliKeyRevokeResponse) toResult() *KeyRevokeResult {
-	return &KeyRevokeResult{
-		KeyID:     r.KeyID,
-		Status:    r.Status,
-		RevokedAt: time.Unix(r.RevokedAt, 0),
-	}
-}
-
+// cliKeyMetadataResponse mirrors `kms key metadata get`; its timestamps
+// are RFC 3339 strings and it carries no rotation policy.
 type cliKeyMetadataResponse struct {
-	KeyID              string             `json:"key_id,omitempty"`
-	Name               string             `json:"name,omitempty"`
-	Description        string             `json:"description,omitempty"`
-	Algorithm          string             `json:"algorithm,omitempty"`
-	Status             string             `json:"status,omitempty"`
-	Version            uint64             `json:"version,omitempty"`
-	Exportable         bool               `json:"exportable,omitempty"`
-	DeletionProtection bool               `json:"deletion_protection,omitempty"`
-	Usage              []string           `json:"usage,omitempty"`
-	Owner              string             `json:"owner,omitempty"`
-	CreatedAt          int64              `json:"created_at,omitempty"`
-	UpdatedAt          int64              `json:"updated_at,omitempty"`
-	LastUsedAt         int64              `json:"last_used_at,omitempty"`
-	Tags               map[string]string  `json:"tags,omitempty"`
-	RotationPolicy     *cliRotationPolicy `json:"rotation_policy,omitempty"`
+	KeyID              string            `json:"key_id,omitempty"`
+	Name               string            `json:"name,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Algorithm          string            `json:"algorithm,omitempty"`
+	Status             string            `json:"status,omitempty"`
+	Version            uint64            `json:"version,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	Usage              []string          `json:"usage,omitempty"`
+	Owner              string            `json:"owner,omitempty"`
+	CreatedAt          string            `json:"created_at,omitempty"`
+	UpdatedAt          string            `json:"updated_at,omitempty"`
+	LastUsedAt         string            `json:"last_used_at,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
 }
 
-type cliRotationPolicy struct {
-	Enabled         bool  `json:"enabled,omitempty"`
-	IntervalSeconds int64 `json:"interval_seconds,omitempty"`
-	NextRotation    int64 `json:"next_rotation,omitempty"`
-	RetainVersions  int32 `json:"retain_versions,omitempty"`
-}
-
-func (r *cliKeyMetadataResponse) toResult() *KeyMetadataResult {
-	result := &KeyMetadataResult{
+func (r *cliKeyMetadataResponse) toResult() (*KeyMetadataResult, error) {
+	const operation = "KeyMetadata"
+	createdAt, err := parseCLIRFC3339(operation, "created_at", r.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseCLIRFC3339(operation, "updated_at", r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	lastUsedAt, err := parseCLIRFC3339(operation, "last_used_at", r.LastUsedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &KeyMetadataResult{
 		KeyID:              r.KeyID,
 		Name:               r.Name,
 		Description:        r.Description,
@@ -1438,78 +1492,50 @@ func (r *cliKeyMetadataResponse) toResult() *KeyMetadataResult {
 		DeletionProtection: r.DeletionProtection,
 		Usage:              r.Usage,
 		Owner:              r.Owner,
-		CreatedAt:          time.Unix(r.CreatedAt, 0),
-		UpdatedAt:          time.Unix(r.UpdatedAt, 0),
-		LastUsedAt:         time.Unix(r.LastUsedAt, 0),
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
+		LastUsedAt:         lastUsedAt,
 		Tags:               r.Tags,
-	}
-	if r.RotationPolicy != nil {
-		result.RotationPolicy = &RotationPolicy{
-			Enabled:         r.RotationPolicy.Enabled,
-			IntervalSeconds: r.RotationPolicy.IntervalSeconds,
-			NextRotation:    time.Unix(r.RotationPolicy.NextRotation, 0),
-			RetainVersions:  r.RotationPolicy.RetainVersions,
-		}
-	}
-	return result
+	}, nil
 }
 
-type cliKeyMetadataUpdateResponse struct {
-	KeyID     string            `json:"key_id,omitempty"`
-	Name      string            `json:"name,omitempty"`
-	UpdatedAt int64             `json:"updated_at,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
-}
-
-func (r *cliKeyMetadataUpdateResponse) toResult() *KeyMetadataUpdateResult {
-	return &KeyMetadataUpdateResult{
-		KeyID:     r.KeyID,
-		Name:      r.Name,
-		UpdatedAt: time.Unix(r.UpdatedAt, 0),
-		Tags:      r.Tags,
-	}
-}
-
+// cliKeyPolicyResponse mirrors `kms key policy get`; its timestamps are
+// RFC 3339 strings.
 type cliKeyPolicyResponse struct {
 	KeyID             string   `json:"key_id,omitempty"`
 	Version           int32    `json:"version,omitempty"`
 	AllowedOperations []string `json:"allowed_operations,omitempty"`
 	AllowedPrincipals []string `json:"allowed_principals,omitempty"`
 	DeniedPrincipals  []string `json:"denied_principals,omitempty"`
-	ExpiresAt         int64    `json:"expires_at,omitempty"`
+	ExpiresAt         string   `json:"expires_at,omitempty"`
 	RotationRequired  bool     `json:"rotation_required,omitempty"`
 	MaxUsageCount     uint64   `json:"max_usage_count,omitempty"`
 	RequireMFA        bool     `json:"require_mfa,omitempty"`
-	UpdatedAt         int64    `json:"updated_at,omitempty"`
+	UpdatedAt         string   `json:"updated_at,omitempty"`
 }
 
-func (r *cliKeyPolicyResponse) toResult() *KeyPolicyResult {
+func (r *cliKeyPolicyResponse) toResult() (*KeyPolicyResult, error) {
+	const operation = "KeyPolicy"
+	expiresAt, err := parseCLIRFC3339(operation, "expires_at", r.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseCLIRFC3339(operation, "updated_at", r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
 	return &KeyPolicyResult{
 		KeyID:             r.KeyID,
 		Version:           r.Version,
 		AllowedOperations: r.AllowedOperations,
 		AllowedPrincipals: r.AllowedPrincipals,
 		DeniedPrincipals:  r.DeniedPrincipals,
-		ExpiresAt:         time.Unix(r.ExpiresAt, 0),
+		ExpiresAt:         expiresAt,
 		RotationRequired:  r.RotationRequired,
 		MaxUsageCount:     r.MaxUsageCount,
 		RequireMFA:        r.RequireMFA,
-		UpdatedAt:         time.Unix(r.UpdatedAt, 0),
-	}
-}
-
-type cliKeyPolicySetResponse struct {
-	KeyID         string `json:"key_id,omitempty"`
-	PolicyVersion int32  `json:"policy_version,omitempty"`
-	UpdatedAt     int64  `json:"updated_at,omitempty"`
-}
-
-func (r *cliKeyPolicySetResponse) toResult() *KeyPolicySetResult {
-	return &KeyPolicySetResult{
-		KeyID:         r.KeyID,
-		PolicyVersion: r.PolicyVersion,
-		UpdatedAt:     time.Unix(r.UpdatedAt, 0),
-	}
+		UpdatedAt:         updatedAt,
+	}, nil
 }
 
 type cliKeyAlgorithmsResponse struct {
@@ -1529,47 +1555,51 @@ type cliCryptoEncryptResponse struct {
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Ciphertext string `json:"ciphertext,omitempty"`
 	Nonce      string `json:"nonce,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoEncryptResponse) toResult() (*CryptoEncryptResult, error) {
-	ciphertext, err := base64.StdEncoding.DecodeString(r.Ciphertext)
+	const operation = "CryptoEncrypt"
+	ciphertext, err := decodeCLIBase64(operation, "ciphertext", r.Ciphertext)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode ciphertext: %w", err)
+		return nil, err
 	}
-	var nonce []byte
-	if r.Nonce != "" {
-		nonce, err = base64.StdEncoding.DecodeString(r.Nonce)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode nonce: %w", err)
-		}
+	nonce, err := decodeCLIBase64(operation, "nonce", r.Nonce)
+	if err != nil {
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoEncryptResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
 		Ciphertext: ciphertext,
 		Nonce:      nonce,
-		Timestamp:  time.Unix(r.Timestamp, 0),
+		Timestamp:  timestamp,
 	}, nil
 }
 
+// cliCryptoDecryptResponse carries the plaintext raw, not base64
+// (docs/kms/cli.md §6).
 type cliCryptoDecryptResponse struct {
 	KeyID      string `json:"key_id,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Plaintext  string `json:"plaintext,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoDecryptResponse) toResult() (*CryptoDecryptResult, error) {
-	plaintext, err := base64.StdEncoding.DecodeString(r.Plaintext)
+	timestamp, err := parseCLIUnixTimestamp("CryptoDecrypt", r.Timestamp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode plaintext: %w", err)
+		return nil, err
 	}
 	return &CryptoDecryptResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
-		Plaintext:  plaintext,
-		Timestamp:  time.Unix(r.Timestamp, 0),
+		Plaintext:  []byte(r.Plaintext),
+		Timestamp:  timestamp,
 	}, nil
 }
 
@@ -1578,20 +1608,25 @@ type cliCryptoSignResponse struct {
 	KeyVersion    uint64 `json:"key_version,omitempty"`
 	Signature     string `json:"signature,omitempty"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-	Timestamp     int64  `json:"timestamp,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoSignResponse) toResult() (*CryptoSignResult, error) {
-	signature, err := base64.StdEncoding.DecodeString(r.Signature)
+	const operation = "CryptoSign"
+	signature, err := decodeCLIBase64(operation, "signature", r.Signature)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode signature: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoSignResult{
 		KeyID:         r.KeyID,
 		KeyVersion:    r.KeyVersion,
 		Signature:     signature,
 		HashAlgorithm: r.HashAlgorithm,
-		Timestamp:     time.Unix(r.Timestamp, 0),
+		Timestamp:     timestamp,
 	}, nil
 }
 
@@ -1599,33 +1634,42 @@ type cliCryptoVerifyResponse struct {
 	KeyID      string `json:"key_id,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Valid      bool   `json:"valid,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
-func (r *cliCryptoVerifyResponse) toResult() *CryptoVerifyResult {
+func (r *cliCryptoVerifyResponse) toResult() (*CryptoVerifyResult, error) {
+	timestamp, err := parseCLIUnixTimestamp("CryptoVerify", r.Timestamp)
+	if err != nil {
+		return nil, err
+	}
 	return &CryptoVerifyResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
 		Valid:      r.Valid,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
+		Timestamp:  timestamp,
+	}, nil
 }
 
 type cliCryptoHashResponse struct {
 	Algorithm string `json:"algorithm,omitempty"`
 	Hash      string `json:"hash,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoHashResponse) toResult() (*CryptoHashResult, error) {
-	hash, err := base64.StdEncoding.DecodeString(r.Hash)
+	const operation = "CryptoHash"
+	hash, err := decodeCLIBase64(operation, "hash", r.Hash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode hash: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoHashResult{
 		Algorithm: r.Algorithm,
 		Hash:      hash,
-		Timestamp: time.Unix(r.Timestamp, 0),
+		Timestamp: timestamp,
 	}, nil
 }
 
@@ -1634,20 +1678,25 @@ type cliCryptoHMACResponse struct {
 	KeyVersion    uint64 `json:"key_version,omitempty"`
 	HMAC          string `json:"hmac,omitempty"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-	Timestamp     int64  `json:"timestamp,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoHMACResponse) toResult() (*CryptoHMACResult, error) {
-	hmac, err := base64.StdEncoding.DecodeString(r.HMAC)
+	const operation = "CryptoHMAC"
+	hmac, err := decodeCLIBase64(operation, "hmac", r.HMAC)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode HMAC: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoHMACResult{
 		KeyID:         r.KeyID,
 		KeyVersion:    r.KeyVersion,
 		HMAC:          hmac,
 		HashAlgorithm: r.HashAlgorithm,
-		Timestamp:     time.Unix(r.Timestamp, 0),
+		Timestamp:     timestamp,
 	}, nil
 }
 
@@ -1655,31 +1704,40 @@ type cliCryptoVerifyHMACResponse struct {
 	KeyID      string `json:"key_id,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Valid      bool   `json:"valid,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
-func (r *cliCryptoVerifyHMACResponse) toResult() *CryptoVerifyHMACResult {
+func (r *cliCryptoVerifyHMACResponse) toResult() (*CryptoVerifyHMACResult, error) {
+	timestamp, err := parseCLIUnixTimestamp("CryptoVerifyHMAC", r.Timestamp)
+	if err != nil {
+		return nil, err
+	}
 	return &CryptoVerifyHMACResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
 		Valid:      r.Valid,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
+		Timestamp:  timestamp,
+	}, nil
 }
 
 type cliCryptoRandomResponse struct {
 	RandomBytes string `json:"random_bytes,omitempty"`
-	Timestamp   int64  `json:"timestamp,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoRandomResponse) toResult() (*CryptoRandomResult, error) {
-	randomBytes, err := base64.StdEncoding.DecodeString(r.RandomBytes)
+	const operation = "CryptoRandom"
+	randomBytes, err := decodeCLIBase64(operation, "random_bytes", r.RandomBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode random bytes: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoRandomResult{
 		RandomBytes: randomBytes,
-		Timestamp:   time.Unix(r.Timestamp, 0),
+		Timestamp:   timestamp,
 	}, nil
 }
 
