@@ -31,6 +31,7 @@ import (
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
 )
 
 // The proto enum names are the suite's state names, upper-cased and prefixed.
