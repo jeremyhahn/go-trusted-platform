@@ -220,7 +220,8 @@ The REST runtime routes (§4) also return:
 
 - 404 for `ErrBundleNotFound`.
 - 409 for `ErrVTPMNotRunning` or `ErrVTPMAlreadyRunning`: the bundle is not in
-  the state the operation needs.
+  the state the operation needs. gRPC answers `FailedPrecondition` for both,
+  never `Internal`.
 - 400 for `ErrInvalidNonce`, `ErrInvalidPCRIndex`, or a `pcr_index` query value
   that is not an integer.
 
