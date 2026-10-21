@@ -19,7 +19,9 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"time"
 
+	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -209,40 +211,83 @@ func (a *QUICAdapter) SignManifest(ctx context.Context, opts SignManifestOptions
 	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "SignManifest"}
 }
 
-// VerifyManifest verifies a signed manifest
+// VerifyManifest fetches the stored manifest and posts it to
+// OpAttestVerifyManifest, which takes the manifest itself, as the REST and
+// gRPC adapters do (docs/attestation/api.md §3).
 func (a *QUICAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	body, err := a.doOp(ctx, "VerifyManifest", quicwire.OpAttestVerifyManifest, opts)
+	m, err := a.fetchManifest(ctx, "VerifyManifest/GetManifest", opts.ManifestID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result VerifyManifestResult
-	if err := quicwire.DecodePayload(body, &result); err != nil {
+	body, err := a.doOp(ctx, "VerifyManifest", quicwire.OpAttestVerifyManifest, quicapi.VerifyManifestRequest{Manifest: m})
+	if err != nil {
+		return nil, err
+	}
+
+	var resp quicapi.VerifyManifestResponse
+	if err := quicwire.DecodePayload(body, &resp); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "VerifyManifest",
 			Message:   "failed to parse response: " + err.Error(),
 		}
 	}
 
-	return &result, nil
+	hostIDMatch := true
+	if opts.ExpectedHostID != "" {
+		hostIDMatch = m.HostID == opts.ExpectedHostID
+	}
+	return &VerifyManifestResult{
+		Valid:           resp.Valid,
+		ManifestID:      opts.ManifestID,
+		SignatureValid:  resp.SignatureValid,
+		MerkleRootValid: resp.MerkleRootValid,
+		HostIDMatch:     hostIDMatch,
+		SignerTrusted:   resp.SignatureValid,
+		Errors:          resp.Errors,
+	}, nil
 }
 
 // GetManifest retrieves a manifest by ID
 func (a *QUICAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	body, err := a.doOp(ctx, "GetManifest", quicwire.OpAttestGetManifest, opts)
+	m, err := a.fetchManifest(ctx, "GetManifest", opts.ManifestID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result GetManifestResult
-	if err := quicwire.DecodePayload(body, &result); err != nil {
+	return &GetManifestResult{
+		ManifestID:     m.ID,
+		HostID:         m.HostID,
+		MerkleRoot:     m.MerkleRoot,
+		Signature:      m.Signature,
+		VMCount:        len(m.VMs),
+		ContainerCount: len(m.Containers),
+		Timestamp:      time.Unix(m.Timestamp, 0),
+		Version:        m.Version,
+		Metadata:       m.Metadata,
+	}, nil
+}
+
+// fetchManifest reads a stored manifest over OpAttestGetManifest. The daemon
+// decodes the request as quicapi.GetManifestRequest, keyed "id", so the
+// suite's GetManifestOptions cannot travel as is.
+func (a *QUICAdapter) fetchManifest(ctx context.Context, op, manifestID string) (*quicapi.ManifestData, error) {
+	body, err := a.doOp(ctx, op, quicwire.OpAttestGetManifest, quicapi.GetManifestRequest{ID: manifestID})
+	if err != nil {
+		return nil, err
+	}
+
+	var resp quicapi.GetManifestResponse
+	if err := quicwire.DecodePayload(body, &resp); err != nil {
 		return nil, &QUICAdapterError{
-			Operation: "GetManifest",
+			Operation: op,
 			Message:   "failed to parse response: " + err.Error(),
 		}
 	}
-
-	return &result, nil
+	if resp.Manifest == nil {
+		return nil, &QUICAdapterError{Operation: op, Message: ErrMissingResponseField{Field: "manifest"}.Error()}
+	}
+	return resp.Manifest, nil
 }
 
 // =============================================================================
