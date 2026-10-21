@@ -160,8 +160,8 @@ reachable by unidentified machines and is rate-limited for that reason.
 **Known holes in the integration suite:**
 
 - `test/integration/pxe/` drives every transport through real clients: the
-  REST, CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
-  pinned to gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
+  CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
+  pinned to REST, gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
   production code constructs a `pkg/compute/pxe.Service`, so platformd's
   `PXEGRPCService` has no backend (`pkg/api/daemon/daemon.go:975-979`) and every
   PXE call answers `SERVICE_NOT_CONFIGURED`. Against the shared integration
