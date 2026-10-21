@@ -28,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // The vtpm CLI prints the SDK domain types of sdk/go/services/vtpm with
@@ -183,6 +184,12 @@ func (e *CLIAdapterError) Error() string {
 // CLIAdapter implements VTPMCommands using the platformctl CLI.
 type CLIAdapter struct {
 	cliPath string
+	// configDir and configPath hold the platformctl config Setup writes: its
+	// context dials the harness daemon socket. platformctl reads its daemon
+	// connection only from a context (docs/vtpm/cli.md §1, global flags);
+	// without one every verb answers "daemon connection required".
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter.
@@ -201,12 +208,28 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 			Message:   "CLI not found",
 		}
 	}
+
+	dir, path, err := helpers.WriteTempLocalCLIConfig(GetSocketPath(), GetGRPCEndpoint())
+	if err != nil {
+		return &CLIAdapterError{
+			Operation: "Setup",
+			Message:   "writing the platformctl config: " + err.Error(),
+		}
+	}
+	a.configDir = dir
+	a.configPath = path
 	return nil
 }
 
 // Teardown cleans up after testing.
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(a.configDir)
+	a.configDir = ""
+	a.configPath = ""
+	return err
 }
 
 // Name returns the adapter name.
@@ -216,6 +239,9 @@ func (a *CLIAdapter) Name() string {
 
 // runCommand executes a CLI command and returns the output.
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
+	if a.configPath != "" {
+		args = append([]string{"--config", a.configPath, "--context", helpers.CLIContextName}, args...)
+	}
 	cmd := exec.CommandContext(ctx, a.cliPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

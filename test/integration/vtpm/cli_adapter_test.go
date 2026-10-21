@@ -17,7 +17,11 @@ package vtpm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // printCLIJSON renders v exactly as `platformctl vtpm ... --output json` does.
@@ -86,4 +91,52 @@ func TestBundleFromCLI_LeavesAnUnknownModeEmptyAndANilBundleNil(t *testing.T) {
 	assert.Nil(t, bundleFromCLI(nil))
 	assert.Nil(t, templateFromCLI(nil))
 	assert.Equal(t, vtpm.BundleMode(""), bundleFromCLI(&vtpmsvc.Bundle{Mode: vtpmsvc.BundleModeUnspecified}).Mode)
+}
+
+// echoPlatformCTL installs a stand-in platformctl that prints its arguments,
+// one per line, and points the adapter at it.
+func echoPlatformCTL(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "platformctl")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755))
+	t.Setenv("PLATFORMCTL_PATH", path)
+}
+
+// TestCLIAdapter_RunsEveryVerbInTheHarnessContext pins the daemon connection:
+// platformctl reads it only from a context, so every verb carries the config
+// Setup wrote for the harness socket. Without it each verb answered "daemon
+// connection required".
+func TestCLIAdapter_RunsEveryVerbInTheHarnessContext(t *testing.T) {
+	echoPlatformCTL(t)
+	t.Setenv("VTPM_SOCKET_PATH", "")
+	t.Setenv("PLATFORM_SOCKET_PATH", "/tmp/platformd-vtpm-test.sock")
+	ctx := context.Background()
+	adapter := NewCLIAdapter()
+	require.NoError(t, adapter.Setup(ctx))
+
+	out, err := adapter.runCommand(ctx, "vtpm", "list")
+	require.NoError(t, err)
+
+	args := strings.Fields(string(out))
+	require.Len(t, args, 6, "arguments: %q", args)
+	assert.Equal(t, []string{"--config", adapter.configPath, "--context", helpers.CLIContextName, "vtpm", "list"}, args)
+	config, err := os.ReadFile(adapter.configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(config), "socket_path: /tmp/platformd-vtpm-test.sock")
+
+	configDir := adapter.configDir
+	require.NoError(t, adapter.Teardown(ctx))
+	assert.NoDirExists(t, configDir)
+}
+
+func TestCLIAdapter_SetupRefusesAMissingCLI(t *testing.T) {
+	t.Setenv("PLATFORMCTL_PATH", filepath.Join(t.TempDir(), "no-platformctl"))
+	adapter := NewCLIAdapter()
+
+	err := adapter.Setup(context.Background())
+
+	var adapterErr *CLIAdapterError
+	require.ErrorAs(t, err, &adapterErr)
+	assert.Empty(t, adapter.configPath)
+	assert.NoError(t, adapter.Teardown(context.Background()))
 }
