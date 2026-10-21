@@ -1,5 +1,7 @@
 # Wire Protocol
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Protocol Stack
 
 ```

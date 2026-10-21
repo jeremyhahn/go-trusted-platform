@@ -1,5 +1,7 @@
 # Cryptographic Protocols
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The go-trusted-platform system employs a layered cryptographic architecture to provide trustworthy distributed operations without any single point of compromise. Three primary cryptographic protocols work together:

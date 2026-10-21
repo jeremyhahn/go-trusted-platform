@@ -1,5 +1,7 @@
 # QuicBaaS Schema for DHT State Storage
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Revision History
 
 | Version | Date | Description |
