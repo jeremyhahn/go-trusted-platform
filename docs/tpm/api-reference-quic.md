@@ -280,7 +280,11 @@ type TPM2KeyResponse struct {
 {}
 ```
 
-The configured EK handle is flushed.
+The EK that `tpm.ek` configures is evicted from its persistent handle
+(`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5) with the `tpm.ek`
+hierarchy auth; the message is `EK evicted`. An empty handle is NotFound.
+DeleteSRK (`0x0B`) does the same for the Shared SRK `tpm.ssrk` configures,
+answering `SRK evicted`.
 
 **Response Payload:**
 ```go

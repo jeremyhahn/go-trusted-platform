@@ -15,6 +15,7 @@ package tpmsrk
 
 import (
 	"crypto/x509"
+	"errors"
 	"fmt"
 
 	libtpm2 "github.com/google/go-tpm/tpm2"
@@ -70,6 +71,22 @@ func (e ErrExists) Error() string {
 // GRPCStatus classifies the error as AlreadyExists.
 func (e ErrExists) GRPCStatus() *status.Status {
 	return status.New(codes.AlreadyExists, e.Error())
+}
+
+// ErrNotFound is returned when Delete finds no persistent object at the
+// Shared SRK handle (TPM_RC_HANDLE). It is NotFound on every transport.
+type ErrNotFound struct {
+	Handle uint32
+}
+
+// Error returns the message.
+func (e ErrNotFound) Error() string {
+	return fmt.Sprintf("shared SRK not found at handle 0x%08X", e.Handle)
+}
+
+// GRPCStatus classifies the error as NotFound.
+func (e ErrNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }
 
 // AttributesFromConfig builds the creation attributes of the Shared SRK
@@ -180,4 +197,39 @@ func Create(tpm xkmssdk.TrustedPlatformModule) (*xkmssdk.KeyAttributes, error) {
 		return nil, ErrExists{Handle: handle}
 	}
 	return Persist(tpm, cfg.SSRK, cfg.EncryptSession)
+}
+
+// Delete is the single DeleteSRK entry point shared by every daemon
+// transport. It evicts the Shared SRK the TPM configuration names
+// (tpm.ssrk) from its persistent handle with TPM2_EvictControl (TPM 2.0
+// Library Part 3 §28.5), authorised by the owner hierarchy auth it was
+// persisted with, so a following Create at the same handle succeeds. It
+// returns the evicted handle. An empty handle is ErrNotFound and a missing
+// tpm.ssrk handle ErrNotConfigured; a nil TPM is ErrTPMUnavailable.
+func Delete(tpm xkmssdk.TrustedPlatformModule) (uint32, error) {
+	if tpm == nil {
+		return 0, ErrTPMUnavailable{}
+	}
+	cfg := tpm.Config()
+	if cfg == nil || cfg.SSRK == nil || cfg.SSRK.Handle == 0 {
+		return 0, ErrNotConfigured{}
+	}
+	handle := cfg.SSRK.Handle
+
+	name, _, err := tpm.ReadHandle(xkmssdk.TPMHandle(handle))
+	if errors.Is(err, libtpm2.TPMRCHandle) {
+		return 0, ErrNotFound{Handle: handle}
+	}
+	if err != nil {
+		return 0, err
+	}
+	attrs, err := AttributesFromConfig(cfg.SSRK)
+	if err != nil {
+		return 0, err
+	}
+	attrs.TPMAttributes.Name = name
+	if err := tpm.DeleteKey(attrs, nil); err != nil {
+		return 0, err
+	}
+	return handle, nil
 }

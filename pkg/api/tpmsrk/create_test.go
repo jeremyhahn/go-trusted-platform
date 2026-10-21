@@ -16,6 +16,7 @@ package tpmsrk
 import (
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
@@ -37,20 +38,28 @@ type createTPM struct {
 	xkmssdk.TrustedPlatformModule
 
 	cfg       *xkmssdk.TPMConfig
+	name      tpm2.TPM2BName
 	readErr   error
 	ekAttrs   *xkmssdk.KeyAttributes
 	ekErr     error
 	createErr error
+	deleteErr error
 
 	readHandle tpm2.TPMHandle
 	created    *xkmssdk.KeyAttributes
+	deleted    *xkmssdk.KeyAttributes
 }
 
 func (f *createTPM) Config() *xkmssdk.TPMConfig { return f.cfg }
 
 func (f *createTPM) ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
 	f.readHandle = handle
-	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, f.readErr
+	return f.name, tpm2.TPMTPublic{}, f.readErr
+}
+
+func (f *createTPM) DeleteKey(keyAttrs *xkmssdk.KeyAttributes, _ xkmssdk.TPMKeyBackend) error {
+	f.deleted = keyAttrs
+	return f.deleteErr
 }
 
 func (f *createTPM) EKAttributes() (*xkmssdk.KeyAttributes, error) { return f.ekAttrs, f.ekErr }
@@ -150,6 +159,90 @@ func TestCreate_PropagatesBackendErrors(t *testing.T) {
 
 func TestCreate_NilTPM(t *testing.T) {
 	_, err := Create(nil)
+
+	require.ErrorAs(t, err, &ErrTPMUnavailable{})
+}
+
+// persistedSSRK is a TPM holding the Shared SRK at the configured handle.
+func persistedSSRK() *createTPM {
+	return &createTPM{cfg: &xkmssdk.TPMConfig{
+		SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle), HierarchyAuth: "so-pin"},
+	}}
+}
+
+func TestDelete_EvictsThePersistedSSRK(t *testing.T) {
+	name := tpm2.TPM2BName{Buffer: []byte{0x00, 0x0B, 0x5A}}
+	tpm := persistedSSRK()
+	tpm.name = name
+
+	handle, err := Delete(tpm)
+
+	require.NoError(t, err)
+	assert.Equal(t, uint32(testSSRKHandle), handle)
+	assert.Equal(t, testSSRKHandle, tpm.readHandle, "Delete must read the configured SSRK handle")
+	require.NotNil(t, tpm.deleted, "a persisted SSRK must reach TPM2_EvictControl")
+	assert.Equal(t, testSSRKHandle, tpm.deleted.TPMAttributes.Handle)
+	assert.Equal(t, tpm2.TPMHTPersistent, tpm.deleted.TPMAttributes.HandleType,
+		"only a persistent handle type is evicted rather than flushed")
+	assert.Equal(t, name, tpm.deleted.TPMAttributes.Name, "EvictControl names the object it evicts")
+	assert.Equal(t, "so-pin", string(tpm.deleted.TPMAttributes.HierarchyAuth.Bytes()),
+		"eviction is authorised by the owner auth the SSRK was persisted with")
+}
+
+func TestDelete_EmptyHandleIsNotFound(t *testing.T) {
+	tpm := persistedSSRK()
+	tpm.readErr = fmt.Errorf("read public: %w", tpm2.TPMRCHandle)
+
+	_, err := Delete(tpm)
+
+	require.ErrorAs(t, err, &ErrNotFound{})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Contains(t, err.Error(), "0x81000001")
+	assert.Nil(t, tpm.deleted, "an empty handle must never reach TPM2_EvictControl")
+}
+
+func TestDelete_NotConfigured(t *testing.T) {
+	for name, cfg := range map[string]*xkmssdk.TPMConfig{
+		"no config":   nil,
+		"no tpm.ssrk": {},
+		"zero handle": {SSRK: &xkmssdk.SRKConfig{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tpm := &createTPM{cfg: cfg}
+
+			_, err := Delete(tpm)
+
+			require.ErrorAs(t, err, &ErrNotConfigured{})
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Nil(t, tpm.deleted)
+		})
+	}
+}
+
+func TestDelete_PropagatesBackendErrors(t *testing.T) {
+	t.Run("ReadHandle", func(t *testing.T) {
+		readErr := errors.New("TPM_RC_FAILURE")
+		tpm := persistedSSRK()
+		tpm.readErr = readErr
+
+		_, err := Delete(tpm)
+
+		require.ErrorIs(t, err, readErr)
+		assert.Nil(t, tpm.deleted)
+	})
+	t.Run("DeleteKey", func(t *testing.T) {
+		deleteErr := errors.New("TPM_RC_BAD_AUTH")
+		tpm := persistedSSRK()
+		tpm.deleteErr = deleteErr
+
+		_, err := Delete(tpm)
+
+		require.ErrorIs(t, err, deleteErr)
+	})
+}
+
+func TestDelete_NilTPM(t *testing.T) {
+	_, err := Delete(nil)
 
 	require.ErrorAs(t, err, &ErrTPMUnavailable{})
 }

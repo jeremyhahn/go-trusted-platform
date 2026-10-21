@@ -24,6 +24,7 @@ package tpmek
 
 import (
 	"crypto/x509"
+	"errors"
 	"fmt"
 
 	libtpm2 "github.com/google/go-tpm/tpm2"
@@ -61,6 +62,22 @@ func (e ErrEKExists) Error() string {
 // GRPCStatus classifies the error as AlreadyExists.
 func (e ErrEKExists) GRPCStatus() *status.Status {
 	return status.New(codes.AlreadyExists, e.Error())
+}
+
+// ErrNotFound is returned when Delete finds no persistent object at the EK
+// handle (TPM_RC_HANDLE). It is NotFound on every transport.
+type ErrNotFound struct {
+	Handle uint32
+}
+
+// Error returns the message.
+func (e ErrNotFound) Error() string {
+	return fmt.Sprintf("endorsement key not found at handle 0x%08X", e.Handle)
+}
+
+// GRPCStatus classifies the error as NotFound.
+func (e ErrNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }
 
 // ErrNotConfigured is returned when the TPM configuration names no EK
@@ -199,4 +216,39 @@ func Create(tpm xkmssdk.TrustedPlatformModule) (*xkmssdk.KeyAttributes, error) {
 		return nil, err
 	}
 	return ekAttrs, nil
+}
+
+// Delete is the single DeleteEK entry point shared by every daemon
+// transport. It evicts the EK the TPM configuration names (tpm.ek) from its
+// persistent handle with TPM2_EvictControl (TPM 2.0 Library Part 3 §28.5),
+// authorised by the hierarchy auth it was persisted with, so a following
+// Create at the same handle succeeds. It returns the evicted handle. An
+// empty handle is ErrNotFound and a missing tpm.ek handle ErrNotConfigured;
+// a nil TPM is ErrTPMUnavailable.
+func Delete(tpm xkmssdk.TrustedPlatformModule) (uint32, error) {
+	if tpm == nil {
+		return 0, ErrTPMUnavailable{}
+	}
+	cfg := tpm.Config()
+	if cfg == nil || cfg.EK == nil || cfg.EK.Handle == 0 {
+		return 0, ErrNotConfigured{}
+	}
+	handle := cfg.EK.Handle
+
+	name, _, err := tpm.ReadHandle(xkmssdk.TPMHandle(handle))
+	if errors.Is(err, libtpm2.TPMRCHandle) {
+		return 0, ErrNotFound{Handle: handle}
+	}
+	if err != nil {
+		return 0, err
+	}
+	ekAttrs, err := AttributesFromConfig(cfg.EK)
+	if err != nil {
+		return 0, err
+	}
+	ekAttrs.TPMAttributes.Name = name
+	if err := tpm.DeleteKey(ekAttrs, nil); err != nil {
+		return 0, err
+	}
+	return handle, nil
 }

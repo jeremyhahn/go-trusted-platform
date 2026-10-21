@@ -574,18 +574,15 @@ func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *quicw
 	})
 }
 
-// handleDeleteEK deletes (flushes) the Endorsement Key handle.
+// handleDeleteEK evicts the persisted Endorsement Key (tpmek.Delete).
 func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *quicwire.Response {
-	ekAttrs, err := h.tpm.EKAttributes()
-	if err != nil {
+	if _, err := tpmek.Delete(h.tpm); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	h.tpm.Flush(ekAttrs.TPMAttributes.Handle)
-
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   "EK handle flushed",
+		Message:   "EK evicted",
 		Timestamp: time.Now().Unix(),
 	})
 }
@@ -675,18 +672,15 @@ func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quic
 	})
 }
 
-// handleDeleteSRK deletes (flushes) the Storage Root Key handle.
+// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete).
 func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
-	if err != nil {
+	if _, err := tpmsrk.Delete(h.tpm); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	h.tpm.Flush(srkAttrs.TPMAttributes.Handle)
-
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   "SRK handle flushed",
+		Message:   "SRK evicted",
 		Timestamp: time.Now().Unix(),
 	})
 }

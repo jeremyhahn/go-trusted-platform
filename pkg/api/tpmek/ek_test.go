@@ -17,6 +17,7 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
@@ -38,18 +39,26 @@ type fakeTPM struct {
 	xkmssdk.TrustedPlatformModule
 
 	cfg       *xkmssdk.TPMConfig
+	name      tpm2.TPM2BName
 	readErr   error
 	createErr error
+	deleteErr error
 
 	readHandle tpm2.TPMHandle
 	created    *xkmssdk.KeyAttributes
+	deleted    *xkmssdk.KeyAttributes
 }
 
 func (f *fakeTPM) Config() *xkmssdk.TPMConfig { return f.cfg }
 
 func (f *fakeTPM) ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
 	f.readHandle = handle
-	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, f.readErr
+	return f.name, tpm2.TPMTPublic{}, f.readErr
+}
+
+func (f *fakeTPM) DeleteKey(keyAttrs *xkmssdk.KeyAttributes, _ xkmssdk.TPMKeyBackend) error {
+	f.deleted = keyAttrs
+	return f.deleteErr
 }
 
 func (f *fakeTPM) CreateEK(attrs *xkmssdk.KeyAttributes) error {
@@ -138,6 +147,80 @@ func TestCreate_PropagatesBackendErrors(t *testing.T) {
 
 func TestCreate_NilTPM(t *testing.T) {
 	_, err := Create(nil)
+
+	require.ErrorAs(t, err, &ErrTPMUnavailable{})
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+func TestDelete_EvictsThePersistedEK(t *testing.T) {
+	name := tpm2.TPM2BName{Buffer: []byte{0x00, 0x0B, 0xEC}}
+	tpm := &fakeTPM{cfg: configuredEK(), name: name}
+
+	handle, err := Delete(tpm)
+
+	require.NoError(t, err)
+	assert.Equal(t, uint32(testEKHandle), handle)
+	assert.Equal(t, testEKHandle, tpm.readHandle, "Delete must read the configured EK handle")
+	require.NotNil(t, tpm.deleted, "a persisted EK must reach TPM2_EvictControl")
+	assert.Equal(t, testEKHandle, tpm.deleted.TPMAttributes.Handle)
+	assert.Equal(t, tpm2.TPMHTPersistent, tpm.deleted.TPMAttributes.HandleType,
+		"only a persistent handle type is evicted rather than flushed")
+	assert.Equal(t, name, tpm.deleted.TPMAttributes.Name, "EvictControl names the object it evicts")
+	assert.Equal(t, "endorsement-pin", string(tpm.deleted.TPMAttributes.HierarchyAuth.Bytes()),
+		"eviction is authorised by the hierarchy auth the EK was persisted with")
+}
+
+func TestDelete_EmptyHandleIsNotFound(t *testing.T) {
+	tpm := &fakeTPM{cfg: configuredEK(), readErr: fmt.Errorf("read public: %w", tpm2.TPMRCHandle)}
+
+	_, err := Delete(tpm)
+
+	require.ErrorAs(t, err, &ErrNotFound{})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Contains(t, err.Error(), "0x81010001")
+	assert.Nil(t, tpm.deleted, "an empty handle must never reach TPM2_EvictControl")
+}
+
+func TestDelete_NotConfigured(t *testing.T) {
+	for name, cfg := range map[string]*xkmssdk.TPMConfig{
+		"no config":   nil,
+		"no tpm.ek":   {},
+		"zero handle": {EK: &xkmssdk.EKConfig{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tpm := &fakeTPM{cfg: cfg}
+
+			_, err := Delete(tpm)
+
+			require.ErrorAs(t, err, &ErrNotConfigured{})
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Nil(t, tpm.deleted)
+		})
+	}
+}
+
+func TestDelete_PropagatesBackendErrors(t *testing.T) {
+	t.Run("ReadHandle", func(t *testing.T) {
+		readErr := errors.New("TPM_RC_FAILURE")
+		tpm := &fakeTPM{cfg: configuredEK(), readErr: readErr}
+
+		_, err := Delete(tpm)
+
+		require.ErrorIs(t, err, readErr)
+		assert.Nil(t, tpm.deleted)
+	})
+	t.Run("DeleteKey", func(t *testing.T) {
+		deleteErr := errors.New("TPM_RC_BAD_AUTH")
+		tpm := &fakeTPM{cfg: configuredEK(), deleteErr: deleteErr}
+
+		_, err := Delete(tpm)
+
+		require.ErrorIs(t, err, deleteErr)
+	})
+}
+
+func TestDelete_NilTPM(t *testing.T) {
+	_, err := Delete(nil)
 
 	require.ErrorAs(t, err, &ErrTPMUnavailable{})
 	assert.Equal(t, codes.Unavailable, status.Code(err))

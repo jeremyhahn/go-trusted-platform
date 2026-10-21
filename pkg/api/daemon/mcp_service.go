@@ -3006,16 +3006,15 @@ func (p *MCPServiceProvider) TPMDeleteEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	handle, err := tpmek.Delete(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
-
-	p.tpm2Service.Flush(ekAttrs.TPMAttributes.Handle)
 
 	return map[string]interface{}{
 		"success": true,
-		"message": "EK handle flushed",
+		"message": "EK evicted",
+		"handle":  handle,
 	}, nil
 }
 
@@ -3061,16 +3060,15 @@ func (p *MCPServiceProvider) TPMDeleteSRK(ctx context.Context) (interface{}, err
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
+	handle, err := tpmsrk.Delete(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
-
-	p.tpm2Service.Flush(srkAttrs.TPMAttributes.Handle)
 
 	return map[string]interface{}{
 		"success": true,
-		"message": "SRK handle flushed",
+		"message": "SRK evicted",
+		"handle":  handle,
 	}, nil
 }
 

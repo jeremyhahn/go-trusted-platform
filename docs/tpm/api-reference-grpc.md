@@ -236,8 +236,12 @@ message ImportEKCertificateResponse {
 
 ### DeleteEK
 
-Flushes the configured EK handle from the TPM. The request fields are not
-read.
+Evicts the EK that `tpm.ek` configures from its persistent handle
+(`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5), authorised by the
+`tpm.ek` hierarchy auth it was persisted with, so a following `CreateEK`
+at the same handle succeeds. The status message is `EK evicted`. An empty
+handle (`TPM_RC_HANDLE`) is `NotFound`; a `tpm.ek` without a handle is
+`FailedPrecondition`. The request fields are not read.
 
 **Request:**
 ```protobuf
@@ -307,7 +311,12 @@ message CreateSRKResponse {
 
 ### DeleteSRK
 
-Flushes the SSRK handle from the TPM. The request fields are not read.
+Evicts the Shared SRK that `tpm.ssrk` configures from its persistent handle
+(`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5), authorised by the
+`tpm.ssrk` hierarchy auth it was persisted with, so a following `CreateSRK`
+at the same handle succeeds. The status message is `SRK evicted`. An empty
+handle (`TPM_RC_HANDLE`) is `NotFound`; a `tpm.ssrk` without a handle is
+`FailedPrecondition`. The request fields are not read.
 
 **Request:**
 ```protobuf

@@ -421,19 +421,16 @@ func (s *TPMGRPCService) DeleteEK(
 
 	s.logger.Debug("TPM DeleteEK request received")
 
-	// EK is typically not deleted, but we can flush the handle
-	ekAttrs, err := tpm.EKAttributes()
+	handle, err := tpmek.Delete(tpm)
 	if err != nil {
 		return nil, s.mapError(err)
 	}
 
-	tpm.Flush(ekAttrs.TPMAttributes.Handle)
-
-	s.logger.Debug("TPM DeleteEK completed")
+	s.logger.Debug("TPM DeleteEK completed", "handle", fmt.Sprintf("0x%08X", handle))
 	return &platformv1.DeleteEKResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "EK handle flushed",
+			Message: "EK evicted",
 		},
 	}, nil
 }
@@ -544,18 +541,16 @@ func (s *TPMGRPCService) DeleteSRK(
 
 	s.logger.Debug("TPM DeleteSRK request received")
 
-	srkAttrs, err := tpm.SSRKAttributes()
+	handle, err := tpmsrk.Delete(tpm)
 	if err != nil {
 		return nil, s.mapError(err)
 	}
 
-	tpm.Flush(srkAttrs.TPMAttributes.Handle)
-
-	s.logger.Debug("TPM DeleteSRK completed")
+	s.logger.Debug("TPM DeleteSRK completed", "handle", fmt.Sprintf("0x%08X", handle))
 	return &platformv1.DeleteSRKResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "SRK handle flushed",
+			Message: "SRK evicted",
 		},
 	}, nil
 }
