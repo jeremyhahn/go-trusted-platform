@@ -734,10 +734,23 @@ func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir s
 	t.Logf("TestInstall completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
 }
 
+// vmCleanupMargin is the part of the test's deadline a VM command leaves for
+// killing its process group (serialWaitDelay) and the test's cleanup.
+const vmCleanupMargin = 2 * time.Minute
+
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
 	diskPath := ensureInstalledDisk(t, ctx, cmd, workDir)
 
-	testCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	// Bound the boot by the test's own deadline, less a margin for the
+	// process-group kill and cleanup, so a hung guest fails TestBoot with its
+	// output instead of panicking the package at its go test timeout.
+	bootCtx := ctx
+	if deadline, ok := t.Deadline(); ok {
+		var cancelBoot context.CancelFunc
+		bootCtx, cancelBoot = context.WithDeadline(ctx, deadline.Add(-vmCleanupMargin))
+		defer cancelBoot()
+	}
+	testCtx, cancel := context.WithTimeout(bootCtx, 30*time.Minute)
 	defer cancel()
 
 	opts := TestBootOptions{

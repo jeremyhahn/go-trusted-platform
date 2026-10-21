@@ -19,10 +19,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -79,6 +81,7 @@ func (c *CLIAdapter) Teardown() error {
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	killGroupOnCancel(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return output, fmt.Errorf("command failed: %s: %w", string(output), err)
@@ -88,9 +91,16 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 
 // runCommandWithTimeout runs a command with a specific timeout.
 func (c *CLIAdapter) runCommandWithTimeout(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
+		timeout = time.Until(deadline)
+	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return c.runCommand(timeoutCtx, args...)
+	output, err := c.runCommand(timeoutCtx, args...)
+	if err != nil && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+		return output, ErrCommandTimeout{Command: strings.Join(args, " "), Timeout: timeout.String()}
+	}
+	return output, err
 }
 
 // runVerb runs an iso verb and decodes its result from stdout. stderr carries

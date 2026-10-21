@@ -146,11 +146,7 @@ func (c *CLIAdapter) runWatched(ctx context.Context, timeout time.Duration, dete
 	cmd := exec.CommandContext(runCtx, c.binaryPath, args...)
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	cmd.WaitDelay = serialWaitDelay
+	killGroupOnCancel(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -211,4 +207,16 @@ func (c *CLIAdapter) runWatched(ctx context.Context, timeout time.Duration, dete
 		return output.Bytes(), ErrCommandTimeout{Command: strings.Join(args, " "), Timeout: timeout.String()}
 	}
 	return output.Bytes(), err
+}
+
+// killGroupOnCancel makes cancelling cmd's context kill its whole process
+// group, not only platformctl: a QEMU grandchild would otherwise keep the
+// output pipe open and block Wait past the test's deadline. WaitDelay bounds
+// the wait for the pipe once the group is killed.
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = serialWaitDelay
 }
