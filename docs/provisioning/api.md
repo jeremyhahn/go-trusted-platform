@@ -60,15 +60,17 @@ REST base path `/api/v1/pxe` (`pkg/webservice/v1/rest/pxe/router.go`).
 capabilities, all fifteen on five transports.
 
 **`ListDevices` filters on every transport (#975).** The `PXEDeviceFilter`
-fields `state`, `mac_address` and `vlan` narrow the list; a field left unset
-matches every device. On REST they are the query parameters of `GET
-/api/v1/pxe/devices` (`pkg/webservice/v1/rest/pxe/filter.go`):
+fields `state`, `mac_address` and `vlan` narrow the list, and `limit` and
+`offset` page it; a field left unset matches every device. On REST they are
+the query parameters of `GET /api/v1/pxe/devices`
+(`pkg/webservice/v1/rest/pxe/filter.go`):
 
 | Parameter | Value | Refused with `400` |
 |---|---|---|
 | `state` | a `ProvisioningState` name, with or without its `PROVISIONING_STATE_` prefix (`quarantined`, `PROVISIONING_STATE_QUARANTINED`) | an unknown name, or `unspecified` |
 | `mac_address` | a colon-separated MAC address, or a prefix of one (`52:54:00`) | any character but hex digits and `:`, or longer than 17 |
 | `vlan` | an 802.1Q VLAN ID | anything but an integer from 1 to 4094 |
+| `limit`, `offset` | a count; `0` is no limit, no offset | a negative number, or anything but an integer that fits 32 bits |
 
 An absent or empty parameter is no filter. A refused value never reaches the
 service. Until #975, REST ignored the query and listed every device, and gRPC

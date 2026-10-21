@@ -28,6 +28,10 @@ const (
 	filterMAC   = "mac_address"
 	filterVLAN  = "vlan"
 
+	// filterLimit and filterOffset page the matching devices.
+	filterLimit  = "limit"
+	filterOffset = "offset"
+
 	// maxMACLength is the length of a colon-separated MAC address
 	// ("00:11:22:33:44:55"); a longer prefix can match no device.
 	maxMACLength = 17
@@ -42,7 +46,7 @@ const (
 // device. state takes the ProvisioningState name with or without its
 // PROVISIONING_STATE_ prefix ("quarantined" or
 // "PROVISIONING_STATE_QUARANTINED"); mac_address an exact MAC or a prefix
-// of one; vlan an 802.1Q VLAN ID.
+// of one; vlan an 802.1Q VLAN ID; limit and offset a non-negative count.
 func deviceFilter(query url.Values) (*platformv1.PXEDeviceFilter, error) {
 	filter := &platformv1.PXEDeviceFilter{}
 
@@ -69,7 +73,29 @@ func deviceFilter(query url.Values) (*platformv1.PXEDeviceFilter, error) {
 		filter.Vlan = uint32(vlan)
 	}
 
+	var err error
+	if filter.Limit, err = pageBound(query, filterLimit); err != nil {
+		return nil, err
+	}
+	if filter.Offset, err = pageBound(query, filterOffset); err != nil {
+		return nil, err
+	}
+
 	return filter, nil
+}
+
+// pageBound reads the limit or offset parameter: a non-negative count, where
+// zero (or absent) means no limit and no offset.
+func pageBound(query url.Values, parameter string) (int32, error) {
+	value := query.Get(parameter)
+	if value == "" {
+		return 0, nil
+	}
+	count, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || count < 0 {
+		return 0, &ErrInvalidDeviceFilter{Parameter: parameter, Value: value, Reason: "not a non-negative count"}
+	}
+	return int32(count), nil
 }
 
 // isMACPrefix reports whether value is a colon-separated MAC address or a

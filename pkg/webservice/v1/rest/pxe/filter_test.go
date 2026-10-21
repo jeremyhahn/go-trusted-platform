@@ -57,6 +57,8 @@ func TestDeviceFilter_ReadsEveryFilterParameter(t *testing.T) {
 		{"all three", "state=booting&mac_address=52:54&vlan=405", &platformv1.PXEDeviceFilter{
 			State: platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING, MacAddress: "52:54", Vlan: 405,
 		}},
+		{"a page", "limit=10&offset=20", &platformv1.PXEDeviceFilter{Limit: 10, Offset: 20}},
+		{"zero limit and offset are no page", "limit=0&offset=0", &platformv1.PXEDeviceFilter{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,6 +87,11 @@ func TestDeviceFilter_RefusesAValueThatCannotBeAFilter(t *testing.T) {
 		{"vlan=-1", filterVLAN},
 		{"vlan=70000", filterVLAN},
 		{"vlan=ten", filterVLAN},
+		{"limit=-1", filterLimit},
+		{"limit=many", filterLimit},
+		{"limit=3000000000", filterLimit},
+		{"offset=-5", filterOffset},
+		{"offset=1.5", filterOffset},
 	}
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {
@@ -102,7 +109,7 @@ func TestListDevices_HandsTheQueryFilterToTheService(t *testing.T) {
 	server := &listingPXEServer{}
 	router := pxeRoutes(server)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/pxe/devices?state=authorized&mac_address=52:54:00&vlan=200", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/pxe/devices?state=authorized&mac_address=52:54:00&vlan=200&limit=5&offset=1", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -110,6 +117,7 @@ func TestListDevices_HandsTheQueryFilterToTheService(t *testing.T) {
 	require.NotNil(t, server.got)
 	want := &platformv1.PXEDeviceFilter{
 		State: platformv1.ProvisioningState_PROVISIONING_STATE_AUTHORIZED, MacAddress: "52:54:00", Vlan: 200,
+		Limit: 5, Offset: 1,
 	}
 	assert.True(t, proto.Equal(want, server.got.GetFilter()), "got %v", server.got.GetFilter())
 }
@@ -118,7 +126,7 @@ func TestListDevices_RefusesABadFilterBeforeTheService(t *testing.T) {
 	server := &listingPXEServer{}
 	router := pxeRoutes(server)
 
-	for _, query := range []string{"state=sleeping", "mac_address=nope", "vlan=4095"} {
+	for _, query := range []string{"state=sleeping", "mac_address=nope", "vlan=4095", "limit=-1", "offset=x"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/pxe/devices?"+query, nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
