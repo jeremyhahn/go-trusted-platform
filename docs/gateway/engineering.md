@@ -1390,10 +1390,13 @@ counters dropped and each gateway cookie cut to its owner id. It then
 
 `TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` drives `routing` past
 its limit from outside. It checks the child sits in its own leaf at the class
-`memory.max`, then sets `memory.swap.max` to 0 and lowers the live leaf's
-`memory.max` to 1 MiB. It then asserts the following:
+`memory.max` and that its `oom_score_adj` is not -1000, which would make it
+unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
+`memory.max` to 1 MiB, and asserts the following:
 
-- the kernel's `oom_kill` count in `memory.events` rises;
+- the kernel's `oom_kill` count in `memory.events` has risen by the time the
+  write returns, because the write waits out the kill; a failure here means
+  the child was never killed, not that the relaunch was slow;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);

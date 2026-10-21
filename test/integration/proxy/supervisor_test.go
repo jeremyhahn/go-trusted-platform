@@ -248,6 +248,12 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
 		t.Fatalf("%s memory.max = %s, want the class value %d", victim, limit, def.MemoryMax)
 	}
+	// An oom_score_adj of -1000 makes a task unkillable even inside its own
+	// memory cgroup: the limit below would then stall the child instead of
+	// killing it, and the wait for a relaunch would time out with no cause.
+	if adj := readTrimmed(t, fmt.Sprintf("/proc/%d/oom_score_adj", before[victim])); adj == "-1000" {
+		t.Fatalf("%s child oom_score_adj = %s: the OOM killer cannot kill it", victim, adj)
+	}
 	oomBefore := memoryEvent(t, leaf, "oom_kill")
 	failedBefore := load.failed.Load()
 
@@ -260,10 +266,15 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	}
 	writeCgroupFile(t, filepath.Join(leaf, "memory.max"), strconv.Itoa(1<<20))
 
-	after := gw.awaitRelaunch(t, victim, before, probes[victim])
+	// The write returns only once the leaf's usage is under the new limit or
+	// it holds no task, and the kernel counts an OOM kill before the victim's
+	// memory is freed. So the count has risen by now, or the child was never
+	// killed and no relaunch can follow.
 	if oom := memoryEvent(t, leaf, "oom_kill"); oom <= oomBefore {
-		t.Errorf("%s memory.events oom_kill = %d, want more than %d", victim, oom, oomBefore)
+		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, oom, oomBefore)
 	}
+
+	after := gw.awaitRelaunch(t, victim, before, probes[victim])
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
 		t.Errorf("relaunched %s memory.max = %s, want the class value %d restored", victim, limit, def.MemoryMax)
 	}
