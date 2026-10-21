@@ -60,7 +60,8 @@ Three properties that follow, and that callers depend on:
 2. **`deleting` only goes forward.** Deletion cannot be cancelled once entered.
 3. **Same-state transitions are allowed for idempotency**
    (`CanTransitionTo`, `state.go:69-73`). Suspending a suspended tenant
-   succeeds. This is deliberate — retried API calls must not fail — and it means
+   succeeds, and resuming an active tenant succeeds without a change
+   (`Manager.ResumeTenant`) on every transport. This is deliberate — retried API calls must not fail — and it means
    `CanTransitionTo(s, s)` is always true, including for `deleted`.
 
 An invalid transition is `ErrInvalidTransition`; an operation against a state
@@ -155,6 +156,16 @@ Tenant entities are stored through the stack; `ErrStorageFailed` wraps
 persistence failures. Per-tenant keyspaces (`keyspace.go`) are how a tenant's
 data is separated in the store — the isolation is in the key path, not in a
 filter applied at read time.
+
+A tenant's lifecycle state, quotas, labels and annotations live only in the
+`Manager`'s in-memory cache; the IAM tenant record holds the ID, the name and
+the timestamps. The pinned go-quicbaas `sdk/go` (v0.12.0-alpha) cannot carry
+more: its embedded transport's tenant update keeps only `DisplayName`, stores
+it as the tenant's new IAM **name**, and drops status and metadata. So a
+tenant rebuilt from IAM (after a restart) starts as `created`, and a by-name
+lookup that falls back to IAM never replaces a cached record: a name the cached
+record does not carry is `ErrTenantNotFound`, since it is the SDK's rewritten
+display name.
 
 ## 7. Test strategy
 
