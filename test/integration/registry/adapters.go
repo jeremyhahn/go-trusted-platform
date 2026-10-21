@@ -17,7 +17,6 @@ package registry
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
@@ -413,56 +412,6 @@ func (r *cliPushResponse) toPushResult() *PushResult {
 	}
 }
 
-type cliPullResponse struct {
-	Reference      string              `json:"reference"`
-	Manifest       cliManifestResponse `json:"manifest"`
-	Config         string              `json:"config"`
-	Layers         []cliLayerResponse  `json:"layers"`
-	Encrypted      bool                `json:"encrypted"`
-	Signed         bool                `json:"signed"`
-	SignatureValid bool                `json:"signature_valid"`
-	PulledAt       time.Time           `json:"pulled_at"`
-}
-
-func (r *cliPullResponse) toPullResult() *PullResult {
-	result := &PullResult{
-		Reference:      r.Reference,
-		Manifest:       r.Manifest.toImageManifest(),
-		Encrypted:      r.Encrypted,
-		Signed:         r.Signed,
-		SignatureValid: r.SignatureValid,
-		PulledAt:       r.PulledAt,
-	}
-
-	if r.Config != "" {
-		result.Config, _ = base64.StdEncoding.DecodeString(r.Config)
-	}
-
-	if len(r.Layers) > 0 {
-		result.Layers = make([]LayerData, len(r.Layers))
-		for i, layer := range r.Layers {
-			result.Layers[i] = layer.toLayerData()
-		}
-	}
-
-	return result
-}
-
-type cliLayerResponse struct {
-	MediaType   string            `json:"media_type"`
-	Content     string            `json:"content"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-func (r *cliLayerResponse) toLayerData() LayerData {
-	content, _ := base64.StdEncoding.DecodeString(r.Content)
-	return LayerData{
-		MediaType:   r.MediaType,
-		Content:     content,
-		Annotations: r.Annotations,
-	}
-}
-
 type cliManifestResponse struct {
 	SchemaVersion int                     `json:"schemaVersion"`
 	MediaType     string                  `json:"mediaType"`
@@ -537,20 +486,25 @@ func (r *cliListResponse) toListResult() *ListResult {
 	}
 }
 
+// cliDeleteResponse is `registry delete --output json` (docs/registry/cli.md
+// §6): the deletion time is `timestamp`, Unix seconds, as on push.
 type cliDeleteResponse struct {
-	Reference     string    `json:"reference"`
-	Digest        string    `json:"digest"`
-	DeletedAt     time.Time `json:"deleted_at"`
-	LayersDeleted int       `json:"layers_deleted"`
+	Reference string `json:"reference"`
+	Digest    string `json:"digest"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func (r *cliDeleteResponse) toDeleteResult() *DeleteResult {
-	return &DeleteResult{
-		Reference:     r.Reference,
-		Digest:        r.Digest,
-		DeletedAt:     r.DeletedAt,
-		LayersDeleted: r.LayersDeleted,
+	result := &DeleteResult{
+		Reference: r.Reference,
+		Digest:    r.Digest,
 	}
+	// A zero timestamp means the daemon reported none; time.Unix(0, 0) would
+	// pass a DeletedAt.IsZero check it should fail.
+	if r.Timestamp != 0 {
+		result.DeletedAt = time.Unix(r.Timestamp, 0).UTC()
+	}
+	return result
 }
 
 // cliInspectResponse is `platformctl registry inspect --output json`: one

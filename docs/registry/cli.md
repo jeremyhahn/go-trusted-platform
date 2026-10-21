@@ -87,19 +87,27 @@ Without `--overwrite`, pushing over an existing tag fails with
 
 ## 4. `platformctl registry pull <image-reference>`
 
-Pull an image. Writes to `--output` or stdout.
+Pull an image. Writes to `--output-file` or stdout.
 
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--decrypt` | `-d` | bool | `false` | Decrypt encrypted image layers |
 | `--verify` | | bool | `false` | Verify the image signature |
 | `--platform` | `-p` | string | `""` | Target platform, e.g. `linux/amd64` |
-| `--output` | `-o` | string | `""` | Output file path; writes stdout when unset |
+| `--output-file` | | string | `""` | Output file path; writes stdout when unset |
 
 ```bash
 platformctl registry pull registry.example.com/apps/api:1.4.2 \
-    --decrypt --verify --platform linux/amd64 --output ./api.tar
+    --decrypt --verify --platform linux/amd64 --output-file ./api.tar
 ```
+
+The file flag is not `--output`: that is the global format flag, and pull
+honours it. Without `--output-file`, stdout carries the image document the
+registry streams (`application/x-trusted-platform-image`, a JSON object with
+`manifest`, `config` and `layers`) and nothing else, in every format. With
+`--output-file`, the image goes to the file and stdout carries the pull
+summary: `reference`, `digest`, `size`, `decrypted`, `verified`, `platform`
+and `timestamp` with `--output json` or `yaml`, the table otherwise.
 
 `--verify` is opt-in, not the default. In an environment where image
 provenance matters, pass it — or pull through tooling that always does.
@@ -146,6 +154,11 @@ Delete an image from the registry.
 platformctl registry delete registry.example.com/apps/api:1.4.1 --dry-run
 platformctl registry delete registry.example.com/apps/api:1.4.1 --force --keep-untagged
 ```
+
+With `--output json` or `yaml` the document is `reference`, `digest`,
+`deleted`, `message` and `bytes_freed` (when set), and `timestamp`: the
+deletion time in Unix seconds, the same field the other transports return.
+A dry run reports `deleted: false` and `timestamp: 0`.
 
 Run `--dry-run` first on anything shared. `--keep-untagged` is the safe form:
 it detaches the tag and leaves the manifest addressable by digest.

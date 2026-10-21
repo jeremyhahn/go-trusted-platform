@@ -221,12 +221,9 @@ func (c *CLIAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*P
 		return nil, err
 	}
 
-	var result cliPullResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "Pull", Err: err}
-	}
-
-	return result.toPullResult(), nil
+	// Without --output-file, stdout is the image document the registry
+	// streams and nothing else (docs/registry/cli.md §4).
+	return pullResultFromImage(ref, output)
 }
 
 // List lists images in the registry via CLI.
