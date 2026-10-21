@@ -1043,8 +1043,8 @@ platform:
   # DHT network configuration
   dht:
     bootstrap_peers:
-      - "/ip4/192.168.1.100/tcp/9444/p2p/QmBootstrap1"
-      - "/ip4/192.168.1.101/tcp/9444/p2p/QmBootstrap2"
+      - "/ip4/192.0.2.10/tcp/9444/p2p/QmBootstrap1"
+      - "/ip4/192.0.2.11/tcp/9444/p2p/QmBootstrap2"
       - "/dns4/bootstrap.trusted-dht.io/tcp/9444/p2p/QmBootstrap3"
     listen_addresses:
       - "/ip4/0.0.0.0/tcp/9444"

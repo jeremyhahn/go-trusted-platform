@@ -1430,8 +1430,8 @@ p2p:
 
   # Bootstrap peers for initial network join
   bootstrap_peers:
-    - /ip4/192.168.1.100/tcp/9999/p2p/QmNodeID1
-    - /ip4/192.168.1.101/tcp/9999/p2p/QmNodeID2
+    - /ip4/192.0.2.10/tcp/9999/p2p/QmNodeID1
+    - /ip4/192.0.2.11/tcp/9999/p2p/QmNodeID2
     - /dns4/bootstrap.example.com/tcp/9999/p2p/QmBootstrapID
 
   # Listen addresses for P2P connections
@@ -1521,7 +1521,7 @@ PLATFORMD_CLUSTER_NODE_ID=node-1
 
 # P2P configuration
 PLATFORMD_P2P_ENABLED=true
-PLATFORMD_P2P_BOOTSTRAP_PEERS=/ip4/192.168.1.100/tcp/9999/p2p/QmNodeID1
+PLATFORMD_P2P_BOOTSTRAP_PEERS=/ip4/192.0.2.10/tcp/9999/p2p/QmNodeID1
 
 # EAB credentials (sensitive - prefer flags)
 PLATFORMD_P2P_EAB_KID=your-kid
@@ -1553,13 +1553,13 @@ PLATFORMD_P2P_EAB_HMAC=your-hmac-key
 **Standalone with P2P:**
 ```bash
 platformd --p2p \
-  --p2p-bootstrap=/ip4/192.168.1.100/tcp/9999/p2p/QmNodeID1
+  --p2p-bootstrap=/ip4/192.0.2.10/tcp/9999/p2p/QmNodeID1
 ```
 
 **Single-node Raft with P2P:**
 ```bash
 platformd --mode=raft --p2p \
-  --p2p-bootstrap=/ip4/192.168.1.100/tcp/9999/p2p/QmNodeID1 \
+  --p2p-bootstrap=/ip4/192.0.2.10/tcp/9999/p2p/QmNodeID1 \
   --raft-data-dir=/var/lib/platformd/raft
 ```
 
@@ -1589,7 +1589,7 @@ platformd --mode=node --p2p \
 platformd --p2p \
   --eab-kid=your-key-id \
   --eab-hmac=your-hmac-key \
-  --p2p-bootstrap=/ip4/192.168.1.100/tcp/9999/p2p/QmNodeID1
+  --p2p-bootstrap=/ip4/192.0.2.10/tcp/9999/p2p/QmNodeID1
 ```
 
 ---
