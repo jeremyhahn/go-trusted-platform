@@ -52,12 +52,18 @@ func (g *GRPCAdapter) Name() string {
 	return "gRPC"
 }
 
+// platformdGRPCEndpoint is the platformd gRPC address: PLATFORM_GRPC_ENDPOINT
+// when set, otherwise the suite's PlatformdGRPC endpoint.
+func platformdGRPCEndpoint() string {
+	if endpoint := os.Getenv("PLATFORM_GRPC_ENDPOINT"); endpoint != "" {
+		return endpoint
+	}
+	return GetServiceEndpoints().PlatformdGRPC
+}
+
 // Setup initializes the gRPC connection to platformd.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv("PLATFORM_GRPC_ENDPOINT")
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformdGRPC
-	}
+	endpoint := platformdGRPCEndpoint()
 
 	conn, err := grpc.NewClient(endpoint,
 		helpers.GRPCTransportCredentials(),

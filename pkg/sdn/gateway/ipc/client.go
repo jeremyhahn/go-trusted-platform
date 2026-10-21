@@ -29,9 +29,11 @@ import (
 // Client is the supervisor's (or a parser process's) handle on one child's
 // socket.
 type Client struct {
+	path     string
 	conn     *grpc.ClientConn
 	control  ipcv1.ProcessControlServiceClient
 	datapath ipcv1.DatapathServiceClient
+	services ipcv1.GatewayServicesServiceClient
 }
 
 // Reconnect backoff for the child's socket. gRPC's default backoff starts at
@@ -73,9 +75,11 @@ func Dial(path string) (*Client, error) {
 		return nil, &ErrSocketPath{Path: path, Op: "dial", Cause: err}
 	}
 	return &Client{
+		path:     path,
 		conn:     conn,
 		control:  ipcv1.NewProcessControlServiceClient(conn),
 		datapath: ipcv1.NewDatapathServiceClient(conn),
+		services: ipcv1.NewGatewayServicesServiceClient(conn),
 	}, nil
 }
 

@@ -352,7 +352,7 @@ type ErrDisabled struct{}
 func (ErrDisabled) Error() string { return "ntp: time synchronization is not enabled" }
 
 // ErrUnresolvedNTSMaterial is returned when an NTS certificate or key field
-// still holds a secret reference (kms://, secret://, file://) at the point
+// still holds a secret reference (any <scheme>://, e.g. kms://) at the point
 // chronyd needs the material on disk. Serving unauthenticated time instead
 // would be a silent security downgrade, so this is fatal for the NTP service.
 type ErrUnresolvedNTSMaterial struct {

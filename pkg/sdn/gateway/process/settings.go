@@ -59,6 +59,10 @@ type Settings struct {
 	StopTimeout   time.Duration `yaml:"stop-timeout" json:"stop_timeout" mapstructure:"stop-timeout"`
 	RestartBudget int           `yaml:"restart-budget" json:"restart_budget" mapstructure:"restart-budget"`
 	RestartWindow time.Duration `yaml:"restart-window" json:"restart_window" mapstructure:"restart-window"`
+	// PlatformUIDs are the platformd accounts the datapath child admits to
+	// its live load-balancer, NAT64 and perf calls (#660). A root platformd
+	// needs no entry: root is a control uid already.
+	PlatformUIDs []uint32 `yaml:"platform-uids" json:"platform_uids" mapstructure:"platform-uids"`
 }
 
 // ErrUserUnknown reports a configured service account that does not exist on

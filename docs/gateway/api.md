@@ -188,8 +188,8 @@ and port on every transport. The add body is
 set-backends takes `{backends: [...]}` and replaces the whole set. A VIP read
 returns its `ct_zone`, `group_id` and per-backend `healthy` flag.
 
-A production `platformd` does not wire the load balancer backend yet (see
-§5a), so these verbs answer "not configured" on a live platform.
+On a live platform these verbs reach the load balancer in `gatewayd` over
+live IPC (see §5a); without a datapath socket they answer "not configured".
 
 ---
 
@@ -199,21 +199,29 @@ A production `platformd` does not wire the load balancer backend yet (see
 |---|---|---|---|---|---|
 | NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`sdk/go/wire/quicwire/gateway_nat64.go`) | `gateway_nat64_status` | ✅ |
 
-> **Production status: routed, not yet backed.** The translator runs in
-> `gatewayd`. Today `platformd` does not reach it: it builds the gateway
-> service with no NAT64 backend on any transport. On a live platform every
-> transport answers "not configured": `Unavailable` on gRPC and Unix, 503 on
-> REST, `StatusUnavailable` on QUIC, and "service not available" from MCP.
-> That holds even while the `nat64:` section is running and healthy.
+> **Production status: served over live IPC (#660).** The translator, the
+> load balancer (§5) and perf (§6) run in `gatewayd`'s datapath child.
+> `platformd` reaches them by dialling that child's control socket directly,
+> `sdn.gateway.datapath-socket` in platformd's configuration (normally
+> gatewayd's `<process.runtime-dir>/datapath.sock`; see [user.md](user.md)), and builds the gateway service on an IPC client
+> (`pkg/api/daemon/gateway_backends.go`). Every read and control action is a
+> live call to `GatewayServicesService` (`pkg/sdn/gateway/ipc/proto/ipc.proto`);
+> nothing is served from the telemetry snapshot, which stays telemetry.
 >
-> Connecting the control plane to gatewayd-resident services is planned and
-> awaits a design decision: live IPC over the supervisor seam, or the
-> telemetry snapshot. The load balancer (§5) and perf (§6) verbs share the
-> same gap. Until it lands, read translator health from `gatewayd` itself
-> or from the telemetry snapshot's `nat64` section.
+> - **Child unreachable.** The dial is lazy, so `platformd` starts before
+>   `gatewayd`. A call that cannot reach the child answers "not configured"
+>   on every transport: `Unavailable` on gRPC and Unix, 503 on REST,
+>   `StatusUnavailable` on QUIC, and "service not available" from MCP.
+> - **No datapath socket (single-process mode).** The load balancer and
+>   NAT64 answer "not configured"; perf falls back to `platformd`'s local OVS
+>   perf service.
+> - **Access.** The child admits `platformd`'s uid to these methods only
+>   through `process.platform-uids` (`pkg/sdn/gateway/ipc/policy.go`).
 >
-> What is proven today:
+> What is proven:
 > - The verb is routed on every transport (`TestNAT64StatusMultiProtocol`).
+> - The production wiring serves all three backends from a real IPC server
+>   (`TestNew_ServesGatewayBackendsOverIPC`).
 > - The translator itself works end to end (`make integration-test-nat64`).
 
 Read-only by design: the translator has no runtime verbs. Its `pool6`,
@@ -284,9 +292,9 @@ and why its MCP tool needs `sdn:write` while the two read verbs need
 
 The perf sub-opcodes are served by the same shared perf service as the other
 transports; when the perf backend is not wired, they return
-`StatusUnavailable` rather than failing as unknown opcodes. A production
-`platformd` does not wire the perf backend yet (see §5a), so on a live
-platform that is what every transport answers.
+`StatusUnavailable` rather than failing as unknown opcodes. On a live
+platform perf is measured by `gatewayd`'s datapath child over live IPC (see
+§5a); in single-process mode it is `platformd`'s local OVS perf service.
 
 ---
 

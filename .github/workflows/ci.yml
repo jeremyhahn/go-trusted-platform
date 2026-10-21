@@ -64,7 +64,7 @@ env:
   # An exact patch release, never "stable", so an upstream release cannot change
   # the toolchain under a running pipeline. The `go` directive in every go.mod
   # must not exceed this, and nested modules must match the root's.
-  GO_VERSION: "1.27.2"
+  GO_VERSION: "1.27.3"
   # Modules resolve from tags, never from a workspace. A stray go.work in the
   # tree would silently change what every job compiles (the Makefile and
   # release.yml set the same).

@@ -83,6 +83,19 @@ type GatewayService struct {
 	mu            sync.RWMutex
 }
 
+// GatewayBackendSource is the one place every transport reads the
+// gatewayd-resident backends from (#660): REST, QUIC and MCP hold the
+// shared *GatewayService through it instead of a nil field of their own,
+// so a backend wired at construction reaches every transport at once.
+type GatewayBackendSource interface {
+	LoadBalancer() GatewayLoadBalancerInterface
+	NAT64() GatewayNAT64Interface
+	Perf() GatewayPerfInterface
+}
+
+// Ensure *GatewayService is the shared backend source.
+var _ GatewayBackendSource = (*GatewayService)(nil)
+
 // GatewayServiceOption is a functional option for configuring the GatewayService.
 type GatewayServiceOption func(*GatewayService)
 

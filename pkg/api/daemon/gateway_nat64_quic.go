@@ -31,19 +31,13 @@ func (a *zoneGatewayAdapter) NAT64Status(_ context.Context) (*quicwire.NAT64Stat
 	return nil, errGatewayFeatureNotConfigured
 }
 
-// SetNAT64 wires the NAT64 backend into the QUIC gateway adapter. A nil
-// backend leaves the status operation returning
-// errGatewayFeatureNotConfigured (StatusUnavailable on the wire).
-func (a *fullGatewayQUICAdapter) SetNAT64(n GatewayNAT64Interface) {
-	a.nat64 = n
-}
-
-// requireNAT64 resolves the translator backend or reports it unconfigured.
+// requireNAT64 resolves the shared service's translator backend, or
+// reports errGatewayFeatureNotConfigured (StatusUnavailable on the wire).
 func (a *fullGatewayQUICAdapter) requireNAT64() (GatewayNAT64Interface, error) {
-	if a.nat64 == nil {
+	if a.backends == nil || a.backends.NAT64() == nil {
 		return nil, errGatewayFeatureNotConfigured
 	}
-	return a.nat64, nil
+	return a.backends.NAT64(), nil
 }
 
 // mapNAT64ToQUICError converts NAT64 errors to the QUIC adapter's

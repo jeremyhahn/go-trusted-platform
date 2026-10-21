@@ -19,20 +19,34 @@
 // service start, the material is handed to exactly one consumer, and that
 // consumer zeroizes it once the kernel or the speaker holds it.
 //
+// Resolution goes through the stack's canonical secret-resolution SPI as
+// the go-quicbaas SDK re-exports it (sdk/go/secret, #659): the store holds
+// a ResolverRegistry and dispatches every reference to the resolver
+// registered for its scheme. A reference no resolver claims comes back from
+// the registry as a literal, and the store refuses it, so a value can never
+// stand where a reference belongs.
+//
 // A reference is
 //
 //	kms://<path>[?enc=raw|base64|hex][#<field>]
-//	secret://<path>[?enc=raw|base64|hex][#<field>]
 //
-// Both schemes name the same store; kms:// is the platform-wide spelling
-// (the one platformd's own configuration uses), secret:// reads better for
-// an operator who thinks of the value as a stored secret. <path> is the
-// secret's path as `platformctl secrets` shows it. A secret stored as a
-// plain payload is one field named "data"; a JSON payload is one field per
-// key. Without #<field> the secret must hold exactly one field. enc says
-// how the field's text encodes the bytes the consumer needs: raw (the
-// text's bytes, the default — a BGP password), base64 (a 36-byte ESP key
-// minted with `?ensure=true&enc=base64`) or hex.
+// <path> is the secret's path as `platformctl secrets` shows it. A secret
+// stored as a plain payload is one field named "data"; a JSON payload is
+// one field per key. Without #<field> the secret must hold exactly one
+// field. enc says how the field's text encodes the bytes the consumer
+// needs: raw (the text's bytes, the default — a BGP password), base64 (a
+// 36-byte ESP key minted with `?ensure=true&enc=base64`) or hex.
+//
+// The kms:// resolver registered here is the gateway's own, because the SDK
+// has none a remote client can register: go-quicbaas's LocalKMSResolver is
+// not re-exported through sdk/go/secret, it has no #<field> selection, and
+// its enc= names the encoding ensure=true mints rather than one to decode
+// on read. When the SDK carries those, its resolver replaces this one in
+// NewStore and nothing else changes.
+//
+// The "secret" scheme gatewayd once accepted as a synonym for kms:// was
+// removed (#659): a reference spelled with it is refused with
+// ErrSchemeRemoved, which names the kms:// spelling to use instead.
 //
 // The store fails closed on every path: a bare value is not a reference,
 // an unsupported scheme or option is refused, an empty secret is refused,
@@ -51,12 +65,21 @@ import (
 	"time"
 
 	sdksecrets "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
 
-// Schemes the store serves.
 const (
-	SchemeKMS    = "kms"
-	SchemeSecret = "secret"
+	// SchemeKMS is the one scheme the store serves.
+	SchemeKMS = "kms"
+
+	// SchemeSecretRemoved is the scheme gatewayd once accepted as a synonym
+	// for kms://. It was removed (#659) because the portfolio's scheme
+	// table gives it no meaning; a reference that still uses it is refused
+	// with ErrSchemeRemoved.
+	SchemeSecretRemoved = "secret"
+
+	// schemeSeparator ends a reference's scheme.
+	schemeSeparator = "://"
 )
 
 // Encodings a reference may declare with ?enc=.
@@ -84,13 +107,12 @@ type DialFunc func(ctx context.Context) (Session, error)
 // Resolve method has the shape of bgp.SecretResolver; the gateway adapts
 // the same method for tunnel.KeyProvider, so one store serves both.
 type Store struct {
-	dial    DialFunc
-	timeout time.Duration
-	logger  *slog.Logger
+	registry *secret.ResolverRegistry
 }
 
-// NewStore builds a Store around dial. A non-positive timeout means
-// DefaultTimeout; a nil logger means slog.Default.
+// NewStore builds a Store whose registry holds the kms:// resolver over
+// dial. A non-positive timeout means DefaultTimeout; a nil logger means
+// slog.Default.
 func NewStore(dial DialFunc, timeout time.Duration, logger *slog.Logger) (*Store, error) {
 	if dial == nil {
 		return nil, &ErrNilDialFunc{}
@@ -101,20 +123,85 @@ func NewStore(dial DialFunc, timeout time.Duration, logger *slog.Logger) (*Store
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Store{dial: dial, timeout: timeout, logger: logger}, nil
+	registry := secret.NewResolverRegistry()
+	registry.Register(&kmsResolver{dial: dial, timeout: timeout, logger: logger})
+	return &Store{registry: registry}, nil
 }
 
 // Resolve returns the material behind ref. The returned slice is a fresh
-// allocation owned by the caller, who zeroizes it after hand-off.
+// allocation owned by the caller, who zeroizes it after hand-off. A
+// resolver's refusal comes back as the SPI's ResolutionFailedError, which
+// unwraps to the store's own typed error.
 func (s *Store) Resolve(ctx context.Context, ref string) ([]byte, error) {
-	parsed, err := parseRef(ref)
+	if ref == "" {
+		return nil, &ErrRefInvalid{Ref: ref, Reason: "empty reference"}
+	}
+	scheme := schemeOf(ref)
+	if scheme == SchemeSecretRemoved {
+		return nil, &ErrSchemeRemoved{
+			Ref:         ref,
+			Scheme:      scheme,
+			Replacement: SchemeKMS,
+			Cause:       &secret.InvalidSecretURIError{Raw: ref},
+		}
+	}
+	value, err := s.registry.Resolve(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer value.Clear()
+	if value.Strategy == secret.StrategyLiteral {
+		return nil, &ErrSchemeUnsupported{Ref: ref, Scheme: scheme}
+	}
+	var out []byte
+	if err := value.WithBytes(func(material []byte) error {
+		out = append([]byte(nil), material...)
+		return nil
+	}); err != nil {
+		return nil, &ErrSecretUnresolvable{Ref: ref, Cause: err}
+	}
+	return out, nil
+}
+
+// schemeOf returns the scheme ref is spelled with, or "" for a bare value.
+func schemeOf(ref string) string {
+	if i := strings.Index(ref, schemeSeparator); i >= 0 {
+		return ref[:i]
+	}
+	return ""
+}
+
+// kmsResolver is the store's secret.SecretResolver for kms:// references:
+// it reads the secret through a Session, selects the field and decodes it.
+// It dials per resolution and closes the session afterwards.
+type kmsResolver struct {
+	dial    DialFunc
+	timeout time.Duration
+	logger  *slog.Logger
+}
+
+// Scheme names the scheme the resolver serves.
+func (r *kmsResolver) Scheme() string {
+	return SchemeKMS
+}
+
+// CanResolve claims every reference spelled kms://, so a malformed one is
+// refused by Resolve with the reason rather than read as a literal.
+func (r *kmsResolver) CanResolve(raw string) bool {
+	return strings.HasPrefix(raw, SchemeKMS+schemeSeparator)
+}
+
+// Resolve reads the secret raw names and returns its material sealed in a
+// SecretValue. The intermediate plaintext is zeroized before returning.
+func (r *kmsResolver) Resolve(ctx context.Context, raw string) (*secret.SecretValue, error) {
+	parsed, err := parseRef(raw)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	session, err := s.dial(ctx)
+	session, err := r.dial(ctx)
 	if err != nil {
 		return nil, &ErrStoreUnavailable{Cause: err}
 	}
@@ -122,27 +209,31 @@ func (s *Store) Resolve(ctx context.Context, ref string) ([]byte, error) {
 		// The read has already succeeded or failed by the time the session
 		// closes; a close failure is worth a log line, not a refused key.
 		if cerr := session.Close(); cerr != nil {
-			s.logger.Warn("secrets: closing the store session failed", slog.Any("error", cerr))
+			r.logger.Warn("secrets: closing the store session failed", slog.Any("error", cerr))
 		}
 	}()
 
-	secret, err := session.Get(ctx, parsed.path)
+	stored, err := session.Get(ctx, parsed.path)
 	if err != nil {
-		return nil, &ErrSecretUnresolvable{Ref: ref, Cause: err}
+		return nil, &ErrSecretUnresolvable{Ref: raw, Cause: err}
 	}
-	if secret == nil {
-		return nil, &ErrSecretEmpty{Ref: ref}
+	if stored == nil {
+		return nil, &ErrSecretEmpty{Ref: raw}
 	}
-	text, err := selectField(ref, parsed.field, secret.Data)
+	text, err := selectField(raw, parsed.field, stored.Data)
 	if err != nil {
 		return nil, err
 	}
-	return decode(ref, parsed.encoding, text)
+	material, err := decode(raw, parsed.encoding, text)
+	if err != nil {
+		return nil, err
+	}
+	defer Zeroize(material)
+	return secret.NewSecretValue(raw, material, secret.StrategyRemoteKMS), nil
 }
 
-// reference is a parsed kms:// or secret:// URI.
+// reference is a parsed kms:// URI.
 type reference struct {
-	scheme   string
 	path     string
 	field    string
 	encoding string
@@ -154,16 +245,12 @@ func parseRef(ref string) (*reference, error) {
 	if ref == "" {
 		return nil, &ErrRefInvalid{Ref: ref, Reason: "empty reference"}
 	}
-	schemeEnd := strings.Index(ref, "://")
-	if schemeEnd < 0 {
-		return nil, &ErrSchemeUnsupported{Ref: ref}
+	prefix := SchemeKMS + schemeSeparator
+	if !strings.HasPrefix(ref, prefix) {
+		return nil, &ErrSchemeUnsupported{Ref: ref, Scheme: schemeOf(ref)}
 	}
-	scheme := ref[:schemeEnd]
-	if scheme != SchemeKMS && scheme != SchemeSecret {
-		return nil, &ErrSchemeUnsupported{Ref: ref, Scheme: scheme}
-	}
-	rest := ref[schemeEnd+len("://"):]
-	out := &reference{scheme: scheme, encoding: EncodingRaw}
+	rest := ref[len(prefix):]
+	out := &reference{encoding: EncodingRaw}
 
 	if i := strings.IndexByte(rest, '#'); i >= 0 {
 		out.field = rest[i+1:]

@@ -14,6 +14,8 @@
 > This document is the one reference for the root of `platformctl` and for the
 > daemon binaries. Feature groups are documented in their feature folders (§3).
 
+Replaces `docs/man/serve.md`, `docs/man/common/options.md` and `docs/man/pkcs11.md`, removed in 3ddd4fa19 (`git show 3ddd4fa19^:<path>`).
+
 ---
 
 ## 1. Exit codes and output
@@ -571,7 +573,7 @@ Persistent flags:
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--config` | `-c` | string | | Platform config file |
-| `--config-dir` | | string | `/etc/` | Configuration directory |
+| `--config-dir` | | string | `/etc/trusted-platform` | Configuration directory: `/etc/` plus the build's application name, `trusted-platform` from `make` (`APPNAME`) |
 | `--platform-dir` | | string | `<cwd>/trusted-data` | Platform data directory |
 | `--ca-dir` | | string | `trusted-data/ca` | CA directory |
 | `--log-dir` | | string | `trusted-data/log` | Log directory |
@@ -587,7 +589,9 @@ Persistent flags:
 | `--setuid` | | string | `root` | User to drop to when started as root. Parsed but not yet applied: no startup path calls `App.DropPrivileges`, which prepares the log file for that user while still root, then drops groups, GID and UID, and returns a typed error (user lookup, a UID/GID outside `0..4294967294`, log file, setgroups/setgid/setuid) rather than exiting; see [engineering.md](engineering.md) §5 |
 
 `platformd serve` flags. Each bind host and port also has a config key
-`daemon.<proto>.bind-host` / `daemon.<proto>.port`.
+`daemon.<proto>.bind-host` / `daemon.<proto>.port` and an environment variable
+`PLATFORMD_DAEMON_<PROTO>_BIND_HOST` / `PLATFORMD_DAEMON_<PROTO>_PORT`; the
+precedence is flag, environment, file, default.
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
@@ -602,6 +606,19 @@ Persistent flags:
 | `--mcp-bind-host` / `--mcp-port` | string / int | `127.0.0.1` / `9445` | |
 | `--enable-mtls` | bool | `false` | Mutual TLS on the network listeners |
 | `--skip-iam-validation` | bool | `false` | Testing only |
+| `--raft-address` | string | | Raft address advertised to peers; config `quicbaas.raft-address`, env `PLATFORMD_QUICBAAS_RAFT_ADDRESS` |
+| `--raft-listen-address` | string | | Raft bind address; empty binds the advertised address. Config `quicbaas.raft-listen-address`, env `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS` |
+
+A node that joins a cluster without a routable advertised Raft address is
+refused at start rather than given a guessed one.
+
+**Two modes, chosen by the config.** With a `webservice` or `webservices` section `serve` runs
+the full web stack (REST API, ACME, WebAuthn, JWT) beside the other listeners.
+Without one it runs **daemon-only**: Unix, gRPC, QUIC and MCP, with REST only
+under `--enable-mtls`.
+
+If the TPM is not provisioned, `serve` provisions the platform first, as
+`--init` would, then starts.
 
 **Barrier-unseal gate.** While the barrier is uninitialised or sealed,
 `platformd serve` binds only the Unix socket and a loopback listener on

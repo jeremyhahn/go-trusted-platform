@@ -369,7 +369,7 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 func TestPolicy_EveryContractMethodIsPlaced(t *testing.T) {
 	// A method added to ipc.proto without a policy entry would be refused
 	// to everyone, the supervisor included; this fails before that ships.
-	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc} {
+	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc, ipcv1.GatewayServicesService_ServiceDesc} {
 		for _, m := range desc.Methods {
 			method := "/" + desc.ServiceName + "/" + m.MethodName
 			if _, ok := methodAdmissions[method]; !ok {
@@ -593,6 +593,11 @@ func TestErrors_Messages(t *testing.T) {
 		{&ErrDocument{Document: "snapshot", Cause: errors.New("bad")}, "gatewayd ipc: snapshot document: bad"},
 		{&ErrRemoteApply{Message: "x"}, "gatewayd ipc: datapath apply failed: x"},
 		{&ErrServerNotListening{}, "gatewayd ipc: server has no listener; call Listen first"},
+		{&ErrRemoteService{Message: "m"}, "m"},
+		{&ErrRemoteService{Sentinel: errors.New("sentinel")}, "sentinel"},
+		{&ErrServiceUnreachable{Socket: "/s", Service: "nat64", Cause: errors.New("eof")}, "gatewayd ipc: nat64 unreachable on \"/s\": eof"},
+		{&ErrConntrackZone{Zone: -1}, "gatewayd ipc: conntrack zone -1 is out of range"},
+		{&ErrVIPKey{Address: "x", Cause: errors.New("bad")}, "gatewayd ipc: VIP address \"x\": bad"},
 		{
 			&ErrSocketGroup{Path: "/p", Want: 65534, Got: 0, Cause: errors.New("denied")},
 			"gatewayd ipc: socket \"/p\" has group 0, not 65534, and cannot be given it " +
@@ -606,7 +611,8 @@ func TestErrors_Messages(t *testing.T) {
 	}
 	cause := errors.New("cause")
 	if !errors.Is(&ErrSocketPath{Cause: cause}, cause) || !errors.Is(&ErrDocument{Cause: cause}, cause) ||
-		!errors.Is(&ErrSocketGroup{Cause: cause}, cause) {
+		!errors.Is(&ErrSocketGroup{Cause: cause}, cause) || !errors.Is(&ErrVIPKey{Cause: cause}, cause) ||
+		!errors.Is(&ErrServiceUnreachable{Cause: cause}, cause) || !errors.Is(&ErrRemoteService{Sentinel: cause}, cause) {
 		t.Fatal("Unwrap does not reach the cause")
 	}
 }

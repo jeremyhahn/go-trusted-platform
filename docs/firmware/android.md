@@ -1,6 +1,6 @@
 # Android/GrapheneOS Secure Mobile Implementation
 
-> **Status: NORMATIVE** · Scope: planned Android and GrapheneOS support; not implemented
+> **Status: NORMATIVE** · Scope: planned Android and GrapheneOS support; not implemented · Last verified: 2026-10-18
 > Conflicts with this document are defects. Fix them here first.
 
 ## Overview
@@ -105,7 +105,7 @@ GrapheneOS has experimental support for the following devices:
 
 ### Fastboot Protocol
 
-**Location**: `pkg/firmware/android/fastboot/protocol.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/fastboot/protocol.go`
 
 ```go
 package fastboot
@@ -232,7 +232,7 @@ func (f *FastbootDevice) UnlockBootloader() error {
 
 ### USB Device Detection
 
-**Location**: `pkg/firmware/android/fastboot/detect.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/fastboot/detect.go`
 
 ```go
 func DetectFastbootDevices() ([]*FastbootDevice, error) {
@@ -286,7 +286,7 @@ func isFastbootDevice(dev *gousb.Device) bool {
 
 ### Building GrapheneOS
 
-**Location**: `pkg/firmware/android/grapheneos/builder.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/grapheneos/builder.go`
 
 ```go
 package grapheneos
@@ -388,7 +388,7 @@ func (b *GrapheneOSBuilder) signImages() (*BuildArtifacts, error) {
 
 ### Signing Keys
 
-**Location**: `pkg/firmware/android/signing/keys.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/signing/keys.go`
 
 ```go
 package signing
@@ -455,7 +455,7 @@ func SignVBMeta(vbmetaImg string, key *rsa.PrivateKey) error {
 
 ### OTA Update Implementation
 
-**Location**: `pkg/ota/android.go`
+**Proposed location** (does not exist yet): `pkg/ota/android.go`
 
 ```go
 package ota
@@ -556,7 +556,7 @@ func (u *AndroidOTAUpdater) getInactiveSlot() string {
 
 ### Rollback Protection
 
-**Location**: `pkg/firmware/android/rollback/`
+**Proposed location** (does not exist yet): `pkg/firmware/android/rollback/`
 
 ```go
 package rollback
@@ -607,7 +607,7 @@ func (r *RollbackProtection) IncrementRollbackIndex() error {
 
 ### Android Key Attestation API
 
-**Location**: `pkg/firmware/android/attestation/hardware.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/attestation/hardware.go`
 
 ```go
 package attestation
@@ -689,7 +689,7 @@ type AttestationExtension struct {
 
 ### Attestation Verification
 
-**Location**: `pkg/firmware/android/attestation/verifier.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/attestation/verifier.go`
 
 ```go
 func VerifyHardwareAttestation(attestation *Attestation) error {
@@ -728,7 +728,7 @@ func VerifyHardwareAttestation(attestation *Attestation) error {
 
 ### ADB for Remote Operations
 
-**Location**: `pkg/firmware/android/adb/client.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/adb/client.go`
 
 ```go
 package adb
@@ -775,7 +775,7 @@ func (c *Client) Reboot(mode string) error {
 
 ### Complete Flash Workflow
 
-**Location**: `pkg/firmware/android/flasher/flasher.go`
+**Proposed location** (does not exist yet): `pkg/firmware/android/flasher/flasher.go`
 
 ```go
 package flasher
@@ -873,7 +873,7 @@ func (f *AndroidFlasher) isBootloaderLocked() (bool, error) {
 
 ### Emulator Testing
 
-**Location**: `pkg/firmware/testing/android_emulator.go`
+**Proposed location** (does not exist yet): `pkg/firmware/testing/android_emulator.go`
 
 ```go
 type AndroidEmulator struct {
@@ -953,6 +953,9 @@ platformctl firmware android test-emulator --avd pixel_7_api_33
 ```
 
 ## Implementation Files
+
+> **PROPOSED** - none of these files or packages exists. `pkg/firmware/`
+> holds only `avr/attestation/` today, and there is no `pkg/ota/`.
 
 ### Core Android Files
 

@@ -102,14 +102,26 @@ One field serves both consumers of key material. `buildSecretResolver`
 tunnel package's `KeyProvider` (`resolverKeyProvider`). One store, one field,
 two consumers.
 
+The `kms://` resolver registered in the SPI registry is the gateway's own, not
+the stack's `LocalKMSResolver`, for three reasons the SDK does not yet cover:
+that resolver is not re-exported under `go-quicbaas/sdk/go/secret`, and a
+remote SDK client (gatewayd dials quicbaasd) gets no registry from
+`Security().SecretResolver()`; its `?enc=` is the generation encoding for
+`?ensure=true`, not decode-on-read; and its `SecretsClient` returns one byte
+string, with no `#<field>` selection. When go-quicbaas exports a remote-capable
+`kms://` resolver with both, `NewStore` registers it in place of `kmsResolver`.
+
 | Invariant | Where |
 |---|---|
-| A reference is `kms://<path>` or `secret://<path>`, optionally `?enc=raw\|base64\|hex` and `#<field>`; both schemes name the same store | `parseRef` |
-| A bare value is not a reference and never resolves (`ErrSchemeUnsupported`); nor does any other scheme, `?ensure=` included — the gateway reads keys, it does not mint them | `parseRef` |
+| References resolve through the stack's canonical secret-resolution SPI (`go-quicbaas/sdk/go/secret`): a `ResolverRegistry` holding one `SecretResolver`, the gateway's `kms://` resolver, which returns a `SecretValue` (`StrategyRemoteKMS`); resolver failures arrive as the SPI's `ResolutionFailedError` and unwrap to the gateway's typed cause | `NewStore`, `Store.Resolve`, `kmsResolver` |
+| A reference is `kms://<path>`, optionally `?enc=raw\|base64\|hex` and `#<field>` | `parseRef` |
+| The `secret` scheme was removed (#659): such a reference is `ErrSchemeRemoved`, which wraps the SPI's `InvalidSecretURIError` and names the `kms://` replacement; it never reaches the store | `Store.Resolve` |
+| A bare value is not a reference and never resolves (`ErrSchemeUnsupported`) — the SPI registry's literal fallback is refused, not returned as key material; nor does any other scheme, `?ensure=` included — the gateway reads keys, it does not mint them | `Store.Resolve`, `parseRef` |
 | A secret with one field needs no `#<field>`; more than one without it is `ErrFieldAmbiguous` | `selectField` |
 | An empty secret, an empty field, or a field that decodes to no bytes is `ErrSecretEmpty` — an empty key is a fail-open in every consumer | `decode` |
 | Errors name the reference, never the material | every error in `secrets/errors.go` |
-| The SDK session is verified against the platform anchor; a `secret-store:` without `platform-ca-file:` is `secrets.ErrTrustRequired` at assembly, not a dial failure later | `buildSecretResolver` |
+| The SDK session is verified against the platform anchor; a `secret-store:` without `platform-ca-file:` is `secrets.ErrTrustRequired` at assembly, not a dial failure later | `buildSecretResolver` → `secretStoreTLS` |
+| The SDK session is mutual (#658): it presents the node mTLS identity, the `control-plane:` `cert-file`/`key-file` pair, loaded by the one `loadNodeIdentity` the telemetry reporter also calls, once at start. There is no second credential under `secret-store:`. A section without the pair is `secrets.ErrClientIdentityRequired` and a pair that does not load is `proxysvc.ErrCertificateLoadFailed`, both at assembly. `secrets.WithClientIdentity` clones the anchor's config and adds the certificate, so `RootCAs` still come from the anchor. `TestGatewaySecretStoreSession` (`test/integration/secrets/`) reads a secret from the real mTLS platformd with the identity, and shows the same store without it is refused | `secretStoreTLS`, `loadNodeIdentity`, `secrets.WithClientIdentity` |
 | One platform anchor and one trust resolver serve the whole daemon. The anchor verifies platform services — the store's session, platformd grpc dials, the proxy's client CAs and `trust-class: platform` backends, the control-plane reporter; the resolver verifies what the platform did not issue (`trust-class: bmc`) | `BuildGateway` → `buildPlatformAnchor`, `buildTrustResolver` |
 | Every grpc dial to platformd — proxy sync, the attestation gate, the overlay's IPAM, device, verdict and verdict-stream reads — presents a client identity, because platformd's gRPC listener refuses unauthenticated callers: `proxy.platformd.cert-file`/`key-file` for an mTLS platformd, `token-file` for a token platformd. Neither is `proxysvc.ErrConfigInvalid` at assembly; an unreadable certificate or an empty token is `proxysvc.ErrPlatformdIdentityLoadFailed`. The files are re-read on every dial | `platformdOptions`, `PlatformdConfig.Validate` |
 | gatewayd runs no CA and holds no IDevID, so its anchor is `trust.FileAnchorSource` over the top-level `platform-ca-file:` — the platform CA bundle provisioning projects onto the node, re-read at every verification | `buildPlatformAnchor` |
@@ -1333,6 +1345,31 @@ account, and only to `InstallVPNPeer` and `RemoveVPNPeer`, so one parser cannot
 reach another's surface though they share an account, and no parser can send
 the datapath a desired document.
 
+**platformd's live calls (#660).** The kernel-class (`datapath`) child also
+serves `GatewayServicesService` (`pkg/sdn/gateway/ipc/proto/ipc.proto`):
+`LBStatus`, `ListVIPs`, `GetVIP`, `NAT64Status`, `PerfFlows`, `PerfDatapath`
+and `PerfConntrack` are live reads, and `AddVIP`, `RemoveVIP` and
+`SetVIPBackends` are live control actions — each answered by the running
+service, never by the telemetry snapshot. The child builds perf on its own
+OVS runtime client. Besides the supervisor's uid it admits the uids in
+`process.platform-uids` to this service only (`Policy.PlatformUIDs`,
+`pkg/sdn/gateway/ipc/policy.go`), never to the control service.
+
+platformd dials the child's socket directly, not through the supervisor:
+`sdn.gateway.datapath-socket` in platformd's configuration
+(`sdn.Config.GatewayDatapathSocket`) reaches the daemon `Config`, and
+`gatewayBackendOptions` (`pkg/api/daemon/gateway_backends.go`) builds the
+gateway service with one lazy `ipc.Client` as its load balancer, NAT64 and
+perf backend. The method sets match the daemon's backend interfaces, so REST,
+gRPC, Unix, QUIC and MCP all reach gatewayd through the same
+`GatewayBackendSource` getters. A call the child cannot answer returns
+`*ipc.ErrServiceUnreachable`, which reads as `gateway.ErrServiceNotActive`
+and maps to `Unavailable` on every transport. With no socket (single-process
+mode) the load balancer and NAT64 are absent, so they answer `Unavailable`,
+and perf is platformd's local OVS perf service. `Stop` and `ForceStop` close
+the client. `TestNew_ServesGatewayBackendsOverIPC` proves the production
+wiring against a real IPC server.
+
 **Readable as the service account.** The child reads the gatewayd
 configuration — and, for the processes that build them, the `secret-store:`
 client files and `platform-ca-file` — after dropping to `process.user`. Those
@@ -2477,7 +2514,7 @@ model.
 | Unit (nat64) | `pkg/sdn/gateway/services/nat64/*_test.go`, `pkg/sdn/gateway/nat64_test.go` | Config validation, the Jool command lines and pool4 convergence against a runner scripted with jool 4.1.14's real output, the flow set, start/stop/rollback/adoption and the reconcile loop over fakes |
 | Unit (pipeline) | `pkg/sdn/gateway/pipeline_test.go` | Every table a gate or `goto` routes into has an empty-match miss, each datapath service started alone; exactly one table-20 miss and it is the pipeline's; `fail_mode` is set before the pipeline is installed |
 | Integration (nat64) | `test/integration/nat64/` (harness) running `test/integration/sdn/nat64_*_test.go` (`nat64vm` tag) | `make integration-test-nat64`: an Alpine VM under QEMU/KVM in the devcontainer, with linux-lts and jool-modules-lts from one repository snapshot (`build/docker/nat64-vm`). The Jool driver against the real module (range tiling, idempotent converge, pool change, prefix change, refusal) and the datapath end to end: an IPv6-only client pings an IPv4-only server through a real gateway running `nat64:` alone, untagged and in a tagged client zone, with ARP/IPv4 and neighbour discovery crossing the same bridge. Fails, never skips, when KVM, the module or a guest test is missing |
-| Integration (nat64 surface) | `test/integration/sdn/nat64_surface_test.go` | `GetNAT64Status` against the integration platformd over the CLI, gRPC, Unix, REST, QUIC and MCP: each answers with its "not configured" mapping (the translator is gatewayd-resident and its control-plane wiring is #660), never an unknown method, a 404 or an unmapped opcode |
+| Integration (nat64 surface) | `test/integration/sdn/nat64_surface_test.go` | `GetNAT64Status` against the integration platformd over the CLI, gRPC, Unix, REST, QUIC and MCP: each answers with its "not configured" mapping (the integration platformd sets no `datapath-socket`, so the gatewayd-resident translator is not reachable; the live IPC path is `TestNew_ServesGatewayBackendsOverIPC`), never an unknown method, a 404 or an unmapped opcode |
 | Integration | `test/integration/proxy/`, `test/integration/network/` | Real listeners, real backends |
 | Spike (not a test) | `test/spike/nat64/main.go` (`//go:build spike`) | The #595 NAT64 throughput measurement: two TUNs in an unprivileged user namespace, one goroutine per direction over a lock-guarded binding table, UDP blast. Run by hand with `unshare -rn go run -tags spike ./test/spike/nat64`; excluded from every `make` target by its tag |
 | **Architecture** | `pkg/arch/gatewayguard_test.go` | `gatewayd`'s import closure |
@@ -2503,8 +2540,9 @@ the auth chain in the proxy rather than in each backend. `metrics.go` provides
 `MetricsSnapshot` and per-route `RouteMetrics`.
 
 Gateway-side: `GetPerfFlows`, `GetPerfDatapath` and `GetPerfConntrack`, surfaced
-as `platformctl sdn gateway perf flows|datapath|conntrack`. When the perf backend is not
-wired, these return `StatusUnavailable` rather than zeroes — an important
+as `platformctl sdn gateway perf flows|datapath|conntrack`, measured live by
+gatewayd's `datapath` child over IPC (§ "platformd's live calls"). When the
+perf backend is not wired or not reachable, these return `StatusUnavailable` rather than zeroes — an important
 distinction when you are trying to work out whether the datapath is idle or the
 instrumentation is off.
 

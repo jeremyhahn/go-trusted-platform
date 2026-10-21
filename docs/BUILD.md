@@ -100,7 +100,9 @@ version and the line has no comment, trailing or directly above, naming the
 reason (`devops.md` §9). A first-party module's latest is its highest tag
 including `-alpha`, the version `make deps-latest` moves to
 (`dependency-resolution.md` §3); a third-party require's is the go command's
-`go list -m -u` update. It looks versions up through the module proxy and the
+`go list -m -u` update. When that update was released less than 7 days ago
+the lag is reported on stdout as `fresh:` and does not fail; at 7 days, or
+when `go list` prints no release time, it fails as above. It looks versions up through the module proxy and the
 dev Gitea, so under `GOPROXY=off` it exits 2 with that reason rather than pass.
 
 ### Build All Binaries
