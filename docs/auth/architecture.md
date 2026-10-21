@@ -478,7 +478,7 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
 
 > Code: `pkg/webservice/v1/adminclaim/` · CLI: `platformctl admin claim` ·
 > Contract: `software/docs/08-bootstrap-auth-contract.md`
-> §"Admin enrollment" (amended 2026-09-01).
+> §"Admin enrollment".
 
 ### 6b.1 The gap this closes
 
@@ -793,10 +793,9 @@ of tenant users). Nothing here relies on a system admin being able to reach
 tenant data — `RequireOwnTenant` denies it today, for the system tenant as much
 as any other.
 
-**Both upstream issues are closed, and neither fix is present at the version
-this repo consumes.** #356 closed 2026-09-01 and #357 on 2026-09-02, but
-`go.mod` pins `go-quicbaas v0.3.0-alpha` while upstream is tagged
-`v0.6.0-alpha`, and at the pinned version
+**Neither fix is present at the version this repo consumes.** #356 and #357 are
+closed, but the pinned `go.mod` still pins `go-quicbaas v0.3.0-alpha` while
+upstream is tagged `v0.6.0-alpha`, and at the pinned version
 `pkg/iam/tenant_scope.go:49` still returns the requested tenant for any caller
 where `qrdbsdk.IsSystemTenant(callerTenant)` holds. A closed issue upstream is
 not a delivered property downstream until the pin moves; #298 tracks the bump
@@ -1141,7 +1140,7 @@ a different carrier.
 
 ### What is NOT gated yet, and why
 
-Measured from the built route table on 2026-09-05 (#165, #420) rather than
+Measured from the built route table (#165, #420) rather than
 from this section's earlier prose, which had gone stale twice: **seven routes
 answer a request carrying no credential** when every optional route is mounted
 (eight until #177 took `GET /devices/config` off the table), and six by
@@ -1254,7 +1253,7 @@ this section as a claim that the platform is fully gated.
 
 Recorded per `conventions/feature-docs.md` §7 — the code wins.
 
-| Stale statement | Where | Reality (2026-08-18) |
+| Stale statement | Where | Reality |
 |---|---|---|
 | *"designed to work with the go-trusted-ca `CertificateAuthority` interface"* | `pkg/auth/doc.go` | `NewMTLSAdapter` takes `quicbaasca.CACertificateAuthority` from `go-quicbaas/sdk/go/xkms/ca`. `go-trusted-ca` was decommissioned; its CA rolled into go-xkms. |
 | *"IAM Module (`pkg/iam/`)"* with a tenant manager, identity store, WebAuthn and an ABAC engine | deleted legacy `docs/auth/README.md` diagram (and `docs/iam/architecture.md`, which already flags it) | **There is no `pkg/iam` in this repository.** Those components live in go-qrdb / go-quicbaas. |
