@@ -46,7 +46,7 @@ storage backend never holds plaintext.
 | Platform REST surface `/api/v1/compute/images` | `pkg/webservice/v1/rest/registry/` | this repo |
 | gRPC `RegistryService` | `pkg/api/grpc/proto/registry.proto`, `pkg/registry/grpc_adapter.go` | this repo |
 | MCP tools | `pkg/api/mcp/registry_tools.go` | this repo |
-| **Key management (DEK wrap/unwrap)** | consumed through the quicbaas SDK | **not this repo** |
+| **Key management (DEK wrap/unwrap, manifest signing)** | consumed through the quicbaas SDK | **not this repo** |
 | **Blob storage** | consumed through the quicbaas SDK | **not this repo** |
 | **Attestation verification primitives** | `pkg/attestation/` — see [`docs/attestation/`](../attestation/) | this repo |
 
@@ -57,6 +57,26 @@ Everything below the platform — keys, blobs, identity — is reached through
 `LocalKMSClient` and `FileStorageClient` exist for development and tests only;
 the storage config's own doc comment names the stack's object-storage service as
 the sole supported production backend.
+
+### Decision: the signing key lives behind the KMS seam
+
+A push with `sign` set is signed by the registry, after encryption and before
+anything is stored (see [engineering.md](engineering.md)). The signing key is
+reached through the same KMS seam as the encryption keys, not through a key
+store of its own: `KMSClient` (`pkg/registry/encryption.go`) carries the
+symmetric wrap/unwrap operations and `SigningKMSClient`
+(`pkg/registry/manifest_signer.go`) its signing half, `Sign(ctx, keyID,
+digest)`, so the private key never leaves the KMS. `LocalKMSClient` implements
+both on a single node, keeping each signing key as
+`<PlatformDir>/registry/keys/<sha256(keyID)>.sign.pem` (PKCS#8, mode 0600,
+created on first use) beside the AES keys, and the daemon passes the one client
+to both `WithEncryptor` and `WithSigner`. The SDK pairs the same two operations
+(`Security().KMS().GenerateKey`, `Security().Crypto().Sign`), so the swap to an
+SDK-backed KMS stays a single change, as it already is for encryption.
+
+Rejected: a second, signing-only key directory beside `keys/`. It would be a
+parallel key store with its own backup, permissions and swap, the duplication
+the SDK Consumption Invariant forbids.
 
 ## Trust boundaries
 

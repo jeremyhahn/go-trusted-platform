@@ -483,7 +483,7 @@ func (e ErrEncryptionNotConfigured) Error() string {
 }
 
 // ErrSigningNotConfigured is returned when a push asks for the image to be
-// signed and the registry was built without a ManifestSigner (WithSigner):
+// signed and the registry was built without a SigningKMSClient (WithSigner):
 // it refuses rather than storing an unsigned image the caller believes is
 // signed.
 type ErrSigningNotConfigured struct {

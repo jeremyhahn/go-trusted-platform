@@ -15,9 +15,14 @@ package registry
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,10 +47,16 @@ import (
 // prepended to the ciphertext. The context parameter is bound into
 // the GCM additional-authenticated-data so a ciphertext from one
 // layer cannot be replayed against another.
+//
+// It is also the registry's single-node SigningKMSClient: one ECDSA P-256
+// signing key per key ID, a PKCS#8 PEM file <root>/<sha256(keyID)>.sign.pem
+// (mode 0600) created on the key's first use, so encryption and signing
+// keys share one directory and one swap.
 type LocalKMSClient struct {
-	root string
-	mu   sync.RWMutex
-	keys map[string][]byte
+	root        string
+	mu          sync.RWMutex
+	keys        map[string][]byte
+	signingKeys map[string]*ecdsa.PrivateKey
 }
 
 // NewLocalKMSClient creates the keys directory under root and returns
@@ -59,8 +70,9 @@ func NewLocalKMSClient(root string) (*LocalKMSClient, error) {
 		return nil, &WrappedError{Msg: fmt.Sprintf("registry: mkdir %s", root), Err: err}
 	}
 	return &LocalKMSClient{
-		root: root,
-		keys: make(map[string][]byte),
+		root:        root,
+		keys:        make(map[string][]byte),
+		signingKeys: make(map[string]*ecdsa.PrivateKey),
 	}, nil
 }
 
@@ -204,6 +216,108 @@ func (c *LocalKMSClient) Decrypt(ctx context.Context, keyID string, ciphertext, 
 // ErrKeyNotFoundLocal is returned when GetKey is asked about a key
 // that has never been generated. The wrapping ImageEncryptor reads
 // this as a signal to call GenerateKey.
+// SignatureAlgorithmECDSAP256SHA256 names the algorithm LocalKMSClient
+// signs with: ECDSA over P-256, SHA-256 digest, ASN.1 DER signature.
+const SignatureAlgorithmECDSAP256SHA256 = "ECDSA-P256-SHA256"
+
+// signingKeyPEMType is the PEM block type of a persisted signing key.
+const signingKeyPEMType = "PRIVATE KEY"
+
+// Sign signs a SHA-256 digest with keyID's signing key, creating the key
+// on its first use.
+func (c *LocalKMSClient) Sign(ctx context.Context, keyID string, digest []byte) ([]byte, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	if keyID == "" {
+		return nil, "", &MessageError{Msg: "registry: signing key ID cannot be empty"}
+	}
+	if len(digest) != sha256.Size {
+		return nil, "", &MessageError{Msg: fmt.Sprintf("registry: signing digest must be %d bytes, got %d", sha256.Size, len(digest))}
+	}
+	key, err := c.signingKey(keyID)
+	if err != nil {
+		return nil, "", err
+	}
+	sig, err := ecdsa.SignASN1(rand.Reader, key, digest)
+	if err != nil {
+		return nil, "", &WrappedError{Msg: fmt.Sprintf("registry: sign with key %s", keyID), Err: err}
+	}
+	return sig, SignatureAlgorithmECDSAP256SHA256, nil
+}
+
+// signingKeyPath hashes keyID like keyPath; the .sign.pem suffix keeps a
+// signing key apart from an encryption key of the same ID.
+func (c *LocalKMSClient) signingKeyPath(keyID string) string {
+	sum := sha256.Sum256([]byte(keyID))
+	return filepath.Join(c.root, fmt.Sprintf("%x.sign.pem", sum))
+}
+
+// signingKey returns keyID's signing key, loading it from disk or
+// generating and persisting it on first use.
+func (c *LocalKMSClient) signingKey(keyID string) (*ecdsa.PrivateKey, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if k, ok := c.signingKeys[keyID]; ok {
+		return k, nil
+	}
+	path := c.signingKeyPath(keyID)
+	k, err := loadSigningKey(path)
+	if errors.Is(err, os.ErrNotExist) {
+		k, err = generateSigningKey(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.signingKeys[keyID] = k
+	return k, nil
+}
+
+// loadSigningKey reads a PKCS#8 PEM ECDSA P-256 key from path.
+func loadSigningKey(path string) (*ecdsa.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != signingKeyPEMType {
+		return nil, &MessageError{Msg: fmt.Sprintf("registry: signing key %s is not a PEM %s", path, signingKeyPEMType)}
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("registry: parse signing key %s", path), Err: err}
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok || key.Curve != elliptic.P256() {
+		return nil, &MessageError{Msg: fmt.Sprintf("registry: signing key %s is not ECDSA P-256", path)}
+	}
+	return key, nil
+}
+
+// generateSigningKey creates a P-256 key and writes it to path. O_EXCL
+// keeps an existing key from ever being overwritten.
+func generateSigningKey(path string) (*ecdsa.PrivateKey, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, &WrappedError{Msg: "registry: generate signing key", Err: err}
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, &WrappedError{Msg: "registry: marshal signing key", Err: err}
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("registry: create signing key %s", path), Err: err}
+	}
+	if err := pem.Encode(f, &pem.Block{Type: signingKeyPEMType, Bytes: der}); err != nil {
+		return nil, errors.Join(&WrappedError{Msg: fmt.Sprintf("registry: write signing key %s", path), Err: err}, f.Close())
+	}
+	if err := f.Close(); err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("registry: close signing key %s", path), Err: err}
+	}
+	return key, nil
+}
+
 type ErrKeyNotFoundLocal struct {
 	KeyID string
 }

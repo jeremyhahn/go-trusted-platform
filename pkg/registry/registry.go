@@ -15,6 +15,7 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"log/slog"
@@ -175,7 +176,7 @@ type Registry struct {
 	// signer signs the manifest when Push(opts.SignImage) is requested.
 	// Set via WithSigner; nil disables signing (Push with SignImage=true
 	// is then refused).
-	signer ManifestSigner
+	signer SigningKMSClient
 
 	// initialized tracks whether the registry is ready
 	initialized atomic.Bool
@@ -221,9 +222,10 @@ func WithEncryptor(e *ImageEncryptor) RegistryOption {
 	}
 }
 
-// WithSigner wires the manifest signer. Without one, a push that asks for
-// signing is refused with ErrSigningNotConfigured.
-func WithSigner(s ManifestSigner) RegistryOption {
+// WithSigner wires the KMS that signs manifests (LocalKMSClient in the
+// daemon, the same client that holds the encryption keys). Without one, a
+// push that asks for signing is refused with ErrSigningNotConfigured.
+func WithSigner(s SigningKMSClient) RegistryOption {
 	return func(r *Registry) {
 		r.signer = s
 	}
@@ -411,17 +413,18 @@ func (r *Registry) signManifest(ctx context.Context, ref string, m *ImageManifes
 	if err != nil {
 		return ErrManifestSigningFailed{KeyID: keyID, Err: err}
 	}
-	sig, err := r.signer.SignManifest(ctx, keyID, payload)
+	digest := sha256.Sum256(payload)
+	sig, algorithm, err := r.signer.Sign(ctx, keyID, digest[:])
 	if err != nil {
-		return err
+		return ErrManifestSigningFailed{KeyID: keyID, Err: err}
 	}
 	if m.Annotations == nil {
 		m.Annotations = make(map[string]string, len(signatureAnnotations))
 	}
 	m.Annotations[ManifestAnnotationSigned] = "true"
-	m.Annotations[ManifestAnnotationSigningKeyID] = sig.KeyID
-	m.Annotations[ManifestAnnotationSignatureAlgorithm] = sig.Algorithm
-	m.Annotations[ManifestAnnotationSignature] = base64.StdEncoding.EncodeToString(sig.Signature)
+	m.Annotations[ManifestAnnotationSigningKeyID] = keyID
+	m.Annotations[ManifestAnnotationSignatureAlgorithm] = algorithm
+	m.Annotations[ManifestAnnotationSignature] = base64.StdEncoding.EncodeToString(sig)
 	return nil
 }
 
