@@ -60,7 +60,8 @@ Three properties that follow, and that callers depend on:
 2. **`deleting` only goes forward.** Deletion cannot be cancelled once entered.
 3. **Same-state transitions are allowed for idempotency**
    (`CanTransitionTo`, `state.go:69-73`). Suspending a suspended tenant
-   succeeds. This is deliberate — retried API calls must not fail — and it means
+   succeeds, and resuming an active tenant succeeds without a change
+   (`Manager.ResumeTenant`) on every transport. This is deliberate — retried API calls must not fail — and it means
    `CanTransitionTo(s, s)` is always true, including for `deleted`.
 
 An invalid transition is `ErrInvalidTransition`; an operation against a state

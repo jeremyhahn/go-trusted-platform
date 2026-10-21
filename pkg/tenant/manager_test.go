@@ -1663,28 +1663,53 @@ func TestResumeTenant_Success(t *testing.T) {
 	}
 }
 
-func TestResumeTenant_NotSuspended(t *testing.T) {
+func TestResumeTenant_ActiveIsIdempotent(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "test-tenant"})
 	if err != nil {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	// Try to resume without suspending
-	err = manager.ResumeTenant(ctx, created.ID)
-	if err == nil {
-		t.Fatal("expected error resuming non-suspended tenant")
+	// Resuming an active tenant is a same-state transition and succeeds
+	// (docs/tenant/engineering.md §2 rule 3).
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Fatalf("expected idempotent resume of an active tenant, got %v", err)
 	}
 
+	entity, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get tenant: %v", err)
+	}
+	if entity.State != StateActive {
+		t.Errorf("expected state %q, got %q", StateActive, entity.State)
+	}
+	if !entity.UpdatedAt.Equal(created.UpdatedAt) {
+		t.Errorf("a no-op resume must not touch UpdatedAt: was %v, now %v", created.UpdatedAt, entity.UpdatedAt)
+	}
+}
+
+func TestResumeTenant_NotSuspendedOrActive(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "test-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
+	// A record rebuilt from IAM after the cache lost it is "created"
+	// (§6): resume is defined for a suspended tenant only.
+	manager.InvalidateCache(created.ID)
+
+	err = manager.ResumeTenant(ctx, created.ID)
 	var invalidTransition ErrInvalidTransition
 	if !errors.As(err, &invalidTransition) {
-		t.Errorf("expected ErrInvalidTransition, got %T", err)
+		t.Fatalf("expected ErrInvalidTransition, got %T: %v", err, err)
+	}
+	if invalidTransition.From != StateCreated || invalidTransition.To != StateActive {
+		t.Errorf("expected created -> active, got %s -> %s", invalidTransition.From, invalidTransition.To)
 	}
 }
 

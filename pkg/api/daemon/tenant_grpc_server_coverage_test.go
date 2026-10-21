@@ -759,7 +759,7 @@ func TestTenantGRPCServer_ResumeTenant_InvalidArgument(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
-func TestTenantGRPCServer_ResumeTenant_InvalidState(t *testing.T) {
+func TestTenantGRPCServer_ResumeTenant_ActiveIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
@@ -769,16 +769,18 @@ func TestTenantGRPCServer_ResumeTenant_InvalidState(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Try to resume an active tenant - should fail
+	// Resuming an active tenant is a same-state transition: it succeeds
+	// so a retried resume never fails (docs/tenant/engineering.md §2).
 	resp, err := server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{
 		TenantId: createResp.Tenant.Id,
 	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.GetStatus().GetSuccess())
 
-	assert.Nil(t, resp)
-	require.Error(t, err)
-	st, ok := status.FromError(err)
-	require.True(t, ok)
-	assert.Equal(t, codes.FailedPrecondition, st.Code())
+	got, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: createResp.Tenant.Id})
+	require.NoError(t, err)
+	assert.Equal(t, platformv1.TenantState_TENANT_STATE_ACTIVE, got.GetTenant().GetState())
 }
 
 func TestTenantGRPCServer_ResumeTenant_NotFound(t *testing.T) {

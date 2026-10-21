@@ -691,6 +691,13 @@ func (m *Manager) ResumeTenant(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Resuming an active tenant is a same-state transition: it succeeds
+	// without a change so a retried resume never fails
+	// (docs/tenant/engineering.md §2 rule 3).
+	if entity.State == StateActive {
+		return nil
+	}
+
 	if entity.State != StateSuspended {
 		return ErrInvalidTransition{
 			From: entity.State,
