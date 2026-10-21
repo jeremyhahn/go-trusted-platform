@@ -21,15 +21,14 @@ package acme
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
+	acmecmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/acme"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -156,33 +155,19 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // Account Management Commands
 // =============================================================================
 
-// AccountCreate creates a new ACME account via CLI.
+// AccountCreate registers an ACME account with platformctl acme register.
+// register takes only --email; the CLI checks it and then refuses with
+// registerGap.
 func (c *CLIAdapter) AccountCreate(ctx context.Context, opts AccountCreateOptions) (*AccountCreateResult, error) {
-	args := []string{"acme", "account", "create"}
+	args := []string{"acme", "register"}
 
 	if opts.Email != "" {
 		args = append(args, "--email", opts.Email)
 	}
 
-	if opts.DirectoryURL != "" {
-		args = append(args, "--directory", opts.DirectoryURL)
-	}
-
-	if opts.TermsOfService {
-		args = append(args, "--accept-tos")
-	}
-
-	if opts.ExternalAccountID != "" {
-		args = append(args, "--eab-kid", opts.ExternalAccountID)
-	}
-
-	if opts.ExternalAccountKey != "" {
-		args = append(args, "--eab-hmac-key", opts.ExternalAccountKey)
-	}
-
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
-		return nil, err
+		return nil, cliGapError(err, registerGap)
 	}
 
 	var resp cliAccountCreateResponse
@@ -193,133 +178,34 @@ func (c *CLIAdapter) AccountCreate(ctx context.Context, opts AccountCreateOption
 	return resp.toResult(), nil
 }
 
-// AccountList lists ACME accounts via CLI.
+// AccountList has no platformctl acme verb.
 func (c *CLIAdapter) AccountList(ctx context.Context, opts AccountListOptions) (*AccountListResult, error) {
-	args := []string{"acme", "account", "list"}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliAccountListResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "AccountList", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return nil, cliRefusals["AccountList"]
 }
 
-// AccountDelete deletes an ACME account via CLI.
+// AccountDelete has no platformctl acme verb.
 func (c *CLIAdapter) AccountDelete(ctx context.Context, accountID string) (*AccountDeleteResult, error) {
-	args := []string{"acme", "account", "delete", accountID, "--confirm"}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliAccountDeleteResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "AccountDelete", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return nil, cliRefusals["AccountDelete"]
 }
 
 // =============================================================================
 // Order Management Commands
 // =============================================================================
 
-// OrderCreate creates an ACME order via CLI.
+// OrderCreate has no platformctl acme verb: acme renew places its order
+// itself.
 func (c *CLIAdapter) OrderCreate(ctx context.Context, opts OrderCreateOptions) (*OrderCreateResult, error) {
-	args := []string{"acme", "order", "create"}
-
-	if opts.AccountID != "" {
-		args = append(args, "--account", opts.AccountID)
-	}
-
-	for _, id := range opts.Identifiers {
-		args = append(args, "--identifier", fmt.Sprintf("%s:%s", id.Type, id.Value))
-	}
-
-	if !opts.NotBefore.IsZero() {
-		args = append(args, "--not-before", opts.NotBefore.Format(time.RFC3339))
-	}
-
-	if !opts.NotAfter.IsZero() {
-		args = append(args, "--not-after", opts.NotAfter.Format(time.RFC3339))
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliOrderCreateResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "OrderCreate", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return nil, cliRefusals["OrderCreate"]
 }
 
-// OrderList lists ACME orders via CLI.
+// OrderList has no platformctl acme verb.
 func (c *CLIAdapter) OrderList(ctx context.Context, opts OrderListOptions) (*OrderListResult, error) {
-	args := []string{"acme", "order", "list"}
-
-	if opts.AccountID != "" {
-		args = append(args, "--account", opts.AccountID)
-	}
-
-	if opts.Status != "" {
-		args = append(args, "--status", opts.Status)
-	}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliOrderListResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "OrderList", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return nil, cliRefusals["OrderList"]
 }
 
-// OrderGet retrieves an ACME order via CLI.
+// OrderGet has no platformctl acme verb.
 func (c *CLIAdapter) OrderGet(ctx context.Context, orderID string) (*OrderGetResult, error) {
-	args := []string{"acme", "order", "get", orderID}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliOrderGetResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "OrderGet", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return nil, cliRefusals["OrderGet"]
 }
 
 // =============================================================================
@@ -400,7 +286,7 @@ func (c *CLIAdapter) CertificateRequest(ctx context.Context, opts CertificateReq
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
-		return nil, err
+		return nil, cliGapError(err, renewGap)
 	}
 
 	var resp cliCertificateRequestResponse
@@ -485,7 +371,7 @@ func (c *CLIAdapter) CertificateRenew(ctx context.Context, opts CertificateRenew
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
-		return nil, err
+		return nil, cliGapError(err, renewGap)
 	}
 
 	var resp cliCertificateRenewResponse
@@ -496,93 +382,58 @@ func (c *CLIAdapter) CertificateRenew(ctx context.Context, opts CertificateRenew
 	return resp.toResult(), nil
 }
 
-// CertificateRevoke revokes a certificate via CLI.
+// CertificateRevoke has no platformctl acme verb.
 func (c *CLIAdapter) CertificateRevoke(ctx context.Context, opts CertificateRevokeOptions) (*CertificateRevokeResult, error) {
-	args := []string{"acme", "certificate", "revoke"}
-
-	if opts.CertificateURL != "" {
-		args = append(args, "--url", opts.CertificateURL)
-	}
-
-	if opts.SerialNumber != "" {
-		args = append(args, "--serial", opts.SerialNumber)
-	}
-
-	if opts.Reason > 0 {
-		args = append(args, "--reason", strconv.Itoa(opts.Reason))
-	}
-
-	args = append(args, "--confirm")
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliCertificateRevokeResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "CertificateRevoke", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return nil, cliRefusals["CertificateRevoke"]
 }
 
 // =============================================================================
 // Challenge Commands
 // =============================================================================
 
-// ChallengeEnroll01 executes the enroll-01 custom challenge via CLI.
+// ChallengeEnroll01 has no platformctl acme verb: acme renew --challenge
+// names the challenge type of the order it places.
 func (c *CLIAdapter) ChallengeEnroll01(ctx context.Context, opts ChallengeEnroll01Options) (*ChallengeEnroll01Result, error) {
-	args := []string{"acme", "challenge", "enroll-01"}
+	return nil, cliRefusals["ChallengeEnroll01"]
+}
 
-	if opts.OrderID != "" {
-		args = append(args, "--order", opts.OrderID)
+// =============================================================================
+// CLI Refusals
+// =============================================================================
+
+// registerGap and renewGap are the refusals platformctl acme register and
+// renew give once their input validates: platformd has no ACME call on any
+// transport (docs/ca/cli.md §3).
+var (
+	registerGap = acmecmd.ErrACMEDaemonCallMissing{Command: "register", Section: "§7.3 newAccount"}
+	renewGap    = acmecmd.ErrACMEDaemonCallMissing{Command: "renew", Section: "§7.4 order and finalize"}
+)
+
+// cliRefusals maps each ACMECommands operation to the error the CLI gives
+// it for valid input: the SDK gap for an operation a platformctl acme verb
+// carries, ErrCLINoACMEVerb for the rest.
+var cliRefusals = map[string]error{
+	"AccountCreate":      registerGap,
+	"AccountList":        ErrCLINoACMEVerb{Operation: "AccountList"},
+	"AccountDelete":      ErrCLINoACMEVerb{Operation: "AccountDelete"},
+	"OrderCreate":        ErrCLINoACMEVerb{Operation: "OrderCreate"},
+	"OrderList":          ErrCLINoACMEVerb{Operation: "OrderList"},
+	"OrderGet":           ErrCLINoACMEVerb{Operation: "OrderGet"},
+	"CertificateRequest": renewGap,
+	"CertificateRenew":   renewGap,
+	"CertificateRevoke":  ErrCLINoACMEVerb{Operation: "CertificateRevoke"},
+	"ChallengeEnroll01":  ErrCLINoACMEVerb{Operation: "ChallengeEnroll01"},
+}
+
+// cliGapError returns gap when the CLI's error text carries it, so a leaf
+// can match the refusal with errors.Is; platformctl prints the error as
+// "Error: <err>" on stderr, which runCommand keeps. Any other error, such
+// as a validation error, passes through unchanged.
+func cliGapError(err error, gap error) error {
+	if strings.Contains(err.Error(), gap.Error()) {
+		return gap
 	}
-
-	if opts.AccountID != "" {
-		args = append(args, "--account", opts.AccountID)
-	}
-
-	if opts.DeviceSerial != "" {
-		args = append(args, "--device-serial", opts.DeviceSerial)
-	}
-
-	if opts.DeviceModel != "" {
-		args = append(args, "--device-model", opts.DeviceModel)
-	}
-
-	if opts.TPMHandle != 0 {
-		args = append(args, "--tpm-handle", fmt.Sprintf("0x%08X", opts.TPMHandle))
-	}
-
-	if opts.AttestKeyPEM != "" {
-		args = append(args, "--attest-key", opts.AttestKeyPEM)
-	}
-
-	if len(opts.QuoteData) > 0 {
-		args = append(args, "--quote", base64.StdEncoding.EncodeToString(opts.QuoteData))
-	}
-
-	// PCR values are passed as comma-separated index:value pairs
-	if len(opts.PCRValues) > 0 {
-		var pcrPairs []string
-		for idx, val := range opts.PCRValues {
-			pcrPairs = append(pcrPairs, fmt.Sprintf("%d:%s", idx, base64.StdEncoding.EncodeToString(val)))
-		}
-		args = append(args, "--pcrs", strings.Join(pcrPairs, ","))
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp cliChallengeEnroll01Response
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "ChallengeEnroll01", Output: string(output), Err: err}
-	}
-
-	return resp.toResult(), nil
+	return err
 }
 
 // =============================================================================
@@ -609,202 +460,6 @@ func (r *cliAccountCreateResponse) toResult() *AccountCreateResult {
 		CreatedAt:    time.Unix(r.CreatedAt, 0),
 		KeyID:        r.KeyID,
 	}
-}
-
-type cliAccountListResponse struct {
-	Accounts   []cliAccountSummary `json:"accounts,omitempty"`
-	TotalCount int32               `json:"total_count,omitempty"`
-	HasMore    bool                `json:"has_more,omitempty"`
-	NextCursor string              `json:"next_cursor,omitempty"`
-}
-
-type cliAccountSummary struct {
-	AccountID    string `json:"account_id,omitempty"`
-	Status       string `json:"status,omitempty"`
-	Email        string `json:"email,omitempty"`
-	DirectoryURL string `json:"directory_url,omitempty"`
-	CreatedAt    int64  `json:"created_at,omitempty"`
-}
-
-func (r *cliAccountListResponse) toResult() *AccountListResult {
-	result := &AccountListResult{
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
-	}
-
-	for _, acc := range r.Accounts {
-		result.Accounts = append(result.Accounts, AccountSummary{
-			AccountID:    acc.AccountID,
-			Status:       acc.Status,
-			Email:        acc.Email,
-			DirectoryURL: acc.DirectoryURL,
-			CreatedAt:    time.Unix(acc.CreatedAt, 0),
-		})
-	}
-
-	return result
-}
-
-type cliAccountDeleteResponse struct {
-	AccountID string `json:"account_id,omitempty"`
-	Deleted   bool   `json:"deleted,omitempty"`
-}
-
-func (r *cliAccountDeleteResponse) toResult() *AccountDeleteResult {
-	return &AccountDeleteResult{
-		AccountID: r.AccountID,
-		Deleted:   r.Deleted,
-	}
-}
-
-// Order response types
-
-type cliOrderCreateResponse struct {
-	OrderID        string               `json:"order_id,omitempty"`
-	Status         string               `json:"status,omitempty"`
-	Expires        int64                `json:"expires,omitempty"`
-	Identifiers    []cliOrderIdentifier `json:"identifiers,omitempty"`
-	Authorizations []string             `json:"authorizations,omitempty"`
-	Finalize       string               `json:"finalize,omitempty"`
-	CreatedAt      int64                `json:"created_at,omitempty"`
-}
-
-type cliOrderIdentifier struct {
-	Type  string `json:"type,omitempty"`
-	Value string `json:"value,omitempty"`
-}
-
-func (r *cliOrderCreateResponse) toResult() *OrderCreateResult {
-	result := &OrderCreateResult{
-		OrderID:        r.OrderID,
-		Status:         r.Status,
-		Expires:        time.Unix(r.Expires, 0),
-		Authorizations: r.Authorizations,
-		Finalize:       r.Finalize,
-		CreatedAt:      time.Unix(r.CreatedAt, 0),
-	}
-
-	for _, id := range r.Identifiers {
-		result.Identifiers = append(result.Identifiers, OrderIdentifier{
-			Type:  id.Type,
-			Value: id.Value,
-		})
-	}
-
-	return result
-}
-
-type cliOrderListResponse struct {
-	Orders     []cliOrderSummary `json:"orders,omitempty"`
-	TotalCount int32             `json:"total_count,omitempty"`
-	HasMore    bool              `json:"has_more,omitempty"`
-	NextCursor string            `json:"next_cursor,omitempty"`
-}
-
-type cliOrderSummary struct {
-	OrderID     string               `json:"order_id,omitempty"`
-	Status      string               `json:"status,omitempty"`
-	Expires     int64                `json:"expires,omitempty"`
-	Identifiers []cliOrderIdentifier `json:"identifiers,omitempty"`
-	CreatedAt   int64                `json:"created_at,omitempty"`
-}
-
-func (r *cliOrderListResponse) toResult() *OrderListResult {
-	result := &OrderListResult{
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
-	}
-
-	for _, o := range r.Orders {
-		summary := OrderSummary{
-			OrderID:   o.OrderID,
-			Status:    o.Status,
-			Expires:   time.Unix(o.Expires, 0),
-			CreatedAt: time.Unix(o.CreatedAt, 0),
-		}
-		for _, id := range o.Identifiers {
-			summary.Identifiers = append(summary.Identifiers, OrderIdentifier{
-				Type:  id.Type,
-				Value: id.Value,
-			})
-		}
-		result.Orders = append(result.Orders, summary)
-	}
-
-	return result
-}
-
-type cliOrderGetResponse struct {
-	OrderID        string                 `json:"order_id,omitempty"`
-	Status         string                 `json:"status,omitempty"`
-	Expires        int64                  `json:"expires,omitempty"`
-	Identifiers    []cliOrderIdentifier   `json:"identifiers,omitempty"`
-	Authorizations []cliAuthorizationInfo `json:"authorizations,omitempty"`
-	Finalize       string                 `json:"finalize,omitempty"`
-	Certificate    string                 `json:"certificate,omitempty"`
-	CreatedAt      int64                  `json:"created_at,omitempty"`
-	UpdatedAt      int64                  `json:"updated_at,omitempty"`
-}
-
-type cliAuthorizationInfo struct {
-	URL        string             `json:"url,omitempty"`
-	Status     string             `json:"status,omitempty"`
-	Identifier cliOrderIdentifier `json:"identifier,omitempty"`
-	Challenges []cliChallengeInfo `json:"challenges,omitempty"`
-	Expires    int64              `json:"expires,omitempty"`
-}
-
-type cliChallengeInfo struct {
-	Type      string `json:"type,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Token     string `json:"token,omitempty"`
-	Validated int64  `json:"validated,omitempty"`
-}
-
-func (r *cliOrderGetResponse) toResult() *OrderGetResult {
-	result := &OrderGetResult{
-		OrderID:     r.OrderID,
-		Status:      r.Status,
-		Expires:     time.Unix(r.Expires, 0),
-		Finalize:    r.Finalize,
-		Certificate: r.Certificate,
-		CreatedAt:   time.Unix(r.CreatedAt, 0),
-		UpdatedAt:   time.Unix(r.UpdatedAt, 0),
-	}
-
-	for _, id := range r.Identifiers {
-		result.Identifiers = append(result.Identifiers, OrderIdentifier{
-			Type:  id.Type,
-			Value: id.Value,
-		})
-	}
-
-	for _, auth := range r.Authorizations {
-		authInfo := AuthorizationInfo{
-			URL:    auth.URL,
-			Status: auth.Status,
-			Identifier: OrderIdentifier{
-				Type:  auth.Identifier.Type,
-				Value: auth.Identifier.Value,
-			},
-			Expires: time.Unix(auth.Expires, 0),
-		}
-		for _, ch := range auth.Challenges {
-			authInfo.Challenges = append(authInfo.Challenges, ChallengeInfo{
-				Type:      ch.Type,
-				URL:       ch.URL,
-				Status:    ch.Status,
-				Token:     ch.Token,
-				Validated: time.Unix(ch.Validated, 0),
-			})
-		}
-		result.Authorizations = append(result.Authorizations, authInfo)
-	}
-
-	return result
 }
 
 // Certificate response types
@@ -864,48 +519,6 @@ func (r *cliCertificateRenewResponse) toResult() *CertificateRenewResult {
 		Issuer:         r.Issuer,
 		Subject:        r.Subject,
 		RenewedAt:      time.Unix(r.RenewedAt, 0),
-	}
-}
-
-type cliCertificateRevokeResponse struct {
-	CertificateURL string `json:"certificate_url,omitempty"`
-	SerialNumber   string `json:"serial_number,omitempty"`
-	Revoked        bool   `json:"revoked,omitempty"`
-	RevokedAt      int64  `json:"revoked_at,omitempty"`
-	Reason         int    `json:"reason,omitempty"`
-}
-
-func (r *cliCertificateRevokeResponse) toResult() *CertificateRevokeResult {
-	return &CertificateRevokeResult{
-		CertificateURL: r.CertificateURL,
-		SerialNumber:   r.SerialNumber,
-		Revoked:        r.Revoked,
-		RevokedAt:      time.Unix(r.RevokedAt, 0),
-		Reason:         r.Reason,
-	}
-}
-
-// Challenge response types
-
-type cliChallengeEnroll01Response struct {
-	Status         string `json:"status,omitempty"`
-	Validated      bool   `json:"validated,omitempty"`
-	ValidatedAt    int64  `json:"validated_at,omitempty"`
-	CertificateURL string `json:"certificate_url,omitempty"`
-	DeviceID       string `json:"device_id,omitempty"`
-	AttestationOK  bool   `json:"attestation_ok,omitempty"`
-	PCRsVerified   bool   `json:"pcrs_verified,omitempty"`
-}
-
-func (r *cliChallengeEnroll01Response) toResult() *ChallengeEnroll01Result {
-	return &ChallengeEnroll01Result{
-		Status:         r.Status,
-		Validated:      r.Validated,
-		ValidatedAt:    time.Unix(r.ValidatedAt, 0),
-		CertificateURL: r.CertificateURL,
-		DeviceID:       r.DeviceID,
-		AttestationOK:  r.AttestationOK,
-		PCRsVerified:   r.PCRsVerified,
 	}
 }
 
