@@ -18,6 +18,8 @@ package helpers
 import (
 	"fmt"
 	"strings"
+
+	"github.com/stretchr/testify/require"
 )
 
 // SecretsSDKGapIssue is the upstream issue that carries the secrets verbs
@@ -90,4 +92,15 @@ func CLIUpstreamGap(operation, issue string, err error) error {
 		}
 	}
 	return err
+}
+
+// RequireCLIRefusal asserts, for the CLI adapter only, that err is the typed
+// refusal want (ErrCLINoFlag{} or ErrCLIUpstreamGap{}) and reports true so the
+// leaf returns; for every other adapter it reports false and asserts nothing.
+func RequireCLIRefusal(t require.TestingT, adapter string, err, want error) bool {
+	if adapter != "CLI" {
+		return false
+	}
+	require.ErrorIs(t, err, want)
+	return true
 }

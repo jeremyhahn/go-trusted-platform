@@ -67,3 +67,35 @@ func TestErrCLINoFlagMatchesByType(t *testing.T) {
 	assert.Equal(t, "platformctl kms secrets store has no flag for --expires-at", err.Error())
 	assert.False(t, errors.Is(err, ErrCLIUpstreamGap{}), "a missing flag is not an upstream gap")
 }
+
+// recordingT is a require.TestingT that records a failed assertion instead of
+// stopping the test, so RequireCLIRefusal's failure path can be observed.
+type recordingT struct {
+	failed bool
+}
+
+func (r *recordingT) Errorf(string, ...interface{}) { r.failed = true }
+
+func (r *recordingT) FailNow() { r.failed = true }
+
+func TestRequireCLIRefusalAssertsOnlyForTheCLIAdapter(t *testing.T) {
+	gap := ErrCLIUpstreamGap{Operation: "kms secrets rotate", Issue: SecretsSDKGapIssue}
+
+	cli := &recordingT{}
+	assert.True(t, RequireCLIRefusal(cli, "CLI", gap, ErrCLIUpstreamGap{}))
+	assert.False(t, cli.failed)
+
+	rest := &recordingT{}
+	assert.False(t, RequireCLIRefusal(rest, "REST", nil, ErrCLIUpstreamGap{}))
+	assert.False(t, rest.failed, "a non-CLI adapter asserts nothing")
+}
+
+func TestRequireCLIRefusalFailsOnTheWrongRefusal(t *testing.T) {
+	noFlag := &recordingT{}
+	RequireCLIRefusal(noFlag, "CLI", ErrCLINoFlag{Operation: "kms secrets store", Flag: "--key-id"}, ErrCLIUpstreamGap{})
+	assert.True(t, noFlag.failed, "a missing flag is not the upstream gap the leaf expects")
+
+	success := &recordingT{}
+	RequireCLIRefusal(success, "CLI", nil, ErrCLINoFlag{})
+	assert.True(t, success.failed, "a CLI success where a refusal is expected fails the leaf")
+}

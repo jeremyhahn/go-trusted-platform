@@ -21,12 +21,9 @@ package secrets
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -80,19 +77,29 @@ func (e ErrCLICommandFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrCLIOutputParseFailed is returned when CLI output cannot be parsed.
-type ErrCLIOutputParseFailed struct {
-	Operation string
-	Output    string
-	Err       error
+// ErrCLIBinaryVerifyFailed is returned when platformctl version fails during
+// Setup.
+type ErrCLIBinaryVerifyFailed struct {
+	Path string
+	Err  error
 }
 
-func (e ErrCLIOutputParseFailed) Error() string {
-	return fmt.Sprintf("failed to parse CLI output for %s: %v (output: %s)", e.Operation, e.Err, e.Output)
+func (e ErrCLIBinaryVerifyFailed) Error() string {
+	return fmt.Sprintf("platformctl binary %s failed verification: %v", e.Path, e.Err)
 }
 
-func (e ErrCLIOutputParseFailed) Unwrap() error {
+func (e ErrCLIBinaryVerifyFailed) Unwrap() error {
 	return e.Err
+}
+
+// ErrCLIVersionNegative is returned when a caller names a negative secret
+// version, which platformctl cannot address.
+type ErrCLIVersionNegative struct {
+	Version int
+}
+
+func (e ErrCLIVersionNegative) Error() string {
+	return fmt.Sprintf("secret version %d is negative", e.Version)
 }
 
 // ErrCLIBinaryNotFound is returned when the platformctl binary cannot be found.
@@ -169,7 +176,7 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 	// Verify binary works by running version command
 	_, err = c.runCommand(ctx, "version")
 	if err != nil {
-		return fmt.Errorf("CLI binary verification failed: %w", err)
+		return ErrCLIBinaryVerifyFailed{Path: c.binaryPath, Err: err}
 	}
 
 	return nil
@@ -239,556 +246,217 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // Secrets Management Commands
 // =============================================================================
 
-// Store stores a new secret via CLI.
+// secrets runs the kms secrets verbs through this adapter's platformctl.
+func (c *CLIAdapter) secrets() helpers.SecretsCLI {
+	return helpers.SecretsCLI{Run: c.runCommand}
+}
+
+// Store stores a new secret via CLI. Metadata and tags both go as --tag, as on
+// REST; the CLI has no flag for an expiry, a tenant, a key or an algorithm.
 func (c *CLIAdapter) Store(ctx context.Context, opts StoreOptions) (*StoreResult, error) {
-	args := []string{"secrets", "store", opts.Name}
-
-	// Encode data as base64 for CLI input
-	data := base64.StdEncoding.EncodeToString(opts.Data)
-	args = append(args, "--data", data, "--base64")
-
-	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
+	if err := storeNoFlag(opts); err != nil {
+		return nil, err
 	}
-
-	if opts.TenantID != "" {
-		args = append(args, "--tenant-id", opts.TenantID)
-	}
-
-	if opts.KeyID != "" {
-		args = append(args, "--key-id", opts.KeyID)
-	}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
-	}
-
-	for k, v := range opts.Tags {
-		args = append(args, "--tag", fmt.Sprintf("%s=%s", k, v))
-	}
-
-	for k, v := range opts.Metadata {
-		args = append(args, "--metadata", fmt.Sprintf("%s=%s", k, v))
-	}
-
-	if !opts.ExpiresAt.IsZero() {
-		args = append(args, "--expires-at", opts.ExpiresAt.Format(time.RFC3339))
-	}
-
-	output, err := c.runCommand(ctx, args...)
+	stored, err := c.secrets().Store(ctx, opts.Name, opts.Data, opts.Description, mergeTags(opts.Metadata, opts.Tags))
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliStoreResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Store", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &StoreResult{SecretID: stored.Name, Version: stored.Version}, nil
 }
 
-// Get retrieves a secret via CLI.
+// storeNoFlag refuses the StoreOptions platformctl kms secrets store has no
+// flag for.
+func storeNoFlag(opts StoreOptions) error {
+	const operation = "kms secrets store"
+	switch {
+	case !opts.ExpiresAt.IsZero():
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--expires-at"}
+	case opts.TenantID != "":
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--tenant-id"}
+	case opts.KeyID != "":
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--key-id"}
+	case opts.Algorithm != "":
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--algorithm"}
+	}
+	return nil
+}
+
+// Get retrieves the current version of a secret via CLI.
 func (c *CLIAdapter) Get(ctx context.Context, name string) (*GetResult, error) {
-	args := []string{"secrets", "get", name}
-
-	output, err := c.runCommand(ctx, args...)
+	secret, err := c.secrets().Get(ctx, name)
 	if err != nil {
 		return nil, err
-	}
-
-	var result cliGetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Get", Output: string(output), Err: err}
-	}
-
-	return result.toResult()
-}
-
-// List lists secrets via CLI.
-func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	args := []string{"secrets", "list"}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliListResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "List", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Delete deletes a secret via CLI.
-func (c *CLIAdapter) Delete(ctx context.Context, name string, permanent bool) (*DeleteResult, error) {
-	args := []string{"secrets", "delete", name}
-
-	if permanent {
-		args = append(args, "--permanent")
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliDeleteResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Delete", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Rotate rotates a secret via CLI.
-func (c *CLIAdapter) Rotate(ctx context.Context, name string, newData []byte) (*RotateResult, error) {
-	args := []string{"secrets", "rotate", name}
-
-	// Encode new data as base64 for CLI input
-	data := base64.StdEncoding.EncodeToString(newData)
-	args = append(args, "--data", data, "--base64")
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliRotateResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Rotate", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Versions lists secret versions via CLI.
-func (c *CLIAdapter) Versions(ctx context.Context, name string) (*VersionsResult, error) {
-	args := []string{"secrets", "versions", name}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliVersionsResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Versions", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Version retrieves a specific secret version via CLI.
-func (c *CLIAdapter) Version(ctx context.Context, name string, version int) (*VersionResult, error) {
-	args := []string{"secrets", "version", name, strconv.Itoa(version)}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliVersionResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Version", Output: string(output), Err: err}
-	}
-
-	return result.toResult()
-}
-
-// Rollback rolls back a secret to a previous version via CLI.
-func (c *CLIAdapter) Rollback(ctx context.Context, name string, targetVersion int) (*RollbackResult, error) {
-	args := []string{"secrets", "rollback", name, strconv.Itoa(targetVersion)}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliRollbackResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Rollback", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Status updates secret status via CLI.
-func (c *CLIAdapter) Status(ctx context.Context, name string, enabled bool) (*StatusResult, error) {
-	args := []string{"secrets", "status", name}
-
-	if enabled {
-		args = append(args, "--enable")
-	} else {
-		args = append(args, "--disable")
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliStatusResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Status", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Policy retrieves secret rotation policy via CLI.
-func (c *CLIAdapter) Policy(ctx context.Context, name string) (*PolicyResult, error) {
-	args := []string{"secrets", "policy", "get", name}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliPolicyResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Policy", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// PolicySet sets secret rotation policy via CLI.
-func (c *CLIAdapter) PolicySet(ctx context.Context, name string, opts PolicySetOptions) (*PolicySetResult, error) {
-	args := []string{"secrets", "policy", "set", name}
-
-	if opts.Enabled {
-		args = append(args, "--enable")
-	} else {
-		args = append(args, "--disable")
-	}
-
-	if opts.IntervalSeconds > 0 {
-		args = append(args, "--interval", strconv.FormatInt(opts.IntervalSeconds, 10))
-	}
-
-	if opts.RetainVersions > 0 {
-		args = append(args, "--retain-versions", strconv.FormatInt(int64(opts.RetainVersions), 10))
-	}
-
-	if opts.RotationLambda != "" {
-		args = append(args, "--rotation-lambda", opts.RotationLambda)
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliPolicySetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "PolicySet", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
-}
-
-// Prefix retrieves secrets by prefix via CLI.
-func (c *CLIAdapter) Prefix(ctx context.Context, prefix string, includeData bool) (*PrefixResult, error) {
-	args := []string{"secrets", "prefix", prefix}
-
-	if includeData {
-		args = append(args, "--include-data")
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliPrefixResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "Prefix", Output: string(output), Err: err}
-	}
-
-	return result.toResult()
-}
-
-// =============================================================================
-// CLI Response Types and Conversion
-// =============================================================================
-
-type cliStoreResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Version   uint64 `json:"version,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliStoreResponse) toResult() *StoreResult {
-	return &StoreResult{
-		SecretID:  r.SecretID,
-		Version:   r.Version,
-		Timestamp: time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliGetResponse struct {
-	SecretID      string            `json:"secret_id,omitempty"`
-	Version       uint64            `json:"version,omitempty"`
-	Data          string            `json:"data,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	Algorithm     string            `json:"algorithm,omitempty"`
-	KeyIdentifier string            `json:"key_identifier,omitempty"`
-	CreatedAt     int64             `json:"created_at,omitempty"`
-	Timestamp     int64             `json:"timestamp,omitempty"`
-}
-
-func (r *cliGetResponse) toResult() (*GetResult, error) {
-	data, err := base64.StdEncoding.DecodeString(r.Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode secret data: %w", err)
 	}
 	return &GetResult{
-		SecretID:      r.SecretID,
-		Version:       r.Version,
-		Data:          data,
-		Metadata:      r.Metadata,
-		Algorithm:     r.Algorithm,
-		KeyIdentifier: r.KeyIdentifier,
-		CreatedAt:     time.Unix(r.CreatedAt, 0),
-		Timestamp:     time.Unix(r.Timestamp, 0),
+		SecretID:  secret.Name,
+		Version:   secret.Version,
+		Data:      secret.Value,
+		Metadata:  secret.Metadata,
+		CreatedAt: secret.CreatedAt,
 	}, nil
 }
 
-type cliListResponse struct {
-	Secrets    []cliSecretSummary `json:"secrets,omitempty"`
-	TotalCount int32              `json:"total_count,omitempty"`
-	HasMore    bool               `json:"has_more,omitempty"`
-	NextCursor string             `json:"next_cursor,omitempty"`
-}
-
-type cliSecretSummary struct {
-	SecretID       string `json:"secret_id,omitempty"`
-	Name           string `json:"name,omitempty"`
-	CurrentVersion uint64 `json:"current_version,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Owner          string `json:"owner,omitempty"`
-	CreatedAt      int64  `json:"created_at,omitempty"`
-	UpdatedAt      int64  `json:"updated_at,omitempty"`
-}
-
-func (r *cliListResponse) toResult() *ListResult {
-	result := &ListResult{
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
+// List lists secret names via CLI; the CLI pages by --limit only.
+func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
+	if opts.Cursor != "" {
+		return nil, helpers.ErrCLINoFlag{Operation: "kms secrets list", Flag: "--cursor"}
 	}
-	for _, s := range r.Secrets {
-		result.Secrets = append(result.Secrets, SecretSummary{
-			SecretID:       s.SecretID,
-			Name:           s.Name,
-			CurrentVersion: s.CurrentVersion,
-			Description:    s.Description,
-			Owner:          s.Owner,
-			CreatedAt:      time.Unix(s.CreatedAt, 0),
-			UpdatedAt:      time.Unix(s.UpdatedAt, 0),
-		})
-	}
-	return result
-}
-
-type cliDeleteResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Deleted   bool   `json:"deleted,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliDeleteResponse) toResult() *DeleteResult {
-	return &DeleteResult{
-		SecretID:  r.SecretID,
-		Deleted:   r.Deleted,
-		Timestamp: time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliRotateResponse struct {
-	SecretID   string `json:"secret_id,omitempty"`
-	OldVersion uint64 `json:"old_version,omitempty"`
-	NewVersion uint64 `json:"new_version,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliRotateResponse) toResult() *RotateResult {
-	return &RotateResult{
-		SecretID:   r.SecretID,
-		OldVersion: r.OldVersion,
-		NewVersion: r.NewVersion,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliVersionsResponse struct {
-	SecretID   string           `json:"secret_id,omitempty"`
-	Versions   []cliVersionInfo `json:"versions,omitempty"`
-	HasMore    bool             `json:"has_more,omitempty"`
-	NextCursor string           `json:"next_cursor,omitempty"`
-}
-
-type cliVersionInfo struct {
-	Version   uint64 `json:"version,omitempty"`
-	CreatedAt int64  `json:"created_at,omitempty"`
-	CreatedBy string `json:"created_by,omitempty"`
-	ExpiresAt int64  `json:"expires_at,omitempty"`
-	DeletedAt int64  `json:"deleted_at,omitempty"`
-}
-
-func (r *cliVersionsResponse) toResult() *VersionsResult {
-	result := &VersionsResult{
-		SecretID:   r.SecretID,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
-	}
-	for _, v := range r.Versions {
-		result.Versions = append(result.Versions, VersionInfo{
-			Version:   v.Version,
-			CreatedAt: time.Unix(v.CreatedAt, 0),
-			CreatedBy: v.CreatedBy,
-			ExpiresAt: time.Unix(v.ExpiresAt, 0),
-			DeletedAt: time.Unix(v.DeletedAt, 0),
-		})
-	}
-	return result
-}
-
-type cliVersionResponse struct {
-	SecretID  string            `json:"secret_id,omitempty"`
-	Version   uint64            `json:"version,omitempty"`
-	Data      string            `json:"data,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	CreatedAt int64             `json:"created_at,omitempty"`
-	CreatedBy string            `json:"created_by,omitempty"`
-	ExpiresAt int64             `json:"expires_at,omitempty"`
-	Timestamp int64             `json:"timestamp,omitempty"`
-}
-
-func (r *cliVersionResponse) toResult() (*VersionResult, error) {
-	data, err := base64.StdEncoding.DecodeString(r.Data)
+	list, err := c.secrets().List(ctx, opts.Limit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode secret data: %w", err)
+		return nil, err
+	}
+	summaries := make([]SecretSummary, 0, len(list.Secrets))
+	for _, name := range list.Secrets {
+		summaries = append(summaries, SecretSummary{SecretID: name, Name: name})
+	}
+	return &ListResult{
+		Secrets:    summaries,
+		TotalCount: int32(len(summaries)),
+		HasMore:    list.HasMore,
+	}, nil
+}
+
+// Delete deletes a secret via CLI. The CLI, like REST, has one delete that
+// removes every version, so permanent changes nothing.
+func (c *CLIAdapter) Delete(ctx context.Context, name string, permanent bool) (*DeleteResult, error) {
+	deleted, err := c.secrets().Delete(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &DeleteResult{SecretID: deleted.Name, Deleted: deleted.Deleted}, nil
+}
+
+// =============================================================================
+// Version Management Commands
+// =============================================================================
+
+// Rotate rotates a secret to new data via CLI.
+func (c *CLIAdapter) Rotate(ctx context.Context, name string, newData []byte) (*RotateResult, error) {
+	rotated, err := c.secrets().Rotate(ctx, name, newData)
+	if err != nil {
+		return nil, err
+	}
+	return &RotateResult{
+		SecretID:   rotated.Name,
+		OldVersion: rotated.OldVersion,
+		NewVersion: rotated.NewVersion,
+	}, nil
+}
+
+// Versions lists every version of a secret via CLI.
+func (c *CLIAdapter) Versions(ctx context.Context, name string) (*VersionsResult, error) {
+	listed, err := c.secrets().Versions(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	versions := make([]VersionInfo, 0, len(listed.Versions))
+	for _, v := range listed.Versions {
+		versions = append(versions, VersionInfo{Version: v.Version, CreatedAt: v.CreatedAt, CreatedBy: v.CreatedBy})
+	}
+	return &VersionsResult{SecretID: listed.Name, Versions: versions}, nil
+}
+
+// Version retrieves one version of a secret via CLI.
+func (c *CLIAdapter) Version(ctx context.Context, name string, version int) (*VersionResult, error) {
+	if version < 0 {
+		return nil, ErrCLIVersionNegative{Version: version}
+	}
+	secret, err := c.secrets().Version(ctx, name, uint64(version))
+	if err != nil {
+		return nil, err
 	}
 	return &VersionResult{
-		SecretID:  r.SecretID,
-		Version:   r.Version,
-		Data:      data,
-		Metadata:  r.Metadata,
-		CreatedAt: time.Unix(r.CreatedAt, 0),
-		CreatedBy: r.CreatedBy,
-		ExpiresAt: time.Unix(r.ExpiresAt, 0),
-		Timestamp: time.Unix(r.Timestamp, 0),
+		SecretID:  secret.Name,
+		Version:   secret.Version,
+		Data:      secret.Value,
+		Metadata:  secret.Metadata,
+		CreatedAt: secret.CreatedAt,
+		CreatedBy: secret.CreatedBy,
 	}, nil
 }
 
-type cliRollbackResponse struct {
-	SecretID   string `json:"secret_id,omitempty"`
-	NewVersion uint64 `json:"new_version,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliRollbackResponse) toResult() *RollbackResult {
-	return &RollbackResult{
-		SecretID:   r.SecretID,
-		NewVersion: r.NewVersion,
-		Timestamp:  time.Unix(r.Timestamp, 0),
+// Rollback makes a copy of an earlier version the current one via CLI.
+func (c *CLIAdapter) Rollback(ctx context.Context, name string, targetVersion int) (*RollbackResult, error) {
+	if targetVersion < 0 {
+		return nil, ErrCLIVersionNegative{Version: targetVersion}
 	}
-}
-
-type cliStatusResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliStatusResponse) toResult() *StatusResult {
-	return &StatusResult{
-		SecretID:  r.SecretID,
-		Status:    r.Status,
-		Timestamp: time.Unix(r.Timestamp, 0),
+	rolledBack, err := c.secrets().Rollback(ctx, name, uint64(targetVersion))
+	if err != nil {
+		return nil, err
 	}
+	return &RollbackResult{SecretID: rolledBack.Name, NewVersion: rolledBack.NewVersion}, nil
 }
 
-type cliPolicyResponse struct {
-	SecretID        string `json:"secret_id,omitempty"`
-	Enabled         bool   `json:"enabled,omitempty"`
-	IntervalSeconds int64  `json:"interval_seconds,omitempty"`
-	NextRotation    int64  `json:"next_rotation,omitempty"`
-	RetainVersions  int32  `json:"retain_versions,omitempty"`
-	RotationLambda  string `json:"rotation_lambda,omitempty"`
-	UpdatedAt       int64  `json:"updated_at,omitempty"`
+// =============================================================================
+// Status and Policy Commands
+// =============================================================================
+
+// Status enables or disables a secret via CLI.
+func (c *CLIAdapter) Status(ctx context.Context, name string, enabled bool) (*StatusResult, error) {
+	status, err := c.secrets().SetStatus(ctx, name, enabled)
+	if err != nil {
+		return nil, err
+	}
+	return &StatusResult{SecretID: status.Name, Status: status.Status}, nil
 }
 
-func (r *cliPolicyResponse) toResult() *PolicyResult {
+// Policy retrieves a secret's rotation policy via CLI.
+func (c *CLIAdapter) Policy(ctx context.Context, name string) (*PolicyResult, error) {
+	policy, err := c.secrets().Policy(ctx, name)
+	if err != nil {
+		return nil, err
+	}
 	return &PolicyResult{
-		SecretID:        r.SecretID,
-		Enabled:         r.Enabled,
-		IntervalSeconds: r.IntervalSeconds,
-		NextRotation:    time.Unix(r.NextRotation, 0),
-		RetainVersions:  r.RetainVersions,
-		RotationLambda:  r.RotationLambda,
-		UpdatedAt:       time.Unix(r.UpdatedAt, 0),
+		SecretID:        policy.Name,
+		Enabled:         policy.Enabled,
+		IntervalSeconds: policy.IntervalSeconds,
+		NextRotation:    policy.NextRotation,
+		RetainVersions:  policy.RetainVersions,
+		RotationLambda:  policy.RotationLambda,
+	}, nil
+}
+
+// PolicySet sets a secret's rotation policy via CLI.
+func (c *CLIAdapter) PolicySet(ctx context.Context, name string, opts PolicySetOptions) (*PolicySetResult, error) {
+	policy, err := c.secrets().SetPolicy(ctx, name, helpers.SecretsCLIPolicyOptions{
+		Enabled:         opts.Enabled,
+		IntervalSeconds: opts.IntervalSeconds,
+		RetainVersions:  opts.RetainVersions,
+		RotationLambda:  opts.RotationLambda,
+	})
+	if err != nil {
+		return nil, err
 	}
+	return &PolicySetResult{SecretID: policy.Name}, nil
 }
 
-type cliPolicySetResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
+// =============================================================================
+// Advanced Commands
+// =============================================================================
 
-func (r *cliPolicySetResponse) toResult() *PolicySetResult {
-	return &PolicySetResult{
-		SecretID:  r.SecretID,
-		Timestamp: time.Unix(r.Timestamp, 0),
+// Prefix lists the secrets under prefix via CLI, with their values when
+// includeData is set.
+func (c *CLIAdapter) Prefix(ctx context.Context, prefix string, includeData bool) (*PrefixResult, error) {
+	list, err := c.secrets().PrefixList(ctx, prefix, includeData)
+	if err != nil {
+		return nil, err
 	}
-}
-
-type cliPrefixResponse struct {
-	Secrets    map[string]cliPrefixSecretData `json:"secrets,omitempty"`
-	TotalCount int32                          `json:"total_count,omitempty"`
-	HasMore    bool                           `json:"has_more,omitempty"`
-	NextCursor string                         `json:"next_cursor,omitempty"`
-}
-
-type cliPrefixSecretData struct {
-	Data     string            `json:"data,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-	Version  int64             `json:"version,omitempty"`
-}
-
-func (r *cliPrefixResponse) toResult() (*PrefixResult, error) {
-	result := &PrefixResult{
-		Secrets:    make(map[string]PrefixSecretData),
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
+	data := make(map[string]helpers.SecretsCLISecret, len(list.Data))
+	for _, secret := range list.Data {
+		data[secret.Name] = secret
 	}
-	for name, s := range r.Secrets {
-		var data []byte
-		var err error
-		if s.Data != "" {
-			data, err = base64.StdEncoding.DecodeString(s.Data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode secret data for %s: %w", name, err)
-			}
-		}
-		result.Secrets[name] = PrefixSecretData{
-			Data:     data,
-			Metadata: s.Metadata,
-			Version:  s.Version,
+	secrets := make(map[string]PrefixSecretData, len(list.Secrets))
+	for _, name := range list.Secrets {
+		secret := data[name]
+		secrets[name] = PrefixSecretData{
+			Data:     secret.Value,
+			Metadata: secret.Metadata,
+			Version:  int64(secret.Version),
 		}
 	}
-	return result, nil
+	return &PrefixResult{
+		Secrets:    secrets,
+		TotalCount: int32(len(secrets)),
+		HasMore:    list.HasMore,
+	}, nil
 }

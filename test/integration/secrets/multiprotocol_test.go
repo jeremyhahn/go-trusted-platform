@@ -333,6 +333,9 @@ func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		newData := []byte("new-rotated-secret-data")
 
 		result, err := cmd.Rotate(testCtx, secretName, newData)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Rotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
@@ -347,6 +350,9 @@ func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("RotateNonexistentSecretFails", func(t *testing.T) {
 		_, err := cmd.Rotate(testCtx, prefix+"-nonexistent-rotate", []byte("data"))
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.Error(t, err, "Rotate should fail for nonexistent secret")
 	})
 }
@@ -368,11 +374,16 @@ func testVersions(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	// Rotate a few times
 	for i := 2; i <= 3; i++ {
 		_, err := cmd.Rotate(testCtx, secretName, []byte(fmt.Sprintf("version-%d-data", i)))
-		require.NoError(t, err, "Setup: Rotate should succeed")
+		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			require.NoError(t, err, "Setup: Rotate should succeed")
+		}
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.Versions(testCtx, secretName)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Versions should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Versions), 3, "Should have at least 3 versions")
@@ -395,10 +406,15 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 
 	// Rotate once
 	_, err = cmd.Rotate(testCtx, secretName, []byte("version-2-data"))
-	require.NoError(t, err, "Setup: Rotate should succeed")
+	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		require.NoError(t, err, "Setup: Rotate should succeed")
+	}
 
 	t.Run("GetSpecificVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 1)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Version should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(1), result.Version, "Version should be 1")
@@ -407,6 +423,9 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 
 	t.Run("GetLatestVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 2)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Version should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(2), result.Version, "Version should be 2")
@@ -431,10 +450,15 @@ func testRollback(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 
 	// Rotate to create version 2
 	_, err = cmd.Rotate(testCtx, secretName, []byte("rotated-data"))
-	require.NoError(t, err, "Setup: Rotate should succeed")
+	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		require.NoError(t, err, "Setup: Rotate should succeed")
+	}
 
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.Rollback(testCtx, secretName, 1)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Rollback should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Greater(t, result.NewVersion, uint64(2), "NewVersion should be > 2 (creates new version)")
@@ -467,6 +491,9 @@ func testStatus(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.Status(testCtx, secretName, false)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Status (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -474,6 +501,9 @@ func testStatus(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.Status(testCtx, secretName, true)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Status (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
@@ -502,12 +532,18 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		}
 
 		result, err := cmd.PolicySet(testCtx, secretName, policyOpts)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "PolicySet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 	})
 
 	t.Run("GetRotationPolicy", func(t *testing.T) {
 		result, err := cmd.Policy(testCtx, secretName)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "Policy should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Enabled, "Policy should be enabled")
@@ -521,6 +557,9 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		}
 
 		result, err := cmd.PolicySet(testCtx, secretName, policyOpts)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "PolicySet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 
