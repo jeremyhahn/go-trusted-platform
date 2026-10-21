@@ -251,7 +251,7 @@ type KMSService struct {
 ### CLI Request Flow
 
 ```
-platformctl kms key generate --algorithm AES-256-GCM my-key
+platformctl kms key generate my-key --algorithm aes-256
     |
     | Parse flags, create gRPC request
     v

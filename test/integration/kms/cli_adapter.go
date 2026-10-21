@@ -264,12 +264,30 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 // Key Management Commands
 // =============================================================================
 
+// cliKeyAlgorithms maps the suite's protocol-neutral AES names to the
+// spellings platformctl documents (docs/kms/cli.md §5): the CLI names an AES
+// key by its size alone and rejects "AES-256-GCM". Every other suite name is
+// already a spelling the CLI accepts, in any case.
+var cliKeyAlgorithms = map[string]string{
+	"AES-128-GCM": "aes-128",
+	"AES-192-GCM": "aes-192",
+	"AES-256-GCM": "aes-256",
+}
+
+// cliKeyAlgorithm returns the platformctl spelling of a suite algorithm name.
+func cliKeyAlgorithm(algorithm string) string {
+	if spelling, ok := cliKeyAlgorithms[algorithm]; ok {
+		return spelling
+	}
+	return algorithm
+}
+
 // KeyGenerate generates a new cryptographic key via CLI.
 func (c *CLIAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
 	args := []string{"kms", "key", "generate", opts.KeyID}
 
 	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
+		args = append(args, "--algorithm", cliKeyAlgorithm(opts.Algorithm))
 	}
 
 	if opts.Purpose != "" {
@@ -826,7 +844,7 @@ func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEK
 	args := []string{"kms", "dek", "create", opts.Path}
 
 	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
+		args = append(args, "--algorithm", cliKeyAlgorithm(opts.Algorithm))
 	}
 
 	if opts.Description != "" {
