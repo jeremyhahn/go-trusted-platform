@@ -58,6 +58,54 @@ func (e ErrVMTimeout) Error() string {
 	return fmt.Sprintf("the VM did not power off within --timeout %s; QEMU and the software TPM were stopped", e.Timeout)
 }
 
+// ErrBootTimeout is returned when `iso test boot` (or `firstboot`) is still
+// running when its --timeout expires. ConsoleTail holds the last lines of
+// the guest serial console log, so the failure shows where the boot stopped.
+// It unwraps to ErrVMTimeout.
+type ErrBootTimeout struct {
+	Timeout     time.Duration
+	Elapsed     time.Duration
+	ConsoleLog  string
+	ConsoleTail string
+}
+
+func (e ErrBootTimeout) Error() string {
+	return fmt.Sprintf("the guest did not power off within --timeout %s (ran %s); %s",
+		e.Timeout, e.Elapsed.Round(time.Second), consoleReport(e.ConsoleLog, e.ConsoleTail))
+}
+
+func (e ErrBootTimeout) Unwrap() error {
+	return ErrVMTimeout{Timeout: e.Timeout}
+}
+
+// ErrBootFailed is returned when QEMU fails during `iso test boot` (or
+// `firstboot`). Like ErrBootTimeout it carries the console tail.
+type ErrBootFailed struct {
+	Err         error
+	ConsoleLog  string
+	ConsoleTail string
+}
+
+func (e *ErrBootFailed) Error() string {
+	return fmt.Sprintf("QEMU boot failed: %v; %s", e.Err, consoleReport(e.ConsoleLog, e.ConsoleTail))
+}
+
+func (e *ErrBootFailed) Unwrap() error {
+	return e.Err
+}
+
+// consoleReport describes what a boot error knows about the guest console.
+func consoleReport(consoleLog, tail string) string {
+	switch {
+	case consoleLog == "":
+		return "the guest console was on the terminal"
+	case tail == "":
+		return fmt.Sprintf("the console log %s is missing or empty: the guest wrote nothing to its serial port", consoleLog)
+	default:
+		return fmt.Sprintf("last console lines from %s:\n%s", consoleLog, tail)
+	}
+}
+
 // ErrDirectoryNotFound is returned when a directory is not found.
 type ErrDirectoryNotFound struct {
 	Path string

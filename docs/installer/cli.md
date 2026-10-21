@@ -383,6 +383,16 @@ build it (`ensureBuiltISO`, `test/integration/iso/multiprotocol_test.go`): its
 autoinstaller's inittab ends with `/sbin/poweroff -f`, so the guest powers off
 whether the install passes or fails.
 
+**A headless `iso test boot` / `firstboot` reports where the boot stopped.**
+With `--timeout` set, the guest serial console goes to
+`<work-dir>/boot-serial.log` instead of the terminal. When the timeout expires
+the verb fails with `ErrBootTimeout` (which is also an `ErrVMTimeout`); when
+QEMU fails it returns `ErrBootFailed`. Both carry the last 60 lines of that log
+(the last bootloader, kernel or init line), or say the log is missing or empty
+when the guest wrote nothing to its serial port. Without `--timeout` the console
+stays on the terminal. The iso integration suite's `TestBoot` passes a
+`--timeout` inside its own deadline so its failure carries that tail.
+
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them
 at, not the verb.

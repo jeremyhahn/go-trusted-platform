@@ -556,6 +556,9 @@ func (c *CLIAdapter) TestBoot(ctx context.Context, opts TestBootOptions) (*TestR
 	if opts.Debug {
 		args = append(args, "--debug")
 	}
+	if opts.Timeout > 0 {
+		args = append(args, "--timeout", opts.Timeout.String())
+	}
 
 	output, err := c.runCommandWithTimeout(ctx, 30*time.Minute, args...)
 	elapsed := time.Since(startTime)

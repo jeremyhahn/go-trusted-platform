@@ -16,8 +16,10 @@ package iso
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,4 +136,80 @@ func TestTestVMError_OtherFailureIsWrapped(t *testing.T) {
 	assert.Contains(t, err.Error(), "QEMU boot failed")
 	var timeoutErr ErrVMTimeout
 	assert.False(t, errors.As(err, &timeoutErr))
+}
+
+// consoleLog writes a fake guest console log of n CRLF-terminated lines.
+func consoleLog(t *testing.T, n int) string {
+	t.Helper()
+	var sb strings.Builder
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&sb, "console line %d\r\n", i)
+	}
+	path := filepath.Join(t.TempDir(), bootConsoleLogName)
+	require.NoError(t, os.WriteFile(path, []byte(sb.String()), 0o600))
+	return path
+}
+
+func TestBootError_TimeoutCarriesConsoleTail(t *testing.T) {
+	path := consoleLog(t, 100)
+	deadline := &WrappedError{Msg: "the VM was still running at the deadline", Err: context.DeadlineExceeded}
+
+	err := bootError(45*time.Minute, 45*time.Minute+3*time.Second, path, deadline)
+
+	var bootErr ErrBootTimeout
+	require.ErrorAs(t, err, &bootErr)
+	lines := strings.Split(bootErr.ConsoleTail, "\n")
+	require.Len(t, lines, bootConsoleTailLines)
+	assert.Equal(t, "console line 41", lines[0])
+	assert.Equal(t, "console line 100", lines[len(lines)-1])
+	assert.NotContains(t, bootErr.ConsoleTail, "\r")
+	assert.Contains(t, err.Error(), "--timeout 45m0s (ran 45m3s)")
+	assert.Contains(t, err.Error(), "last console lines from "+path+":\nconsole line 41\n")
+	assert.NotContains(t, err.Error(), "console line 40\n")
+
+	var timeoutErr ErrVMTimeout
+	require.ErrorAs(t, err, &timeoutErr, "a boot timeout is still a VM timeout")
+	assert.Equal(t, 45*time.Minute, timeoutErr.Timeout)
+}
+
+func TestBootError_MissingConsoleLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), bootConsoleLogName)
+
+	err := bootError(time.Minute, time.Minute, path, context.DeadlineExceeded)
+
+	var bootErr ErrBootTimeout
+	require.ErrorAs(t, err, &bootErr)
+	assert.Empty(t, bootErr.ConsoleTail)
+	assert.Contains(t, err.Error(), "the console log "+path+" is missing or empty")
+}
+
+func TestBootError_EmptyConsoleLog(t *testing.T) {
+	path := consoleLog(t, 0)
+
+	err := bootError(time.Minute, time.Minute, path, context.DeadlineExceeded)
+
+	var bootErr ErrBootTimeout
+	require.ErrorAs(t, err, &bootErr)
+	assert.Empty(t, bootErr.ConsoleTail)
+	assert.Contains(t, err.Error(), "is missing or empty")
+}
+
+func TestBootError_QEMUFailureCarriesConsoleTail(t *testing.T) {
+	path := consoleLog(t, 3)
+	cause := errors.New("exit status 1")
+
+	err := bootError(0, time.Second, path, cause)
+
+	var failed *ErrBootFailed
+	require.ErrorAs(t, err, &failed)
+	assert.ErrorIs(t, err, cause)
+	assert.Equal(t, "console line 1\nconsole line 2\nconsole line 3", failed.ConsoleTail)
+	var timeoutErr ErrVMTimeout
+	assert.False(t, errors.As(err, &timeoutErr))
+}
+
+func TestBootError_InteractiveRunHasNoConsoleLog(t *testing.T) {
+	err := bootError(0, time.Second, "", errors.New("exit status 1"))
+
+	assert.Contains(t, err.Error(), "the guest console was on the terminal")
 }

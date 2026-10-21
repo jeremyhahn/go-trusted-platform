@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -315,6 +316,14 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	// Create QEMU configuration
 	config := createTestQEMUConfig(flags)
 
+	// A headless run (--timeout) has no terminal to show the console on:
+	// it goes to a log in --work-dir, whose tail a failure reports.
+	if flags.timeout > 0 {
+		config.SerialConsole = false
+		config.SerialLogFile = filepath.Join(flags.workDir, bootConsoleLogName)
+		printInfo(fmt.Sprintf("Console log: %s", config.SerialLogFile))
+	}
+
 	// Setup VM environment
 	if err := setupTestVMEnvironment(ctx, logger, config); err != nil {
 		return &WrappedError{Msg: "failed to setup VM environment", Err: err}
@@ -338,8 +347,9 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	printInfo("Starting QEMU for boot test (this will open an interactive session)...")
 	printInfo("Press Ctrl+C to exit")
 
+	started := time.Now()
 	if err := runTestQEMUBoot(ctx, logger, config); err != nil {
-		return testVMError(flags.timeout, "QEMU boot failed", err)
+		return bootError(flags.timeout, time.Since(started), config.SerialLogFile, err)
 	}
 
 	printSuccess("Boot test completed")
@@ -684,6 +694,45 @@ func testVMError(timeout time.Duration, msg string, err error) error {
 		return ErrVMTimeout{Timeout: timeout}
 	}
 	return &WrappedError{Msg: msg, Err: err}
+}
+
+// bootConsoleLogName is the guest console log a headless boot test writes
+// in --work-dir; bootConsoleTailLines is how much of it a failure reports.
+const (
+	bootConsoleLogName   = "boot-serial.log"
+	bootConsoleTailLines = 60
+)
+
+// bootError reports a failed boot test with the tail of the guest console
+// log, so the failure shows the last bootloader, kernel or init line. A run
+// stopped because --timeout expired is ErrBootTimeout.
+func bootError(timeout, elapsed time.Duration, consoleLog string, err error) error {
+	tail := consoleTail(consoleLog, bootConsoleTailLines)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrBootTimeout{Timeout: timeout, Elapsed: elapsed, ConsoleLog: consoleLog, ConsoleTail: tail}
+	}
+	return &ErrBootFailed{Err: err, ConsoleLog: consoleLog, ConsoleTail: tail}
+}
+
+// consoleTail returns the last lines of the console log at path, or ""
+// when there is no log, it cannot be read, or the guest wrote nothing.
+func consoleTail(path string, lines int) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimRight(strings.ReplaceAll(string(data), "\r", ""), "\n")
+	if text == "" {
+		return ""
+	}
+	all := strings.Split(text, "\n")
+	if len(all) > lines {
+		all = all[len(all)-lines:]
+	}
+	return strings.Join(all, "\n")
 }
 
 // runTestQEMUBoot runs QEMU for boot test
