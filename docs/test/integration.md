@@ -562,15 +562,24 @@ devcontainer image so a developer and CI run the same thing:
 
 | Job | Tier | What it runs |
 |-----|------|--------------|
-| `image` | PR | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
+| `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) |
+| `image` | docs | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
 | `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
-| `lint`, `sdkjs`, `security`, `build`, `test` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls`; the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
+| `lint` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls` |
+| `sdkjs`, `security`, `build`, `test` | docs | Native-runner checks: the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
 | `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
 | `fips` | main only | `make test-fips`; outside the gate |
 
 The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
-labelled `ci:full`. `CI Gate` passes when every PR-tier job passed and every
-full-tier job passed or was not selected.
+labelled `ci:full`. The docs tier runs on every run except a docs-only PR: one
+whose every changed file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`),
+none of them a page a unit test reads (`DOCS_TESTED_PATTERN`, today
+`docs/daemon/` and `docs/web/`). A docs-only PR runs `lint` and `CI Gate`
+only; `ci:full` overrides it, and so does any doubt in the diff. `CI Gate`
+passes when every PR-tier job passed, every docs-tier job passed or skipped on
+a docs-only PR (`docs_only` reading exactly `true`), and every full-tier job
+passed or was not selected. `pkg/arch/citiers_test.go` holds the tiers, the
+gate's `needs` and its check lines to one another.
 
 The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
 the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
