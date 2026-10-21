@@ -1,5 +1,7 @@
 # Certificate Authority Architecture
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 A fully decentralized Certificate Authority using threshold signatures with hourly key rotation, TPM attestation, and Certificate Transparency for a billion-scale IoT P2P network.
