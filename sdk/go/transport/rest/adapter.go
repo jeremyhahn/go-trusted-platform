@@ -1149,6 +1149,26 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.PXEService/Authorize":   itemRoute("/api/v1/pxe/devices/{id}/authorize", http.MethodPost, "{id}", "device_id"),
 	"/platform.v1.PXEService/Quarantine":  itemRoute("/api/v1/pxe/devices/{id}/quarantine", http.MethodPost, "{id}", "device_id"),
 
+	// The rest of the PXE control plane (#975): every RPC now rides the
+	// route the web service serves it on, the device id or MAC only in the
+	// path, and the ListDevices filter as the query the server reads.
+	"/platform.v1.PXEService/GetDeviceByMAC":    itemRoute("/api/v1/pxe/devices/mac/{mac}", http.MethodGet, "{mac}", "mac_address"),
+	"/platform.v1.PXEService/RemoveDevice":      itemRoute("/api/v1/pxe/devices/{id}", http.MethodDelete, "{id}", "device_id"),
+	"/platform.v1.PXEService/SetDeviceEnrolled": itemRoute("/api/v1/pxe/devices/{id}/enrolled", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/Retry":             itemRoute("/api/v1/pxe/devices/{id}/retry", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/GetEvents":         itemRoute("/api/v1/pxe/devices/{id}/events", http.MethodGet, "{id}", "device_id"),
+	"/platform.v1.PXEService/ListDevices": {
+		path:   "/api/v1/pxe/devices",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "state", field: "filter.state"},
+			{name: "mac_address", field: "filter.mac_address"},
+			{name: "vlan", field: "filter.vlan"},
+			{name: "limit", field: "filter.limit"},
+			{name: "offset", field: "filter.offset"},
+		},
+	},
+
 	// GET /api/v1/sdn/policies/{id}
 	"/platform.v1.SDNService/GetPolicy": itemRoute("/api/v1/sdn/policies/{id}", http.MethodGet, "{id}", "policy_id"),
 
@@ -1514,9 +1534,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.TenantService/Sync":         {"/api/v1/tenants/sync", http.MethodPost},
 
 	// PXE Service
-	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
-	"/platform.v1.PXEService/RegisterDevice": {"/api/v1/pxe/devices", http.MethodPost},
-	"/platform.v1.PXEService/GetStatus":      {"/api/v1/pxe/status", http.MethodGet},
+	"/platform.v1.PXEService/RegisterDevice":  {"/api/v1/pxe/devices", http.MethodPost},
+	"/platform.v1.PXEService/GetStatus":       {"/api/v1/pxe/status", http.MethodGet},
+	"/platform.v1.PXEService/StartService":    {"/api/v1/pxe/start", http.MethodPost},
+	"/platform.v1.PXEService/StopService":     {"/api/v1/pxe/stop", http.MethodPost},
+	"/platform.v1.PXEService/WebhookComplete": {"/api/v1/pxe/webhook/complete", http.MethodPost},
 
 	// Switch Service routes are templated: see switches.go.
 

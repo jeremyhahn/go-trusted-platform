@@ -75,7 +75,10 @@ the query parameters of `GET /api/v1/pxe/devices`
 An absent or empty parameter is no filter. A refused value never reaches the
 service. Until #975, REST ignored the query and listed every device, and gRPC
 read an unset `state` as `PROVISIONING_STATE_UNKNOWN`, so a VLAN- or MAC-only
-filter matched nothing.
+filter matched nothing. The SDK REST transport sends the filter as these
+parameters: `state` as the enum name, and unset fields left out
+(`sdk/go/transport/rest/adapter.go`). Before #975 it mapped only eight of the
+fifteen methods; it now maps all fifteen (`docs/ipxe/api.md` §4).
 
 `Authorize` and `Quarantine` are separate operations, and the presence of
 `Quarantine` is the design point: a device that fails a check goes to an

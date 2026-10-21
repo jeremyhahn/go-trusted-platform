@@ -295,6 +295,17 @@ paths. It now claims the normative item routes. The device id travels only in
 the path (the templated rows in `sdk/go/transport/rest/adapter.go`), and a
 request without one is refused with `InvalidArgument` before it is sent.
 
+**The SDK REST transport carries all fifteen (#975).** Until then it mapped
+eight. `StartService`, `StopService`, `GetDeviceByMAC`, `RemoveDevice`,
+`SetDeviceEnrolled`, `Retry` and `GetEvents` had no route, so the SDK failed
+them before sending anything. The MAC and the device id travel only in the
+path. `ListDevices` sends its filter as the query parameters
+[`docs/provisioning/api.md`](../provisioning/api.md) §2 defines: `state` as the
+enum name, then `mac_address`, `vlan`, `limit` and `offset`. Unset fields are
+left out. `pkg/api/daemon/pxe_rest_sdk_test.go` drives all fifteen through the
+SDK against the PXE router. It requires the same reply and service call as
+gRPC, and the same refusals.
+
 **QUIC carries all fifteen (#704).** Eight methods have a direct opcode in
 `sdk/go/wire/quicwire/protocol.go` (`0xEC`–`0xEF`, `0xFC`–`0xFF`); the other
 seven ride the provisioning category `0xCF` as subs `0x30`–`0x36`
