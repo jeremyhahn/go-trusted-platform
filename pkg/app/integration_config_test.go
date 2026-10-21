@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -183,4 +184,48 @@ func TestIntegrationConfig_NTPTypoRefused(t *testing.T) {
 	var unknown *config.ErrUnknownConfigKeys
 	require.True(t, errors.As(err, &unknown), "got %v", err)
 	assert.Equal(t, "ntp", unknown.Section)
+}
+
+// restPortVariable is the runner's REST port, the one PLATFORM_REST_ENDPOINT
+// names.
+var restPortVariable = regexp.MustCompile(`(?m)^PLATFORMD_REST_PORT="(\d+)"$`)
+
+// harnessRESTPort returns the REST port run-integration-tests.sh points the
+// adapters at.
+func harnessRESTPort(script []byte) (string, bool) {
+	match := restPortVariable.FindSubmatch(script)
+	if match == nil {
+		return "", false
+	}
+	return string(match[1]), true
+}
+
+// TestIntegrationConfig_ServesRESTThroughWebservice guards the harness mode:
+// without a webservice platformd runs daemon-only, whose REST lacks the
+// webservice routers, and every REST adapter answers 404
+// (docs/daemon/architecture.md).
+func TestIntegrationConfig_ServesRESTThroughWebservice(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+
+	require.Len(t, a.WebServices, 1, "one webservice serves the harness REST")
+	ws := a.WebServices[0]
+
+	script, err := os.ReadFile(integrationRunner)
+	require.NoError(t, err)
+	port, ok := harnessRESTPort(script)
+	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+	assert.Equal(t, port, strconv.Itoa(ws.TLSPort), "the webservice listens where PLATFORM_REST_ENDPOINT points")
+	assert.Zero(t, ws.Port, "no plaintext listener")
+
+	assert.Equal(t, "localhost", ws.Certificate.Subject.CommonName)
+	require.NotNil(t, ws.Certificate.SANS)
+	assert.Contains(t, ws.Certificate.SANS.DNS, "localhost", "the adapters dial https://localhost")
+	require.NotNil(t, ws.Key, "the TLS key is required (ErrWebServiceKeyRequired)")
+	assert.True(t, ws.Key.PlatformPolicy, "the key is sealed with the swtpm platform policy")
+}
+
+func TestIntegrationConfig_HarnessRESTPortMissing(t *testing.T) {
+	port, ok := harnessRESTPort([]byte("PLATFORMD_GRPC_PORT=\"10443\"\n# PLATFORMD_REST_PORT=\"8443\"\n"))
+	assert.False(t, ok, "a commented or absent REST port is not the runner's")
+	assert.Empty(t, port)
 }

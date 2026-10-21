@@ -20,6 +20,9 @@
 // must respond with anything other than the platformd "the requested API
 // endpoint does not exist" envelope, which signals the route is mounted
 // and a handler ran (even when the underlying service returns an error).
+// A bare router 404 fails too, and the health and DNS zone routes must
+// answer 200: both mean platformd serves REST through its webservice, as
+// the harness config requires, not daemon-only.
 package restroutes
 
 import (
@@ -45,6 +48,17 @@ const (
 	envKeyFile  = "PLATFORM_CLIENT_KEY"
 
 	notFoundMessage = "the requested API endpoint does not exist"
+
+	// routerDefaultNotFound is gorilla/mux's plain-text 404, the answer of a
+	// router with no NotFoundHandler: the daemon-only REST server. The
+	// webservice always answers with the JSON envelope above.
+	routerDefaultNotFound = "404 page not found\n"
+
+	// healthPath and dnsZonesPath are mounted only by the webservice
+	// routers (pkg/webservice/v1/rest/platform, pkg/webservice/v1/rest/dns);
+	// the dns suite's REST adapter lists zones on dnsZonesPath.
+	healthPath   = "/api/v1/platform/health"
+	dnsZonesPath = "/api/v1/dns/zones"
 )
 
 // route describes one expected REST endpoint.
@@ -212,20 +226,42 @@ func TestRESTRoutes_AllRegistered(t *testing.T) {
 	}
 }
 
+// TestRESTRoutes_ServedByWebservice fails a harness that runs platformd
+// daemon-only: there the REST port has none of the webservice routers, so
+// both routes answer 404 (docs/daemon/architecture.md).
+func TestRESTRoutes_ServedByWebservice(t *testing.T) {
+	endpoint := os.Getenv(envEndpoint)
+	if endpoint == "" {
+		t.Fatalf("%s not set; run via run-integration-tests.sh, which exports it for the running platformd", envEndpoint)
+	}
+	client := newClient(t)
+	for _, path := range []string{healthPath, dnsZonesPath} {
+		t.Run(path, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, endpoint+path, nil)
+			require.NoError(t, err)
+			req.Header.Set("Accept", "application/json")
+			resp, err := client.Do(req)
+			require.NoError(t, err, "request GET %s", path)
+			defer resp.Body.Close()
+			payload, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, resp.StatusCode, "GET %s body=%s", path, string(payload))
+		})
+	}
+}
+
 func assertRouteRegistered(t *testing.T, status int, body []byte) {
 	t.Helper()
 	if status != http.StatusNotFound {
 		return
 	}
-	// 404 with the platform's "endpoint does not exist" envelope means the
-	// route was not mounted; any other 404 (e.g. resource id missing) is a
-	// legitimate downstream response.
+	require.NotEqual(t, routerDefaultNotFound, string(body),
+		"no platform router served the request: platformd is running daemon-only, not with webservices")
 	var env struct {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(body, &env); err == nil {
-		assert.NotEqual(t, notFoundMessage, env.Message,
-			fmt.Sprintf("route appears unregistered: status=404 body=%s", string(body)))
+		assert.NotEqual(t, notFoundMessage, env.Message, fmt.Sprintf("route appears unregistered: status=404 body=%s", string(body)))
 	}
 }
 
