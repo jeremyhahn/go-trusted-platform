@@ -164,6 +164,20 @@ func (e ErrMCPVTPMRequestFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrMCPVTPMValidationFailed is returned when vtpm_validate answers
+// valid: false, as the gRPC, Unix and QUIC adapters do for the same reply.
+type ErrMCPVTPMValidationFailed struct {
+	BundleID string
+	Errors   []string
+}
+
+func (e ErrMCPVTPMValidationFailed) Error() string {
+	if len(e.Errors) > 0 {
+		return fmt.Sprintf("MCP vTPM bundle %s failed validation: %s", e.BundleID, e.Errors[0])
+	}
+	return fmt.Sprintf("MCP vTPM bundle %s failed validation", e.BundleID)
+}
+
 // =============================================================================
 // MCP JSON-RPC Types
 // =============================================================================
@@ -931,6 +945,12 @@ func (m *MCPAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOpti
 	var resp mcpValidateResp
 	if err := m.parseToolResult(result, MCPToolVTPMValidate, &resp); err != nil {
 		return nil, err
+	}
+
+	// vtpm_validate answers valid: false for an absent or corrupt bundle
+	// (docs/vtpm/api.md §5); surface it as an error like the other adapters.
+	if !resp.Valid {
+		return nil, ErrMCPVTPMValidationFailed{BundleID: opts.ID, Errors: resp.Errors}
 	}
 
 	return &ValidateBundleResult{
