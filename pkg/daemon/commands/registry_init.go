@@ -95,11 +95,21 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 		return
 	}
 
+	// Manifest signing keys live beside the encryption keys, one ECDSA
+	// P-256 key per signing key ID under <PlatformDir>/registry/signing-keys.
+	signingRoot := filepath.Join(root, "signing-keys")
+	signer, err := registry.NewLocalManifestSigner(signingRoot)
+	if err != nil {
+		logger.Warnf("registry: manifest signer unavailable: %v", err)
+		return
+	}
+
 	r, err := registry.NewRegistry(
 		cfgReg,
 		slog.Default(),
 		registry.WithStorage(storage),
 		registry.WithEncryptor(encryptor),
+		registry.WithSigner(signer),
 	)
 	if err != nil {
 		logger.Warnf("registry: failed to construct: %v", err)
@@ -107,5 +117,5 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 	}
 	cfg.RegistryService = registry.NewGRPCAdapter(r)
 	registryBackends[cfg] = r
-	logger.Info("registry service wired", "root", root, "kms_root", kmsRoot)
+	logger.Info("registry service wired", "root", root, "kms_root", kmsRoot, "signing_root", signingRoot)
 }

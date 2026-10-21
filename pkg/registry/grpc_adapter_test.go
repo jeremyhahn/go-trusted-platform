@@ -317,8 +317,8 @@ func TestGRPCAdapter_PushWithSignAnnotationIsRefusedAndStoresNothing(t *testing.
 		Annotations: map[string]string{PushAnnotationSign: "true"},
 	}
 	_, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one"))))
-	if !errors.As(err, &ErrSigningNotConfigured{}) {
-		t.Fatalf("PushStream error = %v, want ErrSigningNotConfigured", err)
+	if !errors.As(err, &grpcapi.ErrRegistryNotConfigured{}) {
+		t.Fatalf("PushStream error = %v, want grpcapi.ErrRegistryNotConfigured", err)
 	}
 	if _, err := a.Inspect(ctx, &grpcapi.RegistryInspectRequest{Repository: "apps/web", Reference: "v1"}); err == nil {
 		t.Error("Inspect found an image whose signed push was refused")

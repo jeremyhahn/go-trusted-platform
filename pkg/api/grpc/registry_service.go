@@ -563,6 +563,8 @@ func RegistryErrorStatus(err error) error {
 		return status.Errorf(codes.Internal, "registry operation %s failed: %s", e.Operation, e.Reason)
 	case ErrStreamClosed:
 		return status.Error(codes.Aborted, e.Error())
+	case ErrRegistryNotConfigured:
+		return status.Error(codes.FailedPrecondition, e.Error())
 	}
 
 	return status.Error(codes.Internal, err.Error())
