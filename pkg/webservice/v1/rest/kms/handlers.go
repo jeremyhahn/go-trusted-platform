@@ -25,6 +25,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -1260,20 +1261,18 @@ func (h *Handlers) GetSecret(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	value, err := common.DecodeSecretValue(s.Data["value"])
+	if err != nil {
+		h.respWriter.Error500(w, r, err)
+		return
+	}
 	out := &SecretResponse{
 		Path:      s.Path,
 		Version:   s.Version,
+		Value:     value,
 		Tags:      s.Metadata,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.CreatedAt,
-	}
-	if v, ok := s.Data["value"]; ok {
-		switch typed := v.(type) {
-		case string:
-			out.Value = []byte(typed)
-		case []byte:
-			out.Value = typed
-		}
 	}
 	if v, ok := s.Data["content_type"]; ok {
 		if str, ok := v.(string); ok {

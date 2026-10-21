@@ -27,6 +27,7 @@ import (
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // ErrSecretNameRequired is returned when a secret name is empty.
@@ -288,23 +289,22 @@ func parseSecretVersion(arg string) (int, error) {
 
 // secretOutputFrom converts an SDK secret. The value and description sit in
 // the secret's data map under the keys the REST surface writes them to.
-func secretOutputFrom(s *secretsclient.Secret) secretOutput {
+func secretOutputFrom(s *secretsclient.Secret) (secretOutput, error) {
+	value, err := common.DecodeSecretValue(s.Data["value"])
+	if err != nil {
+		return secretOutput{}, ErrSecretOperationFailed{Operation: "get", Name: s.Path, Err: err}
+	}
 	out := secretOutput{
 		Name:      s.Path,
 		Version:   s.Version,
+		Value:     value,
 		Metadata:  s.Metadata,
 		CreatedAt: s.CreatedAt,
-	}
-	switch v := s.Data["value"].(type) {
-	case string:
-		out.Value = []byte(v)
-	case []byte:
-		out.Value = v
 	}
 	if description, ok := s.Data["description"].(string); ok {
 		out.Description = description
 	}
-	return out
+	return out, nil
 }
 
 func newSecretsStoreCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -399,7 +399,10 @@ func executeSecretsGet(ctx context.Context, client quicbaassdk.SecretsClient, pr
 		return ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
 	}
 
-	out := secretOutputFrom(secret)
+	out, err := secretOutputFrom(secret)
+	if err != nil {
+		return err
+	}
 	return printSecrets(printer, format, out, func() { printSecretTable(printer, out) })
 }
 
@@ -468,7 +471,11 @@ func executeSecretsList(ctx context.Context, client quicbaassdk.SecretsClient, p
 			if err != nil {
 				return ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
 			}
-			out.Data = append(out.Data, secretOutputFrom(secret))
+			data, err := secretOutputFrom(secret)
+			if err != nil {
+				return err
+			}
+			out.Data = append(out.Data, data)
 		}
 	}
 

@@ -612,6 +612,13 @@ metadata, exactly as `POST /api/v1/kms/secrets` does, so the CLI and REST read
 each other's secrets. Each verb prints JSON or YAML with `-o json|yaml`;
 `value` is base64 there.
 
+`get` (and `prefix list --include-data`) returns the bytes that were stored.
+The go-quicbaas Secrets client JSON-encodes the data map, so a stored value
+comes back from the SDK as its base64 text; the CLI and `GET
+/api/v1/kms/secrets/{name}` decode it in one shared place
+(`common.DecodeSecretValue`). A stored value that is not base64 text exits 1
+with `ErrSecretOperationFailed` wrapping `ErrMalformedSecretValue`.
+
 | Verb | Arguments | Flags (type, default) | SDK call | JSON output |
 |---|---|---|---|---|
 | `secrets store` | `<name>` | `--value` (required), `--base64` (bool: `--value` is base64), `--description`, `--tag key=value` (repeatable) | `Store` | `name`, `version` |
