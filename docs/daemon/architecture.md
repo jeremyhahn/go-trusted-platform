@@ -86,7 +86,10 @@ services, protocols, BMC, ceremony, PIV, LUKS, FIDO2 and cluster
 (`RESTServer.MountOwnedRoutes`, `pkg/webservice/v1/daemon_routes.go`). Those
 routes keep the contract they have on the daemon's own listener: a request
 whose TLS handshake verified no client certificate is refused with 401
-(`ErrDaemonRouteClientCertRequired`). The daemon's `/api/v1/status` stays off
+(`ErrDaemonRouteClientCertRequired`).
+`pkg/webservice/v1/testdata/daemon_routes.golden` lists every route the
+webservice mounts for these groups, and `daemon_routes_golden_test.go` sends each
+endpoint a request without a client certificate and expects that 401. The daemon's `/api/v1/status` stays off
 that set because the webservice serves its own. Only groups registered inside
 `daemon.New` are mounted: the webservice is built after it, and a group
 registered later would not be replayed.
