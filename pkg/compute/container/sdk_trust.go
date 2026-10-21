@@ -45,19 +45,32 @@ func NewTrustStack(tpm orchestration.HostTPM, logger *slog.Logger) (*TrustStack,
 		return nil, ErrHostTPMRequired{}
 	}
 
-	sdkLog := newSDKLogger(logger)
-
-	runtime, err := orchestration.NewExecContainerRuntime(sdkLog)
+	runtime, err := orchestration.NewExecContainerRuntime(newSDKLogger(logger))
 	if err != nil {
 		return nil, err
 	}
 
-	attesting, err := orchestration.NewTPMAttestingRuntime(runtime, tpm, sdkLog)
+	attesting, err := NewAttestingRuntime(runtime, tpm, logger)
 	if err != nil {
 		return nil, err
 	}
 
 	return &TrustStack{Runtime: runtime, Attesting: attesting}, nil
+}
+
+// NewAttestingRuntime layers the go-quicbaas SDK's TPM attesting runtime
+// (Tiers 1 and 2) over base, the Tier 0 runtime that runs the containers.
+// NewTrustStack layers it over the exec runtime; a caller that already holds a
+// Tier 0 runtime passes its own.
+func NewAttestingRuntime(
+	base orchestration.ContainerRuntime,
+	tpm orchestration.HostTPM,
+	logger *slog.Logger,
+) (*orchestration.TPMAttestingRuntime, error) {
+	if tpm == nil {
+		return nil, ErrHostTPMRequired{}
+	}
+	return orchestration.NewTPMAttestingRuntime(base, tpm, newSDKLogger(logger))
 }
 
 // NewSDKContainerAttestor fills the go-quicbaas orchestration seam
