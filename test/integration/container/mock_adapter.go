@@ -344,8 +344,9 @@ func (m *MockAdapter) List(ctx context.Context, opts ListOptions) ([]*Container,
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// An empty list is an empty slice, not nil.
-	result := []*Container{}
+	// An empty listing is an empty slice, never nil, as every served
+	// transport decodes it.
+	result := make([]*Container, 0, len(m.containers))
 
 	for _, c := range m.containers {
 		// Apply filters

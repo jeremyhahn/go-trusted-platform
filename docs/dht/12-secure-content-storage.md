@@ -1,5 +1,7 @@
 # Secure Content Storage Architecture
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 This document specifies the Key Share Partitioning (KSP) system for secure content storage on the go-trusted-platform P2P network. The architecture ensures that user data remains secure even if individual nodes are compromised, encryption algorithms are weakened, or attackers collude across the network.

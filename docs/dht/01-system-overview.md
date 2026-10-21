@@ -1,5 +1,7 @@
 # System Overview
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document shows how all components of the Trusted DHT system fit together.
 
 > **Note**: For canonical reputation thresholds and role eligibility requirements, see [09-defense-reputation.md](09-defense-reputation.md) Section "Role Eligibility Thresholds (CANONICAL)".

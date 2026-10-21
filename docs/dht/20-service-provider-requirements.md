@@ -1,5 +1,7 @@
 # Service Provider Trust and Reputation Requirements
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document specifies the comprehensive trust and reputation requirement system for service providers in the go-trusted-platform DHT. This system enables service providers to configure minimum eligibility criteria that potential clients must meet before accessing their services.
 
 ---

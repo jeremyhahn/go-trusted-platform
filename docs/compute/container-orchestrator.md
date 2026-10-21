@@ -72,7 +72,9 @@ Key wiring facts:
   `orchestration.HostTPM` seam and enables workload measurement into PCR 14
   plus IAK-signed quote attestation. The orchestrator additionally builds
   the SDK trust stack (`container.NewTrustStack`), which supplies image
-  digest resolution and the Tier 1 attesting runtime. Without a TPM the
+  digest resolution and the Tier 1 attesting runtime
+  (`container.NewAttestingRuntime` layers that attesting runtime over a
+  Tier 0 runtime the caller already holds). Without a TPM the
   orchestrator runs unmeasured and `Attest` returns a typed error. A host
   with a TPM never starts a workload unmeasured (default deny,
   `plans/trusted-service-plane.md` §3 item 5). When it has neither `docker`

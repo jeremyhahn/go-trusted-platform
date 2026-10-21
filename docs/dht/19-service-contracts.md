@@ -1,5 +1,7 @@
 # Service Contracts
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document specifies the ServiceContract system for go-trusted-platform, providing the foundational contract framework for all decentralized services on the platform.
 
 ---
