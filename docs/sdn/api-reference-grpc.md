@@ -63,6 +63,12 @@ service SDNService {
 }
 ```
 
+A `Port`'s `status` from `AddPort`, `GetPort` and `ListPorts` is its Open
+vSwitch interface's `admin_state`: `up` is `PORT_STATUS_UP`, `down` is
+`PORT_STATUS_DOWN`, and a state OVS has not recorded, or a port with no
+interface of its own name (a bond), is `PORT_STATUS_UNSPECIFIED`. A failed read
+is `Internal`. `SetPortState` answers the state it committed.
+
 ## Key Message Types
 
 Resources are config + status pairs. For example bridges:
