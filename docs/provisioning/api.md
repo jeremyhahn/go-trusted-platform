@@ -301,9 +301,11 @@ reachable by machines with no identity, so it is rate-limited by design
 
 **503 from `/api/v1/pxe/*` may mean the PXE service is simply stopped** —
 `StartService` and `StopService` exist, so "not running" is a state, not a
-fault. A stopped service does not start again until platformd restarts:
-`pxe.Service.Start` reuses its `ipxe.Server`, which is single-use
-(`pkg/ipxe/server.go`), so `StartService` after `StopService` fails.
+fault. `StartService` returns once every iPXE listener has bound, and the
+server then runs until `StopService` or platformd shuts down; it does not
+end with the request that started it. An `ipxe.Server` is single-use
+(`pkg/ipxe/server.go`), so each `StartService` runs a fresh one and a
+stopped service starts again.
 
 ---
 

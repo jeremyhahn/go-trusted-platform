@@ -165,7 +165,9 @@
 //	    log.Fatal(err)
 //	}
 //
-//	// Start the service
+//	// Start the service. Start returns once the iPXE listeners have bound;
+//	// the server runs until Stop or Close, not until ctx ends, and a
+//	// stopped service can be started again.
 //	ctx := context.Background()
 //	if err := service.Start(ctx); err != nil {
 //	    log.Fatal(err)

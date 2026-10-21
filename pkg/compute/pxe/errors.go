@@ -60,6 +60,14 @@ func (e ErrServiceAlreadyRunning) Error() string {
 	return "pxe: service is already running"
 }
 
+// ErrIPXEServerExited indicates the iPXE server stopped before every one of
+// its listeners had bound, without reporting a cause of its own.
+type ErrIPXEServerExited struct{}
+
+func (e ErrIPXEServerExited) Error() string {
+	return "pxe: iPXE server exited before it was ready"
+}
+
 // ErrInvalidConfiguration indicates invalid service configuration.
 type ErrInvalidConfiguration struct {
 	Field  string

@@ -173,10 +173,10 @@ reachable by unidentified machines and is rate-limited for that reason.
   in `TestPXERESTGRPCParity` (`rest_adapter_test.go`), which refuses it on
   the running service with `FailedPrecondition` over REST and gRPC alike and
   checks that every `ListDevices` filter returns the same devices on both.
-  `StopService` is not driven: `pxe.Service.Start` reuses its `ipxe.Server`,
-  which is single-use (`pkg/ipxe/server.go`, `Start`), so a stopped service
-  cannot be started again and stopping it would break every later test on
-  the shared platformd.
+  `StopService` is not driven yet. `pxe.Service.Start` runs a fresh
+  `ipxe.Server` on each start (the server is single-use, `pkg/ipxe/server.go`)
+  under a context of its own, so a stopped service starts again and the
+  server outlives the `StartService` request.
 - `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
   protocol adapters commented out**: a multi-protocol conformance test that
   exercises the CLI alone.
