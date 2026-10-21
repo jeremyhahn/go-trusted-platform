@@ -15,13 +15,62 @@ package acme
 
 import "fmt"
 
-// ErrDaemonConnectionRequired is returned when a command requires daemon connection
-type ErrDaemonConnectionRequired struct {
+// ErrACMEDaemonCallMissing is returned by a verb whose input is valid but which
+// platformd cannot serve: the platform SDK client has no ACME call on any
+// transport, so the verb refuses rather than reaching the ACME server itself.
+// Section names the RFC 8555 operation the missing daemon call would carry.
+// This is an SDK gap (go-quicbaas), not a platform feature to build locally.
+type ErrACMEDaemonCallMissing struct {
 	Command string
+	Section string
 }
 
-func (e ErrDaemonConnectionRequired) Error() string {
-	return fmt.Sprintf("daemon connection required for %s command", e.Command)
+func (e ErrACMEDaemonCallMissing) Error() string {
+	return fmt.Sprintf("acme %s: platformd has no ACME call for RFC 8555 %s (SDK gap)", e.Command, e.Section)
+}
+
+// ErrMissingEmail is returned when register is run without --email
+type ErrMissingEmail struct{}
+
+func (e ErrMissingEmail) Error() string {
+	return "account email is required; specify --email"
+}
+
+// ErrInvalidEmail is returned when --email is not a bare RFC 5322 address
+type ErrInvalidEmail struct {
+	Email string
+}
+
+func (e ErrInvalidEmail) Error() string {
+	return fmt.Sprintf("invalid account email %q: expected a bare address such as admin@example.com", e.Email)
+}
+
+// ErrInvalidAuthorizationType is returned when --authz names an unknown type
+type ErrInvalidAuthorizationType struct {
+	Type string
+}
+
+func (e ErrInvalidAuthorizationType) Error() string {
+	return fmt.Sprintf("invalid authorization type %q: expected dns, ip or permanent-identifier", e.Type)
+}
+
+// ErrInvalidChallengeType is returned when --challenge names an unknown type
+type ErrInvalidChallengeType struct {
+	Type string
+}
+
+func (e ErrInvalidChallengeType) Error() string {
+	return fmt.Sprintf("invalid challenge type %q: expected http-01, dns-01, endorse-01, device-01 or device-attest-01", e.Type)
+}
+
+// ErrInvalidCertificateURL is returned when the download URL is not an
+// absolute https URL
+type ErrInvalidCertificateURL struct {
+	URL string
+}
+
+func (e ErrInvalidCertificateURL) Error() string {
+	return fmt.Sprintf("invalid certificate URL %q: expected an absolute https URL", e.URL)
 }
 
 // ErrRegisterAccountFailed is returned when ACME account registration fails
