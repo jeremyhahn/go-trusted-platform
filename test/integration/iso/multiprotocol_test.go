@@ -764,8 +764,12 @@ func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir stri
 			time.Until(deadline), vmCleanupMargin)
 	}
 
+	// An installed node never powers off: its getty's login prompt on the
+	// serial console, after OpenRC's default runlevel, ends the boot
+	// (docs/installer/cli.md).
 	opts := TestBootOptions{
 		Timeout:    bootTimeout,
+		Expect:     "login:",
 		Disk:       diskPath,
 		Memory:     4096,
 		CPUs:       2,

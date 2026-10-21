@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -63,6 +64,10 @@ type testFlags struct {
 
 	// timeout bounds a headless run; zero waits until the guest powers off
 	timeout time.Duration
+
+	// expect is the boot milestone on the serial console that ends a
+	// headless boot test; empty waits until the guest powers off
+	expect string
 }
 
 // newTestCommand creates the test subcommand for ISO testing
@@ -119,8 +124,13 @@ Example:
 Boots from the installed disk and tests the boot sequence including
 TPM-based disk encryption unlock. Requires a previously installed disk.
 
+With --expect, the test passes as soon as the milestone appears on the
+serial console (an installed node never powers off by itself) and the VM
+is stopped; it needs --timeout, which sends the console to a log.
+
 Example:
-  platformctl iso test boot --disk alpine-installed.qcow2`,
+  platformctl iso test boot --disk alpine-installed.qcow2
+  platformctl iso test boot --disk alpine-installed.qcow2 --timeout 20m --expect 'login:'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTestBoot(getFlags(), flags, "Normal Boot Test")
 		},
@@ -190,6 +200,12 @@ Example:
 
 	// ISO flag only for install and all commands
 	// Default uses same convention as create: trusted-alpine-<version>-x86_64.iso
+	// An installed node never powers off: a milestone ends its boot test
+	for _, subcmd := range []*cobra.Command{testFirstBootCmd, testBootCmd} {
+		subcmd.Flags().StringVar(&flags.expect, "expect", "",
+			"Pass when this line appears on the serial console, then stop the VM, e.g. 'login:' (needs --timeout; default: wait until the guest powers off)")
+	}
+
 	testInstallCmd.Flags().StringVar(&flags.iso, "iso", "",
 		"Path to ISO file (default: trusted-alpine-<version>-x86_64.iso)")
 
@@ -291,6 +307,9 @@ func runTestBoot(commonFlags *cli.CommonFlags, flags *testFlags, testName string
 // runTestBootCommon is the common implementation for boot tests
 func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName string) error {
 	// Validate flag values before any destructive setup (NVRAM reset).
+	if flags.expect != "" && flags.timeout <= 0 {
+		return &MessageError{Msg: "--expect needs --timeout: the milestone is read from the headless console log"}
+	}
 	if err := qemu.ValidateDiskCache(flags.diskCache); err != nil {
 		return err
 	}
@@ -321,6 +340,9 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	if flags.timeout > 0 {
 		config.SerialConsole = false
 		config.SerialLogFile = filepath.Join(flags.workDir, bootConsoleLogName)
+		if err := resetConsoleLog(config.SerialLogFile); err != nil {
+			return err
+		}
 		printInfo(fmt.Sprintf("Console log: %s", config.SerialLogFile))
 	}
 
@@ -348,7 +370,7 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	printInfo("Press Ctrl+C to exit")
 
 	started := time.Now()
-	if err := runTestQEMUBoot(ctx, logger, config); err != nil {
+	if err := runTestQEMUBoot(ctx, logger, config, flags.expect); err != nil {
 		return bootError(flags.timeout, time.Since(started), config.SerialLogFile, err)
 	}
 
@@ -729,6 +751,16 @@ func bootError(timeout, elapsed time.Duration, consoleLog string, err error) err
 	return &ErrBootFailed{Err: err, ConsoleLog: consoleLog, ConsoleTail: tail}
 }
 
+// resetConsoleLog removes the console log an earlier boot test in the same
+// work dir left, so neither its --expect milestone nor its tail is taken
+// for this boot's before QEMU truncates the file.
+func resetConsoleLog(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return &WrappedError{Msg: "failed to remove the previous console log " + path, Err: err}
+	}
+	return nil
+}
+
 // consoleTail returns the last lines of the console log at path, or ""
 // when there is no log, it cannot be read, or the guest wrote nothing.
 func consoleTail(path string, lines int) string {
@@ -751,7 +783,7 @@ func consoleTail(path string, lines int) string {
 }
 
 // runTestQEMUBoot runs QEMU for boot test
-func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.Config) error {
+func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.Config, expect string) error {
 	// Create QEMU VM
 	vm, err := qemu.NewVM(config, logger)
 	if err != nil {
@@ -764,18 +796,51 @@ func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.C
 		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
-	// Wait for VM to complete
-	logger.Info("VM started, waiting for boot to complete (press Ctrl+C to exit)...")
-	waitErr := vm.Wait()
-	if err := vmDeadlineError(ctx); err != nil {
+	if err := waitForBoot(ctx, logger, vm, config.SerialLogFile, expect); err != nil {
 		return err
-	}
-	if waitErr != nil {
-		return &WrappedError{Msg: "VM execution failed", Err: waitErr}
 	}
 
 	logger.Info("Boot test completed successfully")
 	return nil
+}
+
+// bootVM is the part of a running qemu.VM the boot wait drives.
+type bootVM interface {
+	Wait() error
+	Stop() error
+}
+
+// waitForBoot ends the boot test. With expect set, the test passes when
+// the milestone appears in the serial console log and the VM is then
+// stopped: an installed node never powers off by itself. Without it, the
+// test ends when the guest powers off. A run still going at the deadline
+// is reported as such, so bootError names it ErrBootTimeout.
+func waitForBoot(ctx context.Context, logger *logging.Logger, vm bootVM, serialLog, expect string) error {
+	if expect == "" {
+		logger.Info("VM started, waiting for boot to complete (press Ctrl+C to exit)...")
+		waitErr := vm.Wait()
+		if err := vmDeadlineError(ctx); err != nil {
+			return err
+		}
+		if waitErr != nil {
+			return &WrappedError{Msg: "VM execution failed", Err: waitErr}
+		}
+		return nil
+	}
+
+	logger.Info("VM started; waiting for the milestone", "expect", expect, "serial_log", serialLog)
+	waitErr := harness.WaitForSerial(ctx, serialLog, expect)
+	if err := vm.Stop(); err != nil {
+		logger.Warn("failed to stop the VM", "error", err)
+	}
+	if waitErr == nil {
+		logger.Info("Milestone reached", "expect", expect)
+		return nil
+	}
+	if err := vmDeadlineError(ctx); err != nil {
+		return err
+	}
+	return &WrappedError{Msg: "waiting for " + strconv.Quote(expect), Err: waitErr}
 }
 
 // copyTestFile copies a file from src to dst
