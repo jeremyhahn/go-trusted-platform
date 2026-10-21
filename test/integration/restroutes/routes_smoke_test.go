@@ -20,9 +20,10 @@
 // must respond with anything other than the platformd "the requested API
 // endpoint does not exist" envelope, which signals the route is mounted
 // and a handler ran (even when the underlying service returns an error).
-// A bare router 404 fails too, and the health and DNS zone routes must
-// answer 200: both mean platformd serves REST through its webservice, as
-// the harness config requires, not daemon-only.
+// A bare router 404 fails too, the public service registry must answer 200
+// and the admin-gated health and DNS zone routes the gate's 401: all mean
+// platformd serves REST through its webservice, as the harness config
+// requires, not daemon-only.
 package restroutes
 
 import (
@@ -54,11 +55,12 @@ const (
 	// webservice always answers with the JSON envelope above.
 	routerDefaultNotFound = "404 page not found\n"
 
-	// healthPath and dnsZonesPath are mounted only by the webservice
-	// routers (pkg/webservice/v1/rest/platform, pkg/webservice/v1/rest/dns);
+	// serviceRegistryPath, healthPath and dnsZonesPath are mounted only by
+	// the webservice routers (pkg/webservice/v1, rest/platform, rest/dns);
 	// the dns suite's REST adapter lists zones on dnsZonesPath.
-	healthPath   = "/api/v1/platform/health"
-	dnsZonesPath = "/api/v1/dns/zones"
+	serviceRegistryPath = "/api/v1/platform/service-registry"
+	healthPath          = "/api/v1/platform/health"
+	dnsZonesPath        = "/api/v1/dns/zones"
 )
 
 // route describes one expected REST endpoint.
@@ -228,24 +230,41 @@ func TestRESTRoutes_AllRegistered(t *testing.T) {
 
 // TestRESTRoutes_ServedByWebservice fails a harness that runs platformd
 // daemon-only: there the REST port has none of the webservice routers, so
-// both routes answer 404 (docs/daemon/architecture.md).
+// every route below answers 404 (docs/daemon/architecture.md).
+//
+// The service registry is public (docs/auth/architecture.md §6c, the
+// routes "outside the CA" that answer a caller holding no credential) and
+// answers 200. The health breakdown and the DNS zone list sit behind the
+// admin-role gate, whose session comes only from a bearer token the
+// platform minted (§6c; the mTLS login factor is declined, §"The mTLS
+// factor is declined"). The harness client certificate is no session, so
+// both answer the gate's 401: a webservice answer the daemon-only REST
+// server cannot give.
 func TestRESTRoutes_ServedByWebservice(t *testing.T) {
 	endpoint := os.Getenv(envEndpoint)
 	if endpoint == "" {
 		t.Fatalf("%s not set; run via run-integration-tests.sh, which exports it for the running platformd", envEndpoint)
 	}
 	client := newClient(t)
-	for _, path := range []string{healthPath, dnsZonesPath} {
-		t.Run(path, func(t *testing.T) {
-			req, err := http.NewRequest(http.MethodGet, endpoint+path, nil)
+	routes := []struct {
+		path string
+		want int
+	}{
+		{serviceRegistryPath, http.StatusOK},
+		{healthPath, http.StatusUnauthorized},
+		{dnsZonesPath, http.StatusUnauthorized},
+	}
+	for _, rt := range routes {
+		t.Run(rt.path, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, endpoint+rt.path, nil)
 			require.NoError(t, err)
 			req.Header.Set("Accept", "application/json")
 			resp, err := client.Do(req)
-			require.NoError(t, err, "request GET %s", path)
+			require.NoError(t, err, "request GET %s", rt.path)
 			defer resp.Body.Close()
 			payload, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
-			assert.Equal(t, http.StatusOK, resp.StatusCode, "GET %s body=%s", path, string(payload))
+			assert.Equal(t, rt.want, resp.StatusCode, "GET %s body=%s", rt.path, string(payload))
 		})
 	}
 }

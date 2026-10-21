@@ -311,8 +311,10 @@ sdn:
 #
 # TLS on 8443 only (port 0 opens no plaintext listener). The server
 # certificate is issued by the platform CA, so the ca-bundle.crt the adapters
-# trust verifies it, and their client-bundle.pem authenticates through the
-# IAM middleware (both under <platform-dir>/tls). The key is sealed with the
+# trust verifies it, and their client-bundle.pem completes the TLS handshake
+# (both under <platform-dir>/tls). It is no session for the admin-gated
+# routes, which take a platform-minted bearer token
+# (docs/auth/architecture.md §6c). The key is sealed with the
 # TPM platform policy, which the swtpm platform-srk above provides.
 
 webservices:

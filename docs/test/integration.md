@@ -508,8 +508,13 @@ The Makefile automatically handles:
   on the daemon. A daemon-only harness answers 404 on every webservice route;
   `TestIntegrationConfig_ServesRESTThroughWebservice` (`pkg/app`) checks the
   section against the runner's `PLATFORMD_REST_PORT`, and the `restroutes`
-  smoke suite fails on a bare router 404 or when `/api/v1/platform/health`
-  or `/api/v1/dns/zones` does not answer 200.
+  smoke suite fails on a bare router 404, when the public
+  `/api/v1/platform/service-registry` does not answer 200, or when the
+  admin-gated `/api/v1/platform/health` or `/api/v1/dns/zones` does not answer
+  the gate's 401. The harness client certificate authenticates the TLS
+  handshake only: the webservice admin gate takes a session from a bearer token
+  the platform minted (`docs/auth/architecture.md` §6c), and the harness mints
+  none, so no suite reaches an admin-gated webservice route's handler.
 - Config file: `test/integration/config.yaml`. Its `dns:` section gives
   platformd an internal CoreDNS server on port 9053 seeded with zone
   `integration.internal.`, so the daemon builds a DNS backend and the dns
