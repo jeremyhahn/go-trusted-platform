@@ -256,6 +256,49 @@ func TestService_SignDigest_NilSignerUnavailable(t *testing.T) {
 	}
 }
 
+// TestService_SignDigest_KMSNotFoundSurfacesAsNotConfigured verifies a signer
+// error that is itself ErrRemoteSignNotConfigured (the KMS does not hold the
+// configured DB key) remains found through the ErrSignFailed wrapper.
+func TestService_SignDigest_KMSNotFoundSurfacesAsNotConfigured(t *testing.T) {
+	certPEM, certB64 := newSelfSignedEKCert(t)
+	profile := remoteSignProfile(certPEM)
+	signer := &fakeDBKeySigner{signErr: ErrRemoteSignNotConfigured{Reason: "db key not provisioned in the KMS"}}
+	svc := newSignService(t, profile, signer, boundEAB(profile), true)
+
+	_, err := svc.SignDigest(context.Background(), signRequest(t, svc, certB64, sha256Digest()))
+	if err == nil {
+		t.Fatal("expected error when the KMS does not hold the db key")
+	}
+	if !errors.Is(err, ErrRemoteSignNotConfigured{}) {
+		t.Fatalf("expected ErrRemoteSignNotConfigured through ErrSignFailed, got %T: %v", err, err)
+	}
+	var signFailed ErrSignFailed
+	if !errors.Is(err, signFailed) {
+		t.Fatalf("expected ErrSignFailed wrapping the signer error, got %T: %v", err, err)
+	}
+}
+
+// TestService_SignDigest_UnrelatedSignerErrorIsNotNotConfigured verifies an
+// unrelated signer failure stays a plain ErrSignFailed and is not mistaken
+// for ErrRemoteSignNotConfigured.
+func TestService_SignDigest_UnrelatedSignerErrorIsNotNotConfigured(t *testing.T) {
+	certPEM, certB64 := newSelfSignedEKCert(t)
+	profile := remoteSignProfile(certPEM)
+	signer := &fakeDBKeySigner{signErr: errors.New("kms unavailable")}
+	svc := newSignService(t, profile, signer, boundEAB(profile), true)
+
+	_, err := svc.SignDigest(context.Background(), signRequest(t, svc, certB64, sha256Digest()))
+	if err == nil {
+		t.Fatal("expected error for an unrelated signer failure")
+	}
+	if errors.Is(err, ErrRemoteSignNotConfigured{}) {
+		t.Fatalf("an unrelated signer error must not be ErrRemoteSignNotConfigured, got: %v", err)
+	}
+	if !errors.Is(err, ErrSignFailed{}) {
+		t.Fatalf("expected ErrSignFailed for an unrelated signer error, got %T: %v", err, err)
+	}
+}
+
 // TestService_SignDigest_EmptyDigest verifies an empty digest is rejected as a
 // bad request before signing.
 func TestService_SignDigest_EmptyDigest(t *testing.T) {
