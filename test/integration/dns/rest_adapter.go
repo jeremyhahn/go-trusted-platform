@@ -106,8 +106,9 @@ func (r *RESTAdapter) Name() string {
 
 // Setup initializes the REST client.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	// Verify connectivity by checking health endpoint
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/dns/health", nil)
+	// Verify connectivity with a read on the DNS surface itself: the REST
+	// API has no /api/v1/dns/health route (docs/dns/api-reference-rest.md).
+	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/dns/zones?limit=1", nil)
 	if err != nil {
 		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
 	}
