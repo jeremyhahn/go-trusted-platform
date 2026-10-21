@@ -17,6 +17,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -65,4 +66,50 @@ func TestStart_CancelledContextRefusesToStart(t *testing.T) {
 	err := s.Start(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, s.IsRunning())
+}
+
+// A socket path past the Unix limit runs swtpm in a short temp directory.
+// Stop removes that directory, so it must hand the configured path back: a
+// restart that kept the removed temp socket would bind in a directory that
+// no longer exists, and every reboot of a VM would lose its TPM.
+func TestStart_RelocatedSocketIsRestoredOnStop(t *testing.T) {
+	fakeSWTPMOnPath(t)
+	configured := filepath.Join(t.TempDir(), strings.Repeat("s", unixSocketPathMax), "swtpm.sock")
+	s := &SWTPM{
+		config: &Config{StateDir: t.TempDir(), SocketPath: configured},
+		logger: logging.DefaultLogger(),
+	}
+
+	require.NoError(t, s.Start(context.Background()))
+	first := s.SocketPath()
+	assert.NotEqual(t, configured, first, "a socket past the Unix limit must run in a temp directory")
+	assert.DirExists(t, filepath.Dir(first))
+	require.NoError(t, s.Stop())
+
+	assert.Equal(t, configured, s.SocketPath())
+	assert.NoDirExists(t, filepath.Dir(first))
+
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { assert.NoError(t, s.Stop()) })
+	assert.NotEqual(t, configured, s.SocketPath())
+	assert.DirExists(t, filepath.Dir(s.SocketPath()), "a restart must listen in a directory that exists")
+}
+
+// A socket within the limit is never relocated, so Stop leaves it alone.
+func TestStart_ShortSocketIsKeptAcrossStop(t *testing.T) {
+	fakeSWTPMOnPath(t)
+	stateDir, err := os.MkdirTemp("/tmp", "swtpm-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(stateDir)) })
+	configured := filepath.Join(stateDir, "swtpm.sock")
+	s := &SWTPM{
+		config: &Config{StateDir: stateDir, SocketPath: configured},
+		logger: logging.DefaultLogger(),
+	}
+
+	require.NoError(t, s.Start(context.Background()))
+	assert.Equal(t, configured, s.SocketPath())
+	require.NoError(t, s.Stop())
+
+	assert.Equal(t, configured, s.SocketPath())
 }

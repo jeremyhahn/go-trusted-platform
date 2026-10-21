@@ -60,6 +60,11 @@ type SWTPM struct {
 	exitErr      error       // Error from process exit
 	exitMu       sync.RWMutex
 	exitCh       chan struct{} // Closed when the process exits
+
+	// configuredSocketPath is the socket path the caller configured, kept
+	// while a temp-directory run replaces config.SocketPath so Stop can
+	// restore it and the next Start relocates afresh.
+	configuredSocketPath string
 }
 
 // tools reaches the swtpm host binaries.
@@ -273,6 +278,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 			return &WrappedError{Msg: "failed to create temp directory", Err: err}
 		}
 		s.tempStateDir = tmpDir
+		s.configuredSocketPath = s.config.SocketPath
 		stateDir = tmpDir
 		socketPath = filepath.Join(tmpDir, "swtpm.sock")
 		s.config.SocketPath = socketPath
@@ -467,6 +473,9 @@ func (s *SWTPM) Stop() error {
 			s.logger.Warnf("Failed to remove temp state directory: %v", err)
 		}
 		s.tempStateDir = ""
+		// The temp socket is gone with its directory; the next Start
+		// begins from the configured path again.
+		s.config.SocketPath = s.configuredSocketPath
 	}
 
 	s.cmd = nil

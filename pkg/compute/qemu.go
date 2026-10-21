@@ -522,7 +522,14 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 			return &WrappedError{Msg: "swtpm socket not ready", Err: err}
 		}
 
-		o.logger.Infof("swtpm started for instance %s (PID: %d)", instanceID, qemuInst.swtpm.PID())
+		// swtpm runs a socket past the Unix path limit from a short temp
+		// directory, so QEMU and attestation dial the socket it listens on,
+		// not the one recorded at Create.
+		socketPath := qemuInst.swtpm.SocketPath()
+		qemuInst.vm.GetConfig().TPMSocket = socketPath
+		qemuInst.instance.Metadata["tpm_socket"] = socketPath
+
+		o.logger.Infof("swtpm started for instance %s (PID: %d, socket: %s)", instanceID, qemuInst.swtpm.PID(), socketPath)
 	}
 
 	// Determine boot mode

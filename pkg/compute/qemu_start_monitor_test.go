@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
 )
 
 var errQMPRefused = errors.New("connect: connection refused")
@@ -138,6 +139,69 @@ func TestStart_QEMUExitIsStartFailure(t *testing.T) {
 	state, stateErr := orch.GetState(ctx, instance.ID)
 	require.NoError(t, stateErr)
 	assert.Equal(t, StateError, state)
+}
+
+// newExitingQEMUInstance creates an instance on a fake host whose QEMU exits
+// at once, with the disk and qcow2 NVRAM Start expects already in place.
+func newExitingQEMUInstance(t *testing.T, host *fakeHost, name string) (*QEMUOrchestrator, *Instance) {
+	t.Helper()
+	orch := newSWTPMTestOrchestrator(t, host)
+	firmwareDir := t.TempDir()
+	orch.config.OVMFCode = writeTestFile(t, firmwareDir, "OVMF_CODE.fd", "code", 0o644)
+	orch.config.OVMFVars = writeTestFile(t, firmwareDir, "OVMF_VARS.fd", "vars", 0o644)
+	orch.config.QEMUBinary = writeTestFile(t, firmwareDir, "qemu-system-x86_64", "#!/bin/sh\nexit 1\n", 0o755)
+	instance, err := orch.Create(context.Background(), &entities.DeviceProfile{ID: 1, Name: name})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(instance.Config.DiskPath, []byte("disk"), 0o600))
+	nvram := (&qemu.Config{WorkDir: instance.Config.WorkDir, NVRAMFormat: qemu.DiskFormatQCOW2}).GetNVRAMPath()
+	require.NoError(t, os.MkdirAll(filepath.Dir(nvram), 0o755))
+	require.NoError(t, os.WriteFile(nvram, []byte("vars"), 0o600))
+	return orch, instance
+}
+
+// swtpm moves a socket past the Unix path limit into a temp directory when
+// it starts. QEMU and attestation must dial that socket, not the path
+// recorded at Create, or the VM boots without its TPM.
+func TestStart_QEMUDialsTheSocketSWTPMListensOn(t *testing.T) {
+	orch, instance := newExitingQEMUInstance(t, &fakeHost{}, "test-vm-sock")
+	qemuInst := orch.instances[instance.ID]
+	created := instance.Metadata["tpm_socket"]
+	running := filepath.Join(t.TempDir(), "swtpm.sock")
+	qemuInst.swtpm.(*fakeEmulator).runSocket = running
+
+	err := orch.Start(context.Background(), instance.ID)
+
+	require.ErrorIs(t, err, ErrVMExitedDuringStart)
+	assert.NotEqual(t, created, running)
+	assert.Equal(t, running, qemuInst.vm.GetConfig().TPMSocket)
+	assert.Equal(t, running, instance.Metadata["tpm_socket"])
+}
+
+// A swtpm whose socket never appears fails Start before QEMU is told
+// anything: the instance keeps the socket recorded at Create.
+func TestStart_SWTPMSocketNotReadyKeepsCreatedSocket(t *testing.T) {
+	orch, instance := newExitingQEMUInstance(t, &fakeHost{}, "test-vm-nosock")
+	qemuInst := orch.instances[instance.ID]
+	created := instance.Metadata["tpm_socket"]
+	qemuInst.swtpm = &notReadyEmulator{fakeEmulator: qemuInst.swtpm.(*fakeEmulator)}
+
+	err := orch.Start(context.Background(), instance.ID)
+
+	require.ErrorIs(t, err, swtpm.ErrSocketNotReady)
+	assert.Equal(t, created, qemuInst.vm.GetConfig().TPMSocket)
+	assert.Equal(t, created, instance.Metadata["tpm_socket"])
+	state, stateErr := orch.GetState(context.Background(), instance.ID)
+	require.NoError(t, stateErr)
+	assert.Equal(t, StateError, state)
+}
+
+// notReadyEmulator is a fakeEmulator whose socket never becomes ready.
+type notReadyEmulator struct {
+	*fakeEmulator
+}
+
+func (n *notReadyEmulator) WaitForSocket(timeout time.Duration) error {
+	return swtpm.ErrSocketNotReady
 }
 
 func writeTestFile(t *testing.T, dir, name, content string, mode os.FileMode) string {
