@@ -222,15 +222,12 @@ func (a *MCPAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions)
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(result, &tenant); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "CreateTenant",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	tenant, err := decodeMCPTenantEnvelope("CreateTenant", result)
+	if err != nil {
+		return nil, err
 	}
 
-	return &CreateTenantResult{Tenant: &tenant}, nil
+	return &CreateTenantResult{Tenant: tenant}, nil
 }
 
 // GetTenant retrieves a tenant by ID
@@ -276,15 +273,39 @@ func (a *MCPAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions)
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(result, &tenant); err != nil {
+	tenant, err := decodeMCPTenantEnvelope("UpdateTenant", result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UpdateTenantResult{Tenant: tenant}, nil
+}
+
+// mcpTenantEnvelope is the tenant_create / tenant_update tool output: the
+// status fields beside the tenant under "tenant" (pkg/api/mcp/tenant_tools.go).
+type mcpTenantEnvelope struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message"`
+	Tenant  *TenantData `json:"tenant"`
+}
+
+// decodeMCPTenantEnvelope reads the tenant out of a tenant_create or
+// tenant_update result, refusing an output that carries no tenant.
+func decodeMCPTenantEnvelope(operation string, result json.RawMessage) (*TenantData, error) {
+	var envelope mcpTenantEnvelope
+	if err := json.Unmarshal(result, &envelope); err != nil {
 		return nil, ErrMCPRequestFailed{
-			Operation: "UpdateTenant",
+			Operation: operation,
 			Message:   "failed to parse response: " + err.Error(),
 		}
 	}
-
-	return &UpdateTenantResult{Tenant: &tenant}, nil
+	if envelope.Tenant == nil {
+		return nil, ErrMCPRequestFailed{
+			Operation: operation,
+			Message:   "response carries no tenant: " + string(result),
+		}
+	}
+	return envelope.Tenant, nil
 }
 
 // DeleteTenant removes a tenant
@@ -368,7 +389,26 @@ func (a *MCPAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Get
 
 // UpdateQuotas updates tenant quotas
 func (a *MCPAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions) (*UpdateQuotasResult, error) {
-	result, err := a.callTool(ctx, "tenant_update_quotas", opts)
+	// tenant_update_quotas takes the limits as flat max_* arguments; a limit
+	// left out keeps its current value (docs/tenant/api.md §7).
+	args := map[string]interface{}{"tenant_id": opts.TenantID}
+	if c := opts.Compute; c != nil {
+		putMCPLimit(args, "max_vms", c.MaxVMs)
+		putMCPLimit(args, "max_containers", c.MaxContainers)
+		putMCPLimit(args, "max_vcpus", c.MaxVCPUs)
+		putMCPLimit(args, "max_memory_mb", c.MaxMemoryMB)
+	}
+	if n := opts.Network; n != nil {
+		putMCPLimit(args, "max_bridges", n.MaxBridges)
+		putMCPLimit(args, "max_ports", n.MaxPorts)
+		putMCPLimit(args, "max_bandwidth_mbps", n.MaxBandwidthMbps)
+	}
+	if s := opts.Storage; s != nil {
+		putMCPLimit(args, "max_volumes_gb", s.MaxVolumesGB)
+		putMCPLimit(args, "max_snapshots", s.MaxSnapshots)
+	}
+
+	result, err := a.callTool(ctx, "tenant_update_quotas", args)
 	if err != nil {
 		return nil, err
 	}
@@ -384,6 +424,13 @@ func (a *MCPAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions)
 	return &quotasResult, nil
 }
 
+// putMCPLimit sets a quota limit argument when it is given (non-zero).
+func putMCPLimit(args map[string]interface{}, name string, value int64) {
+	if value != 0 {
+		args[name] = value
+	}
+}
+
 // GetUsage retrieves tenant resource usage
 func (a *MCPAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUsageResult, error) {
 	result, err := a.callTool(ctx, "tenant_get_usage", opts)
@@ -391,39 +438,57 @@ func (a *MCPAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUs
 		return nil, err
 	}
 
-	var usageResult GetUsageResult
-	if err := json.Unmarshal(result, &usageResult); err != nil {
+	// tenant_get_usage nests the counters under "usage".
+	var envelope struct {
+		TenantID string         `json:"tenant_id"`
+		Usage    GetUsageResult `json:"usage"`
+	}
+	if err := json.Unmarshal(result, &envelope); err != nil {
 		return nil, ErrMCPRequestFailed{
 			Operation: "GetUsage",
 			Message:   "failed to parse response: " + err.Error(),
 		}
 	}
 
-	return &usageResult, nil
+	usage := envelope.Usage
+	usage.TenantID = envelope.TenantID
+	return &usage, nil
 }
 
 // CheckQuota checks if a resource request can be fulfilled
 func (a *MCPAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error) {
-	result, err := a.callTool(ctx, "tenant_check_quota", opts)
+	// tenant_check_quota names the resource "resource_type" and answers
+	// "available"; a refusal such as an unknown tenant is an error.
+	result, err := a.callTool(ctx, "tenant_check_quota", map[string]interface{}{
+		"tenant_id":     opts.TenantID,
+		"resource_type": opts.Resource,
+		"amount":        opts.Amount,
+	})
 	if err != nil {
-		return &CheckQuotaResult{
-			TenantID: opts.TenantID,
-			Resource: opts.Resource,
-			Amount:   opts.Amount,
-			Allowed:  false,
-			Message:  err.Error(),
-		}, nil
+		return nil, err
 	}
 
-	var checkResult CheckQuotaResult
-	if err := json.Unmarshal(result, &checkResult); err != nil {
+	var output struct {
+		TenantID     string `json:"tenant_id"`
+		ResourceType string `json:"resource_type"`
+		Amount       int64  `json:"amount"`
+		Available    bool   `json:"available"`
+		Message      string `json:"message"`
+	}
+	if err := json.Unmarshal(result, &output); err != nil {
 		return nil, ErrMCPRequestFailed{
 			Operation: "CheckQuota",
 			Message:   "failed to parse response: " + err.Error(),
 		}
 	}
 
-	return &checkResult, nil
+	return &CheckQuotaResult{
+		TenantID: output.TenantID,
+		Resource: output.ResourceType,
+		Amount:   output.Amount,
+		Allowed:  output.Available,
+		Message:  output.Message,
+	}, nil
 }
 
 // =============================================================================
