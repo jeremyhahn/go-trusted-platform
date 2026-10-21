@@ -208,9 +208,14 @@ func (g *GRPCAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*
 		}
 		data.Write(msg.GetChunk())
 	}
+	return pullResultFromImage(ref, data.Bytes())
+}
 
+// pullResultFromImage decodes the image document a pull streams
+// (application/x-trusted-platform-image), the push envelope's shape.
+func pullResultFromImage(ref string, data []byte) (*PullResult, error) {
 	var img registry.Image
-	if err := json.Unmarshal(data.Bytes(), &img); err != nil {
+	if err := json.Unmarshal(data, &img); err != nil {
 		return nil, ErrInvalidResponse{Operation: "Pull", Err: err}
 	}
 	result := &PullResult{
