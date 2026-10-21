@@ -57,6 +57,36 @@ func openKMSClient(base *cli.BaseCommand) (quicbaassdk.KMSClient, error) {
 	return activeKMSClientFactory(base)
 }
 
+// secretsClientFactory builds a quicbaas SecretsClient from a BaseCommand.
+// Tests override it so the `kms secrets` verbs run without a live daemon.
+type secretsClientFactory func(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error)
+
+// activeSecretsClientFactory is the secrets client factory currently in use.
+var activeSecretsClientFactory secretsClientFactory = defaultSecretsClientFactory
+
+// SetSecretsClientFactory installs a secrets client factory and returns a
+// restorer that the caller invokes via defer.
+func SetSecretsClientFactory(f secretsClientFactory) func() {
+	prev := activeSecretsClientFactory
+	activeSecretsClientFactory = f
+	return func() { activeSecretsClientFactory = prev }
+}
+
+// defaultSecretsClientFactory reaches the secrets service through the same
+// SDK client the key and crypto verbs use.
+func defaultSecretsClientFactory(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error) {
+	q, err := base.Client().QuicBaaS()
+	if err != nil {
+		return nil, err
+	}
+	return q.Security().Secrets(), nil
+}
+
+// openSecretsClient returns a SecretsClient from the active factory.
+func openSecretsClient(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error) {
+	return activeSecretsClientFactory(base)
+}
+
 // parseSDKKeyUsage converts a CLI usage string to the SDK KeyUsage.
 func parseSDKKeyUsage(usage string) (kms.KeyUsage, error) {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(usage), "-", "_"))

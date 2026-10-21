@@ -85,10 +85,12 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrListKeyVersionsFailed", ErrListKeyVersionsFailed{KeyID: "k11", Err: errors.New("fail")}, "k11"},
 
 		// secrets.go
-		{"ErrSecretsNotImplemented", ErrSecretsNotImplemented{}, "not yet implemented"},
 		{"ErrSecretNameRequired", ErrSecretNameRequired{}, "name"},
 		{"ErrSecretValueRequired", ErrSecretValueRequired{}, "value"},
-		{"ErrSecretsClientNotInitialized", ErrSecretsClientNotInitialized{}, "client"},
+		{"ErrInvalidSecretValue", ErrInvalidSecretValue{Err: errors.New("bad b64")}, "bad b64"},
+		{"ErrInvalidSecretVersion", ErrInvalidSecretVersion{Value: "x9"}, "x9"},
+		{"ErrSecretOperationFailed", ErrSecretOperationFailed{Operation: "get", Name: "s1", Err: errors.New("fail")}, "s1"},
+		{"ErrSecretsSDKGap", ErrSecretsSDKGap{Verb: "watch", Method: "SecretsClient.Watch"}, "SecretsClient.Watch"},
 
 		// status.go
 		{"ErrKMSClientNotInitialized", ErrKMSClientNotInitialized{}, "client"},

@@ -134,7 +134,7 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 		},
 		{
 			name:          "secrets",
-			expectedShort: "Secrets management operations (not yet implemented)",
+			expectedShort: "Secrets management operations",
 		},
 		{
 			name:          "status",

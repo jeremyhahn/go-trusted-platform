@@ -37,7 +37,7 @@ The evidence is the package tree: **there is no `pkg/kms` in this repository**
 | **Handling key bytes in this layer** | This repository sits above Layer 3, so it uses the stack's owned key abstractions rather than coding protected memory itself. Key bytes never enter this layer. `ExportKey`'s CLI counterpart being unimplemented is the conservative side to be wrong on. |
 | **Re-encrypting data on key rotation** | Rotation would become an outage proportional to data volume, so it would not happen. `Rewrap` re-encrypts to the latest key version and leaves plaintext alone. |
 | **Treating AEAD invocation limits as advisory** | AES-GCM nonce reuse is a break, not a degradation. Limits are tracked per key with a dedicated CLI subtree, and exceeding one surfaces as `StatusResourceExhausted` rather than being silently ignored. |
-| **Shipping the CLI's secrets subtree half-working** | The stubs return typed errors and have tests that assert the refusal. A half-working secrets store would be worse than an absent one, because callers would trust it. The `kms dek` subtree has left this row: every verb calls the SDK DEK client, and an option the SDK cannot serve (`dek list --cursor`) refuses with `ErrDEKSDKGap` naming the missing field ([cli.md](cli.md) §7). |
+| **Shipping the CLI's secrets subtree half-working** | Every `kms secrets` verb calls the go-quicbaas SDK secrets client (`Security().Secrets()`), the same client the REST surface uses, and stores the value the way REST does, so either surface reads what the other wrote. The one verb the SDK has no call for, `watch`, refuses with the typed `ErrSecretsSDKGap` naming `SecretsClient.Watch`; it does not poll or reach go-xkms. A half-working secrets store would be worse than an absent one, because callers would trust it. The `kms dek` subtree likewise calls the SDK DEK client (`Security().DEK()`), and an option the SDK cannot serve (`dek list --cursor`) refuses with `ErrDEKSDKGap` naming the missing field ([cli.md](cli.md) §7). |
 
 ## Component boundaries
 
@@ -51,7 +51,7 @@ The evidence is the package tree: **there is no `pkg/kms` in this repository**
 | REST routes | `pkg/webservice/v1/rest/kms/` | this repo |
 | QUIC handlers | `pkg/api/daemon/quic_kms.go`, `quic_kms_extended.go` | this repo |
 | MCP key-lifecycle tools | `pkg/api/daemon/mcp_service_kms_lifecycle.go` | this repo |
-| CLI | `pkg/cli/commands/kms/` — **36 of 107 verb declarations are stubs** | this repo |
+| CLI | `pkg/cli/commands/kms/` — **the stubs are listed in [cli.md](cli.md) §8** | this repo |
 | **AEAD safety limits** | CLI only — no API counterpart | this repo |
 | `aesgcm`, `argon2` primitives | `pkg/crypto/` — **not the KMS** | this repo |
 
@@ -89,8 +89,8 @@ That is why rotation is a routine operation rather than a migration.
 - **It does not re-encrypt data on rotation.**
 - **It does not expose AEAD safety limits over any API** — currently a gap
   ([api.md](api.md) §5), not a decision.
-- **It does not ship a working `kms secrets` CLI.** The API has it; the CLI is a
-  typed stub, deliberately.
+- **It does not watch secrets.** `kms secrets watch` refuses until the SDK
+  secrets client has a `Watch` call ([cli.md](cli.md) §7).
 
 ## Overview
 
@@ -170,7 +170,7 @@ The CLI provides user-facing commands through `platformctl`:
 | `kms.go` | Root KMS command |
 | `key.go` | Key management commands |
 | `dek.go` | DEK management commands |
-| `secrets.go` | Secrets management commands |
+| `secrets.go` | Every `kms secrets` verb, over the SDK secrets client |
 | `crypto.go` | Cryptographic operations |
 | `status.go` | Backend status command |
 | `crypto_encrypt.go` | Encrypt command |
@@ -194,13 +194,6 @@ The CLI provides user-facing commands through `platformctl`:
 | `key_safety.go` | Safety limits |
 | `key_test_backend.go` | Backend testing |
 | `dek_safety.go` | DEK safety limits |
-| `secrets_version.go` | Get version |
-| `secrets_versions.go` | List versions |
-| `secrets_rollback.go` | Rollback |
-| `secrets_status.go` | Status management |
-| `secrets_policy.go` | Rotation policy |
-| `secrets_prefix.go` | Prefix operations |
-| `secrets_watch.go` | Watch for changes |
 
 ### REST API Layer (`pkg/webservice/v1/rest/kms/`)
 

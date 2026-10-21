@@ -60,8 +60,9 @@ platformctl kms
         set-default | set-safety | clear-safety          not implemented
     secrets
         store | get | list | delete | rotate | version | versions
-        rollback | status | policy get | policy set
-        prefix list | watch                               not implemented
+        rollback | status enable | status disable
+        policy get | policy set | prefix list            works
+        watch                                            SDK gap (typed refusal)
 ```
 
 `kms`, `key`, `crypto`, `dek`, `secrets` and every nested group (`metadata`,
@@ -562,6 +563,8 @@ platformctl kms crypto batch encrypt --key-id tenant-a-kek --input items.json -o
 
 ## 7. `kms dek` and `kms secrets`
 
+### `kms dek`
+
 **`kms dek` calls platformd** through the go-quicbaas SDK DEK client
 (`Security().DEK()`). `-o json` prints snake_case fields; times are RFC 3339
 and omitted when unset.
@@ -599,37 +602,47 @@ platformctl kms dek set-safety /tenant/myapp/default --max-operations 1000000
 platformctl kms dek list --prefix /tenant/myapp --recursive -o json
 ```
 
-**`kms secrets` is not implemented.** Every leaf exits 1 with
-`ErrSecretsNotImplemented` after parsing. Arguments are enforced (exit 1 on the
-wrong count). The `secrets` help points at `kms crypto encrypt|decrypt`.
+### `kms secrets`
 
-| Verb | Arguments | Flags declared (type, default) |
-|---|---|---|
-| `secrets store` | `<name>` | `--value`, `--description` |
-| `secrets get` | `<name>` | `--version` (int64, `0`) |
-| `secrets list` | — | `--prefix`, `--limit` (int32, `100`), `--cursor` |
-| `secrets delete` | `<name>` | `--force` (bool) |
-| `secrets rotate` | `<name>` | `--value` |
-| `secrets version` | `<name> <version>` | none |
-| `secrets versions` | `<name>` | `-l/--limit` (int32, `100`), `--cursor` |
-| `secrets rollback` | `<name> <version>` | none |
-| `secrets status` | `<name>` | none |
-| `secrets policy get` | `<name>` | none |
-| `secrets policy set` | `<name>` | none |
-| `secrets prefix list` | `<prefix>` | none |
-| `secrets watch` | `<name>` | none |
+Every verb calls the go-quicbaas SDK secrets client
+(`quicbaas.SDK().Security().Secrets()`) through the same platformd connection
+the `key` and `crypto` verbs use. `store` writes the value and description into
+the secret's data map under `value` and `description` and the tags as its
+metadata, exactly as `POST /api/v1/kms/secrets` does, so the CLI and REST read
+each other's secrets. Each verb prints JSON or YAML with `-o json|yaml`;
+`value` is base64 there.
 
-The help shows `[path]` and `[name]`, but each argument is required.
+| Verb | Arguments | Flags (type, default) | SDK call | JSON output |
+|---|---|---|---|---|
+| `secrets store` | `<name>` | `--value` (required), `--base64` (bool: `--value` is base64), `--description`, `--tag key=value` (repeatable) | `Store` | `name`, `version` |
+| `secrets get` | `<name>` | `--version` (int, `0` = current) | `Get` | `name`, `version`, `value`, `description`, `metadata`, `created_at` |
+| `secrets list` | — | `--prefix`, `--limit` (int, `100`; `0` = all) | `List` | `prefix`, `secrets` (names), `has_more` |
+| `secrets delete` | `<name>` | none | `Delete` | `name`, `deleted` |
+| `secrets rotate` | `<name>` | `--value` (required), `--base64` (bool) | `Rotate` | `name`, `old_version`, `new_version` |
+| `secrets version` | `<name> <version>` | none | `GetVersion` | as `get`, plus `created_by` |
+| `secrets versions` | `<name>` | none | `ListVersions` | `name`, `versions` (no values) |
+| `secrets rollback` | `<name> <version>` | none | `Rollback` | `name`, `new_version` |
+| `secrets status enable`, `secrets status disable` | `<name>` | none | `UpdateStatus` | `name`, `status` |
+| `secrets policy get` | `<name>` | none | `GetRotationPolicy` | `name`, `enabled`, `interval_seconds`, `next_rotation`, `retain_versions`, `rotation_lambda` |
+| `secrets policy set` | `<name>` | `--enabled` (bool, `true`), `--interval` (duration), `--retain-versions` (int), `--rotation-lambda` | `SetRotationPolicy` | as `policy get` |
+| `secrets prefix list` | `<prefix>` | `--include-data` (bool: also `Get` each secret) | `List` (+ `Get`) | as `list`, plus `data` |
+| `secrets watch` | `<name>` | none | **none — SDK gap** | exits 1 with `ErrSecretsSDKGap` naming `SecretsClient.Watch` |
 
-**REST has both surfaces.** Secrets (`/api/v1/kms/secrets`, with versions,
-rotate, rollback, status and rotation policy) and DEKs (`/api/v1/kms/deks`) are
-routed in `pkg/webservice/v1/rest/kms/router.go`; see [api.md](api.md). Until
-the CLI catches up, use REST:
+`<version>` must be a positive integer (`ErrInvalidSecretVersion`, exit 1,
+before any connection). The SDK `List` returns every name at once, so `list`
+has no `--cursor`: `--limit` caps what is printed and `has_more` reports the
+rest. The SDK `Delete` removes a secret with all its versions; there is no soft
+delete and no `--force`. A client error exits 1 with `ErrSecretOperationFailed`
+naming the operation and the secret.
+
+**Server coverage.** The pinned go-quicbaas embedded transport serves
+`Store`, `Get`, `List` and `Delete` only. Against an embedded platformd,
+`rotate`, `version`, `versions`, `rollback`, `status` and `policy` exit 1 with
+`embedded: unknown method: quicbaas.Secrets.*` until go-quicbaas #1619 lands.
 
 ```bash
-curl -s -X POST https://platform.example.com/api/v1/kms/secrets \
-     -d '{"name":"api-token","value":"..."}'
-curl -s https://platform.example.com/api/v1/kms/secrets/api-token
+platformctl kms secrets store api-token --value "s3cret" --tag env=prod -o json
+platformctl kms secrets get api-token -o json
 ```
 
 ---
@@ -643,19 +656,18 @@ A verb is not implemented when its `RunE` returns one of the package's
 grep -rn --include='*.go' --exclude='*_test.go' 'NotImplemented{}' pkg/cli/commands/kms/
 ```
 
-On 2026-10-11 that names exactly these leaves:
+On 2026-10-21 that names exactly these leaves (`kms secrets watch` is not a
+stub: it refuses with `ErrSecretsSDKGap`, an SDK gap, §7):
 
 | Error | Verbs |
 |---|---|
-| `ErrSecretsNotImplemented` | every `kms secrets` leaf (§7) |
 | `ErrKeyImportNotImplemented` | `kms key import` |
 | `ErrKeyExportNotImplemented` | `kms key export` |
 | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
 | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
 Counting the string `(not yet implemented)` instead overcounts: it also appears
-in the `Short` text of the groups (`secrets`, `secrets policy`, `secrets
-prefix`) and in test files.
+in test files.
 
 ---
 
