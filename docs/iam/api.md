@@ -361,7 +361,11 @@ A caller without the tool's scope is denied before the tool runs. Each tool
 gives the result and error class of its gRPC method: the tool calls that
 method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `IAMGRPCService` maps an SDK error by category (invalid input to
 `InvalidArgument`, not found to `NotFound`, and so on) rather than to
-`Internal`.
+`Internal`. The embedded transport hands the in-process server's own error
+through untranslated (`api.create role: invalid_input: ...`), not as an SDK
+error; `upstreamErrorCode` classifies it by its code name into the same
+categories, so a role with a malformed permission is `InvalidArgument` on
+gRPC, Unix, QUIC and MCP alike.
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.

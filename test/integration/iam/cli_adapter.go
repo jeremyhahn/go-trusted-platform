@@ -19,8 +19,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -36,7 +39,9 @@ func (e *CLIAdapterError) Error() string {
 
 // CLIAdapter implements IAMCommands using the platformctl CLI
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -55,12 +60,22 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 			Message:   "CLI not found",
 		}
 	}
+	// platformctl has no --socket flag; the harness socket reaches it through
+	// the config file written here (#540).
+	dir, path, err := helpers.WriteTempLocalCLIConfig(GetSocketPath(), GetGRPCEndpoint())
+	if err != nil {
+		return err
+	}
+	a.configDir, a.configPath = dir, path
 	return nil
 }
 
-// Teardown cleans up after testing
+// Teardown removes the CLI config Setup wrote.
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(a.configDir)
 }
 
 // Name returns the adapter name
@@ -70,7 +85,11 @@ func (a *CLIAdapter) Name() string {
 
 // runCommand executes a CLI command and returns the output
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
+	fullArgs := args
+	if a.configPath != "" {
+		fullArgs = append(append([]string(nil), args...), "--config", a.configPath)
+	}
+	cmd := exec.CommandContext(ctx, a.cliPath, fullArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, &CLIAdapterError{
