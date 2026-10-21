@@ -614,31 +614,34 @@ func (c *CLIAdapter) ServiceStatus(ctx context.Context, serviceType string) (*Se
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
+	return parseServiceStatusJSON(output)
+}
 
-	var resp struct {
-		Service *struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"service"`
+// parseServiceStatusJSON decodes `service status -o json`, which prints the
+// service as a bare object with no wrapping key (docs/daemon/cli.md §4.4).
+func parseServiceStatusJSON(output []byte) (*ServiceStatusResult, error) {
+	var svc *struct {
+		Name          string `json:"name"`
+		Type          string `json:"type"`
+		Status        string `json:"status"`
+		Health        string `json:"health"`
+		UptimeSeconds int64  `json:"uptime_seconds"`
+		Version       string `json:"version"`
 	}
 
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(output, &svc); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
 
 	result := &ServiceStatusResult{}
-	if resp.Service != nil {
+	if svc != nil {
 		result.Service = &ServiceInfo{
-			Name:          resp.Service.Name,
-			Type:          resp.Service.Type,
-			Status:        resp.Service.Status,
-			Health:        resp.Service.Health,
-			UptimeSeconds: resp.Service.UptimeSeconds,
-			Version:       resp.Service.Version,
+			Name:          svc.Name,
+			Type:          svc.Type,
+			Status:        svc.Status,
+			Health:        svc.Health,
+			UptimeSeconds: svc.UptimeSeconds,
+			Version:       svc.Version,
 		}
 	}
 

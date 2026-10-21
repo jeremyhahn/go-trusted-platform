@@ -291,7 +291,8 @@ exits 1. `--force` does not override the refusal. Restart `platformd` instead
 
 With `-o json` (or `yaml`), `service list` prints a bare array, one object per
 service, with keys `name`, `type`, `status`, `health`, `uptime_seconds` and
-`version`. There is no wrapping object.
+`version`. There is no wrapping object. `service status` prints that one
+object bare, with the same keys.
 
 - **Exit:** 0; 1 on a wrong argument count, an unknown type, an unreachable
   daemon or a failed operation.
