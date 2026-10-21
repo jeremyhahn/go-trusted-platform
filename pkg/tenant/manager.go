@@ -424,10 +424,11 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 		entity.DEKPath = BuildDEKPath(id)
 	}
 
-	// Cache and return
-	m.cache.Store(id, entity)
+	// A record cached meanwhile is the richer one: IAM carries no
+	// lifecycle state, so the rebuild must never replace it.
+	cached, _ := m.cache.LoadOrStore(id, entity)
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // GetTenantByName retrieves a tenant by name.
@@ -464,10 +465,17 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 		entity.DEKPath = BuildDEKPath(entity.ID)
 	}
 
-	// Cache and return
-	m.cache.Store(entity.ID, entity)
+	// The IAM record holds no lifecycle state, and the SDK rewrites its
+	// name to the DisplayName on update, so a by-name hit on a tenant this
+	// manager already holds is answered from the cached record and never
+	// replaces it. A name the cached record does not carry is a display
+	// name, not the tenant's name.
+	cached, loaded := m.cache.LoadOrStore(entity.ID, entity)
+	if loaded && cached.(*TenantEntity).Name != name {
+		return nil, ErrTenantNotFound{Name: name}
+	}
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // ListTenants lists all tenants with pagination.

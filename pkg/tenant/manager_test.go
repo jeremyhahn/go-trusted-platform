@@ -1166,6 +1166,86 @@ func TestGetTenantByName_FromIAMAfterCacheInvalidation(t *testing.T) {
 	}
 }
 
+// renameInIAM gives the IAM record a new name, as the SDK's embedded
+// transport does when it stores an update's DisplayName as the name.
+func renameInIAM(iamClient *mockIAMClient, id, name string) {
+	iamClient.mu.Lock()
+	defer iamClient.mu.Unlock()
+	iamClient.tenants[id].Name = name
+}
+
+// lookUpByIAMName asserts that a by-name lookup reaching the IAM fallback
+// for a cached tenant is refused and leaves the cached record in place.
+func lookUpByIAMName(t *testing.T, manager *Manager, iamClient *mockIAMClient, created *TenantEntity, want State) {
+	t.Helper()
+	ctx := context.Background()
+
+	renameInIAM(iamClient, created.ID, "Renamed Display Name")
+
+	_, err := manager.GetTenantByName(ctx, "Renamed Display Name")
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrTenantNotFound for a display name, got %v", err)
+	}
+
+	entity, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetTenant: %v", err)
+	}
+	if entity.State != want {
+		t.Errorf("expected state %q after the IAM fallback, got %q", want, entity.State)
+	}
+
+	byName, err := manager.GetTenantByName(ctx, created.Name)
+	if err != nil {
+		t.Fatalf("the tenant's own name must still resolve: %v", err)
+	}
+	if byName.ID != created.ID {
+		t.Errorf("expected ID %q, got %q", created.ID, byName.ID)
+	}
+}
+
+func TestGetTenantByName_IAMFallbackKeepsSuspendedState(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "suspended-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to suspend tenant: %v", err)
+	}
+
+	lookUpByIAMName(t, manager, iamClient, created, StateSuspended)
+
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Errorf("resume after the IAM fallback: %v", err)
+	}
+}
+
+func TestGetTenantByName_IAMFallbackKeepsResumedState(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "resumed-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to suspend tenant: %v", err)
+	}
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to resume tenant: %v", err)
+	}
+
+	lookUpByIAMName(t, manager, iamClient, created, StateActive)
+
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Errorf("suspend after the IAM fallback: %v", err)
+	}
+}
+
 func TestGetTenantByName_IAMListError(t *testing.T) {
 	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
