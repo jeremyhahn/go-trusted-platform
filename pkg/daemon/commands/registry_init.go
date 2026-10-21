@@ -100,6 +100,9 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 		slog.Default(),
 		registry.WithStorage(storage),
 		registry.WithEncryptor(encryptor),
+		// The same KMS signs manifests: its signing keys sit beside the
+		// encryption keys under <PlatformDir>/registry/keys.
+		registry.WithSigner(kms),
 	)
 	if err != nil {
 		logger.Warnf("registry: failed to construct: %v", err)

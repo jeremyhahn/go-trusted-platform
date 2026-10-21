@@ -161,6 +161,7 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 			metadata.Annotations = make(map[string]string, 1)
 		}
 		metadata.Annotations[registry.PushAnnotationSign] = "true"
+		metadata.Annotations[registry.PushAnnotationSigningKeyID] = opts.SigningKeyID
 	}
 	if err := stream.Send(regsvc.NewPushMetadataRequest(metadata)); err != nil {
 		return nil, err
@@ -178,6 +179,7 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		Digest:    resp.GetArtifact().GetDigest(),
 		Size:      resp.GetBytesReceived(),
 		Encrypted: resp.GetArtifact().GetAnnotations()[registry.ManifestAnnotationEncrypted] == "true",
+		Signed:    resp.GetArtifact().GetAnnotations()[registry.ManifestAnnotationSigned] == "true",
 	}
 	if resp.GetTimestamp() != nil {
 		result.PushedAt = resp.GetTimestamp().AsTime()

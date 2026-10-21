@@ -15,6 +15,8 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -171,6 +173,11 @@ type Registry struct {
 	// (Push with Encrypt=true is then refused).
 	encryptor *ImageEncryptor
 
+	// signer signs the manifest when Push(opts.SignImage) is requested.
+	// Set via WithSigner; nil disables signing (Push with SignImage=true
+	// is then refused).
+	signer SigningKMSClient
+
 	// initialized tracks whether the registry is ready
 	initialized atomic.Bool
 
@@ -212,6 +219,15 @@ func WithStorage(s *QuicBaaSStorage) RegistryOption {
 func WithEncryptor(e *ImageEncryptor) RegistryOption {
 	return func(r *Registry) {
 		r.encryptor = e
+	}
+}
+
+// WithSigner wires the KMS that signs manifests (LocalKMSClient in the
+// daemon, the same client that holds the encryption keys). Without one, a
+// push that asks for signing is refused with ErrSigningNotConfigured.
+func WithSigner(s SigningKMSClient) RegistryOption {
+	return func(r *Registry) {
+		r.signer = s
 	}
 }
 
@@ -282,7 +298,7 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	if opts.Encrypt && r.encryptor == nil {
 		return ErrEncryptionNotConfigured{Reference: ref}
 	}
-	if opts.SignImage {
+	if opts.SignImage && r.signer == nil {
 		return ErrSigningNotConfigured{Reference: ref}
 	}
 	// An image without layers has no content to serve; refuse it here so
@@ -290,6 +306,8 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	if len(image.Layers) == 0 {
 		return ErrImageEmpty{}
 	}
+	// Only the registry's signer sets the signature annotations.
+	image.Manifest.Annotations = withoutSignatureAnnotations(image.Manifest.Annotations)
 
 	select {
 	case r.pushSemaphore <- struct{}{}:
@@ -339,6 +357,14 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 		image.Manifest.Annotations[ManifestAnnotationKeyID] = encImage.KeyID
 	}
 
+	// Sign after the encryption annotations are set, so the signature
+	// covers them, and before anything is stored.
+	if opts.SignImage {
+		if err := r.signManifest(ctx, ref, image.Manifest, opts.SigningKeyID); err != nil {
+			return err
+		}
+	}
+
 	for i := range image.Layers {
 		l := &image.Layers[i]
 		if l.Digest == "" {
@@ -377,6 +403,31 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	return r.storage.StoreManifest(ctx, ref, image.Manifest)
 }
 
+// signManifest signs m's signing payload for ref with keyID (the default
+// signing key when empty) and records the signature as annotations.
+func (r *Registry) signManifest(ctx context.Context, ref string, m *ImageManifest, keyID string) error {
+	if keyID == "" {
+		keyID = defaultSigningKeyID
+	}
+	payload, err := manifestSigningPayload(ref, m)
+	if err != nil {
+		return ErrManifestSigningFailed{KeyID: keyID, Err: err}
+	}
+	digest := sha256.Sum256(payload)
+	sig, algorithm, err := r.signer.Sign(ctx, keyID, digest[:])
+	if err != nil {
+		return ErrManifestSigningFailed{KeyID: keyID, Err: err}
+	}
+	if m.Annotations == nil {
+		m.Annotations = make(map[string]string, len(signatureAnnotations))
+	}
+	m.Annotations[ManifestAnnotationSigned] = "true"
+	m.Annotations[ManifestAnnotationSigningKeyID] = keyID
+	m.Annotations[ManifestAnnotationSignatureAlgorithm] = algorithm
+	m.Annotations[ManifestAnnotationSignature] = base64.StdEncoding.EncodeToString(sig)
+	return nil
+}
+
 // Annotation keys recorded on encrypted manifests. Kept namespaced so
 // they round-trip through generic OCI tooling without collision.
 const (
@@ -385,7 +436,29 @@ const (
 	ManifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
 	// ManifestAnnotationKeyID names the key the layers were encrypted with.
 	ManifestAnnotationKeyID = "org.letstrust.registry.key-id"
+
+	// ManifestAnnotationSigned is "true" on a manifest the registry signed
+	// on push.
+	ManifestAnnotationSigned = "org.letstrust.registry.signed"
+	// ManifestAnnotationSigningKeyID names the key the manifest was signed
+	// with.
+	ManifestAnnotationSigningKeyID = "org.letstrust.registry.signing-key-id"
+	// ManifestAnnotationSignatureAlgorithm names the signature algorithm.
+	ManifestAnnotationSignatureAlgorithm = "org.letstrust.registry.signature-algorithm"
+	// ManifestAnnotationSignature is the base64 (standard encoding)
+	// signature over the manifest's signing payload.
+	ManifestAnnotationSignature = "org.letstrust.registry.signature"
 )
+
+// signatureAnnotations are the annotations only the registry's signer may
+// set: Push strips them from every incoming manifest, so a caller cannot
+// present an unsigned image as signed.
+var signatureAnnotations = map[string]struct{}{
+	ManifestAnnotationSigned:             {},
+	ManifestAnnotationSigningKeyID:       {},
+	ManifestAnnotationSignatureAlgorithm: {},
+	ManifestAnnotationSignature:          {},
+}
 
 // Pull retrieves a container image from the registry. The manifest is
 // looked up at the supplied reference, then each layer is fetched

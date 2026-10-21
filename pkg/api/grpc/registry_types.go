@@ -440,6 +440,17 @@ func (e ErrInvalidArtifactReference) Error() string {
 	return fmt.Sprintf("registry: invalid image reference %q: %s", e.Reference, e.Reason)
 }
 
+// ErrRegistryNotConfigured is returned when the registry refuses an
+// operation because a capability it needs (image signing, image
+// encryption) is not configured. It maps to codes.FailedPrecondition.
+type ErrRegistryNotConfigured struct {
+	Reason string
+}
+
+func (e ErrRegistryNotConfigured) Error() string {
+	return e.Reason
+}
+
 // ErrStreamClosed is returned when a stream is unexpectedly closed.
 type ErrStreamClosed struct{}
 

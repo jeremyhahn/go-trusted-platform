@@ -217,6 +217,15 @@ grammar (`ErrInvalidImageRef`, e.g. an uppercase repository, carried as
 `grpcapi.ErrInvalidArtifactReference`) is `InvalidArgument`: the caller's
 error, never `Internal`.
 
+**A push that asks for a capability the registry was built without is
+`FailedPrecondition` on gRPC.** `sign` with no signer is
+`ErrSigningNotConfigured`, and `encrypt` with no encryptor is
+`ErrEncryptionNotConfigured`. The gRPC adapter (`mapRegistryError`) carries
+both as `grpcapi.ErrRegistryNotConfigured`, and `RegistryErrorStatus` maps
+that to `FailedPrecondition` with the reason as its message. The code is never
+`Internal`: the server is healthy, and the caller has to configure it or drop
+the flag.
+
 **A `/v2` path no route claims returns a JSON 404, not the web console.** The
 SPA catch-all declines the whole `/v2/` namespace along with the other API
 namespaces (`webserver_v1.go` `apiPathPrefixes`; see

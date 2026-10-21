@@ -113,10 +113,18 @@ a live backend. They are the fault-injection points:
    value `"true"` turns a flag on. An encrypted push stamps the manifest with
    `ManifestAnnotationEncrypted` and the KMS key ID
    (`ManifestAnnotationKeyID`), which is how Push and Inspect report it.
-   `sign` (`PushAnnotationSign`) sets `SignImage`, which `Registry.Push`
-   refuses with `ErrSigningNotConfigured` before storing anything: the
-   registry has no image signer, and an unsigned image is never reported as
-   signed. The
+   `sign` (`PushAnnotationSign`) sets `SignImage` and `signing-key-id`
+   (`PushAnnotationSigningKeyID`) names the key, default `registry-default`.
+   Push drops any caller-supplied signature annotation, then signs last —
+   after encryption, so the signature covers the encryption annotations —
+   through the `SigningKMSClient` (`WithSigner`). It signs the SHA-256 of
+   `manifestSigningPayload`, which is the manifest JSON with its reference,
+   minus signature annotations and timestamps. The manifest records
+   `org.letstrust.registry.{signed,signing-key-id,signature-algorithm,signature}`
+   (ECDSA P-256, ASN.1 DER, base64). If no signer is wired, the push is
+   refused with `ErrSigningNotConfigured`. If the KMS fails, the push is
+   refused with `ErrManifestSigningFailed`. In both cases nothing is stored,
+   and an unsigned image is never reported as signed. The
    image config is decoded before anything is stored: a config that is not
    JSON is `ErrInvalidManifest`, and Inspect reports its `os`,
    `architecture` and `author`.
@@ -144,6 +152,8 @@ ones a caller must handle by type:
 | `ErrInvalidDigest` / `ErrInvalidImageRef` / `ErrInvalidManifest` | Malformed input | yes |
 | `ErrImageEmpty` | Push carried no layers | yes |
 | `ErrEncryptionNotConfigured` | `--encrypt` with no encryption backend | yes |
+| `ErrSigningNotConfigured` | `--sign` with no signer; gRPC `FailedPrecondition`, never `Internal` | yes |
+| `ErrManifestSigningFailed` | The KMS refused to sign; nothing is stored | yes |
 | `ErrEncryptionFailed` / `ErrDecryptionFailed` | Crypto operation failed | yes |
 | `ErrKeyNotFound` / `ErrKeyNotFoundLocal` / `ErrKeyCreationFailed` / `ErrKeyWrapFailed` / `ErrKeyUnwrapFailed` | KMS path failures | yes |
 | `ErrInvalidConfig` | Rejected at construction, before the listener opens | yes |

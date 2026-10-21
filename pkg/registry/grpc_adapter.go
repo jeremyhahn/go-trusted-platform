@@ -166,10 +166,13 @@ const (
 	// PushAnnotationKeyID names the encryption key; empty uses the
 	// registry default key.
 	PushAnnotationKeyID = "encrypt-key-id"
-	// PushAnnotationSign is "true" to ask for the image to be signed.
-	// The registry has no image signer, so such a push is refused with
+	// PushAnnotationSign is "true" to ask for the manifest to be signed.
+	// A registry built without a signer refuses such a push with
 	// ErrSigningNotConfigured.
 	PushAnnotationSign = "sign"
+	// PushAnnotationSigningKeyID names the signing key; empty uses the
+	// registry default signing key.
+	PushAnnotationSigningKeyID = "signing-key-id"
 )
 
 func pushOptionsOf(annotations map[string]string) PushOptions {
@@ -179,6 +182,7 @@ func pushOptionsOf(annotations map[string]string) PushOptions {
 		Encrypt:        annotations[PushAnnotationEncrypt] == "true",
 		KeyID:          annotations[PushAnnotationKeyID],
 		SignImage:      annotations[PushAnnotationSign] == "true",
+		SigningKeyID:   annotations[PushAnnotationSigningKeyID],
 	}
 }
 
@@ -422,6 +426,9 @@ func (a *GRPCAdapter) mapRegistryError(repository, reference string, err error) 
 	var invalidRef ErrInvalidImageRef
 	if errors.As(err, &invalidRef) {
 		return grpcapi.ErrInvalidArtifactReference{Reference: invalidRef.Reference, Reason: invalidRef.Reason}
+	}
+	if errors.As(err, &ErrSigningNotConfigured{}) || errors.As(err, &ErrEncryptionNotConfigured{}) {
+		return grpcapi.ErrRegistryNotConfigured{Reason: err.Error()}
 	}
 	return err
 }
