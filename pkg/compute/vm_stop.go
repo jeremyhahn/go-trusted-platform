@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // MaxStopTimeout bounds StopOptions.Timeout. The instance stays locked while
@@ -66,8 +67,9 @@ func (opts StopOptions) GuestWait() time.Duration {
 
 // stopReplyMargin is the time a stop or reboot gets beyond the guest's
 // power-down window to answer: the process exit, a reboot's start and the
-// reply itself.
-const stopReplyMargin = 30 * time.Second
+// reply itself. The SDK owns it, so a client waits exactly as long as the
+// daemon holds the reply open (docs/compute/api.md §2).
+const stopReplyMargin = computesvc.StopReplyMargin
 
 // ReplyWindow is the longest a stop or reboot with these options takes to
 // answer: GuestWait plus the margin for the process exit, a reboot's start

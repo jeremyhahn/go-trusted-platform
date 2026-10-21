@@ -224,8 +224,8 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Call MCP tool
-	result, err := c.adapter.client.CallTool(ctx, toolName, arguments)
+	// Call MCP tool, waiting as long as the daemon may take to answer it
+	result, err := c.adapter.client.CallToolWithin(ctx, toolName, arguments, replyWindow(method, args))
 	if err != nil {
 		return translateMCPErrorToGRPC(err)
 	}

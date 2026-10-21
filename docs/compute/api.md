@@ -219,6 +219,14 @@ reply is ready (`pkg/api/mcp/server.go`). Either way a graceful stop that runs
 past the server's 30-second write timeout still answers instead of closing
 the connection.
 
+The client waits as long. The SDK owns the window
+(`StopReplyWindow` in `sdk/go/services/compute/stop_window.go`) and
+`StopOptions.ReplyWindow` uses its margin, so the two cannot drift. The SDK's
+MCP transport sends `vm_stop` and `vm_reboot` with that window as the
+request's HTTP timeout when it is longer than the client's own
+(`platform.WithTimeout`, 5 seconds by default; `sdk/go/transport/mcp/compute_vm.go`,
+`mcpwire.Client.CallToolWithin`). Every other call keeps the client's timeout.
+
 **List honours `states`, `selector` and `pagination`**
 (`ComputeService.ListVMs`, `pkg/api/daemon/compute_vm_list.go`). `states`
 keeps the VMs in any listed state; an empty list keeps every state.

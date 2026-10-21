@@ -750,13 +750,25 @@ func (o *QEMUOrchestrator) StopWithOptions(ctx context.Context, instanceID strin
 	qemuInst.instance.State = StateStopping
 	qemuInst.instance.UpdatedAt = time.Now()
 
-	// Stop VM
-	if err := stopVMProcess(qemuInst, opts); err != nil {
-		o.lifecycle.SetState(instanceID, StateError)
-		qemuInst.instance.State = StateError
-		qemuInst.instance.UpdatedAt = time.Now()
-		qemuInst.mu.Unlock()
-		return &WrappedError{Msg: "failed to stop VM", Err: err}
+	// A graceful stop waits up to the guest's power-down window, so it runs
+	// without the instance lock: holding it would block every get, list and
+	// create behind this one VM's guest (List holds the orchestrator's read
+	// lock while it takes each instance lock). StateStopping refuses every
+	// other verb meanwhile, and the wait goroutine records the exit.
+	qemuInst.mu.Unlock()
+	stopErr := stopVMProcess(qemuInst, opts)
+	qemuInst.mu.Lock()
+
+	if stopErr != nil {
+		// The guest may have exited during the stop, in which case the exit
+		// is recorded and the VM is stopped after all.
+		if state, err := o.lifecycle.GetState(instanceID); err != nil || state == StateStopping {
+			o.lifecycle.SetState(instanceID, StateError)
+			qemuInst.instance.State = StateError
+			qemuInst.instance.UpdatedAt = time.Now()
+			qemuInst.mu.Unlock()
+			return &WrappedError{Msg: "failed to stop VM", Err: stopErr}
+		}
 	}
 
 	// Cancel context
