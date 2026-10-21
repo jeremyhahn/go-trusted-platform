@@ -1084,10 +1084,12 @@ func deviceStatusError(err error) error {
 		templateID       device.ErrInvalidTemplateID
 		templateName     device.ErrTemplateNameRequired
 		templateAbsent   device.ErrNilTemplate
+		badEvidence      ErrInvalidAttestationEvidence
 	)
 	if errors.As(err, &vlans) || errors.As(err, &tlsClear) ||
 		errors.As(err, &identityRequired) || errors.As(err, &templateID) ||
-		errors.As(err, &templateName) || errors.As(err, &templateAbsent) {
+		errors.As(err, &templateName) || errors.As(err, &templateAbsent) ||
+		errors.As(err, &badEvidence) {
 		return status.Error(codes.InvalidArgument, errStr)
 	}
 	var noConfig device.ErrNoMatchingConfig
