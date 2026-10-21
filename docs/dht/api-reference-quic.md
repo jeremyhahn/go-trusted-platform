@@ -1,5 +1,7 @@
 # DHT QUIC API Reference
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 ## Overview
 
 QUIC provides low-latency, multiplexed connections for DHT operations. The QUIC transport is optimized for:

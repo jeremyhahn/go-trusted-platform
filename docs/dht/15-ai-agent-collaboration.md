@@ -1,5 +1,7 @@
 # AI Agent Collaboration Network
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 This document specifies the AI Agent Collaboration Network feature for go-trusted-platform, enabling AI agents to collaborate on the DHT network via MCP (Model Context Protocol) and native APIs.
 
 ---

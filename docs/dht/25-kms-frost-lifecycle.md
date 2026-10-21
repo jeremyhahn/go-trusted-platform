@@ -1,5 +1,7 @@
 # KMS Integration for FROST Share Management
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 ## Overview
 
 The Key Management Service (KMS) provides secure, hierarchical storage for FROST threshold signature shares within the go-trusted-platform. This document specifies the integration between KMS backends and FROST share lifecycle operations, ensuring cryptographic material remains protected at rest, in transit, and during use.

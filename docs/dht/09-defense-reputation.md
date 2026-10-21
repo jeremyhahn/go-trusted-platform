@@ -1,5 +1,7 @@
 # Defense and Reputation System
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 ## Overview
 
 The Defense and Reputation System provides a complete framework for establishing trust, maintaining network integrity, and enforcing behavioral standards in the trusted DHT network. This document is the **canonical source** for all reputation thresholds, role eligibility requirements, and defense mechanisms.

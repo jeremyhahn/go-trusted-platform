@@ -1,5 +1,7 @@
 # DHT REST API Reference
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 **Document Version:** 1.0
 **Last Updated:** 2026-01-07
 

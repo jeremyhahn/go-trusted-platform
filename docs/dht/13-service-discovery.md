@@ -1,5 +1,7 @@
 # Service Discovery and Marketplace
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 ## Overview
 
 The DHT Service Discovery system enables trusted nodes to advertise services and discover providers across the network. Built on the go-trusted-platform's trust infrastructure, it provides a decentralized marketplace for e-commerce, hosting, storage, compute, API services, content delivery, and custom service offerings.
