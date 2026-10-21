@@ -255,10 +255,13 @@ type TPM2KeyResponse struct {
 {}
 ```
 
-The EK is created from the configured EK attributes and persisted at the
-configured EK handle. An occupied EK handle is refused with
-`StatusAlreadyExists` (0x06); EK attributes that carry no creation template
-are refused with `StatusInvalidRequest` (0x01, gRPC `FailedPrecondition`).
+The EK is built from `tpm.ek` (the TCG EK Credential Profile template of its
+algorithm, RSA unless it names ECC, under the endorsement hierarchy) and
+persisted at the configured EK handle, so it can be created after
+`TPM2_Clear` has emptied the handle. An occupied EK handle is refused with
+`StatusAlreadyExists` (0x06); a `tpm.ek` with no handle, or with an algorithm
+that has no EK template, is refused with `StatusInvalidRequest` (0x01, gRPC
+`FailedPrecondition`).
 
 **Response Payload:**
 ```go

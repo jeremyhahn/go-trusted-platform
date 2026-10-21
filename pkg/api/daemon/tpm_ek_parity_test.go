@@ -30,15 +30,13 @@ import (
 // ekTPM answers the reads and the create that tpmek.Create makes.
 type ekTPM struct {
 	xkmssdk.TrustedPlatformModule
-	template    tpm2.TPMTPublic
+	ekHandle    uint32
 	persisted   bool
 	createCalls int
 }
 
-func (t *ekTPM) EKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return &xkmssdk.KeyAttributes{
-		TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81010001, Template: t.template},
-	}, nil
+func (t *ekTPM) Config() *xkmssdk.TPMConfig {
+	return &xkmssdk.TPMConfig{EK: &xkmssdk.EKConfig{Handle: t.ekHandle}}
 }
 
 func (t *ekTPM) ReadHandle(tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
@@ -48,8 +46,11 @@ func (t *ekTPM) ReadHandle(tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, err
 	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, tpm2.TPMRCHandle
 }
 
-func (t *ekTPM) CreateEK(*xkmssdk.KeyAttributes) error {
+// CreateEK stamps the public key, as the backend does once the primary
+// exists.
+func (t *ekTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error {
 	t.createCalls++
+	keyAttrs.TPMAttributes.PublicKeyBytes = []byte("ek-pub")
 	return nil
 }
 
@@ -66,7 +67,7 @@ func createEKBoth(t *testing.T, tpm *ekTPM) (grpcErr, mcpErr error) {
 // TestTPMCreateEKParity_Creates: gRPC (and so Unix, embedded and daemon
 // REST) and MCP create the configured EK through the same entry point.
 func TestTPMCreateEKParity_Creates(t *testing.T) {
-	tpm := &ekTPM{template: tpm2.RSAEKTemplate}
+	tpm := &ekTPM{ekHandle: 0x81010001}
 
 	grpcErr, mcpErr := createEKBoth(t, tpm)
 
@@ -76,16 +77,15 @@ func TestTPMCreateEKParity_Creates(t *testing.T) {
 }
 
 // TestTPMCreateEKParity_Refusals: an occupied EK handle is AlreadyExists
-// and template-less EK attributes are FailedPrecondition on both, and
-// neither reaches CreateEK (whose go-tpm marshal panics on a zero
-// TPMT_PUBLIC).
+// and a tpm.ek with no handle is FailedPrecondition on both, and neither
+// reaches CreateEK.
 func TestTPMCreateEKParity_Refusals(t *testing.T) {
 	cases := map[string]struct {
 		tpm  *ekTPM
 		want codes.Code
 	}{
-		"persisted EK":   {tpm: &ekTPM{template: tpm2.RSAEKTemplate, persisted: true}, want: codes.AlreadyExists},
-		"no EK template": {tpm: &ekTPM{}, want: codes.FailedPrecondition},
+		"persisted EK":     {tpm: &ekTPM{ekHandle: 0x81010001, persisted: true}, want: codes.AlreadyExists},
+		"no tpm.ek handle": {tpm: &ekTPM{}, want: codes.FailedPrecondition},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

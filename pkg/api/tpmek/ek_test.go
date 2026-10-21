@@ -14,6 +14,8 @@
 package tpmek
 
 import (
+	"crypto/elliptic"
+	"crypto/x509"
 	"errors"
 	"testing"
 
@@ -28,112 +30,110 @@ import (
 
 const testEKHandle = tpm2.TPMHandle(0x81010001)
 
-// fakeTPM answers only EKAttributes, ReadHandle and CreateEK. The
-// embedded nil interface means any other call panics, so a change that
-// starts calling something else is loud.
+// fakeTPM answers only Config, ReadHandle and CreateEK. The embedded nil
+// interface means any other call panics, so a change that starts reading
+// the EK back through EKAttributes -- TPM_RC_HANDLE on the empty handle
+// Create exists for -- is loud.
 type fakeTPM struct {
 	xkmssdk.TrustedPlatformModule
 
-	ekAttrs    *xkmssdk.KeyAttributes
-	ekAttrsErr error
-	readErr    error
-	createErr  error
+	cfg       *xkmssdk.TPMConfig
+	readErr   error
+	createErr error
 
-	readHandle  tpm2.TPMHandle
-	createCalls int
+	readHandle tpm2.TPMHandle
+	created    *xkmssdk.KeyAttributes
 }
 
-func (f *fakeTPM) EKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return f.ekAttrs, f.ekAttrsErr
-}
+func (f *fakeTPM) Config() *xkmssdk.TPMConfig { return f.cfg }
 
 func (f *fakeTPM) ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
 	f.readHandle = handle
 	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, f.readErr
 }
 
-func (f *fakeTPM) CreateEK(*xkmssdk.KeyAttributes) error {
-	f.createCalls++
+func (f *fakeTPM) CreateEK(attrs *xkmssdk.KeyAttributes) error {
+	f.created = attrs
 	return f.createErr
 }
 
 // absentHandle is what ReadHandle returns for an empty persistent handle.
 var absentHandle = errors.New("TPM_RC_HANDLE")
 
-func configuredEK() *xkmssdk.KeyAttributes {
-	return &xkmssdk.KeyAttributes{
-		TPMAttributes: &xkmssdk.TPMAttributes{
-			Handle:   testEKHandle,
-			Template: tpm2.RSAEKTemplate,
-		},
-	}
+func configuredEK() *xkmssdk.TPMConfig {
+	return &xkmssdk.TPMConfig{EK: &xkmssdk.EKConfig{
+		Handle:        uint32(testEKHandle),
+		CertHandle:    0x01C00002,
+		HierarchyAuth: "endorsement-pin",
+		RSAConfig:     &xkmssdk.RSAConfig{KeySize: 2048},
+	}}
 }
 
-func TestCreate_CreatesFromConfiguredTemplate(t *testing.T) {
-	tpm := &fakeTPM{ekAttrs: configuredEK(), readErr: absentHandle}
+// After TPM2_Clear the EK handle is empty; Create builds the key from
+// tpm.ek rather than reading it back.
+func TestCreate_EmptyHandleCreatesFromConfig(t *testing.T) {
+	tpm := &fakeTPM{cfg: configuredEK(), readErr: absentHandle}
 
 	got, err := Create(tpm)
 
 	require.NoError(t, err)
-	assert.Same(t, tpm.ekAttrs, got)
 	assert.Equal(t, testEKHandle, tpm.readHandle, "Create must probe the configured EK handle")
-	assert.Equal(t, 1, tpm.createCalls)
+	require.Same(t, got, tpm.created)
+	assert.Equal(t, testEKHandle, got.TPMAttributes.Handle)
+	assert.Equal(t, tpm2.TPMAlgRSA, got.TPMAttributes.Template.Type)
+	assert.Equal(t, tpm2.TPMHandle(tpm2.TPMRHEndorsement), got.TPMAttributes.Hierarchy)
+	assert.Equal(t, "endorsement-pin", string(got.TPMAttributes.HierarchyAuth.Bytes()))
 }
 
 func TestCreate_OccupiedHandleIsAlreadyExists(t *testing.T) {
-	tpm := &fakeTPM{ekAttrs: configuredEK()}
+	tpm := &fakeTPM{cfg: configuredEK()}
 
 	_, err := Create(tpm)
 
 	require.ErrorAs(t, err, &ErrEKExists{})
 	assert.Equal(t, codes.AlreadyExists, status.Code(err))
 	assert.Contains(t, err.Error(), "0x81010001")
-	assert.Zero(t, tpm.createCalls, "an occupied handle must never reach CreatePrimary")
+	assert.Nil(t, tpm.created, "an occupied handle must never reach CreatePrimary")
 }
 
-// The persistent EK read back by EKAttributes carries no template; once
-// the handle is empty again (TPM2_Clear) the zero TPMT_PUBLIC used to
-// panic go-tpm's marshaller.
-func TestCreate_TemplateLessAttributesAreFailedPrecondition(t *testing.T) {
-	attrs := configuredEK()
-	attrs.TPMAttributes.Template = tpm2.TPMTPublic{}
-	tpm := &fakeTPM{ekAttrs: attrs, readErr: absentHandle}
+func TestCreate_NotConfigured(t *testing.T) {
+	for name, cfg := range map[string]*xkmssdk.TPMConfig{
+		"no config":   nil,
+		"no tpm.ek":   {},
+		"zero handle": {EK: &xkmssdk.EKConfig{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tpm := &fakeTPM{cfg: cfg, readErr: absentHandle}
+
+			_, err := Create(tpm)
+
+			require.ErrorAs(t, err, &ErrNotConfigured{})
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Nil(t, tpm.created)
+		})
+	}
+}
+
+func TestCreate_BadAlgorithmNeverReachesCreatePrimary(t *testing.T) {
+	cfg := configuredEK()
+	cfg.EK.KeyAlgorithm = "Ed25519"
+	tpm := &fakeTPM{cfg: cfg, readErr: absentHandle}
 
 	_, err := Create(tpm)
 
-	require.ErrorAs(t, err, &ErrEKTemplateUnavailable{})
+	var algErr *ErrAlgorithm
+	require.ErrorAs(t, err, &algErr)
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
-	assert.Zero(t, tpm.createCalls)
-}
-
-func TestCreate_MissingTPMAttributesAreFailedPrecondition(t *testing.T) {
-	tpm := &fakeTPM{ekAttrs: &xkmssdk.KeyAttributes{}}
-
-	_, err := Create(tpm)
-
-	require.ErrorAs(t, err, &ErrEKTemplateUnavailable{})
-	assert.Zero(t, tpm.createCalls)
+	assert.Nil(t, tpm.created)
 }
 
 func TestCreate_PropagatesBackendErrors(t *testing.T) {
-	attrsErr := errors.New("EK config is nil")
 	createErr := errors.New("TPM_RC_BAD_AUTH")
-	cases := map[string]struct {
-		tpm  *fakeTPM
-		want error
-	}{
-		"EKAttributes": {tpm: &fakeTPM{ekAttrsErr: attrsErr}, want: attrsErr},
-		"CreateEK": {
-			tpm:  &fakeTPM{ekAttrs: configuredEK(), readErr: absentHandle, createErr: createErr},
-			want: createErr,
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			_, err := Create(tc.tpm)
-			require.ErrorIs(t, err, tc.want)
-		})
-	}
+	tpm := &fakeTPM{cfg: configuredEK(), readErr: absentHandle, createErr: createErr}
+
+	_, err := Create(tpm)
+
+	require.ErrorIs(t, err, createErr)
 }
 
 func TestCreate_NilTPM(t *testing.T) {
@@ -141,4 +141,46 @@ func TestCreate_NilTPM(t *testing.T) {
 
 	require.ErrorAs(t, err, &ErrTPMUnavailable{})
 	assert.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+func TestAttributesFromConfig(t *testing.T) {
+	rsa, err := AttributesFromConfig(configuredEK().EK)
+	require.NoError(t, err)
+	require.Equal(t, x509.RSA, rsa.KeyAlgorithm)
+	require.Equal(t, "ek", rsa.CN)
+	require.Equal(t, tpm2.TPMAlgRSA, rsa.TPMAttributes.Template.Type)
+	require.Equal(t, tpm2.TPMHandle(0x01C00002), rsa.TPMAttributes.CertHandle)
+	require.Equal(t, tpm2.TPMHTPersistent, rsa.TPMAttributes.HandleType)
+	require.Equal(t, 2048, rsa.RSAAttributes.KeySize)
+	require.Nil(t, rsa.Password, "an empty password stays nil")
+	require.False(t, rsa.PlatformPolicy)
+
+	ecc, err := AttributesFromConfig(&xkmssdk.EKConfig{
+		CN:             "ek-device",
+		Handle:         uint32(testEKHandle),
+		ECCConfig:      &xkmssdk.ECCConfig{Curve: "P-256"},
+		Password:       "ek-pin",
+		PlatformPolicy: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, x509.ECDSA, ecc.KeyAlgorithm)
+	require.Equal(t, "ek-device", ecc.CN)
+	require.Equal(t, tpm2.TPMAlgECC, ecc.TPMAttributes.Template.Type)
+	require.Equal(t, elliptic.P256(), ecc.ECCAttributes.Curve)
+	require.Equal(t, "ek-pin", string(ecc.Password.Bytes()))
+	require.True(t, ecc.PlatformPolicy, "CreateEK applies the policy digest when asked")
+	require.Nil(t, ecc.TPMAttributes.HierarchyAuth, "an empty hierarchy auth stays nil")
+}
+
+func TestAttributesFromConfig_BadConfig(t *testing.T) {
+	_, err := AttributesFromConfig(&xkmssdk.EKConfig{KeyAlgorithm: "not-an-algorithm"})
+	require.Error(t, err)
+
+	_, err = AttributesFromConfig(&xkmssdk.EKConfig{ECCConfig: &xkmssdk.ECCConfig{Curve: "not-a-curve"}})
+	require.Error(t, err)
+
+	_, err = AttributesFromConfig(&xkmssdk.EKConfig{KeyAlgorithm: "Ed25519"})
+	var algErr *ErrAlgorithm
+	require.ErrorAs(t, err, &algErr)
+	assert.Equal(t, "Ed25519", algErr.Algorithm)
 }

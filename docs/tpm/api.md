@@ -592,7 +592,7 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrEKTemplateUnavailable` (Create EK with EK attributes that carry no creation template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrNotConfigured` / `tpmek.ErrAlgorithm` (Create EK when `tpm.ek` names no handle, or an algorithm with no EK template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line

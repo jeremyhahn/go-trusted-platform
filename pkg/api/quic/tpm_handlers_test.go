@@ -57,6 +57,7 @@ type mockTPM struct {
 	ekAttrsErr         error
 	createEKErr        error
 	ekPersisted        bool
+	createdEK          *xkmssdk.KeyAttributes
 	ekCert             *x509.Certificate
 	ekCertErr          error
 	provisionEKCertErr error
@@ -107,7 +108,7 @@ type mockTPM struct {
 
 func newMockTPM() *mockTPM {
 	return &mockTPM{
-		config:        &xkmssdk.TPMConfig{UseSimulator: true},
+		config:        &xkmssdk.TPMConfig{UseSimulator: true, EK: &xkmssdk.EKConfig{Handle: 0x81010001}},
 		infoResult:    "mock-tpm-info",
 		deviceResult:  "/dev/tpmrm0",
 		canSealResult: true,
@@ -182,9 +183,19 @@ func (m *mockTPM) ProvisionOwner(auth xkmssdk.Password) (*xkmssdk.KeyAttributes,
 	}
 	return m.ekAttrs, nil
 }
-func (m *mockTPM) Clear(lockoutAuth []byte) error                 { return m.clearErr }
-func (m *mockTPM) EKAttributes() (*xkmssdk.KeyAttributes, error)  { return m.ekAttrs, m.ekAttrsErr }
-func (m *mockTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error { return m.createEKErr }
+func (m *mockTPM) Clear(lockoutAuth []byte) error                { return m.clearErr }
+func (m *mockTPM) EKAttributes() (*xkmssdk.KeyAttributes, error) { return m.ekAttrs, m.ekAttrsErr }
+
+// CreateEK stamps the public key on success, as the backend does once the
+// primary exists.
+func (m *mockTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error {
+	if m.createEKErr != nil {
+		return m.createEKErr
+	}
+	keyAttrs.TPMAttributes.PublicKeyBytes = m.ekAttrs.TPMAttributes.PublicKeyBytes
+	m.createdEK = keyAttrs
+	return nil
+}
 
 // ReadHandle reports the EK handle occupied only when ekPersisted is set.
 func (m *mockTPM) ReadHandle(tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
@@ -526,16 +537,20 @@ func TestTPM2Handler_HandleCreateEK_PersistedEKIsAlreadyExists(t *testing.T) {
 	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 }
 
-// Sub-opcode 0x05 used to panic the server: template-less EK attributes
-// reached go-tpm's TPMT_PUBLIC marshaller.
-func TestTPM2Handler_HandleCreateEK_TemplateLessAttributesAreRefused(t *testing.T) {
+// Sub-opcode 0x05 used to panic the server, and later refused, when the
+// backend's cached EK attributes carried no template. CreateEK now builds
+// the EK from tpm.ek, so the cached attributes no longer matter (#949).
+func TestTPM2Handler_HandleCreateEK_BuildsTemplateFromConfig(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
 	mock.ekAttrs.TPMAttributes.Template = tpm2.TPMTPublic{}
-	mock.createEKErr = errors.New("CreateEK must not run without a template")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
-	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.NotNil(t, mock.createdEK, "CreateEK reached the backend")
+	assert.Equal(t, tpm2.RSAEKTemplate, mock.createdEK.TPMAttributes.Template)
+	assert.Equal(t, xkmssdk.TPMHandle(0x81010001), mock.createdEK.TPMAttributes.Handle)
 }
 
 func TestTPM2Handler_HandleDeleteEK(t *testing.T) {
