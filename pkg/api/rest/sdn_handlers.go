@@ -1712,17 +1712,32 @@ var portStates = map[string]ovs.PortState{
 
 // interfaceToPortState reports an Open vSwitch interface's state.
 func interfaceToPortState(bridgeID, portID string, iface *ovs.Interface) PortStateResponse {
+	linkState := reportedPortState(iface.LinkState)
 	return PortStateResponse{
 		BridgeID:   bridgeID,
 		PortID:     portID,
 		PortNumber: iface.OFPort,
-		AdminState: iface.AdminState,
-		OperState:  iface.LinkState,
-		LinkState:  iface.LinkState,
+		AdminState: reportedPortState(iface.AdminState),
+		OperState:  linkState,
+		LinkState:  linkState,
 		Speed:      iface.Speed,
 		Duplex:     iface.Duplex,
 		UpdatedAt:  time.Now().UTC(),
 	}
+}
+
+// portStateUnknown is reported for an interface state ovs-vswitchd has not
+// written yet: admin_state and link_state are status columns it fills in only
+// once it has opened the interface's network device.
+const portStateUnknown = "unknown"
+
+// reportedPortState returns an interface state column, or portStateUnknown
+// while ovs-vswitchd has not reported it.
+func reportedPortState(state string) string {
+	if state == "" {
+		return portStateUnknown
+	}
+	return state
 }
 
 // =============================================================================
