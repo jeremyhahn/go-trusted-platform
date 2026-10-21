@@ -753,7 +753,23 @@ func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir stri
 	testCtx, cancel := context.WithTimeout(bootCtx, 30*time.Minute)
 	defer cancel()
 
+	// The CLI's own --timeout ends the boot inside testCtx, leaving it the
+	// margin to stop QEMU and report: its error then carries the tail of
+	// the guest console (ErrBootTimeout) instead of the runner killing it.
+	deadline, ok := testCtx.Deadline()
+	require.True(t, ok, "testCtx has a deadline")
+	bootTimeout := time.Until(deadline) - vmCleanupMargin
+	if bootTimeout <= 0 {
+		t.Fatalf("missing prerequisite: %s left before the test deadline, under the %s cleanup margin",
+			time.Until(deadline), vmCleanupMargin)
+	}
+
+	// An installed node never powers off: its getty's login prompt on the
+	// serial console, after OpenRC's default runlevel, ends the boot
+	// (docs/installer/cli.md).
 	opts := TestBootOptions{
+		Timeout:    bootTimeout,
+		Expect:     "login:",
 		Disk:       diskPath,
 		Memory:     4096,
 		CPUs:       2,

@@ -359,6 +359,9 @@ its own socket the same way. A socket path that is still over the limit (a long
 `$TMPDIR`, or a path set explicitly) fails before QEMU starts with
 `ErrSocketPathTooLong`, naming the path and the limit.
 
+`firstboot` and `boot` additionally take `--expect` (a serial-console
+milestone that ends the test; see below).
+
 `install` and `all` additionally take `--iso` (default: resolved as
 `trusted-alpine-<VERSION>-x86_64.iso`, then the `-fips` variant).
 
@@ -368,9 +371,12 @@ platformctl iso test firstboot --disk alpine-platform-installed.qcow2
 platformctl iso test all
 ```
 
-**`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
-script reboots, QEMU exits non-zero, and the harness treats that as success if
-the disk exists and exceeds 100 MB.
+**`iso test install` succeeds only when the disk was written.** Whether the
+guest powers off (QEMU exits zero) or reboots (QEMU exits non-zero), the run
+counts as an install only if the disk exists and exceeds 100 MB. The
+autoinstaller powers off after a failed install too, so a clean exit that left
+the disk empty fails with `ErrInstallDiskNotWritten`, naming the disk and its
+size.
 
 **A VM test waits until the guest powers off.** Interactively you end it with
 Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
@@ -382,6 +388,35 @@ integration suite's VM tests therefore boot an ISO they customize before they
 build it (`ensureBuiltISO`, `test/integration/iso/multiprotocol_test.go`): its
 autoinstaller's inittab ends with `/sbin/poweroff -f`, so the guest powers off
 whether the install passes or fails.
+
+**A headless `iso test boot` / `firstboot` reports where the boot stopped.**
+With `--timeout` set, the guest serial console goes to
+`<work-dir>/boot-serial.log` instead of the terminal. When the timeout expires
+the verb fails with `ErrBootTimeout` (which is also an `ErrVMTimeout`); when
+QEMU fails it returns `ErrBootFailed`. Both carry the last 60 lines of that log
+(the last bootloader, kernel or init line), or say the log is missing or empty
+when the guest wrote nothing to its serial port. Without `--timeout` the console
+stays on the terminal.
+
+**An installed node never powers off, so `--expect` ends its boot test.**
+`iso test boot` and `firstboot` take `--expect <line>`: the test passes as
+soon as that line appears in `<work-dir>/boot-serial.log`, and the verb then
+stops the VM. It needs `--timeout` (without it the console is on the terminal
+and there is no log to watch), and fails before any VM setup otherwise. Each headless boot first removes the
+log an earlier boot in the same `--work-dir` left, so that boot's milestone is
+never taken for this one's. When the
+timeout comes first, the verb fails with `ErrBootTimeout` and the console tail,
+as above. Without `--expect` the test still ends only when the guest powers off.
+
+The milestone for an installed node is `login:`. The installed kernel command
+line ends with the hardware quirk's `console=ttyS0,115200n8` (`pkg/quirks`,
+`Default`), so kernel, initrd and OpenRC output reaches the serial port, and the
+installed `/etc/inittab` (`pkg/installer/alpine.go`, `configureConsole`) runs
+`openrc default` as a `wait` entry before the getty on the SOL port prints its
+login prompt. `login:` therefore means the default runlevel, platformd
+included, has finished. The iso integration suite's `TestBoot` passes
+`--expect login:` with a `--timeout` inside its own deadline, so a boot that
+never gets there fails with that tail.
 
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them
