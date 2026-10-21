@@ -41,7 +41,6 @@ package provision
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
@@ -681,8 +680,11 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 		//   - no DB key signer wired in this environment: typed
 		//     ErrSignerUnavailable (fail-fast before the nonce is
 		//     consumed);
-		//   - signer wired: the EK-bound SIGNED path must complete with a
-		//     non-empty signature and a parseable PEM DB certificate.
+		//   - signer wired: the EK-bound SIGNED path must complete. The
+		//     fixture provisions the DB key in the KMS and has the CA
+		//     certify it, so the response must carry the CA's DB
+		//     certificate for that key and a signature that verifies
+		//     under it.
 		//
 		// An EK-binding rejection is NO LONGER legitimate here — the
 		// prestage feature makes the gate pass by construction.
@@ -701,14 +703,7 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 			Digest:     digest[:],
 		})
 		if err == nil {
-			if len(resp.GetSignature()) == 0 {
-				t.Fatal("SignDigest succeeded but returned an empty signature")
-			}
-			certBlock, _ := pem.Decode(resp.GetCertPem())
-			if certBlock == nil || certBlock.Type != "CERTIFICATE" {
-				t.Fatalf("SignDigest succeeded but the DB certificate is not a PEM CERTIFICATE block (%d bytes)",
-					len(resp.GetCertPem()))
-			}
+			assertDBSignature(t, fixture.dbKeyID, digest[:], resp.GetSignature(), resp.GetCertPem())
 			t.Log("remote sign succeeded: CP DB key signed the digest through the EK-bound path")
 			return
 		}
