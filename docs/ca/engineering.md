@@ -168,7 +168,7 @@ exists.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/webservice/v1/router/acme_test.go`, `pkg/webservice/v1/rest/ca/*_test.go` | Route registration, handler behaviour |
-| Integration | `test/integration/ca/`, `test/integration/acme/` | End-to-end issuance |
+| Integration | `test/integration/ca/`, `test/integration/acme/` | End-to-end issuance; the acme suite's CLI leg asserts each verb's validation errors and its typed SDK-gap refusal ([cli.md §3](cli.md)), and `ErrCLINoACMEVerb` for operations with no verb |
 | ACME enrollment | `test/integration/acme_enrollment_integration_test.go`, `acme_enrollment_mock_server_test.go` | Enrollment against a mock ACME server |
 | Transport parity | `pkg/api/daemon/ca_transport_parity_test.go` | Issue and get through the SDK on every transport return the gRPC service's certificate and send the CA the same request ([api.md](api.md) §2) |
 

@@ -282,6 +282,17 @@ func (e ErrCLIOutputParseFailed) Error() string {
 	return fmt.Sprintf("failed to parse CLI output for %s: %v (output: %s)", e.Operation, e.Err, e.Output)
 }
 
+// ErrCLINoACMEVerb indicates an ACME operation platformctl has no verb for:
+// platformctl acme carries only register, renew, download and rotate-key
+// (docs/ca/cli.md §3).
+type ErrCLINoACMEVerb struct {
+	Operation string
+}
+
+func (e ErrCLINoACMEVerb) Error() string {
+	return fmt.Sprintf("platformctl acme has no verb for %s", e.Operation)
+}
+
 // ErrAccountNotFound indicates an ACME account was not found.
 type ErrAccountNotFound struct {
 	AccountID string
