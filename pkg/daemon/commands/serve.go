@@ -135,6 +135,25 @@ func applyDaemonListeners(cfg *daemon.Config, listeners tpconfig.DaemonListeners
 	cfg.MCPConfig.HTTPAddr = listeners.MCP.Address()
 }
 
+// leaveRESTToWebservice configures the daemon for a webservices: section:
+// it runs no REST listener of its own, but still builds its REST route table
+// so the webservice listener can mount the daemon-owned groups (health,
+// version, services, protocols, BMC, ceremony, PIV, LUKS, FIDO2, cluster).
+func leaveRESTToWebservice(cfg *daemon.Config) {
+	cfg.EnableREST = false
+	cfg.RESTRoutesOnly = true
+}
+
+// daemonRESTRoutes returns the daemon's REST route table for the webservice
+// router, or nil when there is no daemon. Returning the nil pointer directly
+// would make a non-nil v1.DaemonRESTRoutes, and the router would mount it.
+func daemonRESTRoutes(d *daemon.Daemon) v1.DaemonRESTRoutes {
+	if d == nil {
+		return nil
+	}
+	return d
+}
+
 // =============================================================================
 // CA helper interfaces (M5: SDK-only dependency)
 // =============================================================================
@@ -820,8 +839,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return err
 	}
 
-	// The webservice serves REST in this mode, on its own bind host.
-	daemonConfig.EnableREST = false
+	// The webservice serves REST in this mode, on its own bind host,
+	// including the daemon-owned route groups.
+	leaveRESTToWebservice(daemonConfig)
 	daemonConfig.EnableGRPCTCP = serveEnableGRPC
 	daemonConfig.EnableQUIC = serveEnableQUIC
 	daemonConfig.EnableMCP = serveEnableMCP
@@ -1453,6 +1473,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				params.GatewayVPNLeases = vpnControl
 			}
 		}
+		params.DaemonRESTRoutes = daemonRESTRoutes(platformDaemon)
 		restHandlerRegistry := v1.NewHandlerRegistry(ctx, params)
 
 		// Wire the webserver's JWT service into the daemon's gRPC TCP /

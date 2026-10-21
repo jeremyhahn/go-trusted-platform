@@ -408,6 +408,15 @@ routes also take a `Bearer` token, but only over that mTLS connection. So
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
 
+When a `webservices:` section replaces the daemon REST listener, the
+webservice listener serves the daemon-owned groups (health, version, services,
+protocols, BMC, ceremony, PIV, LUKS, FIDO2, cluster) under `/api/v1`
+([architecture.md](architecture.md)). That listener verifies a client
+certificate when one is offered but does not require one, so those routes sit
+behind a gate that answers 401 (`ErrDaemonRouteClientCertRequired`) to any
+request without a verified client chain: the certificate stays their only
+authentication, as on the daemon's own listener.
+
 **The daemon REST VPN, NTP and application service routes check the RPC's
 scope (#584, #704).** mTLS at the handshake is not authorization: each
 `/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/cache/*`, `/api/v1/scheduler/*` and

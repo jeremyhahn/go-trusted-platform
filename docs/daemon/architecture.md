@@ -77,6 +77,20 @@ path skips is registered as its stub and answers every RPC with an error on a
 node that is otherwise configured for it (#544: attestation and the OCI
 registry). Only REST-only consumers belong to `runWithWebservices` alone.
 
+**With a `webservices:` section there is one REST listener.** The daemon runs
+no REST listener of its own (`EnableREST` false) but still builds its route
+table (`Config.RESTRoutesOnly`). `runWithWebservices` hands the daemon to the
+webservice registry (`RegistryParams.DaemonRESTRoutes`), and the webservice
+router mounts the daemon-owned groups under `/api/v1`: health, version,
+services, protocols, BMC, ceremony, PIV, LUKS, FIDO2 and cluster
+(`RESTServer.MountOwnedRoutes`, `pkg/webservice/v1/daemon_routes.go`). Those
+routes keep the contract they have on the daemon's own listener: a request
+whose TLS handshake verified no client certificate is refused with 401
+(`ErrDaemonRouteClientCertRequired`). The daemon's `/api/v1/status` stays off
+that set because the webservice serves its own. Only groups registered inside
+`daemon.New` are mounted: the webservice is built after it, and a group
+registered later would not be replayed.
+
 ## Trust boundaries
 
 1. **Client → daemon.** Crossed by mTLS (`mtls_interceptor.go`), a broker token
