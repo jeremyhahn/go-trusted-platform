@@ -168,6 +168,15 @@ reachable by unidentified machines and is rate-limited for that reason.
   platformd the suite fails at adapter setup on every transport, so it is
   kept out of `make integration-test`'s default set and runs by name with
   `make integration-test-pxe`.
+- Over REST the suite drives thirteen of the fourteen PXEService RPCs: the
+  twelve `PXECommands` methods in `TestPXEMultiProtocol`, and `StartService`
+  in `TestPXERESTGRPCParity` (`rest_adapter_test.go`), which refuses it on
+  the running service with `FailedPrecondition` over REST and gRPC alike and
+  checks that every `ListDevices` filter returns the same devices on both.
+  `StopService` is not driven: `pxe.Service.Start` reuses its `ipxe.Server`,
+  which is single-use (`pkg/ipxe/server.go`, `Start`), so a stopped service
+  cannot be started again and stopping it would break every later test on
+  the shared platformd.
 - `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
   protocol adapters commented out**: a multi-protocol conformance test that
   exercises the CLI alone.
