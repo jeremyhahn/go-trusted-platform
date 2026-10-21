@@ -282,6 +282,35 @@ func TestGRPCAdapter_PushWithEncryptAnnotationEncryptsTheLayers(t *testing.T) {
 	}
 }
 
+func TestGRPCAdapter_PushWithSignAnnotationReturnsASignedResult(t *testing.T) {
+	reg, kms := newSigningTestRegistry(t)
+	a := NewGRPCAdapter(reg)
+	ctx := context.Background()
+
+	meta := &grpcapi.RegistryPushMetadata{
+		Repository:  "apps/web",
+		Tag:         "v1",
+		Annotations: map[string]string{PushAnnotationSign: "true", PushAnnotationSigningKeyID: "web-sign"},
+	}
+	resp, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one"))))
+	if err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+	if got := resp.Artifact.Annotations[ManifestAnnotationSigned]; got != "true" {
+		t.Errorf("signed annotation = %q, want true", got)
+	}
+	if got := resp.Artifact.Annotations[ManifestAnnotationSigningKeyID]; got != "web-sign" {
+		t.Errorf("signing key ID annotation = %q, want web-sign", got)
+	}
+	stored, err := reg.storage.GetManifest(ctx, "apps/web:v1")
+	if err != nil {
+		t.Fatalf("GetManifest: %v", err)
+	}
+	if !manifestSignatureVerifies(t, kms, "apps/web:v1", stored) {
+		t.Fatal("the pushed manifest's signature does not verify")
+	}
+}
+
 func TestGRPCAdapter_PushWithoutEncryptAnnotationStoresPlaintext(t *testing.T) {
 	a := NewGRPCAdapter(newEncryptingTestRegistry(t))
 	ctx := context.Background()
