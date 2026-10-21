@@ -211,7 +211,12 @@ func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
 	return filepath.Join(binDir, "platformd"), platformConfig
 }
 
-// ensureBuiltISO returns an ISO rebuilt from the extracted tree, building it first.
+// ensureBuiltISO returns an ISO customized and rebuilt from the extracted tree,
+// building it first. Its callers boot it in a VM: the customization installs the
+// autoinstaller, whose inittab ends with a power-off, so the guest exits whether
+// the install passes or fails. A stock Alpine tree never powers off and runs
+// into the VM timeout (docs/installer/cli.md, "A VM test waits until the guest
+// powers off").
 func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
 	t.Helper()
 	isoPath := builtISOPath(workDir)
@@ -220,6 +225,19 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	}
 
 	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
+	platformdPath, platformConfig := customizeInputs(t)
+	customized, err := cmd.Customize(ctx, CustomizeOptions{
+		ISODir:         isoDir,
+		PlatformdPath:  platformdPath,
+		PlatformConfig: platformConfig,
+		WorkDir:        workDir,
+	})
+	if err != nil {
+		t.Fatalf("missing prerequisite: customizing the ISO fixture: %v", err)
+	}
+	if customized == nil || !customized.Success {
+		t.Fatalf("missing prerequisite: customizing the ISO fixture reported no success: %+v", customized)
+	}
 	result, err := cmd.Build(ctx, BuildOptions{SourceDir: isoDir, Output: isoPath, VolumeID: "TEST_ISO"})
 	if err != nil {
 		t.Fatalf("missing prerequisite: building the ISO fixture: %v", err)
@@ -770,4 +788,70 @@ func TestISOErrorHandling(t *testing.T) {
 			t.Logf("Download from invalid mirror failed as expected: %v", err)
 		}
 	})
+}
+
+// recordingISOCommands records the order of the ISO verbs the fixture helpers
+// call. Build writes its output so the helper finds the ISO it asked for. Only
+// the verbs ensureBuiltISO reaches on an extracted tree are implemented; any
+// other call panics on the nil embedded interface.
+type recordingISOCommands struct {
+	ISOCommands
+	calls     []string
+	customize CustomizeOptions
+}
+
+func (r *recordingISOCommands) Customize(_ context.Context, opts CustomizeOptions) (*CustomizeResult, error) {
+	r.calls = append(r.calls, "customize")
+	r.customize = opts
+	return &CustomizeResult{Success: true, ISODir: opts.ISODir}, nil
+}
+
+func (r *recordingISOCommands) Build(_ context.Context, opts BuildOptions) (*BuildResult, error) {
+	r.calls = append(r.calls, "build")
+	if err := os.WriteFile(opts.Output, []byte("iso"), 0o600); err != nil {
+		return nil, err
+	}
+	return &BuildResult{Success: true, OutputISO: opts.Output}, nil
+}
+
+// fixtureWorkDir returns a work directory holding an extracted ISO tree, with
+// the binaries customizeInputs requires beside a stand-in platformctl, so the
+// fixture helpers call no verb before Customize.
+func fixtureWorkDir(t *testing.T) string {
+	t.Helper()
+	workDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(extractedISODir(workDir), 0o755))
+
+	binDir := t.TempDir()
+	for _, name := range []string{"platformctl", "platformd", "platform-initrd", "gatewayd"} {
+		require.NoError(t, os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755))
+	}
+	t.Setenv(EnvPlatformCTL, filepath.Join(binDir, "platformctl"))
+	return workDir
+}
+
+// TestEnsureBuiltISO_CustomizesBeforeBuilding pins the VM fixture: the ISO the
+// VM tests boot carries the autoinstaller, so its guest powers off.
+func TestEnsureBuiltISO_CustomizesBeforeBuilding(t *testing.T) {
+	workDir := fixtureWorkDir(t)
+	cmd := &recordingISOCommands{}
+
+	isoPath := ensureBuiltISO(t, context.Background(), cmd, workDir)
+
+	assert.Equal(t, builtISOPath(workDir), isoPath)
+	assert.Equal(t, []string{"customize", "build"}, cmd.calls)
+	assert.Equal(t, extractedISODir(workDir), cmd.customize.ISODir)
+	assert.Equal(t, "platformd", filepath.Base(cmd.customize.PlatformdPath))
+	assert.True(t, FileExists(cmd.customize.PlatformConfig))
+}
+
+func TestEnsureBuiltISO_ReusesAnExistingISO(t *testing.T) {
+	workDir := fixtureWorkDir(t)
+	require.NoError(t, os.WriteFile(builtISOPath(workDir), []byte("iso"), 0o600))
+	cmd := &recordingISOCommands{}
+
+	isoPath := ensureBuiltISO(t, context.Background(), cmd, workDir)
+
+	assert.Equal(t, builtISOPath(workDir), isoPath)
+	assert.Empty(t, cmd.calls)
 }

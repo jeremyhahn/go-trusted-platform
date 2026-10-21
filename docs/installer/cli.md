@@ -377,7 +377,11 @@ Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
 QEMU, stops the software TPM and fails with `ErrVMTimeout`, naming the
 timeout. A run cut off this way never counts as an install, whatever the disk
 size. A guest with no autoinstaller (a stock Alpine ISO) sits at its login
-prompt and never powers off, so it always ends at the timeout.
+prompt and never powers off, so it always ends at the timeout. The iso
+integration suite's VM tests therefore boot an ISO they customize before they
+build it (`ensureBuiltISO`, `test/integration/iso/multiprotocol_test.go`): its
+autoinstaller's inittab ends with `/sbin/poweroff -f`, so the guest powers off
+whether the install passes or fails.
 
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them
