@@ -191,6 +191,13 @@ rotate, rollback and status RPCs call the SDK secrets client the secret routes
 call; the matching MCP tools call the daemon's secrets service
 (`Security().Secrets()`), the one `secret_get` and `secret_store` use.
 
+**`GET /api/v1/kms/secrets/{name}` returns the stored bytes.** The SDK
+secrets client JSON-encodes the data map, so the `value` a store wrote comes
+back from its `Get` as base64 text. The handler decodes it with
+`common.DecodeSecretValue`, the function `platformctl kms secrets get` uses, and
+`value` in the response is the base64 of the bytes that were stored. A stored
+value that is not base64 text answers 500 with `ErrMalformedSecretValue`.
+
 **QUIC DEK subs `0x08`–`0x0D` carry the quicbaas.kms.v1 messages.** Their
 payload after the sub-opcode byte is the `DEKManagement` request message and
 the reply is its response message. The QUIC handler

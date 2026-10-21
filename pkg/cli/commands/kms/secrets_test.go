@@ -28,6 +28,7 @@ import (
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // fakeSecretsClient is an in-memory quicbaassdk.SecretsClient. Each method
@@ -232,9 +233,10 @@ func TestExecuteSecretsGet(t *testing.T) {
 	created := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 
 	t.Run("reads the value the REST surface stores", func(t *testing.T) {
+		// The SDK returns stored []byte data as its base64 JSON text.
 		fake := &fakeSecretsClient{secrets: map[string]*secretsclient.Secret{
 			"db/pw": {Path: "db/pw", Version: 2, CreatedAt: created, Metadata: map[string]string{"env": "prod"},
-				Data: map[string]interface{}{"value": "s3cret", "description": "d"}},
+				Data: map[string]interface{}{"value": "czNjcmV0", "description": "d"}},
 		}}
 		out := runSecretsJSON(t, func(p *cli.Printer) error {
 			return executeSecretsGet(ctx, fake, p, cli.OutputFormatJSON, "db/pw", 2)
@@ -246,14 +248,27 @@ func TestExecuteSecretsGet(t *testing.T) {
 		assert.Equal(t, 1, fake.getOpts, "--version passes WithVersion")
 	})
 
-	t.Run("table format", func(t *testing.T) {
+	t.Run("table format prints the stored bytes", func(t *testing.T) {
 		fake := &fakeSecretsClient{secrets: map[string]*secretsclient.Secret{
-			"n": {Path: "n", Version: 1, Data: map[string]interface{}{"value": []byte("raw")}},
+			"n": {Path: "n", Version: 1, Data: map[string]interface{}{"value": "cmF3"}},
 		}}
 		var buf bytes.Buffer
 		require.NoError(t, executeSecretsGet(ctx, fake, cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf), cli.OutputFormatTable, "n", 0))
 		assert.Contains(t, buf.String(), "raw")
+		assert.NotContains(t, buf.String(), "cmF3", "the base64 text is decoded")
 		assert.Zero(t, fake.getOpts, "version 0 reads the current version")
+	})
+
+	t.Run("malformed stored value", func(t *testing.T) {
+		fake := &fakeSecretsClient{secrets: map[string]*secretsclient.Secret{
+			"n": {Path: "n", Version: 1, Data: map[string]interface{}{"value": "not base64!"}},
+		}}
+		err := executeSecretsGet(ctx, fake, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 0)
+		var failed ErrSecretOperationFailed
+		require.ErrorAs(t, err, &failed)
+		assert.Equal(t, "get", failed.Operation)
+		var malformed common.ErrMalformedSecretValue
+		assert.ErrorAs(t, err, &malformed)
 	})
 
 	t.Run("errors", func(t *testing.T) {
@@ -287,7 +302,7 @@ func TestExecuteSecretsList(t *testing.T) {
 
 	t.Run("include data reads every secret", func(t *testing.T) {
 		fake := &fakeSecretsClient{paths: []string{"p/x"}, secrets: map[string]*secretsclient.Secret{
-			"p/x": {Path: "p/x", Version: 1, Data: map[string]interface{}{"value": "vx"}},
+			"p/x": {Path: "p/x", Version: 1, Data: map[string]interface{}{"value": "dng="}},
 		}}
 		out := runSecretsJSON(t, func(p *cli.Printer) error {
 			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
