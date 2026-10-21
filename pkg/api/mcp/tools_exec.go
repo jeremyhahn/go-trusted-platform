@@ -62,10 +62,11 @@ func (r *ToolRegistry) executeVTPMList(ctx context.Context, args map[string]inte
 
 func (r *ToolRegistry) executeVTPMStart(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	name := getString(args, "name")
-	if err := r.service.VTPMStart(ctx, name); err != nil {
+	reply, err := r.service.VTPMStart(ctx, name)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(reply)
 }
 
 func (r *ToolRegistry) executeVTPMStop(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -73,7 +74,7 @@ func (r *ToolRegistry) executeVTPMStop(ctx context.Context, args map[string]inte
 	if err := r.service.VTPMStop(ctx, name); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "bundle_id": name, "stopped": true}, nil
 }
 
 func (r *ToolRegistry) executeVTPMQuote(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -90,7 +91,15 @@ func (r *ToolRegistry) executeVTPMQuote(ctx context.Context, args map[string]int
 	if err != nil {
 		return nil, err
 	}
-	return marshalResult(quote)
+	result, err := marshalResult(quote)
+	if err != nil {
+		return nil, err
+	}
+	// The reply names the bundle that quoted, as gRPC QuoteVTPM does.
+	if reply, ok := result.(map[string]interface{}); ok {
+		reply["bundle_id"] = name
+	}
+	return result, nil
 }
 
 func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -108,7 +117,8 @@ func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]inte
 		return nil, err
 	}
 	return map[string]interface{}{
-		"sealed": base64.StdEncoding.EncodeToString(sealed),
+		"bundle_id":   name,
+		"sealed_data": base64.StdEncoding.EncodeToString(sealed),
 	}, nil
 }
 
@@ -126,7 +136,8 @@ func (r *ToolRegistry) executeVTPMUnseal(ctx context.Context, args map[string]in
 		return nil, err
 	}
 	return map[string]interface{}{
-		"data": base64.StdEncoding.EncodeToString(data),
+		"bundle_id": name,
+		"data":      base64.StdEncoding.EncodeToString(data),
 	}, nil
 }
 
@@ -143,7 +154,7 @@ func (r *ToolRegistry) executeVTPMExtendPCR(ctx context.Context, args map[string
 	if err := r.service.VTPMExtendPCR(ctx, name, pcr, data); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "bundle_id": name, "pcr_index": pcr, "extended": true}, nil
 }
 
 func (r *ToolRegistry) executeVTPMReadPCR(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -155,7 +166,9 @@ func (r *ToolRegistry) executeVTPMReadPCR(ctx context.Context, args map[string]i
 		return nil, err
 	}
 	return map[string]interface{}{
-		"value": base64.StdEncoding.EncodeToString(value),
+		"bundle_id": name,
+		"pcr_index": pcr,
+		"value":     base64.StdEncoding.EncodeToString(value),
 	}, nil
 }
 

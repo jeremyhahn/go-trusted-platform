@@ -375,8 +375,8 @@ func TestExecuteVTPMDelete_ServiceError(t *testing.T) {
 func TestExecuteVTPMStart_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmStartFunc = func(ctx context.Context, name string) error {
-		return ErrMockServiceError
+	svc.vtpmStartFunc = func(ctx context.Context, name string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 

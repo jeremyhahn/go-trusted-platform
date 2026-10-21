@@ -151,6 +151,13 @@ Both names take the options gRPC carries: `secure_boot_enabled` and `labels` on
 create, and `mode`, `labels`, `limit` and `offset` on list. Seal and unseal take
 `auth_value`. An absent `limit` lists every bundle, as gRPC does.
 
+The runtime tools answer with the gRPC reply's field names, and every answer
+names its bundle in `bundle_id`. Start adds `running` and `socket_path`; stop
+adds `stopped`; quote adds `quote`, `signature`, `pcr_values` and
+`hash_algorithm`; seal adds `sealed_data`; unseal adds `data`; extend adds
+`pcr_index` and `extended`; read adds `pcr_index` and `value`. Bytes are
+base64.
+
 The tools with no duplicate carry the scope of their gRPC method (#304), and
 fail with the same gRPC class as that method:
 

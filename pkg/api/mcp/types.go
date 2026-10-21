@@ -616,7 +616,9 @@ type ServiceProvider interface {
 	VTPMGetNVRAMPath(ctx context.Context, name string) (interface{}, error)
 
 	// vTPM runtime TPM operations
-	VTPMStart(ctx context.Context, name string) error
+	// VTPMStart starts the bundle's vTPM and returns the start reply:
+	// bundle_id, running and socket_path, as gRPC StartVTPM answers.
+	VTPMStart(ctx context.Context, name string) (interface{}, error)
 	VTPMStop(ctx context.Context, name string) error
 	VTPMIsRunning(ctx context.Context, name string) (interface{}, error)
 	VTPMQuote(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
