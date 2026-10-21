@@ -155,6 +155,11 @@ platformctl registry delete registry.example.com/apps/api:1.4.1 --dry-run
 platformctl registry delete registry.example.com/apps/api:1.4.1 --force --keep-untagged
 ```
 
+With `--output json` or `yaml` the document is `reference`, `digest`,
+`deleted`, `message` and `bytes_freed` (when set), and `timestamp`: the
+deletion time in Unix seconds, the same field the other transports return.
+A dry run reports `deleted: false` and `timestamp: 0`.
+
 Run `--dry-run` first on anything shared. `--keep-untagged` is the safe form:
 it detaches the tag and leaves the manifest addressable by digest.
 

@@ -486,20 +486,25 @@ func (r *cliListResponse) toListResult() *ListResult {
 	}
 }
 
+// cliDeleteResponse is `registry delete --output json` (docs/registry/cli.md
+// §6): the deletion time is `timestamp`, Unix seconds, as on push.
 type cliDeleteResponse struct {
-	Reference     string    `json:"reference"`
-	Digest        string    `json:"digest"`
-	DeletedAt     time.Time `json:"deleted_at"`
-	LayersDeleted int       `json:"layers_deleted"`
+	Reference string `json:"reference"`
+	Digest    string `json:"digest"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func (r *cliDeleteResponse) toDeleteResult() *DeleteResult {
-	return &DeleteResult{
-		Reference:     r.Reference,
-		Digest:        r.Digest,
-		DeletedAt:     r.DeletedAt,
-		LayersDeleted: r.LayersDeleted,
+	result := &DeleteResult{
+		Reference: r.Reference,
+		Digest:    r.Digest,
 	}
+	// A zero timestamp means the daemon reported none; time.Unix(0, 0) would
+	// pass a DeletedAt.IsZero check it should fail.
+	if r.Timestamp != 0 {
+		result.DeletedAt = time.Unix(r.Timestamp, 0).UTC()
+	}
+	return result
 }
 
 // cliInspectResponse is `platformctl registry inspect --output json`: one
