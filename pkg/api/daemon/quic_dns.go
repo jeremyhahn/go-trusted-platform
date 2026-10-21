@@ -94,12 +94,27 @@ type DNSGetZoneRequest struct {
 
 // DNSZone represents a DNS zone in QUIC responses
 type DNSZone struct {
-	ID          uint64 `codec:"id"`
-	Name        string `codec:"name"`
-	TTL         uint32 `codec:"ttl"`
-	Description string `codec:"description"`
-	Internal    bool   `codec:"internal"`
-	RecordCount int    `codec:"record_count"`
+	ID          uint64  `codec:"id"`
+	Name        string  `codec:"name"`
+	TTL         uint32  `codec:"ttl"`
+	Description string  `codec:"description"`
+	Internal    bool    `codec:"internal"`
+	RecordCount int     `codec:"record_count"`
+	SOA         *DNSSOA `codec:"soa"`
+}
+
+// DNSSOA is a zone's start-of-authority record (RFC 1035 §3.3.13) as
+// GetZone reports it.
+type DNSSOA struct {
+	Name       string `codec:"name"`
+	MName      string `codec:"mname"`
+	RName      string `codec:"rname"`
+	Serial     uint32 `codec:"serial"`
+	Refresh    uint32 `codec:"refresh"`
+	Retry      uint32 `codec:"retry"`
+	Expire     uint32 `codec:"expire"`
+	MinimumTTL uint32 `codec:"minimum_ttl"`
+	TTL        uint32 `codec:"ttl"`
 }
 
 // DNSGetZoneResponse represents the response containing a DNS zone
@@ -325,6 +340,17 @@ func (h *QUICServiceHandler) handleDNSGetZone(ctx context.Context, req *quicwire
 			Description: zone.Description,
 			Internal:    zone.Internal,
 			RecordCount: recordCount,
+			SOA: &DNSSOA{
+				Name:       zone.RecordSet.SOARecord.Name,
+				MName:      zone.RecordSet.SOARecord.MName,
+				RName:      zone.RecordSet.SOARecord.RName,
+				Serial:     zone.RecordSet.SOARecord.Serial,
+				Refresh:    zone.RecordSet.SOARecord.Refresh,
+				Retry:      zone.RecordSet.SOARecord.Retry,
+				Expire:     zone.RecordSet.SOARecord.Expire,
+				MinimumTTL: zone.RecordSet.SOARecord.MinimumTTL,
+				TTL:        zone.RecordSet.SOARecord.TTL,
+			},
 		},
 		Timestamp: time.Now().Unix(),
 	}
