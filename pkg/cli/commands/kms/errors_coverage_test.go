@@ -63,7 +63,6 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrRevocationReasonRequired", ErrRevocationReasonRequired{}, "reason"},
 
 		// key_status.go
-		{"ErrKeyStatusNotImplemented", ErrKeyStatusNotImplemented{}, "not yet implemented"},
 		{"ErrUpdateKeyStatusFailed", ErrUpdateKeyStatusFailed{KeyID: "k9", Err: errors.New("fail")}, "k9"},
 		{"ErrInvalidKeyStatus", ErrInvalidKeyStatus{Status: "bad"}, "bad"},
 
@@ -78,7 +77,6 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrReadWrappedMaterialFailed", ErrReadWrappedMaterialFailed{Path: "/tmp/wrap", Err: errors.New("read")}, "/tmp/wrap"},
 
 		// key_versions.go
-		{"ErrKeyVersionsNotImplemented", ErrKeyVersionsNotImplemented{}, "not yet implemented"},
 		{"ErrListKeyVersionsFailed", ErrListKeyVersionsFailed{KeyID: "k11", Err: errors.New("fail")}, "k11"},
 
 		// secrets.go

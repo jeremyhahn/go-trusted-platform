@@ -14,11 +14,97 @@
 package kms
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// keyVersionsFake is a KMS that answers GetKeyVersions with resp or err and
+// records the request.
+type keyVersionsFake struct {
+	resp   *platformv1.GetKeyVersionsResponse
+	err    error
+	keyID  string
+	limit  int32
+	cursor string
+}
+
+func (f *keyVersionsFake) GetKeyVersions(_ context.Context, keyID string, limit int32, cursor string) (*platformv1.GetKeyVersionsResponse, error) {
+	f.keyID, f.limit, f.cursor = keyID, limit, cursor
+	return f.resp, f.err
+}
+
+func TestListKeyVersions_PrintsTheDocumentedJSON(t *testing.T) {
+	fake := &keyVersionsFake{resp: &platformv1.GetKeyVersionsResponse{
+		KeyId: "tenant-a-kek",
+		Versions: []*platformv1.KMSKeyVersionInfo{
+			{Version: 1, Algorithm: platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, Status: platformv1.KeyStatus_KEY_STATUS_DISABLED, CreatedAt: 1700000000, DisabledAt: 1700000100},
+			{Version: 2, Algorithm: platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, Status: platformv1.KeyStatus_KEY_STATUS_ENABLED, CreatedAt: 1700000050},
+		},
+		HasMore:    true,
+		NextCursor: "page-2",
+	}}
+
+	out, err := listKeyVersions(context.Background(), fake, "tenant-a-kek", 2, "page-1")
+	require.NoError(t, err)
+	assert.Equal(t, "tenant-a-kek", fake.keyID)
+	assert.Equal(t, int32(2), fake.limit)
+	assert.Equal(t, "page-1", fake.cursor)
+
+	var buf bytes.Buffer
+	require.NoError(t, printKeyVersions(cli.NewPrinterWithWriter(cli.OutputFormatJSON, true, &buf), cli.OutputFormatJSON, out))
+
+	var printed map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &printed))
+	assert.Equal(t, "tenant-a-kek", printed["key_id"])
+	assert.Equal(t, true, printed["has_more"])
+	assert.Equal(t, "page-2", printed["next_cursor"])
+	versions := printed["versions"].([]any)
+	require.Len(t, versions, 2)
+	first := versions[0].(map[string]any)
+	assert.Equal(t, float64(1), first["version"])
+	assert.Equal(t, "KMS_KEY_ALGORITHM_AES_256", first["algorithm"])
+	assert.Equal(t, "KEY_STATUS_DISABLED", first["status"])
+	assert.Equal(t, float64(1700000000), first["created_at"])
+	assert.Equal(t, float64(1700000100), first["disabled_at"])
+}
+
+func TestPrintKeyVersions_Table(t *testing.T) {
+	out := &keyVersionsOutput{
+		KeyID:      "tenant-a-kek",
+		Versions:   []keyVersionOutput{{Version: 3, Algorithm: "KMS_KEY_ALGORITHM_AES_256", Status: "KEY_STATUS_ENABLED", CreatedAt: 1700000000}},
+		HasMore:    true,
+		NextCursor: "page-2",
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printKeyVersions(cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf), cli.OutputFormatTable, out))
+	assert.Contains(t, buf.String(), "KEY_STATUS_ENABLED")
+	assert.Contains(t, buf.String(), "page-2")
+}
+
+func TestListKeyVersions_Errors(t *testing.T) {
+	cause := errors.New("key not found")
+	_, err := listKeyVersions(context.Background(), &keyVersionsFake{err: cause}, "missing", 50, "")
+
+	var listErr ErrListKeyVersionsFailed
+	require.ErrorAs(t, err, &listErr)
+	assert.Equal(t, "missing", listErr.KeyID)
+	assert.ErrorIs(t, err, cause)
+
+	err = printKeyVersions(cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &bytes.Buffer{}), cli.OutputFormat("xml"), &keyVersionsOutput{})
+	var formatErr cli.ErrInvalidOutputFormat
+	require.ErrorAs(t, err, &formatErr)
+}
 
 func TestNewKeyVersionsCommand_Structure(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
@@ -31,7 +117,7 @@ func TestNewKeyVersionsCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "List all versions of a key (not yet implemented)" {
+	if cmd.Short != "List all versions of a key" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 

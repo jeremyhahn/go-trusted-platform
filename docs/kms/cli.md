@@ -41,12 +41,12 @@ platformctl kms
         metadata update <key-id>            works
         policy get <key-id>                 works
         policy set <key-id>                 works
+        versions <key-id>                   works
+        status enable <key-id>              works
+        status disable <key-id>             works
         import <key-id>                     not implemented
         export <key-id>                     not implemented
         unwrap                              not implemented
-        versions <key-id>                   not implemented
-        status enable <key-id>              not implemented
-        status disable <key-id>             not implemented
         backend-test                        not implemented
     crypto
         encrypt | decrypt | rewrap          works
@@ -307,6 +307,42 @@ platformctl kms key policy set tenant-a-kek --operation encrypt --operation decr
     --allow-principal role:admin
 ```
 
+### `key versions <key-id>`
+
+List one page of the key's versions.
+
+| Flag | Short | Type | Default |
+|---|---|---|---|
+| `--limit` | `-l` | int32 | `50` |
+| `--cursor` | | string | first page |
+
+`--output json` prints `key_id`, `versions`, `has_more` and `next_cursor`; pass
+`next_cursor` to `--cursor` while `has_more` is true. Each version carries
+`version`, `algorithm` and `status` (the protobuf enum names, e.g.
+`KMS_KEY_ALGORITHM_AES_256`, `KEY_STATUS_ENABLED`), `created_at` and
+`disabled_at` (Unix seconds, `0` when never disabled).
+
+```bash
+platformctl kms key versions tenant-a-kek --output json
+```
+
+### `key status enable <key-id>` and `key status disable <key-id>`
+
+Enable or disable the key, or one version of it. A disabled key or version
+refuses every cryptographic operation until it is enabled again.
+
+| Flag | Short | Type | Default |
+|---|---|---|---|
+| `--version` | | uint64 | `0` — every version |
+
+`--output json` prints `key_id`, `version`, `status` (e.g.
+`KEY_STATUS_DISABLED`) and `updated_at` (Unix seconds).
+
+```bash
+platformctl kms key status disable tenant-a-kek --version 1
+platformctl kms key status enable tenant-a-kek
+```
+
 ### Not implemented under `kms key`
 
 Each exits 1 with the error shown, after argument and flag parsing.
@@ -316,9 +352,6 @@ Each exits 1 with the error shown, after argument and flag parsing.
 | `import <key-id>` | `-a/--algorithm` (`aes-256-gcm`), `-p/--purpose` (`encrypt`), `-e/--exportable`, `--deletion-protection`, `-n/--name`, `-d/--description`, `--wrapping-key`, `-f/--key-file`, `-m/--material` (base64) | `ErrKeyImportNotImplemented` |
 | `export <key-id>` | `--wrapping-key`, `--wrapping-algorithm` (`aes-kw`), `--format` (`raw`; `jwk`, `pem`), `--version` (`0`), `--output-file` | `ErrKeyExportNotImplemented` |
 | `unwrap` | `--key-id`, `--wrapping-key`, `--wrapping-algorithm` (`aes-kw`), `-a/--algorithm`, `-n/--name`, `-d/--description`, `-f/--input-file`, `-m/--material` | `ErrKeyUnwrapNotImplemented` |
-| `versions <key-id>` | `-l/--limit` (`50`), `--cursor` | `ErrKeyVersionsNotImplemented` |
-| `status enable <key-id>` | `--version` (`0` = all) | `ErrKeyStatusNotImplemented` |
-| `status disable <key-id>` | `--version` (`0` = all) | `ErrKeyStatusNotImplemented` |
 | `backend-test` | none | `ErrBackendTestNotImplemented` |
 
 The help text marks `--wrapping-key`, `--key-id` and `--algorithm` "required"
@@ -592,13 +625,11 @@ On 2026-10-11 that names exactly these leaves:
 | `ErrKeyImportNotImplemented` | `kms key import` |
 | `ErrKeyExportNotImplemented` | `kms key export` |
 | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
-| `ErrKeyVersionsNotImplemented` | `kms key versions` |
-| `ErrKeyStatusNotImplemented` | `kms key status enable`, `kms key status disable` |
 | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
 Counting the string `(not yet implemented)` instead overcounts: it also appears
-in the `Short` text of the groups (`dek`, `secrets`, `key status`, `secrets
-policy`, `secrets prefix`) and in test files.
+in the `Short` text of the groups (`dek`, `secrets`, `secrets policy`, `secrets
+prefix`) and in test files.
 
 ---
 
