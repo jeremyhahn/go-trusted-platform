@@ -120,6 +120,10 @@ const (
 	// cliTimestampUnset is the crypto verbs' timestamp when the server set
 	// none.
 	cliTimestampUnset = "-"
+
+	// cliDEKAlgorithm is the one algorithm kms dek create makes
+	// (docs/kms/cli.md §7).
+	cliDEKAlgorithm = "AES-256-GCM"
 )
 
 // decodeCLIBase64 decodes a base64 field of the CLI's JSON output.
@@ -902,15 +906,39 @@ func (c *CLIAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRan
 
 // DEKCreate creates a new DEK via CLI.
 func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEKCreateResult, error) {
-	args := []string{"kms", "dek", "create", opts.Path}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", cliKeyAlgorithm(opts.Algorithm))
+	// kms dek create has no algorithm, description or limit flags
+	// (docs/kms/cli.md §7): it always creates AES-256-GCM, and the limits
+	// are set afterwards with kms dek set-safety.
+	if opts.Algorithm != "" && opts.Algorithm != cliDEKAlgorithm {
+		return nil, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--algorithm"}
 	}
-
 	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
+		return nil, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--description"}
 	}
+
+	output, err := c.runCommand(ctx, "kms", "dek", "create", opts.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	var dek cliDEK
+	if err := json.Unmarshal(output, &dek); err != nil {
+		return nil, ErrCLIOutputParseFailed{Operation: "DEKCreate", Output: string(output), Err: err}
+	}
+
+	if opts.MaxOperations > 0 || opts.MaxBytes > 0 || opts.WarningPercent > 0 {
+		if err := c.dekSetSafety(ctx, opts); err != nil {
+			return nil, err
+		}
+	}
+
+	return dek.toCreateResult()
+}
+
+// dekSetSafety sends a DEK's usage limits with kms dek set-safety, which
+// prints only a success line.
+func (c *CLIAdapter) dekSetSafety(ctx context.Context, opts DEKCreateOptions) error {
+	args := []string{"kms", "dek", "set-safety", opts.Path}
 
 	if opts.MaxOperations > 0 {
 		args = append(args, "--max-operations", strconv.FormatUint(opts.MaxOperations, 10))
@@ -921,41 +949,35 @@ func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEK
 	}
 
 	if opts.WarningPercent > 0 {
-		args = append(args, "--warning-percent", strconv.FormatInt(int64(opts.WarningPercent), 10))
+		args = append(args, "--warn-percent", strconv.FormatInt(int64(opts.WarningPercent), 10))
 	}
 
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliDEKCreateResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "DEKCreate", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	_, err := c.runCommand(ctx, args...)
+	return err
 }
 
 // DEKGet retrieves DEK metadata via CLI.
 func (c *CLIAdapter) DEKGet(ctx context.Context, path string) (*DEKGetResult, error) {
-	args := []string{"kms", "dek", "get", path}
-
-	output, err := c.runCommand(ctx, args...)
+	output, err := c.runCommand(ctx, "kms", "dek", "get", path)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliDEKGetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
+	var dek cliDEK
+	if err := json.Unmarshal(output, &dek); err != nil {
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKGet", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return dek.toGetResult("DEKGet")
 }
 
 // DEKList lists DEKs via CLI.
 func (c *CLIAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKListResult, error) {
+	// kms dek list --cursor refuses with ErrDEKSDKGap (docs/kms/cli.md §7).
+	if opts.Cursor != "" {
+		return nil, ErrCLINoFlag{Operation: "DEKList", Flag: "--cursor"}
+	}
+
 	args := []string{"kms", "dek", "list"}
 
 	if opts.Prefix != "" {
@@ -970,10 +992,6 @@ func (c *CLIAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKList
 		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
 	}
 
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
-	}
-
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -984,19 +1002,19 @@ func (c *CLIAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKList
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKList", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // DEKDelete deletes a DEK via CLI.
 func (c *CLIAdapter) DEKDelete(ctx context.Context, path string, opts DEKDeleteOptions) (*DEKDeleteResult, error) {
+	if opts.MigrateTo != "" {
+		return nil, ErrCLINoFlag{Operation: "DEKDelete", Flag: "--migrate-to"}
+	}
+
 	args := []string{"kms", "dek", "delete", path}
 
 	if opts.Force {
 		args = append(args, "--force")
-	}
-
-	if opts.MigrateTo != "" {
-		args = append(args, "--migrate-to", opts.MigrateTo)
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -1014,13 +1032,12 @@ func (c *CLIAdapter) DEKDelete(ctx context.Context, path string, opts DEKDeleteO
 
 // DEKRotate rotates a DEK via CLI.
 func (c *CLIAdapter) DEKRotate(ctx context.Context, path string, background bool) (*DEKRotateResult, error) {
-	args := []string{"kms", "dek", "rotate", path}
-
+	// kms dek rotate always rotates in the foreground (docs/kms/cli.md §7).
 	if background {
-		args = append(args, "--background")
+		return nil, ErrCLINoFlag{Operation: "DEKRotate", Flag: "--background"}
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	output, err := c.runCommand(ctx, "kms", "dek", "rotate", path)
 	if err != nil {
 		return nil, err
 	}
@@ -1035,9 +1052,7 @@ func (c *CLIAdapter) DEKRotate(ctx context.Context, path string, background bool
 
 // DEKStatus retrieves DEK status via CLI.
 func (c *CLIAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResult, error) {
-	args := []string{"kms", "dek", "status", path}
-
-	output, err := c.runCommand(ctx, args...)
+	output, err := c.runCommand(ctx, "kms", "dek", "status", path)
 	if err != nil {
 		return nil, err
 	}
@@ -1047,7 +1062,7 @@ func (c *CLIAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResu
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKStatus", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // =============================================================================
@@ -1743,96 +1758,100 @@ func (r *cliCryptoRandomResponse) toResult() (*CryptoRandomResult, error) {
 
 // DEK response types
 
-type cliDEKCreateResponse struct {
-	DEK *cliDEKInfo `json:"dek,omitempty"`
-}
-
-type cliDEKInfo struct {
-	Path        string `json:"path,omitempty"`
-	Algorithm   string `json:"algorithm,omitempty"`
-	Version     uint64 `json:"version,omitempty"`
-	Status      string `json:"status,omitempty"`
-	IsDefault   bool   `json:"is_default,omitempty"`
-	CreatedAt   int64  `json:"created_at,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-func (r *cliDEKCreateResponse) toResult() *DEKCreateResult {
-	result := &DEKCreateResult{}
-	if r.DEK != nil {
-		result.Path = r.DEK.Path
-		result.Algorithm = r.DEK.Algorithm
-		result.Version = r.DEK.Version
-		result.CreatedAt = time.Unix(r.DEK.CreatedAt, 0)
-		result.Description = r.DEK.Description
-	}
-	return result
-}
-
-type cliDEKGetResponse struct {
-	DEK *cliDEKDetailInfo `json:"dek,omitempty"`
-}
-
-type cliDEKDetailInfo struct {
-	Path           string `json:"path,omitempty"`
-	Algorithm      string `json:"algorithm,omitempty"`
-	Version        uint64 `json:"version,omitempty"`
-	Status         string `json:"status,omitempty"`
-	IsDefault      bool   `json:"is_default,omitempty"`
-	CreatedAt      int64  `json:"created_at,omitempty"`
-	RotatedAt      int64  `json:"rotated_at,omitempty"`
+// cliDEK is a DEK as the kms dek verbs print it (docs/kms/cli.md §7): flat
+// snake_case fields, with RFC 3339 times omitted when unset.
+type cliDEK struct {
+	Path           string `json:"path"`
+	Algorithm      string `json:"algorithm"`
+	Version        uint64 `json:"version"`
+	Status         string `json:"status"`
+	IsDefault      bool   `json:"is_default"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	RotatedAt      string `json:"rotated_at,omitempty"`
+	UsageCount     uint64 `json:"usage_count"`
+	BytesUsed      uint64 `json:"bytes_used"`
+	MaxUsageCount  uint64 `json:"max_usage_count"`
+	MaxBytesUsed   uint64 `json:"max_bytes_used"`
+	WarningPercent int32  `json:"warning_percent"`
 	Description    string `json:"description,omitempty"`
 	BackendType    string `json:"backend_type,omitempty"`
-	UsageCount     uint64 `json:"usage_count,omitempty"`
-	BytesUsed      uint64 `json:"bytes_used,omitempty"`
-	MaxUsageCount  uint64 `json:"max_usage_count,omitempty"`
-	MaxBytesUsed   uint64 `json:"max_bytes_used,omitempty"`
-	WarningPercent int32  `json:"warning_percent,omitempty"`
 }
 
-func (r *cliDEKGetResponse) toResult() *DEKGetResult {
-	result := &DEKGetResult{}
-	if r.DEK != nil {
-		result.Path = r.DEK.Path
-		result.Algorithm = r.DEK.Algorithm
-		result.Version = r.DEK.Version
-		result.Status = r.DEK.Status
-		result.IsDefault = r.DEK.IsDefault
-		result.CreatedAt = time.Unix(r.DEK.CreatedAt, 0)
-		result.RotatedAt = time.Unix(r.DEK.RotatedAt, 0)
-		result.Description = r.DEK.Description
-		result.BackendType = r.DEK.BackendType
-		result.UsageCount = r.DEK.UsageCount
-		result.BytesUsed = r.DEK.BytesUsed
-		result.MaxUsageCount = r.DEK.MaxUsageCount
-		result.MaxBytesUsed = r.DEK.MaxBytesUsed
-		result.WarningPercent = r.DEK.WarningPercent
+// times parses the DEK's created_at and rotated_at.
+func (d *cliDEK) times(operation string) (createdAt, rotatedAt time.Time, err error) {
+	createdAt, err = parseCLIRFC3339(operation, "created_at", d.CreatedAt)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
 	}
-	return result
+	rotatedAt, err = parseCLIRFC3339(operation, "rotated_at", d.RotatedAt)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return createdAt, rotatedAt, nil
 }
 
+func (d *cliDEK) toCreateResult() (*DEKCreateResult, error) {
+	createdAt, _, err := d.times("DEKCreate")
+	if err != nil {
+		return nil, err
+	}
+	return &DEKCreateResult{
+		Path:        d.Path,
+		Algorithm:   d.Algorithm,
+		Version:     d.Version,
+		CreatedAt:   createdAt,
+		Description: d.Description,
+	}, nil
+}
+
+func (d *cliDEK) toGetResult(operation string) (*DEKGetResult, error) {
+	createdAt, rotatedAt, err := d.times(operation)
+	if err != nil {
+		return nil, err
+	}
+	return &DEKGetResult{
+		Path:           d.Path,
+		Algorithm:      d.Algorithm,
+		Version:        d.Version,
+		Status:         d.Status,
+		IsDefault:      d.IsDefault,
+		CreatedAt:      createdAt,
+		RotatedAt:      rotatedAt,
+		Description:    d.Description,
+		BackendType:    d.BackendType,
+		UsageCount:     d.UsageCount,
+		BytesUsed:      d.BytesUsed,
+		MaxUsageCount:  d.MaxUsageCount,
+		MaxBytesUsed:   d.MaxBytesUsed,
+		WarningPercent: d.WarningPercent,
+	}, nil
+}
+
+// cliDEKListResponse is kms dek list's output. The CLI does not page, so
+// there is no has_more or next cursor.
 type cliDEKListResponse struct {
-	DEKs       []cliDEKInfo `json:"deks,omitempty"`
-	HasMore    bool         `json:"has_more,omitempty"`
-	NextCursor string       `json:"next_cursor,omitempty"`
+	DEKs       []cliDEK `json:"deks"`
+	TotalCount int      `json:"total_count"`
 }
 
-func (r *cliDEKListResponse) toResult() *DEKListResult {
-	result := &DEKListResult{
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
-	}
-	for _, d := range r.DEKs {
+func (r *cliDEKListResponse) toResult() (*DEKListResult, error) {
+	result := &DEKListResult{}
+	for i := range r.DEKs {
+		d := &r.DEKs[i]
+		createdAt, _, err := d.times("DEKList")
+		if err != nil {
+			return nil, err
+		}
 		result.DEKs = append(result.DEKs, DEKSummary{
 			Path:      d.Path,
 			Algorithm: d.Algorithm,
 			Version:   d.Version,
 			Status:    d.Status,
 			IsDefault: d.IsDefault,
-			CreatedAt: time.Unix(d.CreatedAt, 0),
+			CreatedAt: createdAt,
 		})
 	}
-	return result
+	return result, nil
 }
 
 type cliDEKDeleteResponse struct {
@@ -1861,52 +1880,56 @@ func (r *cliDEKRotateResponse) toResult() *DEKRotateResult {
 	}
 }
 
-type cliDEKStatusResponse struct {
-	Path                   string `json:"path,omitempty"`
-	Algorithm              string `json:"algorithm,omitempty"`
-	Version                uint64 `json:"version,omitempty"`
-	Status                 string `json:"status,omitempty"`
-	IsDefault              bool   `json:"is_default,omitempty"`
-	CreatedAt              int64  `json:"created_at,omitempty"`
-	RotatedAt              int64  `json:"rotated_at,omitempty"`
-	Description            string `json:"description,omitempty"`
-	BackendType            string `json:"backend_type,omitempty"`
-	UsageCount             uint64 `json:"usage_count,omitempty"`
-	BytesUsed              uint64 `json:"bytes_used,omitempty"`
-	MaxUsageCount          uint64 `json:"max_usage_count,omitempty"`
-	MaxBytesUsed           uint64 `json:"max_bytes_used,omitempty"`
-	WarningPercent         int32  `json:"warning_percent,omitempty"`
-	ReencryptionInProgress bool   `json:"reencryption_in_progress,omitempty"`
-	ProcessedKeys          int64  `json:"processed_keys,omitempty"`
-	TotalKeys              int64  `json:"total_keys,omitempty"`
-	FailedKeys             int64  `json:"failed_keys,omitempty"`
-	ReencryptionStartedAt  int64  `json:"reencryption_started_at,omitempty"`
-	EstimatedCompletion    int64  `json:"estimated_completion,omitempty"`
+// cliDEKReencryption is the reencryption object of kms dek status.
+type cliDEKReencryption struct {
+	InProgress    bool   `json:"in_progress"`
+	TotalKeys     int64  `json:"total_keys"`
+	ProcessedKeys int64  `json:"processed_keys"`
+	FailedKeys    int64  `json:"failed_keys"`
+	StartedAt     string `json:"started_at,omitempty"`
 }
 
-func (r *cliDEKStatusResponse) toResult() *DEKStatusResult {
-	return &DEKStatusResult{
-		Path:                   r.Path,
-		Algorithm:              r.Algorithm,
-		Version:                r.Version,
-		Status:                 r.Status,
-		IsDefault:              r.IsDefault,
-		CreatedAt:              time.Unix(r.CreatedAt, 0),
-		RotatedAt:              time.Unix(r.RotatedAt, 0),
-		Description:            r.Description,
-		BackendType:            r.BackendType,
-		UsageCount:             r.UsageCount,
-		BytesUsed:              r.BytesUsed,
-		MaxUsageCount:          r.MaxUsageCount,
-		MaxBytesUsed:           r.MaxBytesUsed,
-		WarningPercent:         r.WarningPercent,
-		ReencryptionInProgress: r.ReencryptionInProgress,
-		ProcessedKeys:          r.ProcessedKeys,
-		TotalKeys:              r.TotalKeys,
-		FailedKeys:             r.FailedKeys,
-		ReencryptionStartedAt:  time.Unix(r.ReencryptionStartedAt, 0),
-		EstimatedCompletion:    time.Unix(r.EstimatedCompletion, 0),
+// cliDEKStatusResponse is kms dek status's output: the DEK plus its
+// reencryption progress when there is any. The CLI prints no estimated
+// completion time.
+type cliDEKStatusResponse struct {
+	cliDEK
+	Reencryption *cliDEKReencryption `json:"reencryption,omitempty"`
+}
+
+func (r *cliDEKStatusResponse) toResult() (*DEKStatusResult, error) {
+	dek, err := r.toGetResult("DEKStatus")
+	if err != nil {
+		return nil, err
 	}
+	result := &DEKStatusResult{
+		Path:           dek.Path,
+		Algorithm:      dek.Algorithm,
+		Version:        dek.Version,
+		Status:         dek.Status,
+		IsDefault:      dek.IsDefault,
+		CreatedAt:      dek.CreatedAt,
+		RotatedAt:      dek.RotatedAt,
+		Description:    dek.Description,
+		BackendType:    dek.BackendType,
+		UsageCount:     dek.UsageCount,
+		BytesUsed:      dek.BytesUsed,
+		MaxUsageCount:  dek.MaxUsageCount,
+		MaxBytesUsed:   dek.MaxBytesUsed,
+		WarningPercent: dek.WarningPercent,
+	}
+	if r.Reencryption != nil {
+		startedAt, err := parseCLIRFC3339("DEKStatus", "reencryption.started_at", r.Reencryption.StartedAt)
+		if err != nil {
+			return nil, err
+		}
+		result.ReencryptionInProgress = r.Reencryption.InProgress
+		result.TotalKeys = r.Reencryption.TotalKeys
+		result.ProcessedKeys = r.Reencryption.ProcessedKeys
+		result.FailedKeys = r.Reencryption.FailedKeys
+		result.ReencryptionStartedAt = startedAt
+	}
+	return result, nil
 }
 
 // Secrets response types
