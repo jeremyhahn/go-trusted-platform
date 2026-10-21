@@ -335,6 +335,13 @@ func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
 			UsedBytes     int64 `json:"used_bytes"`
 			ArtifactCount int   `json:"artifact_count"`
 		} `json:"storage"`
+		// The storage backend travels as the storage component's
+		// details.backend, as on gRPC (pkg/api/daemon/mcp_registry.go).
+		Components []struct {
+			Name    string            `json:"name"`
+			Status  string            `json:"status"`
+			Details map[string]string `json:"details"`
+		} `json:"components"`
 	}
 	if err := m.callTool(ctx, mcpToolRegistryStatus, map[string]interface{}{}, &resp); err != nil {
 		return nil, err
@@ -349,6 +356,12 @@ func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	}
 	if healthy {
 		result.Status = "running"
+	}
+	for _, c := range resp.Components {
+		if c.Name == registry.StatusComponentStorage {
+			result.StorageBackend = c.Details[registry.StatusDetailBackend]
+			result.StorageStatus = c.Status
+		}
 	}
 	if resp.StartedAt != 0 && resp.Timestamp != 0 {
 		result.Uptime = fromMilli(resp.Timestamp).Sub(fromMilli(resp.StartedAt))
