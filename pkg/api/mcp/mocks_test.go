@@ -42,7 +42,7 @@ type mockServiceProvider struct {
 	vtpmCreateFunc    func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error)
 	vtpmDeleteFunc    func(ctx context.Context, name string) error
 	vtpmListFunc      func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error)
-	vtpmStartFunc     func(ctx context.Context, name string) error
+	vtpmStartFunc     func(ctx context.Context, name string) (interface{}, error)
 	vtpmStopFunc      func(ctx context.Context, name string) error
 	vtpmQuoteFunc     func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
 	vtpmSealFunc      func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error)
@@ -294,8 +294,8 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"name": "vtpm-2", "status": "stopped"},
 			}, nil
 		},
-		vtpmStartFunc: func(ctx context.Context, name string) error {
-			return nil
+		vtpmStartFunc: func(ctx context.Context, name string) (interface{}, error) {
+			return map[string]interface{}{"success": true, "bundle_id": name, "running": true}, nil
 		},
 		vtpmStopFunc: func(ctx context.Context, name string) error {
 			return nil
@@ -885,11 +885,11 @@ func (m *mockServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOptio
 	return nil, nil
 }
 
-func (m *mockServiceProvider) VTPMStart(ctx context.Context, name string) error {
+func (m *mockServiceProvider) VTPMStart(ctx context.Context, name string) (interface{}, error) {
 	if m.vtpmStartFunc != nil {
 		return m.vtpmStartFunc(ctx, name)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) VTPMStop(ctx context.Context, name string) error {

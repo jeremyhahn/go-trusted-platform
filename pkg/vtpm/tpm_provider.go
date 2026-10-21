@@ -435,12 +435,19 @@ func (ops *TPMOperations) Provision(soPIN string) error {
 // ProvisionIfNew provisions a vTPM that opened without a persistent EK: a
 // bundle created without EK-certificate injection reaches its first Start
 // unprovisioned, and Quote, Seal and ExtendPCR need its keys. A provisioned
-// vTPM is left as it is, so a restart keeps the keys it already has.
+// vTPM keeps the keys it already has; its IAK is loaded, and a provisioned
+// vTPM without one is refused with ErrVTPMAttestationKeyMissing.
 func (ops *TPMOperations) ProvisionIfNew() error {
-	if ops.provisioned {
-		return nil
+	if !ops.provisioned {
+		return ops.Provision("")
 	}
-	return ops.Provision("")
+	// A provisioned vTPM opens without its IAK loaded, and Quote signs with
+	// the IAK: load it from its persistent handle now, once, so every Quote
+	// on this instance finds it.
+	if _, err := ops.tpm.IAKAttributes(); err != nil {
+		return ErrVTPMAttestationKeyMissing{SocketPath: ops.socketPath, Cause: err}
+	}
+	return nil
 }
 
 // GetEKPublicKey returns the EK public key using go-xkms.

@@ -1433,7 +1433,10 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
 
 - the kernel's `oom_kill` count in `memory.events` has risen by the time the
   write returns, because the write waits out the kill; a failure here means
-  the child was never killed, not that the relaunch was slow;
+  the child was never killed, not that the relaunch was slow. The test writes
+  through a raw blocking descriptor: `os.OpenFile` leaves a kernfs file
+  `O_NONBLOCK`, and since Linux 6.16 a non-blocking `memory.max` write sets
+  the limit and returns without reclaim or the OOM kill;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);

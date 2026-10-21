@@ -1025,8 +1025,26 @@ func readTrimmed(t *testing.T, path string) string {
 
 func writeCgroupFile(t *testing.T, path, value string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+	// os.OpenFile registers a kernfs file with the poller, which leaves the
+	// descriptor O_NONBLOCK, and since Linux 6.16 a non-blocking memory.max
+	// write sets the limit and returns without reclaim or the OOM kill. A raw
+	// descriptor stays blocking, so the write returns only once the kernel
+	// has enforced the limit.
+	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() {
+		if err := syscall.Close(fd); err != nil {
+			t.Errorf("close %s: %v", path, err)
+		}
+	}()
+	n, err := syscall.Write(fd, []byte(value))
+	if err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+	if n != len(value) {
+		t.Fatalf("write %s: wrote %d of %d bytes", path, n, len(value))
 	}
 }
 

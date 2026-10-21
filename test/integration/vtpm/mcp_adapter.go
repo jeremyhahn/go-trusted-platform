@@ -164,6 +164,20 @@ func (e ErrMCPVTPMRequestFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrMCPVTPMValidationFailed is returned when vtpm_validate answers
+// valid: false, as the gRPC, Unix and QUIC adapters do for the same reply.
+type ErrMCPVTPMValidationFailed struct {
+	BundleID string
+	Errors   []string
+}
+
+func (e ErrMCPVTPMValidationFailed) Error() string {
+	if len(e.Errors) > 0 {
+		return fmt.Sprintf("MCP vTPM bundle %s failed validation: %s", e.BundleID, e.Errors[0])
+	}
+	return fmt.Sprintf("MCP vTPM bundle %s failed validation", e.BundleID)
+}
+
 // =============================================================================
 // MCP JSON-RPC Types
 // =============================================================================
@@ -933,6 +947,12 @@ func (m *MCPAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOpti
 		return nil, err
 	}
 
+	// vtpm_validate answers valid: false for an absent or corrupt bundle
+	// (docs/vtpm/api.md §5); surface it as an error like the other adapters.
+	if !resp.Valid {
+		return nil, ErrMCPVTPMValidationFailed{BundleID: opts.ID, Errors: resp.Errors}
+	}
+
 	return &ValidateBundleResult{
 		Valid:            resp.Valid,
 		Errors:           resp.Errors,
@@ -1120,7 +1140,7 @@ func (m *MCPAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 		args["pcrs"] = opts.PCRs
 	}
 	if opts.AuthValue != "" {
-		args["auth"] = opts.AuthValue
+		args["auth_value"] = opts.AuthValue
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMSeal, args)
@@ -1144,11 +1164,11 @@ func (m *MCPAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 // Unseal decrypts data from the TPM via MCP.
 func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
 	args := map[string]interface{}{
-		"name":        opts.BundleID,
-		"sealed_data": base64.StdEncoding.EncodeToString(opts.SealedData),
+		"name":   opts.BundleID,
+		"sealed": base64.StdEncoding.EncodeToString(opts.SealedData),
 	}
 	if opts.AuthValue != "" {
-		args["auth"] = opts.AuthValue
+		args["auth_value"] = opts.AuthValue
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMUnseal, args)
@@ -1172,9 +1192,9 @@ func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // ExtendPCR extends a PCR with the provided data via MCP.
 func (m *MCPAdapter) ExtendPCR(ctx context.Context, opts ExtendPCROptions) (*ExtendPCRResult, error) {
 	args := map[string]interface{}{
-		"name":      opts.BundleID,
-		"pcr_index": opts.PCRIndex,
-		"data":      base64.StdEncoding.EncodeToString(opts.Data),
+		"name": opts.BundleID,
+		"pcr":  opts.PCRIndex,
+		"data": base64.StdEncoding.EncodeToString(opts.Data),
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMExtendPCR, args)
@@ -1197,8 +1217,8 @@ func (m *MCPAdapter) ExtendPCR(ctx context.Context, opts ExtendPCROptions) (*Ext
 // ReadPCR reads the current value of a PCR via MCP.
 func (m *MCPAdapter) ReadPCR(ctx context.Context, opts ReadPCROptions) (*ReadPCRResult, error) {
 	args := map[string]interface{}{
-		"name":      opts.BundleID,
-		"pcr_index": opts.PCRIndex,
+		"name": opts.BundleID,
+		"pcr":  opts.PCRIndex,
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMReadPCR, args)

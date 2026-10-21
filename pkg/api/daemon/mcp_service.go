@@ -314,14 +314,22 @@ func (p *MCPServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOption
 }
 
 // VTPMStart starts a vTPM instance.
-func (p *MCPServiceProvider) VTPMStart(ctx context.Context, name string) error {
+func (p *MCPServiceProvider) VTPMStart(ctx context.Context, name string) (interface{}, error) {
 	if p.vtpmService == nil {
-		return ErrServiceNotAvailable{Service: "vtpm"}
+		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return err
+		return nil, err
 	}
-	return p.vtpmService.Start(ctx, name)
+	if err := p.vtpmService.Start(ctx, name); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"success":     true,
+		"bundle_id":   name,
+		"running":     p.vtpmService.IsRunning(name),
+		"socket_path": p.vtpmService.GetTPMSocketPath(name),
+	}, nil
 }
 
 // VTPMStop stops a vTPM instance.

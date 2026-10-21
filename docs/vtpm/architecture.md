@@ -270,6 +270,10 @@ read back from the persistent EK handle.
   runs the same go-xkms provisioning flow as above (EK, SRK, IAK), because
   quote, seal and PCR extend need those keys. A later `Start` finds the
   persistent EK and does not provision again, so the keys survive a restart.
+- **Start loads the IAK.** A `Start` that finds the vTPM provisioned (a bundle
+  created with EK-certificate injection, or a restart) loads the IAK from
+  `0x81020001`, which quote signs with. A provisioned vTPM with no IAK there
+  is refused with `ErrVTPMAttestationKeyMissing` and does not start.
 - **Sealed data.** go-xkms keeps the private and public blobs of a sealed
   object in `tpm/sealed/` of the bundle, through the SDK file key backend.
   `UnsealVTPM` after a restart reads them from there, and an exported bundle
