@@ -233,11 +233,10 @@ other seven reaches the SDK and answers its unknown-method error, classed
 `Unimplemented` by `pkg/api/errclass`; its service also refuses a `deleted`
 status. A daemon on a remote quicbaas transport serves them.
 
-**The CLI cannot reach them either** — the entire `platformctl kms secrets`
-and `kms dek` subtrees are stubs that return typed
-`ErrSecretsNotImplemented` / `ErrDEKNotImplemented` errors. See
-[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. (`kms crypto
-datakey`, which mints a wrapped DEK, does work.)
+**The CLI reaches them through the same SDK client** — `platformctl kms
+secrets` and `kms dek` call `Security().Secrets()` and `Security().DEK()`, so
+against an embedded daemon the same seven secrets verbs exit 1 with the SDK's
+unknown-method error. See [cli.md](cli.md) §7.
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on

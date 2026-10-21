@@ -844,6 +844,21 @@ func testRandom(t *testing.T, ctx context.Context, cmd KMSCommands, prefix strin
 // DEK Management Tests
 // =============================================================================
 
+// withoutCLIDEKDescription returns opts unchanged on every transport but the
+// CLI. kms dek create has no --description flag (docs/kms/cli.md §7), so on
+// the CLI it asserts the typed refusal and returns opts without the
+// description, for the leaf to create the DEK with.
+func withoutCLIDEKDescription(t *testing.T, ctx context.Context, cmd KMSCommands, opts DEKCreateOptions) DEKCreateOptions {
+	t.Helper()
+	if _, isCLI := cmd.(*CLIAdapter); !isCLI {
+		return opts
+	}
+	_, err := cmd.DEKCreate(ctx, opts)
+	require.ErrorIs(t, err, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--description"})
+	opts.Description = ""
+	return opts
+}
+
 func testDEKCreate(t *testing.T, ctx context.Context, cmd KMSCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -855,6 +870,7 @@ func testDEKCreate(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 			Algorithm:   "AES-256-GCM",
 			Description: "Multi-protocol test DEK",
 		}
+		opts = withoutCLIDEKDescription(t, testCtx, cmd, opts)
 
 		result, err := cmd.DEKCreate(testCtx, opts)
 		require.NoError(t, err, "DEKCreate should succeed")
@@ -901,6 +917,7 @@ func testDEKGet(t *testing.T, ctx context.Context, cmd KMSCommands, prefix strin
 		Algorithm:   "AES-256-GCM",
 		Description: "DEK for get test",
 	}
+	createOpts = withoutCLIDEKDescription(t, testCtx, cmd, createOpts)
 	_, err := cmd.DEKCreate(testCtx, createOpts)
 	require.NoError(t, err, "Setup: DEKCreate should succeed")
 
@@ -909,7 +926,7 @@ func testDEKGet(t *testing.T, ctx context.Context, cmd KMSCommands, prefix strin
 		require.NoError(t, err, "DEKGet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, path, result.Path, "Path should match")
-		assert.Equal(t, "DEK for get test", result.Description, "Description should match")
+		assert.Equal(t, createOpts.Description, result.Description, "Description should match")
 	})
 
 	t.Run("GetNonexistentDEKFails", func(t *testing.T) {
@@ -1030,6 +1047,7 @@ func testDEKStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 		MaxBytes:       500000,
 		WarningPercent: 75,
 	}
+	createOpts = withoutCLIDEKDescription(t, testCtx, cmd, createOpts)
 	_, err := cmd.DEKCreate(testCtx, createOpts)
 	require.NoError(t, err, "Setup: DEKCreate should succeed")
 
@@ -1038,7 +1056,7 @@ func testDEKStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 		require.NoError(t, err, "DEKStatus should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, path, result.Path, "Path should match")
-		assert.Equal(t, "DEK for status test", result.Description, "Description should match")
+		assert.Equal(t, createOpts.Description, result.Description, "Description should match")
 		assert.Equal(t, uint64(5000), result.MaxUsageCount, "MaxUsageCount should match")
 		assert.Equal(t, uint64(500000), result.MaxBytesUsed, "MaxBytesUsed should match")
 		assert.Equal(t, int32(75), result.WarningPercent, "WarningPercent should match")
