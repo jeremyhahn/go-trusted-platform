@@ -313,6 +313,24 @@ func TestExecuteSecretsList(t *testing.T) {
 		assert.Equal(t, "dng=", data[0].(map[string]any)["value"])
 	})
 
+	// The gRPC transport answers Get with the server's secret ID as Path,
+	// which need not be the listed name; every data entry is named by the
+	// path the listing returned, so a caller can match entries to names.
+	t.Run("include data names each entry by its listed path", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"p/x", "p/y"}, secrets: map[string]*secretsclient.Secret{
+			"p/x": {Path: "server-id-1", Version: 1, Data: map[string]interface{}{"value": "dng="}},
+			"p/y": {Version: 2, Data: map[string]interface{}{"value": "dnk="}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
+		})
+		data, ok := out["data"].([]any)
+		require.True(t, ok)
+		require.Len(t, data, 2)
+		assert.Equal(t, "p/x", data[0].(map[string]any)["name"])
+		assert.Equal(t, "p/y", data[1].(map[string]any)["name"])
+	})
+
 	t.Run("errors", func(t *testing.T) {
 		requireSecretOperationFailed(t, executeSecretsList(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 0, false), "list")
 	})

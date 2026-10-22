@@ -288,14 +288,16 @@ func parseSecretVersion(arg string) (int, error) {
 }
 
 // secretOutputFrom converts an SDK secret. The value and description sit in
-// the secret's data map under the keys the REST surface writes them to.
-func secretOutputFrom(s *secretsclient.Secret) (secretOutput, error) {
+// the secret's data map under the keys the REST surface writes them to. The
+// output is named by the name the caller asked for: the gRPC transport fills
+// Path with the server's secret ID, which need not be that name.
+func secretOutputFrom(name string, s *secretsclient.Secret) (secretOutput, error) {
 	value, err := common.DecodeSecretValue(s.Data["value"])
 	if err != nil {
-		return secretOutput{}, ErrSecretOperationFailed{Operation: "get", Name: s.Path, Err: err}
+		return secretOutput{}, ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
 	}
 	out := secretOutput{
-		Name:      s.Path,
+		Name:      name,
 		Version:   s.Version,
 		Value:     value,
 		Metadata:  s.Metadata,
@@ -399,7 +401,7 @@ func executeSecretsGet(ctx context.Context, client quicbaassdk.SecretsClient, pr
 		return ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
 	}
 
-	out, err := secretOutputFrom(secret)
+	out, err := secretOutputFrom(name, secret)
 	if err != nil {
 		return err
 	}
@@ -471,7 +473,7 @@ func executeSecretsList(ctx context.Context, client quicbaassdk.SecretsClient, p
 			if err != nil {
 				return ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
 			}
-			data, err := secretOutputFrom(secret)
+			data, err := secretOutputFrom(name, secret)
 			if err != nil {
 				return err
 			}

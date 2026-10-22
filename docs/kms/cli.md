@@ -617,7 +617,10 @@ The go-quicbaas Secrets client JSON-encodes the data map, so a stored value
 comes back from the SDK as its base64 text; the CLI and `GET
 /api/v1/kms/secrets/{name}` decode it in one shared place
 (`common.DecodeSecretValue`). A stored value that is not base64 text exits 1
-with `ErrSecretOperationFailed` wrapping `ErrMalformedSecretValue`.
+with `ErrSecretOperationFailed` wrapping `ErrMalformedSecretValue`. `get`
+prints the `<name>` it was given and each `prefix list` `data` entry the name
+the listing returned: the SDK gRPC transport answers `Get` with the server's
+secret ID as the path, which need not be that name.
 
 | Verb | Arguments | Flags (type, default) | SDK call | JSON output |
 |---|---|---|---|---|
