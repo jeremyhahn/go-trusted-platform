@@ -450,6 +450,26 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
 | `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
 | `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
+| `PLATFORM_ADMIN_BUNDLE_DIR` | `/tmp/platformd-integration/quicbaas/admin` | Firstboot admin bundle (`admin.crt`, `admin.key`) the admin session claims the console with |
+| `PLATFORM_ADMIN_SESSION_FILE` | `/tmp/platformd-integration/admin-session.json` | Cached console bearer, shared by every test binary of the run |
+
+#### Admin session
+
+Admin-gated webservice routes take a platform console bearer, not the client
+certificate. The REST adapters build their client with
+`helpers.NewAdminHTTPClient`, whose transport adds `Authorization: Bearer`
+from `helpers.HarnessAdminSession` (`test/integration/helpers/admin_session.go`).
+The first request of the run claims the console through
+`/api/v1/admin/claim` (docs/auth/architecture.md §6b): status, challenge,
+verify (the challenge signed with `admin.key`), then passkey begin and finish
+with a test-side software authenticator (ES256, "none" attestation) against
+the `webauthn` relying party in `test/integration/config.yaml`. The minted
+bearer is written to `PLATFORM_ADMIN_SESSION_FILE` (mode 0600); later binaries
+reuse it, refresh it through `/api/v1/login/refresh` when less than 30 minutes
+remain, and claim again only when the cache is for another webservice or the
+daemon is fresh. The claim closes once taken, so an expired cache on a
+claimed daemon fails with `ErrAdminAlreadyClaimed`; every platformd start wipes
+`/tmp/platformd-integration`, cache included.
 
 The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
 writes both on first start (`pkg/daemon/commands/harness_admin_bundle_integration.go`,
