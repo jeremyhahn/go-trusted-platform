@@ -20,7 +20,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
@@ -1342,13 +1341,11 @@ func (r *ToolRegistry) SetAuthorizationChecker(checker *AuthorizationChecker) {
 func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
 	r.logger.Debug("Executing tool", "tool", name)
 
-	// Add timeout to context if not present
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-
+	// A tool runs as long as the caller's context, as a gRPC call runs as
+	// long as its client's: over HTTP that is the request, cancelled when
+	// the client gives up; over stdio, the server's RequestTimeout. No
+	// deadline is added here: a reboot is a stop window plus a start, and
+	// a fixed one cut it short over MCP alone (docs/compute/api.md).
 	// Route to appropriate handler
 	switch name {
 	// vTPM Operations
