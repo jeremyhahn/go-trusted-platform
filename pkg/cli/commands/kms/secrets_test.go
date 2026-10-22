@@ -26,6 +26,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -313,6 +314,24 @@ func TestExecuteSecretsList(t *testing.T) {
 		assert.Equal(t, "dng=", data[0].(map[string]any)["value"])
 	})
 
+	// The gRPC transport answers Get with the server's secret ID as Path,
+	// which need not be the listed name; every data entry is named by the
+	// path the listing returned, so a caller can match entries to names.
+	t.Run("include data names each entry by its listed path", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"p/x", "p/y"}, secrets: map[string]*secretsclient.Secret{
+			"p/x": {Path: "server-id-1", Version: 1, Data: map[string]interface{}{"value": "dng="}},
+			"p/y": {Version: 2, Data: map[string]interface{}{"value": "dnk="}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
+		})
+		data, ok := out["data"].([]any)
+		require.True(t, ok)
+		require.Len(t, data, 2)
+		assert.Equal(t, "p/x", data[0].(map[string]any)["name"])
+		assert.Equal(t, "p/y", data[1].(map[string]any)["name"])
+	})
+
 	t.Run("errors", func(t *testing.T) {
 		requireSecretOperationFailed(t, executeSecretsList(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 0, false), "list")
 	})
@@ -511,4 +530,57 @@ func TestSecretsWatchIsSDKGap(t *testing.T) {
 	watch, _, err := cmd.Find([]string{"watch"})
 	require.NoError(t, err)
 	assert.ErrorIs(t, watch.RunE(watch, []string{"n"}), ErrSecretsSDKGap{Verb: "watch", Method: "SecretsClient.Watch"})
+}
+
+// The SDK gRPC transport refuses a secrets method its proto does not carry
+// (GetVersion, GetRotationPolicy, SetRotationPolicy) as unimplemented; every
+// verb surfaces that refusal as ErrSecretsSDKGap naming its SDK method.
+func TestSecretsUnimplementedIsSDKGap(t *testing.T) {
+	ctx := context.Background()
+	refusal := sdkerrors.NewUnimplemented("secretsHandler.handleRequest", "method not exposed by SecretsManagement gRPC proto")
+	fake := &fakeSecretsClient{err: refusal}
+	p := newTestKMSPrinter()
+	f := cli.OutputFormatJSON
+
+	tests := []struct {
+		verb   string
+		method string
+		run    func() error
+	}{
+		{"store", "SecretsClient.Store", func() error {
+			return executeSecretsStore(ctx, fake, p, f, "n", secretStoreOptions{Value: "v"})
+		}},
+		{"get", "SecretsClient.Get", func() error { return executeSecretsGet(ctx, fake, p, f, "n", 0) }},
+		{"list", "SecretsClient.List", func() error { return executeSecretsList(ctx, fake, p, f, "p/", 0, false) }},
+		{"delete", "SecretsClient.Delete", func() error { return executeSecretsDelete(ctx, fake, p, f, "n") }},
+		{"rotate", "SecretsClient.Rotate", func() error { return executeSecretsRotate(ctx, fake, p, f, "n", "v", false) }},
+		{"version", "SecretsClient.GetVersion", func() error { return executeSecretsVersion(ctx, fake, p, f, "n", 2) }},
+		{"versions", "SecretsClient.ListVersions", func() error { return executeSecretsVersions(ctx, fake, p, f, "n") }},
+		{"rollback", "SecretsClient.Rollback", func() error { return executeSecretsRollback(ctx, fake, p, f, "n", 1) }},
+		{"status", "SecretsClient.UpdateStatus", func() error {
+			return executeSecretsStatus(ctx, fake, p, f, "n", secretsclient.SecretStatusEnabled)
+		}},
+		{"policy get", "SecretsClient.GetRotationPolicy", func() error { return executeSecretsPolicyGet(ctx, fake, p, f, "n") }},
+		{"policy set", "SecretsClient.SetRotationPolicy", func() error {
+			return executeSecretsPolicySet(ctx, fake, p, f, "n", secretPolicyOptions{Enabled: true})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.verb, func(t *testing.T) {
+			err := tt.run()
+			var gap ErrSecretsSDKGap
+			require.ErrorAs(t, err, &gap)
+			assert.Equal(t, tt.verb, gap.Verb)
+			assert.Equal(t, tt.method, gap.Method)
+			assert.ErrorIs(t, err, refusal)
+			assert.Contains(t, err.Error(), "the go-quicbaas SDK does not serve "+tt.method)
+		})
+	}
+}
+
+// Any failure other than an unimplemented refusal stays ErrSecretOperationFailed.
+func TestSecretOperationErrorKeepsOtherFailures(t *testing.T) {
+	err := secretOperationError("version", "n", errFakeSecrets)
+	requireSecretOperationFailed(t, err, "version")
+	assert.NotErrorAs(t, err, new(ErrSecretsSDKGap))
 }

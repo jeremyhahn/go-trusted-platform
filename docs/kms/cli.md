@@ -629,7 +629,10 @@ The go-quicbaas Secrets client JSON-encodes the data map, so a stored value
 comes back from the SDK as its base64 text; the CLI and `GET
 /api/v1/kms/secrets/{name}` decode it in one shared place
 (`common.DecodeSecretValue`). A stored value that is not base64 text exits 1
-with `ErrSecretOperationFailed` wrapping `ErrMalformedSecretValue`.
+with `ErrSecretOperationFailed` wrapping `ErrMalformedSecretValue`. `get`
+prints the `<name>` it was given and each `prefix list` `data` entry the name
+the listing returned: the SDK gRPC transport answers `Get` with the server's
+secret ID as the path, which need not be that name.
 
 | Verb | Arguments | Flags (type, default) | SDK call | JSON output |
 |---|---|---|---|---|
@@ -652,12 +655,20 @@ before any connection). The SDK `List` returns every name at once, so `list`
 has no `--cursor`: `--limit` caps what is printed and `has_more` reports the
 rest. The SDK `Delete` removes a secret with all its versions; there is no soft
 delete and no `--force`. A client error exits 1 with `ErrSecretOperationFailed`
-naming the operation and the secret.
+naming the operation and the secret. A call the SDK transport refuses as
+unimplemented exits 1 with `ErrSecretsSDKGap` instead, naming the verb and the
+SDK method and wrapping the refusal: `kms secrets <verb>: the go-quicbaas SDK
+does not serve SecretsClient.<Method>: <refusal>`. Every verb maps its failure
+in one place (`secretOperationError`).
 
 **Server coverage.** The pinned go-quicbaas embedded transport serves
 `Store`, `Get`, `List` and `Delete` only. Against an embedded platformd,
 `rotate`, `version`, `versions`, `rollback`, `status` and `policy` exit 1 with
 `embedded: unknown method: quicbaas.Secrets.*` until go-quicbaas #1619 lands.
+The SDK gRPC transport has no `SecretsManagement` proto method for
+`GetVersion`, `GetRotationPolicy` or `SetRotationPolicy`: over it, `version`,
+`policy get` and `policy set` exit 1 with `ErrSecretsSDKGap` wrapping
+`UNIMPLEMENTED: ... method not exposed by SecretsManagement gRPC proto`.
 
 ```bash
 platformctl kms secrets store api-token --value "s3cret" --tag env=prod -o json

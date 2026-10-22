@@ -23,16 +23,20 @@ import (
 )
 
 // SecretsSDKGapIssue is the upstream issue that carries the secrets verbs
-// the pinned go-quicbaas SDK's embedded transport does not serve: it serves
+// the pinned go-quicbaas SDK does not serve. Its embedded transport serves
 // only quicbaas.Secrets/{Store,Get,List,Delete,Ensure}, so platformctl kms
-// secrets rotate, version, versions, rollback, status and policy fail there.
+// secrets rotate, version, versions, rollback, status and policy fail there;
+// its gRPC transport has no SecretsManagement proto method for GetVersion,
+// GetRotationPolicy or SetRotationPolicy, so version and policy fail there.
 const SecretsSDKGapIssue = "go-quicbaas #1619"
 
-// cliUpstreamGapMarkers are the texts the SDK's embedded transport answers
-// with when it does not serve a method; platformctl prints them on stderr.
+// cliUpstreamGapMarkers are the texts platformctl prints on stderr when the
+// SDK does not serve a method: the embedded transport's own answers, and the
+// CLI's ErrSecretsSDKGap, which carries any transport's unimplemented refusal.
 var cliUpstreamGapMarkers = []string{
 	"unknown method: quicbaas.",
 	"invalid request type for quicbaas.",
+	"the go-quicbaas SDK does not serve SecretsClient.",
 }
 
 // ErrCLINoFlag is returned by a CLI test adapter when the caller passes an
