@@ -550,7 +550,10 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	// The one carve-out is Unix-domain-socket-only mode — filesystem-
 	// permission-scoped, not network-exposed — which needs no identity.
 	// MCP over HTTP terminates TLS too (#844); MCP over stdio does not.
-	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST && !cfg.MCPServesHTTP() {
+	// RESTRoutesOnly counts as REST: the webservice listener terminates
+	// TLS for the daemon's routes, and they verify clients against the
+	// daemon's roots, so they need the identity as much as REST does.
+	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST && !cfg.RESTRoutesOnly && !cfg.MCPServesHTTP() {
 		logger.Info("Daemon TLS identity skipped: no TLS-terminating transport enabled (UDS-only mode)")
 		return nil
 	}
