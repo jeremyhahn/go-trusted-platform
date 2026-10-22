@@ -16,6 +16,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,14 +68,25 @@ func installStopSeam(t *testing.T, orch *QEMUOrchestrator, qi *qemuInstance, sto
 
 // installStopSeamWithOptions is installStopSeam that also records the
 // StopOptions each process stop received.
+// installTestRun makes a stand-in run the instance's current run, as Start
+// does once QEMU runs. The caller closes its done channel when the stand-in
+// exits.
+func installTestRun(qi *qemuInstance, cancel context.CancelFunc) *qemuRun {
+	run := &qemuRun{cancel: cancel, done: make(chan struct{})}
+	qi.mu.Lock()
+	qi.run = run
+	qi.mu.Unlock()
+	return run
+}
+
 func installStopSeamWithOptions(t *testing.T, orch *QEMUOrchestrator, qi *qemuInstance, stopErr error) (*int, *[]StopOptions) {
 	t.Helper()
 	calls := new(int)
 	seen := new([]StopOptions)
 	exited := make(chan struct{})
-	qi.waitGroup.Add(1)
+	run := installTestRun(qi, func() {})
 	go func() {
-		defer qi.waitGroup.Done()
+		defer close(run.done)
 		if _, ok := <-exited; ok {
 			return
 		}
@@ -289,9 +301,9 @@ func TestStop_GuestWaitDoesNotBlockOtherCalls(t *testing.T) {
 	qi := insertVMInstance(t, orch, "vm1", true, &InstanceConfig{})
 
 	exited := make(chan struct{})
-	qi.waitGroup.Add(1)
+	run := installTestRun(qi, func() {})
 	go func() {
-		defer qi.waitGroup.Done()
+		defer close(run.done)
 		<-exited
 		orch.recordExit("vm1", qi)
 	}()
@@ -338,6 +350,54 @@ func TestStop_GuestWaitDoesNotBlockOtherCalls(t *testing.T) {
 	close(release)
 	require.NoError(t, <-stopped)
 	assertVMState(t, orch, qi, StateStopped)
+}
+
+// TestStop_RestartDuringGuestWaitKeepsNewRun: a stop waits for its guest
+// without the instance lock, so the stopped run can exit and a start can
+// replace the instance's run before the stop finishes. The stop cancels and
+// waits on the run it stopped, so it neither kills the new run nor waits
+// for it to exit.
+func TestStop_RestartDuringGuestWaitKeepsNewRun(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	qi := insertVMInstance(t, orch, "vm1", true, &InstanceConfig{})
+
+	exitA := make(chan struct{})
+	runA := installTestRun(qi, func() {})
+	go func() {
+		defer close(runA.done)
+		<-exitA
+		orch.recordExit("vm1", qi)
+	}()
+
+	var cancelledB atomic.Bool
+	runB := &qemuRun{cancel: func() { cancelledB.Store(true) }, done: make(chan struct{})}
+	t.Cleanup(func() { close(runB.done) })
+
+	orig := stopVMProcess
+	stopVMProcess = func(*qemuInstance, StopOptions) error {
+		// Run A exits and its exit is recorded, then a start brings up run B.
+		close(exitA)
+		<-runA.done
+		qi.mu.Lock()
+		defer qi.mu.Unlock()
+		assert.NoError(t, orch.lifecycle.SetState("vm1", StateStarting))
+		assert.NoError(t, orch.lifecycle.SetState("vm1", StateRunning))
+		qi.instance.State = StateRunning
+		qi.run = runB
+		return nil
+	}
+	t.Cleanup(func() { stopVMProcess = orig })
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- orch.Stop(context.Background(), "vm1") }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(stopUnblockedWithin):
+		t.Fatal("the stop of run A waited for run B to exit")
+	}
+	assert.False(t, cancelledB.Load(), "the stop of run A cancelled run B")
+	assertVMState(t, orch, qi, StateRunning)
 }
 
 // TestStop_ExitDuringFailedStopIsStopped: a stop whose process call fails

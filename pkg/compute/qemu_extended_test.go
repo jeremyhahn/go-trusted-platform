@@ -295,7 +295,7 @@ func TestQEMUOrchestrator_Wait_StoppedInstance(t *testing.T) {
 		defer orch.Delete(ctx, instance.ID)
 
 		// Wait should return immediately since the instance is stopped
-		// and the waitGroup has never been incremented
+		// and has never had a run
 		done := make(chan bool)
 		go func() {
 			orch.Wait(ctx, instance.ID)

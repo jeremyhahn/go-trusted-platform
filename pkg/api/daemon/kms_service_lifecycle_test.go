@@ -16,6 +16,8 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -691,6 +693,31 @@ func TestKMSServerAdapterListKeysPagination(t *testing.T) {
 		}
 	})
 
+	t.Run("SDKOrderChangesBetweenPages", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: rotatingKeyOrder(t, "key-a", "key-b", "key-c", "key-d", "key-e")}, slog.Default())
+
+		var walked []string
+		cursor := ""
+		for {
+			page, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2, Cursor: cursor})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, k := range page.GetKeys() {
+				walked = append(walked, k.GetKeyId())
+			}
+			if !page.GetHasMore() {
+				break
+			}
+			cursor = page.GetNextCursor()
+		}
+		want := []string{"key-a", "key-b", "key-c", "key-d", "key-e"}
+		if !slices.Equal(walked, want) {
+			t.Errorf("pages walked %v, want each key once in KeyID order %v", walked, want)
+		}
+	})
+
 	t.Run("NoLimitReturnsAll", func(t *testing.T) {
 		t.Parallel()
 		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
@@ -723,6 +750,23 @@ func TestKMSServerAdapterListKeysPagination(t *testing.T) {
 		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2})
 		assertGRPCStatusCode(t, err, codes.Internal)
 	})
+}
+
+// rotatingKeyOrder returns an SDK ListKeys fake that lists the same keys on
+// every call but rotates their order by one each time, as the embedded KMS
+// does when it aggregates backends and map-backed metadata unsorted.
+func rotatingKeyOrder(t *testing.T, keyIDs ...string) func(context.Context) (*kms.ListKeysResponse, error) {
+	t.Helper()
+	var calls atomic.Int64
+	return func(context.Context) (*kms.ListKeysResponse, error) {
+		shift := int(calls.Add(1)) % len(keyIDs)
+		keys := make([]kms.KeyInfo, 0, len(keyIDs))
+		for i := range keyIDs {
+			id := keyIDs[(len(keyIDs)-i+shift)%len(keyIDs)]
+			keys = append(keys, kms.KeyInfo{KeyID: id, Version: 1, Algorithm: kms.AlgorithmAES256GCM})
+		}
+		return &kms.ListKeysResponse{Keys: keys}, nil
+	}
 }
 
 func TestKMSServerAdapterRotateKeyVersions(t *testing.T) {
