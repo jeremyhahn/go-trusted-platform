@@ -8,10 +8,13 @@ import (
 
 // TPM ownership (docs/tpm/engineering.md §4 item 5).
 //
-// On its first start on an unowned TPM, platformd creates the
-// owner-hierarchy keys under the empty auth a fresh TPM ships with, then
-// takes ownership (pkg/tpmowner). Every later start finds the TPM owned and
-// proves the SO PIN.
+// On an installed node firstboot takes ownership (pkg/firstboot) with the SO
+// PIN platformd resolves, so platformd's first start already finds the TPM
+// owned and proves that SO PIN, as every later start does. platformd takes
+// ownership itself (pkg/tpmowner) only on a TPM it finds unowned, a node
+// firstboot did not provision or one whose TPM was cleared: it creates the
+// owner-hierarchy keys under the empty auth, then sets the owner auth to the
+// SO PIN.
 
 // hierarchyAuthFor returns the auth a hierarchy currently holds: the SO PIN
 // once its authSet bit is set, empty before.

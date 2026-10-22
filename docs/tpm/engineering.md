@@ -1,6 +1,6 @@
 # Physical TPM 2.0 — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/app/`, `pkg/vtpm/target.go`, `pkg/api/daemon/`, `pkg/api/quic/tpm_handlers.go`, `pkg/api/tpmnv/`, `pkg/webservice/v1/rest/tpm/`, `pkg/api/mcp/`, `pkg/cli/commands/tpm/`, `sdk/go/services/tpm/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/app/`, `pkg/vtpm/target.go`, `pkg/api/daemon/`, `pkg/api/quic/tpm_handlers.go`, `pkg/api/tpmnv/`, `pkg/webservice/v1/rest/tpm/`, `pkg/api/mcp/`, `pkg/cli/commands/tpm/`, `sdk/go/services/tpm/`, `pkg/tpmowner/`, the TPM ownership step of `pkg/firstboot/` · Last verified: 2026-10-22
 > Conflicts with this document are defects. Fix them here first.
 > Design and boundaries: [architecture.md](architecture.md). Transport matrix:
 > [api.md](api.md).
@@ -143,10 +143,40 @@ downgrade is invisible in every downstream artefact.
    hierarchy's auth is empty; a set bit means it is the SO PIN. There is no
    file or datastore flag: the bits survive reboot and only `TPM2_Clear`
    resets them.
-   - **First start (owner bit clear)** — a fresh TPM, hardware or swtpm, has
-     empty owner auth. The SRK is created under that empty auth, then
-     `TPM2_HierarchyChangeAuth` (Part 3 §24.8) sets the owner auth to the SO
-     PIN, which sets `ownerAuthSet`.
+   - **firstboot takes ownership (installed nodes)** — firstboot
+     (`provisionInsideInstaller`, `pkg/firstboot/strategy.go`) resolves the
+     same `platform.so-pin` platformd presents before it touches the TPM. A
+     literal is used as configured. A `kms://<path>?ensure=true&enc=numeric&len=<n>`
+     reference is generated (`tpmowner.GenerateNumericSOPIN`) and staged for
+     platformd at `/run/platform/firstboot-handoff/so-pin` (directory 0700,
+     file 0600, created `O_EXCL`); a firstboot retry in the same boot reuses
+     the staged PIN instead of generating another. Any other `kms://` form is
+     refused with `tpmowner.SOPINRefError` and the TPM is left unchanged. On a
+     TPM a previous install already owned, `tpmowner.Prepare` proves the SO
+     PIN (a wrong one fails with `tpmowner.OwnerAuthRejectedError`) and
+     returns the owner auth to empty. The EK, SSRK, IAK, IDevID and Platform
+     KeyStore SRK are created under the empty owner auth (`Install` is passed
+     a nil SO PIN, so endorsement and lockout auth stay empty), and
+     `tpmowner.TakeOwnership` then sets the owner auth to the SO PIN with
+     `TPM2_HierarchyChangeAuth` (Part 3 §24.8) before firstboot reports
+     provisioning complete. No device leaves firstboot with an empty owner
+     auth. On its first start platformd stores the staged PIN at the
+     reference's kms path (`ConsumeSOPINHandoff`, `pkg/app/sopin_handoff.go`)
+     before the secret references are resolved, then shreds the file; a
+     literal `platform.so-pin` makes it discard the staged file instead.
+   - **The `TPM_RC_BAD_AUTH` chain this closes.** firstboot once generated a
+     random SO PIN, took ownership with it and discarded it at exit. platformd
+     then presented its own SO PIN, every owner-authorized command failed with
+     `TPM_RC_BAD_AUTH`, and so did the next firstboot's eviction pass
+     ([factory-reset.md](../installer/factory-reset.md)); only `TPM2_Clear`
+     recovered the node. firstboot and platformd now resolve one SO PIN, and
+     a mismatch surfaces as `tpmowner.OwnerAuthRejectedError` naming the
+     owner hierarchy, not a bare `TPM_RC_BAD_AUTH` from a later command.
+   - **First start on an unowned TPM (owner bit clear)** — a TPM firstboot
+     did not provision, or one that was cleared, has empty owner auth.
+     platformd creates the SRK under that empty auth, then
+     `TPM2_HierarchyChangeAuth` sets the owner auth to the SO PIN, which sets
+     `ownerAuthSet`.
    - **Every later start (owner bit set)** — the SO PIN is presented. It is
      checked first with an owner-authorized `TPM2_CreatePrimary` (Part 3
      §24.1); a wrong SO PIN fails with `tpmowner.OwnerAuthRejectedError`, naming the
@@ -161,6 +191,17 @@ downgrade is invisible in every downstream artefact.
      clear. A refused clear leaves both as they were. Without it the next
      `CreateSRK`, `CreateEK` or `Provision` fails with `TPM_RC_BAD_AUTH` until
      the daemon restarts.
+   - **Known gap: the handoff is on tmpfs.** `/run/platform/firstboot-handoff`
+     does not survive a reboot. If the node reboots after firstboot took
+     ownership with a generated SO PIN and before platformd's first start
+     stored it, the PIN is lost: platformd's kms path is empty and the owner
+     auth is unknown. Recovery is `TPM2_Clear` (a firstboot run with
+     `factory-reset-on-firstboot: true`, or the PPI clear of item 7).
+   - **Known gap: `--raw-so-pin` against a firstboot-owned TPM.** firstboot
+     reads `platform.so-pin` from the platform config file only. A platformd
+     started with `--raw-so-pin` presents that value instead, so on a TPM
+     firstboot owned it fails with `tpmowner.OwnerAuthRejectedError` unless
+     the flag carries the same PIN as the configuration.
 6. **SRK policy drift is detected, not ignored.** `InitTPM` compares the stored
    `srkAttrs.TPMAttributes.Public.AuthPolicy.Buffer` against the live
    `PlatformPolicyDigest`; a mismatch triggers re-provisioning, because

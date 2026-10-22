@@ -91,6 +91,20 @@ func (e *TPMOwnershipError) Error() string {
 // Unwrap returns the underlying cause.
 func (e *TPMOwnershipError) Unwrap() error { return e.Cause }
 
+// OwnerAuthReleaseError is returned when TPM2_HierarchyChangeAuth fails to
+// return a proven owner auth to empty before the keys are recreated.
+type OwnerAuthReleaseError struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e *OwnerAuthReleaseError) Error() string {
+	return fmt.Sprintf("tpmowner: failed to return the TPM owner hierarchy auth to empty: %v", e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e *OwnerAuthReleaseError) Unwrap() error { return e.Cause }
+
 // Module is the part of the SDK TPM ownership needs. The quicbaas
 // sdk/go/xkms TrustedPlatformModule satisfies it.
 type Module interface {
@@ -180,26 +194,32 @@ func presentOwnerAuth(cfg *xkmssdk.TPMConfig, soPIN xkmssdk.Password) {
 	cfg.SSRK.HierarchyAuth = string(soPIN.Bytes())
 }
 
-// Establish leaves the TPM owned by the SO PIN: on an unowned TPM it takes
-// ownership, on an owned one it proves the SO PIN is the owner auth, so a
-// wrong SO PIN fails with OwnerAuthRejectedError. It reports whether it took
-// ownership. Callers that must create owner-hierarchy keys between the check
-// and the change (platformd) use ReadHierarchyAuthState, VerifyOwnerAuth and
-// TakeOwnership directly.
-func Establish(tpm Module, soPIN xkmssdk.Password) (bool, error) {
+// Prepare readies the owner hierarchy for a caller that creates the
+// owner-hierarchy keys under the empty auth and takes ownership after, as
+// firstboot does. On an unowned TPM it changes nothing. On a TPM already
+// owned it proves the SO PIN, so a wrong one fails with
+// OwnerAuthRejectedError and the TPM is left as it was, then returns the
+// owner auth to empty with TPM2_HierarchyChangeAuth (TPM 2.0 Part 3 §24.8):
+// the keys are recreated exactly as on a fresh TPM, and no owner auth reaches
+// a key-creation command. The endorsement and lockout auth are left as they
+// are.
+func Prepare(tpm Module, soPIN xkmssdk.Password) error {
 	state, err := ReadHierarchyAuthState(tpm.Transport())
 	if err != nil {
-		return false, err
+		return err
 	}
-	if state.OwnerAuthSet {
-		if err := VerifyOwnerAuth(tpm.Transport(), soPIN); err != nil {
-			return false, err
-		}
-		presentOwnerAuth(tpm.Config(), soPIN)
-		return false, nil
+	if !state.OwnerAuthSet {
+		return nil
 	}
-	if err := TakeOwnership(tpm, soPIN); err != nil {
-		return false, err
+	if err := VerifyOwnerAuth(tpm.Transport(), soPIN); err != nil {
+		return err
 	}
-	return true, nil
+	owner := libtpm2.TPMRHOwner
+	if err := tpm.SetHierarchyAuth(soPIN, nil, &owner); err != nil {
+		return &OwnerAuthReleaseError{Cause: err}
+	}
+	if cfg := tpm.Config(); cfg.SSRK != nil {
+		cfg.SSRK.HierarchyAuth = ""
+	}
+	return nil
 }

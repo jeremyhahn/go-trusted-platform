@@ -1714,15 +1714,7 @@ func loadTPMConfig(logger *logging.Logger) (*xkmssdk.TPMConfig, error) {
 		return loadedTPMConfig, nil
 	}
 
-	configPaths := []string{
-		"/mnt/installer/etc/trusted-platform/config.yaml",
-		"/etc/trusted-platform/config.yaml",
-		"/etc/trusted-platform/platformd.yaml",
-		"/boot/efi/configs/platformd.yaml",
-		"/media/cdrom/configs/platformd.yaml",
-	}
-
-	for _, configPath := range configPaths {
+	for _, configPath := range platformConfigPaths {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			continue

@@ -297,10 +297,8 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
 ```
 
 **First provision, the EK and recovery.** This is the
-contract; the implementation is tracked by #951, and until it lands the code
-still behaves as the superseded text in
-[docs/bootstrap/architecture.md](../bootstrap/architecture.md) (rejected
-designs) and [factory-reset.md](factory-reset.md) (Phase B) describes.
+contract. The SO PIN bullet is implemented ([TPM
+engineering](../tpm/engineering.md) §4 item 5); the rest is tracked by #951.
 
 - **First provision.** A fresh TPM with a valid EK and no sealed object on the
   ESP (no `seal-platform.pub`) is first provision: firstboot provisions the TPM
@@ -317,7 +315,10 @@ designs) and [factory-reset.md](factory-reset.md) (Phase B) describes.
   `platformd` over the firstboot tmpfs handoff
   (`/run/platform/firstboot-handoff/`), at the kms path the config names for it
   (`platform.so-pin`, [docs/device-templates.md](../device-templates.md)
-  "Platform PINs"). The hierarchy auth is no longer left empty.
+  "Platform PINs"). The hierarchy auth is no longer left empty. The keys are
+  created under the empty owner auth and ownership is taken last, so no
+  device leaves firstboot with an empty owner auth; a TPM a previous install
+  owned is re-provisioned only after the configured SO PIN is proven.
 
 A diskless node takes neither path. Its signed command line carries
 `platform_boot_model=diskless` and no `root=` or `rd.luks.*`, so the dracut

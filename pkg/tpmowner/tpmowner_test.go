@@ -21,13 +21,21 @@ var errInjectedTPMFault = errors.New("injected TPM transport fault")
 type faultTPM struct {
 	tpm    transport.TPM
 	failCC libtpm2.TPMCC
+	// loseResponse delivers failCC to the TPM and fails only the response,
+	// as a transport that drops the reply does.
+	loseResponse bool
 }
 
 func (f *faultTPM) Send(cmd []byte) ([]byte, error) {
-	if libtpm2.TPMCC(binary.BigEndian.Uint32(cmd[6:10])) == f.failCC {
-		return nil, errInjectedTPMFault
+	if libtpm2.TPMCC(binary.BigEndian.Uint32(cmd[6:10])) != f.failCC {
+		return f.tpm.Send(cmd)
 	}
-	return f.tpm.Send(cmd)
+	if f.loseResponse {
+		if _, err := f.tpm.Send(cmd); err != nil {
+			return nil, err
+		}
+	}
+	return nil, errInjectedTPMFault
 }
 
 // simModule is the Module surface over a TPM transport: SetHierarchyAuth is
@@ -42,13 +50,16 @@ func (m *simModule) Transport() transport.TPM   { return m.tpm }
 func (m *simModule) Config() *xkmssdk.TPMConfig { return m.cfg }
 
 func (m *simModule) SetHierarchyAuth(oldSecret, newSecret xkmssdk.Password, hierarchy *libtpm2.TPMHandle) error {
-	var oldAuth []byte
+	var oldAuth, newAuth []byte
 	if oldSecret != nil {
 		oldAuth = oldSecret.Bytes()
 	}
+	if newSecret != nil {
+		newAuth = newSecret.Bytes()
+	}
 	_, err := libtpm2.HierarchyChangeAuth{
 		AuthHandle: libtpm2.AuthHandle{Handle: *hierarchy, Auth: libtpm2.PasswordAuth(oldAuth)},
-		NewAuth:    libtpm2.TPM2BAuth{Buffer: newSecret.Bytes()},
+		NewAuth:    libtpm2.TPM2BAuth{Buffer: newAuth},
 	}.Execute(m.tpm)
 	return err
 }
@@ -116,6 +127,36 @@ func TestVerifyOwnerAuth_TransportFault(t *testing.T) {
 	require.False(t, errors.As(err, &rejected))
 }
 
+// A FlushContext whose response is lost is a probe failure, not a rejected
+// SO PIN, and the probe key it created is still flushed from the TPM.
+func TestVerifyOwnerAuth_FlushFault(t *testing.T) {
+	tpm := newSimTPM(t)
+	require.NoError(t, TakeOwnership(newModule(tpm), password(t, testSOPIN)))
+
+	err := VerifyOwnerAuth(&faultTPM{tpm: tpm, failCC: libtpm2.TPMCCFlushContext, loseResponse: true}, password(t, testSOPIN))
+	var probeErr *OwnerAuthProbeError
+	require.ErrorAs(t, err, &probeErr)
+	require.ErrorIs(t, err, errInjectedTPMFault)
+	var rejected *OwnerAuthRejectedError
+	require.False(t, errors.As(err, &rejected))
+
+	require.Empty(t, transientHandles(t, tpm))
+}
+
+// transientHandles lists the transient objects loaded in the TPM.
+func transientHandles(t *testing.T, tpm transport.TPM) []libtpm2.TPMHandle {
+	t.Helper()
+	rsp, err := libtpm2.GetCapability{
+		Capability:    libtpm2.TPMCapHandles,
+		Property:      uint32(libtpm2.TPMHTTransient) << 24,
+		PropertyCount: 8,
+	}.Execute(tpm)
+	require.NoError(t, err)
+	handles, err := rsp.CapabilityData.Data.Handles()
+	require.NoError(t, err)
+	return handles.Handle
+}
+
 // TakeOwnership changes the owner auth only, and presents it through the
 // config.
 func TestTakeOwnership_OwnerOnly(t *testing.T) {
@@ -141,58 +182,80 @@ func TestTakeOwnership_ChangeAuthFault(t *testing.T) {
 	require.Nil(t, m.cfg.SSRK, "a failed change presents no owner auth")
 }
 
-// On a fresh TPM, Establish takes ownership: the TPM leaves with the SO PIN
-// as owner auth.
-func TestEstablish_FreshTPM(t *testing.T) {
-	tpm := newSimTPM(t)
-	took, err := Establish(newModule(tpm), password(t, testSOPIN))
-	require.NoError(t, err)
-	require.True(t, took)
+// createOwnerKey creates and flushes a primary key under the empty owner
+// auth, as Install and the Platform KeyStore do; it fails on an owned TPM.
+func createOwnerKey(tpm transport.TPM) error {
+	rsp, err := libtpm2.CreatePrimary{
+		PrimaryHandle: libtpm2.AuthHandle{Handle: libtpm2.TPMRHOwner, Auth: libtpm2.PasswordAuth(nil)},
+		InPublic:      libtpm2.New2B(libtpm2.ECCSRKTemplate),
+	}.Execute(tpm)
+	if err != nil {
+		return err
+	}
+	_, err = libtpm2.FlushContext{FlushHandle: rsp.ObjectHandle}.Execute(tpm)
+	return err
+}
 
+// On a fresh TPM, Prepare changes nothing; keys created next under the empty
+// auth, then TakeOwnership, leave the TPM owned by the SO PIN.
+func TestPrepare_FreshTPM(t *testing.T) {
+	tpm := newSimTPM(t)
+	m := newModule(tpm)
+	require.NoError(t, Prepare(m, password(t, testSOPIN)))
+	require.False(t, authState(t, tpm).OwnerAuthSet)
+	require.NoError(t, createOwnerKey(tpm))
+
+	require.NoError(t, TakeOwnership(m, password(t, testSOPIN)))
 	state := authState(t, tpm)
 	require.True(t, state.OwnerAuthSet)
 	require.False(t, state.EndorsementAuthSet)
 	require.NoError(t, VerifyOwnerAuth(tpm, password(t, testSOPIN)))
 }
 
-// On a TPM already owned by the SO PIN, Establish proves the PIN and
-// presents it without changing the TPM.
-func TestEstablish_AlreadyOwned(t *testing.T) {
+// On a TPM already owned by the SO PIN, Prepare proves the PIN and returns
+// the owner auth to empty, so the keys are recreated as on a fresh TPM and
+// ownership is taken again with the same PIN.
+func TestPrepare_AlreadyOwned(t *testing.T) {
 	tpm := newSimTPM(t)
-	require.NoError(t, TakeOwnership(newModule(tpm), password(t, testSOPIN)))
-
 	m := newModule(tpm)
-	took, err := Establish(m, password(t, testSOPIN))
-	require.NoError(t, err)
-	require.False(t, took)
-	require.Equal(t, testSOPIN, m.cfg.SSRK.HierarchyAuth)
+	require.NoError(t, TakeOwnership(m, password(t, testSOPIN)))
+	require.Error(t, createOwnerKey(tpm), "an owned TPM refuses the empty owner auth")
+
+	require.NoError(t, Prepare(m, password(t, testSOPIN)))
+	require.False(t, authState(t, tpm).OwnerAuthSet)
+	require.Empty(t, m.cfg.SSRK.HierarchyAuth, "the released owner auth is presented as empty")
+	require.NoError(t, createOwnerKey(tpm))
+
+	require.NoError(t, TakeOwnership(m, password(t, testSOPIN)))
+	require.NoError(t, VerifyOwnerAuth(tpm, password(t, testSOPIN)))
 }
 
-func TestEstablish_AlreadyOwnedWrongPIN(t *testing.T) {
+// A wrong SO PIN on an owned TPM is refused and the TPM keeps its owner.
+func TestPrepare_AlreadyOwnedWrongPIN(t *testing.T) {
 	tpm := newSimTPM(t)
 	require.NoError(t, TakeOwnership(newModule(tpm), password(t, testSOPIN)))
 
-	m := newModule(tpm)
-	took, err := Establish(m, password(t, "654321"))
+	err := Prepare(newModule(tpm), password(t, "654321"))
 	var rejected *OwnerAuthRejectedError
 	require.ErrorAs(t, err, &rejected)
-	require.False(t, took)
-	require.Nil(t, m.cfg.SSRK, "a rejected SO PIN is not presented")
+	require.True(t, authState(t, tpm).OwnerAuthSet)
+	require.NoError(t, VerifyOwnerAuth(tpm, password(t, testSOPIN)))
 }
 
-func TestEstablish_ReadFault(t *testing.T) {
-	tpm := newSimTPM(t)
-	took, err := Establish(newModule(&faultTPM{tpm: tpm, failCC: libtpm2.TPMCCGetCapability}), password(t, testSOPIN))
+func TestPrepare_ReadFault(t *testing.T) {
+	err := Prepare(newModule(&faultTPM{tpm: newSimTPM(t), failCC: libtpm2.TPMCCGetCapability}), password(t, testSOPIN))
 	var readErr *TPMPermanentReadError
 	require.ErrorAs(t, err, &readErr)
-	require.False(t, took)
-	require.False(t, authState(t, tpm).OwnerAuthSet, "an unknown state takes no ownership")
 }
 
-func TestEstablish_ChangeAuthFault(t *testing.T) {
+// A failed release is an OwnerAuthReleaseError and leaves the TPM owned.
+func TestPrepare_ReleaseFault(t *testing.T) {
 	tpm := newSimTPM(t)
-	took, err := Establish(newModule(&faultTPM{tpm: tpm, failCC: libtpm2.TPMCCHierarchyChanegAuth}), password(t, testSOPIN))
-	var ownership *TPMOwnershipError
-	require.ErrorAs(t, err, &ownership)
-	require.False(t, took)
+	require.NoError(t, TakeOwnership(newModule(tpm), password(t, testSOPIN)))
+
+	err := Prepare(newModule(&faultTPM{tpm: tpm, failCC: libtpm2.TPMCCHierarchyChanegAuth}), password(t, testSOPIN))
+	var release *OwnerAuthReleaseError
+	require.ErrorAs(t, err, &release)
+	require.ErrorIs(t, err, errInjectedTPMFault)
+	require.True(t, authState(t, tpm).OwnerAuthSet)
 }
