@@ -184,8 +184,8 @@ declare -A TARGET_NO_DAEMON=(
 # is out of the default set: platformd builds its PXE service with no
 # backend, so every PXE call answers SERVICE_NOT_CONFIGURED. bootstrap stays
 # runnable by name but is out of the default set too: its DANE tests need TLSA
-# records for _8443._tcp.localhost., and the shared platformd publishes none
-# (DANE off, no zone holds localhost.; its one webservice listener is on 8444).
+# records for _8443._tcp.localhost., and the shared daemon-only platformd
+# publishes none (no webservices, DANE off, no zone holds localhost.).
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
@@ -253,11 +253,6 @@ PLATFORMD_REST_PORT="8443"
 PLATFORMD_GRPC_PORT="10443"
 PLATFORMD_QUIC_PORT="9444"
 PLATFORMD_MCP_PORT="9445"
-# The harness webservice listener's TLS port. platformd reads it from the
-# config file (test/integration/config.yaml webservices[0].tls-port), not a
-# serve flag, so it is written there too; endpoints_test.go asserts the two
-# agree.
-PLATFORMD_WEBSERVICE_TLS_PORT="8444"
 
 # OVS bridge name used by the integration test config (sdn.ovs.bridge).
 # Platformd reads this from test/integration/config.yaml; the bridge is
@@ -960,9 +955,34 @@ start_platformd() {
     done
 
     echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
-    echo "platformd logs:"
-    tail -50 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
+    report_platformd_startup_failure
     return 1
+}
+
+# report_platformd_startup_failure says why platformd is not serving: its exit
+# status (or that it is still running), appended to PLATFORMD_STARTUP_LOG so
+# the log carries it, then the tail of the startup and application logs. A
+# missing log is reported as missing rather than printed as nothing.
+report_platformd_startup_failure() {
+    local app_log="/tmp/platformd-integration/log/trusted-platform.log"
+    local status_line
+    if kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        status_line="platformd (PID ${PLATFORMD_PID}) is still running without its socket"
+    else
+        wait "$PLATFORMD_PID"
+        status_line="platformd (PID ${PLATFORMD_PID}) exited with status $?"
+    fi
+    echo "${status_line}"
+    echo "${status_line}" >> "${PLATFORMD_STARTUP_LOG}"
+
+    echo "=== platformd startup log (${PLATFORMD_STARTUP_LOG}, stdout/stderr) ==="
+    tail -50 "${PLATFORMD_STARTUP_LOG}"
+    echo "=== platformd app log (${app_log}) ==="
+    if [ -f "${app_log}" ]; then
+        tail -50 "${app_log}"
+    else
+        echo "(missing)"
+    fi
 }
 
 # abort_no_daemon ends the run when platformd did not come up.
@@ -1059,10 +1079,6 @@ setup_env_vars() {
     export ATTESTATION_MCP_ENDPOINT="https://localhost:${PLATFORMD_MCP_PORT}"
     export PLATFORM_MCP_PATH="/tmp/platformd"
 
-    # The webservice router (gatewayd-facing routes such as
-    # POST /api/v1/gateway/telemetry), not served by the daemon REST port.
-    export PLATFORM_WEBSERVICE_ENDPOINT="https://localhost:${PLATFORMD_WEBSERVICE_TLS_PORT}"
-
     # CLI binary path
     export PLATFORMCTL_BINARY="/tmp/platformctl"
     export PLATFORMCTL_PATH="/tmp/platformctl"
@@ -1086,7 +1102,6 @@ setup_env_vars() {
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"
     echo "  PLATFORM_MCP_ENDPOINT=$PLATFORM_MCP_ENDPOINT"
-    echo "  PLATFORM_WEBSERVICE_ENDPOINT=$PLATFORM_WEBSERVICE_ENDPOINT"
     echo "  PLATFORMCTL_PATH=$PLATFORMCTL_PATH"
     echo "  TENANT_SOCKET_PATH=$TENANT_SOCKET_PATH"
     echo "  IAM_SOCKET_PATH=$IAM_SOCKET_PATH"

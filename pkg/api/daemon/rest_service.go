@@ -39,6 +39,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -377,6 +378,22 @@ func (s *RESTServer) SetVPNHandlers(server platformv1.VPNServiceServer, guard *r
 	handlers := restapi.NewVPNHandlers(server, guard, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("VPN REST routes registered")
+}
+
+// SetGatewayControlPlane mounts the gatewayd-facing control-plane routes
+// (POST /api/v1/gateway/telemetry, GET /api/v1/gateway/desired-config/{id},
+// PUT and DELETE /api/v1/gateway/vpn-leases/...) on the daemon REST server,
+// so a control plane without a webservice listener still takes its gateways'
+// reports (docs/gateway/api.md). Each route authenticates the gateway by its
+// verified mTLS client certificate, as on the webservice router; the operator
+// /gateway/state surface is not mounted here. A nil control plane leaves the
+// routes unmounted.
+func (s *RESTServer) SetGatewayControlPlane(cp *restgateway.ControlPlane) {
+	if cp == nil {
+		return
+	}
+	cp.RegisterGatewayFacingRoutes(s.router.PathPrefix(restBasePath).Subrouter())
+	s.logger.Info("Gateway control-plane REST routes registered")
 }
 
 // SetAppServiceHandlers wires the Cache, Scheduler and Messaging REST

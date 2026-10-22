@@ -337,6 +337,18 @@ consumed by gateways:
 | PUT | `/api/v1/gateway/vpn-leases/{id}` | Gateway records a management VPN lease it admitted or renewed ([docs/vpn/api.md](../vpn/api.md) §6) | `{id}` **must equal** the client certificate CN |
 | DELETE | `/api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | Gateway releases a lease it revoked | `{id}` **must equal** the client certificate CN |
 
+**Both REST servers carry the four gatewayd-facing routes.** With a
+`webservices:` listener they are on the webservice router
+(`pkg/webservice/v1/router.go`) beside the operator `state` routes. A
+daemon-only control plane — no `webservices:` section, so the daemon's own
+REST server on 8443 is the REST listener — mounts the same four on that server
+(`RESTServer.SetGatewayControlPlane`, wired by `wireGatewayControlPlane` in
+`pkg/daemon/commands/gateway_control_init.go`), backed by the same telemetry
+store and desired-configuration source. The operator `state` routes are not
+mounted there; the snapshot is read through `GetGatewaySnapshot` on every
+transport (§2). The certificate binding below is the same handler code on
+both.
+
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
 

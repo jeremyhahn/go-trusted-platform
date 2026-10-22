@@ -323,10 +323,9 @@ func TestGatewayOverlayAdmittedVTEPMultiProtocol(t *testing.T) {
 }
 
 // seedGatewayOverlayTelemetry posts a telemetry snapshot the way a gateway
-// does. The route lives on the control plane's webservice router
-// (docs/gateway/api.md), not the daemon REST server, so it goes to the
-// harness webservice listener; the client certificate's name is the gateway
-// ID the handler attributes the snapshot to.
+// does. The daemon REST server mounts the gatewayd-facing routes
+// (docs/gateway/api.md); the client certificate's name is the gateway ID the
+// handler attributes the snapshot to.
 func seedGatewayOverlayTelemetry(t *testing.T, ctx context.Context, gatewayID string, vteps []gwstate.AdmittedVTEPState) {
 	t.Helper()
 
@@ -336,7 +335,7 @@ func seedGatewayOverlayTelemetry(t *testing.T, ctx context.Context, gatewayID st
 		t.Fatalf("marshal gateway overlay telemetry: %v", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.GetWebServiceEndpoint()+"/api/v1/gateway/telemetry", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.GetRESTEndpoint()+"/api/v1/gateway/telemetry", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build gateway telemetry request: %v", err)
 	}

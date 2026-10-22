@@ -385,7 +385,7 @@ Kept out of the runner, or out of its default set:
 | Directory | Why | How it runs |
 |-----------|-----|-------------|
 | `pxe` | platformd constructs its PXE service with a nil backend (`pkg/api/daemon/daemon.go:979`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
-| `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has DANE off, and its one webservice listens on 8444, not 8443. Even with DANE on, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
+| `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
 | `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` key's `./test/integration/sdn/...`; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
@@ -446,7 +446,6 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_QUIC_ENDPOINT` | `localhost:9444` | QUIC protocol endpoint |
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
-| `PLATFORM_WEBSERVICE_ENDPOINT` | `https://localhost:8444` | The harness webservice listener (`config.yaml` `webservices:`): the webservice router, including the gatewayd-facing `POST /api/v1/gateway/telemetry` the daemon REST server does not serve |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
 | `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
 | `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
@@ -475,12 +474,6 @@ the suites cannot drift apart: to move a port, change that one variable.
 `TestRunnerExportsEveryEndpointFromThePortItGivesPlatformd`, part of the unit
 suite, fails if a flag goes back to a literal port or if an endpoint the helpers
 read is no longer exported from the same variable (#502).
-
-The webservice listener is the one exception: platformd takes its port from
-`config.yaml` (`webservices[0].tls-port`), not a serve flag, so it is written
-twice, in the config and in `PLATFORMD_WEBSERVICE_TLS_PORT`.
-`TestRunnerExportsTheWebServiceEndpointTheConfigListensOn` fails if the two
-disagree or if `PLATFORM_WEBSERVICE_ENDPOINT` is not built from the variable.
 
 ### Running in DevContainer
 
