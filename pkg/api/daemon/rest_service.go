@@ -590,7 +590,7 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). These share the same CA instance as the CA handlers so
 	// certificate issuance goes through the live platform CA.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger).WithScopeGuard(guard)
 	s.mountOwnedAbsolute(authFactorHandlers.RegisterRoutes)
 	s.logger.Info("Auth factor REST routes registered")
 }

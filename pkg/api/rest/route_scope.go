@@ -171,6 +171,28 @@ func (g *ScopeGuard) loggerOrDefault() *slog.Logger {
 	return g.logger
 }
 
+// callerContextKey keys the principal a front end serving a daemon route in
+// the same process has already authenticated.
+type callerContextKey struct{}
+
+// WithCaller returns a copy of ctx carrying caller: the principal the
+// webservice authenticated by its own session before it replays a daemon
+// route in-process. A context value cannot cross the wire, so only code in
+// this process can set it.
+func WithCaller(ctx context.Context, caller *platformtoken.AuthorizedContext) context.Context {
+	return context.WithValue(ctx, callerContextKey{}, caller)
+}
+
+// caller returns the principal r acts as: the one a replaying front end put
+// in the context, else the one the bearer token or verified client
+// certificate authenticates on this listener.
+func (g *ScopeGuard) caller(r *http.Request) (*platformtoken.AuthorizedContext, error) {
+	if caller, ok := r.Context().Value(callerContextKey{}).(*platformtoken.AuthorizedContext); ok && caller != nil {
+		return caller, nil
+	}
+	return g.authenticate(r)
+}
+
 // writeGuardError writes the standard REST error envelope for a refusal.
 func writeGuardError(w http.ResponseWriter, logger *slog.Logger, statusCode int, err error) {
 	logger.Warn("REST request refused", "error", err, "http_status", statusCode)

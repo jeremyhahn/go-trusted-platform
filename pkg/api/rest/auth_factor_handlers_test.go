@@ -24,6 +24,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -35,9 +36,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // =============================================================================
@@ -293,18 +297,49 @@ func TestMTLSProbe_WithCert_NoCA_Returns204(t *testing.T) {
 // Gap 3 — cert issuance from CSR tests
 // =============================================================================
 
-func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+// certPrincipals authenticates a verified client certificate as the principal
+// its CN names, holding the roles mapped to that CN: the role comes from the
+// principal store, never from the certificate's subject.
+type certPrincipals map[string][]string
 
-	csrPEM := generateAuthTestCSRPEM(t, "user-abc")
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/user-abc/factors/mtls/issue-cert",
-		bytes.NewReader(body))
+func (p certPrincipals) AuthenticatePeer(_ context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	cn := chain[0].Subject.CommonName
+	return &platformtoken.AuthorizedContext{Subject: cn, Username: cn, Roles: p[cn]}, nil
+}
+
+// guardedHandlerWithCA is newHandlerWithCA with a guard that authenticates
+// verified client certificates through principals.
+func guardedHandlerWithCA(ca authCA, principals certPrincipals) *AuthFactorHandlers {
+	return newHandlerWithCA(ca).WithScopeGuard(NewScopeGuard(nil, principals, nil))
+}
+
+// issueCertRequest builds an issue-cert request for userID carrying a CSR
+// whose CN is csrCN, presented over a verified client certificate when
+// caller is not nil.
+func issueCertRequest(t *testing.T, userID, csrCN string, caller *x509.Certificate) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t, csrCN)})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+userID+"/factors/mtls/issue-cert", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if caller != nil {
+		req.TLS = &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{caller},
+			VerifiedChains:   [][]*x509.Certificate{{caller}},
+		}
+	}
+	return req
+}
+
+func serveIssueCert(h *AuthFactorHandlers, req *http.Request) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	registerRoutes(h).ServeHTTP(rr, req)
+	return rr
+}
+
+func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
+	h := guardedHandlerWithCA(newAuthTestCA(t), nil)
+	rr := serveIssueCert(h, issueCertRequest(t, "user-abc", "user-abc", selfSignedClientCert(t, "user-abc")))
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	var resp IssueMTLSCertResponse
@@ -314,86 +349,70 @@ func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
 }
 
 func TestIssueCert_InvalidCSR_Returns400(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
-
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: "not-a-valid-pem"})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/user-abc/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	req := issueCertRequest(t, "user-abc", "user-abc", selfSignedClientCert(t, "user-abc"))
+	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: "not-a-valid-pem"})
+	require.NoError(t, err)
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	rr := serveIssueCert(guardedHandlerWithCA(newAuthTestCA(t), nil), req)
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestIssueCert_MissingCSRPEM_Returns400(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
-
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: ""})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/user-abc/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	req := issueCertRequest(t, "user-abc", "user-abc", selfSignedClientCert(t, "user-abc"))
+	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: ""})
+	require.NoError(t, err)
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	rr := serveIssueCert(guardedHandlerWithCA(newAuthTestCA(t), nil), req)
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestIssueCert_NoCAService_Returns503(t *testing.T) {
-	router := registerRoutes(NewAuthFactorHandlers(nil, nil))
-
-	csrPEM := generateAuthTestCSRPEM(t, "user-abc")
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/user-abc/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	rr := serveIssueCert(NewAuthFactorHandlers(nil, nil), issueCertRequest(t, "user-abc", "user-abc", nil))
 
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
+// Without a guard the handler cannot tell a user from an admin, so it issues
+// nothing, not even the caller's own certificate.
+func TestIssueCert_NoGuard_Refuses(t *testing.T) {
+	rr := serveIssueCert(newHandlerWithCA(newAuthTestCA(t)), issueCertRequest(t, "alice", "alice", selfSignedClientCert(t, "alice")))
+
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrCallerGuardNotConfigured{}.Error())
+}
+
+// A request the guard cannot authenticate is refused before the CSR is read.
+func TestIssueCert_UnauthenticatedCaller_Returns401(t *testing.T) {
+	rr := serveIssueCert(guardedHandlerWithCA(newAuthTestCA(t), nil), issueCertRequest(t, "alice", "alice", nil))
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
 func TestIssueCert_NonAdminOtherUser_Returns403(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
-
-	csrPEM := generateAuthTestCSRPEM(t, "other-user")
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/other-user/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	// Present a client cert whose CN is "regular-user" (not "other-user" and not "admin").
-	leafCert := selfSignedClientCert(t, "regular-user")
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leafCert}}
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	h := guardedHandlerWithCA(newAuthTestCA(t), nil)
+	rr := serveIssueCert(h, issueCertRequest(t, "other-user", "other-user", selfSignedClientCert(t, "regular-user")))
 
 	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrForbiddenUserID{}.Error())
+}
+
+// A certificate whose CN starts with "admin", or whose OU is admin, makes its
+// holder nobody's admin: the platform anchor issues users' certificates, and
+// only the principal's role grants admin.
+func TestIssueCert_AdminNamedCertWithoutRole_Returns403(t *testing.T) {
+	h := guardedHandlerWithCA(newAuthTestCA(t), nil)
+	adminX := selfSignedClientCertWithSubject(t, pkix.Name{CommonName: "admin-x", OrganizationalUnit: []string{"admin"}})
+	rr := serveIssueCert(h, issueCertRequest(t, "bob", "bob", adminX))
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrForbiddenUserID{}.Error())
 }
 
 func TestIssueCert_SameUserAsCaller_Succeeds(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
-
-	csrPEM := generateAuthTestCSRPEM(t, "alice")
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/alice/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	// Client cert CN matches the URL {id}.
-	leafCert := selfSignedClientCert(t, "alice")
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leafCert}}
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	h := guardedHandlerWithCA(newAuthTestCA(t), nil)
+	rr := serveIssueCert(h, issueCertRequest(t, "alice", "alice", selfSignedClientCert(t, "alice")))
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 }
@@ -401,40 +420,44 @@ func TestIssueCert_SameUserAsCaller_Succeeds(t *testing.T) {
 // A caller may not have the platform CA sign a CSR that names someone else:
 // alice asking for a certificate whose CN is bob is refused before signing.
 func TestIssueCert_CSRNamesAnotherUser_Returns403(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
-
-	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t, "bob")})
-	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/alice/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{selfSignedClientCert(t, "alice")}}
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+	h := guardedHandlerWithCA(newAuthTestCA(t), nil)
+	rr := serveIssueCert(h, issueCertRequest(t, "alice", "bob", selfSignedClientCert(t, "alice")))
 
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 	assert.Contains(t, rr.Body.String(), ErrCSRNotBoundToUser{Field: "CN", Value: "bob"}.Error())
 }
 
-// An admin caller issues a user's certificate when the CSR names that user.
-func TestIssueCert_AdminForBoundUser_Succeeds(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
-
-	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t, "bob")})
-	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/bob/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	admin := selfSignedClientCertWithSubject(t, pkix.Name{CommonName: "ops", OrganizationalUnit: []string{"admin"}})
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{admin}}
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+// A principal holding the admin role issues another user's certificate when
+// the CSR names that user, whatever its certificate's subject says.
+func TestIssueCert_AdminRoleForBoundUser_Succeeds(t *testing.T) {
+	h := guardedHandlerWithCA(newAuthTestCA(t), certPrincipals{"ops": {common.ROLE_ADMIN}})
+	rr := serveIssueCert(h, issueCertRequest(t, "bob", "bob", selfSignedClientCert(t, "ops")))
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
+}
+
+// On the webservice replay the caller is the session principal the
+// webservice publishes, not the certificate on the connection: its admin role
+// admits issuing for another user, and without the role it is refused.
+func TestIssueCert_ReplayedCaller(t *testing.T) {
+	cases := []struct {
+		name  string
+		roles []string
+		want  int
+	}{
+		{"admin session", []string{common.ROLE_ADMIN}, http.StatusCreated},
+		{"user session", []string{"user"}, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := guardedHandlerWithCA(newAuthTestCA(t), nil)
+			req := issueCertRequest(t, "bob", "bob", selfSignedClientCert(t, "alice"))
+			req = req.WithContext(WithCaller(req.Context(), &platformtoken.AuthorizedContext{Subject: "u-ops", Username: "ops", Roles: tc.roles}))
+			rr := serveIssueCert(h, req)
+
+			assert.Equal(t, tc.want, rr.Code)
+		})
+	}
 }
 
 func TestCSRBoundToUser(t *testing.T) {

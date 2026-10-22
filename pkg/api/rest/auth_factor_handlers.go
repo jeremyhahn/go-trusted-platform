@@ -28,6 +28,8 @@ import (
 
 	"github.com/gorilla/mux"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // authCA is the minimal interface required from the CA by AuthFactorHandlers.
@@ -95,6 +97,14 @@ type ErrForbiddenUserID struct{}
 
 func (e ErrForbiddenUserID) Error() string {
 	return "forbidden: caller may not act on behalf of this user"
+}
+
+// ErrCallerGuardNotConfigured is returned when issue-cert has no ScopeGuard to
+// authenticate its caller with, so it cannot tell a user from an admin.
+type ErrCallerGuardNotConfigured struct{}
+
+func (e ErrCallerGuardNotConfigured) Error() string {
+	return "caller authentication is not configured for certificate issuance"
 }
 
 // ErrCSRNotBoundToUser is returned when an issue-cert CSR names a principal or
@@ -242,7 +252,7 @@ type AuthFactorHandlers struct {
 	logger *slog.Logger
 
 	// guard authenticates the caller whose role decides whether it may have
-	// another user's certificate issued; nil admits no admin.
+	// another user's certificate issued; nil refuses every issue-cert.
 	guard *ScopeGuard
 
 	// aaguid cache — keyed by lowercase UUID string
@@ -274,7 +284,7 @@ func NewAuthFactorHandlers(ca quicbaasca.CACertificateAuthority, logger *slog.Lo
 
 // WithScopeGuard sets the guard that authenticates the caller of the
 // certificate issuance route. A caller it resolves with the admin role may
-// have any user's certificate issued; without a guard only the user may.
+// have any user's certificate issued; without a guard nobody may.
 func (h *AuthFactorHandlers) WithScopeGuard(guard *ScopeGuard) *AuthFactorHandlers {
 	h.guard = guard
 	return h
@@ -385,10 +395,9 @@ func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Requ
 // handleIssueCert handles POST /api/v1/users/{id}/factors/mtls/issue-cert.
 //
 // The handler signs the supplied CSR with the platform CA using a clientAuth
-// EKU profile. Authentication is caller-context: the request is accepted when
-// the caller's mTLS cert subject CN matches the user ID, or when the caller
-// presents an admin certificate. When mTLS is not configured the endpoint
-// accepts any authenticated request (IAM layer upstream is responsible).
+// EKU profile. The request is accepted when the authenticated caller is the
+// user or holds the admin role (authorizeCaller), and the CSR names that user
+// alone (csrBoundToUser).
 func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrAuthServiceNotAvailable{})
@@ -401,9 +410,8 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Authorization check: caller must be the user or admin.
-	if !h.callerAuthorized(r, userID) {
-		h.writeError(w, http.StatusForbidden, ErrForbiddenUserID{})
+	if status, err := h.authorizeCaller(r, userID); err != nil {
+		h.writeError(w, status, err)
 		return
 	}
 
@@ -465,31 +473,25 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// callerAuthorized returns true when the caller is allowed to act on the
-// given userID. The caller is allowed when:
-//   - mTLS is not in use (IAM layer is authoritative), OR
-//   - the client cert CN matches userID, OR
-//   - the client cert has the "admin" OID in its SubjectAltName or CN prefix.
-func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bool {
-	leaf := callerLeaf(r)
-	if leaf == nil {
-		// No mTLS — IAM/JWT layer is authoritative; permit.
-		return true
+// authorizeCaller decides whether the caller may have userID's certificate
+// issued, and returns the status and typed error that refuse it. The caller is
+// the principal the guard authenticates (or the webservice replay publishes):
+// one holding the admin role may issue for any user, anyone else only for
+// themselves. Nothing in the client certificate's subject grants admin: the
+// platform anchor issues the users' certificates too, so a user may hold one
+// whose CN is "admin-x". Without a guard nobody is admitted.
+func (h *AuthFactorHandlers) authorizeCaller(r *http.Request, userID string) (int, error) {
+	if h.guard == nil {
+		return http.StatusServiceUnavailable, ErrCallerGuardNotConfigured{}
 	}
-	cn := leaf.Subject.CommonName
-
-	// Admin prefix or org unit.
-	if strings.HasPrefix(cn, "admin") || strings.EqualFold(cn, "admin") {
-		return true
+	caller, err := h.guard.caller(r)
+	if err != nil {
+		return http.StatusUnauthorized, err
 	}
-	for _, ou := range leaf.Subject.OrganizationalUnit {
-		if strings.EqualFold(ou, "admin") {
-			return true
-		}
+	if caller.HasRole(common.ROLE_ADMIN) || caller.Subject == userID || caller.Username == userID {
+		return http.StatusOK, nil
 	}
-
-	// Caller is the user themselves.
-	return cn == userID
+	return http.StatusForbidden, ErrForbiddenUserID{}
 }
 
 // callerLeaf returns the caller's verified client certificate, or nil when the
