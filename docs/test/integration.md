@@ -808,11 +808,18 @@ calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
 which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
 persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
 certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
-is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
-recognises as initialized and does not take its recovery path, which no
+is written to NV index `0x01C00002`, the RSA 2048 index in the Low Range of
+the TCG EK Credential Profile v2.1 §2.2.1.4. `platformd` therefore opens a TPM
+it recognises as initialized and does not take its recovery path, which no
 shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting
 the daemons on a TPM without an EK.
+
+Both configs set `tpm.ek.cert-handle: 0x01C00002`, so `tpm ek certificate`
+reads that certificate from NV on every transport. Without it go-xkms looks
+only in the platform certificate store and answers NotFound.
+`TestIntegrationConfig_EKCertificateAtHarnessIndex` in `pkg/app` holds both
+configs to the index the provisioning script writes.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any

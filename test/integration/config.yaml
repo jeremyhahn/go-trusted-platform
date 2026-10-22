@@ -151,6 +151,11 @@ tpm:
   ek:
     debug: true
     handle: 0x81010001
+    # swtpm-provision.sh has swtpm_setup write an RSA 2048 EK certificate at
+    # 0x01C00002, the Low Range index of TCG EK Credential Profile v2.1
+    # §2.2.1.4. Without cert-handle go-xkms looks the certificate up in the
+    # platform certificate store and never reads NV.
+    cert-handle: 0x01C00002
     hash: SHA-256
     rsa:
       size: 2048
