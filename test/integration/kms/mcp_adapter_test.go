@@ -16,13 +16,17 @@
 package kms
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
+	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 func TestMCPHashAlgorithm(t *testing.T) {
@@ -58,4 +62,54 @@ func TestMCPKeyStatus(t *testing.T) {
 	assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_DISABLED), mcpKeyStatus(false))
 	assert.NotEqual(t, mcpKeyStatus(true), mcpKeyStatus(false),
 		"enable and disable must send different kms_update_key_status numbers")
+}
+
+func TestMCPSecretStatus(t *testing.T) {
+	assert.Equal(t, baasservice.SecretStatusEnabled, mcpSecretStatus(true))
+	assert.Equal(t, baasservice.SecretStatusDisabled, mcpSecretStatus(false))
+}
+
+func TestMCPSecretVersions(t *testing.T) {
+	created := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	expires := created.Add(time.Hour)
+	resp := &baasservice.ListSecretVersionsResponse{
+		Versions: []*baasservice.SecretVersion{
+			{Version: 1, CreatedAt: created, CreatedBy: "a"},
+			nil,
+			{Version: 2, CreatedAt: created, CreatedBy: "b", ExpiresAt: &expires},
+		},
+		HasMore:    true,
+		NextCursor: "c",
+	}
+
+	result := mcpSecretVersions("n", resp)
+	assert.Equal(t, "n", result.SecretID)
+	require.Len(t, result.Versions, 2, "a nil version is skipped")
+	assert.Equal(t, SecretVersionInfo{Version: 1, CreatedAt: created, CreatedBy: "a"}, result.Versions[0])
+	assert.Equal(t, SecretVersionInfo{Version: 2, CreatedAt: created, CreatedBy: "b", ExpiresAt: expires}, result.Versions[1])
+	assert.True(t, result.HasMore)
+	assert.Equal(t, "c", result.NextCursor)
+}
+
+func TestMCPSecretsRefusesArgumentsTheToolsLack(t *testing.T) {
+	// Both refusals happen before any tool call, so a bare adapter suffices.
+	adapter := &MCPAdapter{}
+	ctx := context.Background()
+	var noSurface surface.ErrNoSurface
+
+	for _, opts := range []SecretsRotateOptions{
+		{Name: "n", NewData: []byte("x"), TenantID: "t"},
+		{Name: "n", NewData: []byte("x"), KeyID: "k"},
+		{Name: "n", NewData: []byte("x"), Algorithm: "AES256_GCM"},
+	} {
+		_, err := adapter.SecretsRotate(ctx, opts)
+		require.True(t, errors.As(err, &noSurface), "want ErrNoSurface, got %v", err)
+		assert.Equal(t, "SecretsRotate", noSurface.Operation)
+		assert.Equal(t, mcpNoSecretRotateKeySelection, noSurface.Reason)
+	}
+
+	_, err := adapter.SecretsVersions(ctx, "n", SecretsVersionsOptions{Cursor: "c"})
+	require.True(t, errors.As(err, &noSurface), "want ErrNoSurface, got %v", err)
+	assert.Equal(t, "SecretsVersions", noSurface.Operation)
+	assert.Equal(t, mcpNoSecretVersionsCursor, noSurface.Reason)
 }

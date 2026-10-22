@@ -384,8 +384,12 @@ const (
 	// mcpTransport names this transport in surface.ErrNoSurface declarations.
 	mcpTransport = "MCP"
 
-	// mcpNoSecretVersionTool explains why secret version operations leave the MCP matrix.
-	mcpNoSecretVersionTool = "the MCP tool registry has no secret rotate, version listing, rollback or status tool (MISSING)"
+	// mcpNoSecretRotateKeySelection explains why a rotation that picks its
+	// tenant, key or algorithm leaves the MCP matrix.
+	mcpNoSecretRotateKeySelection = "the secret_rotate tool has no tenant_id, key_id or algorithm argument (MISSING)"
+	// mcpNoSecretVersionsCursor explains why a paged version listing leaves
+	// the MCP matrix.
+	mcpNoSecretVersionsCursor = "the secret_list_versions tool has a limit but no cursor argument (MISSING)"
 )
 
 // mcpPurposeUsages maps a test key purpose to the usage names
@@ -1322,14 +1326,47 @@ func (m *MCPAdapter) SecretsDelete(ctx context.Context, name string, _ bool) (*S
 	return &SecretsDeleteResult{SecretID: resp.SecretID, Deleted: resp.Success}, nil
 }
 
-// SecretsRotate has no MCP surface.
-func (m *MCPAdapter) SecretsRotate(_ context.Context, _ SecretsRotateOptions) (*SecretsRotateResult, error) {
-	return nil, mcpNoSurface("SecretsRotate", mcpNoSecretVersionTool)
+// SecretsRotate calls secret_rotate. The tool has no tenant, key or
+// algorithm argument, so a rotation that picks one is refused, not dropped.
+func (m *MCPAdapter) SecretsRotate(ctx context.Context, opts SecretsRotateOptions) (*SecretsRotateResult, error) {
+	if opts.TenantID != "" || opts.KeyID != "" || opts.Algorithm != "" {
+		return nil, mcpNoSurface("SecretsRotate", mcpNoSecretRotateKeySelection)
+	}
+	args := map[string]interface{}{
+		"secret_id": opts.Name,
+		"new_data":  encodeBytes(opts.NewData),
+	}
+
+	var resp baasservice.RotateSecretResponse
+	if err := m.callTool(ctx, "secret_rotate", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &SecretsRotateResult{
+		SecretID:   resp.SecretID,
+		OldVersion: resp.OldVersion,
+		NewVersion: resp.NewVersion,
+		Timestamp:  resp.Timestamp,
+	}, nil
 }
 
-// SecretsVersions has no MCP surface.
-func (m *MCPAdapter) SecretsVersions(_ context.Context, _ string, _ SecretsVersionsOptions) (*SecretsVersionsResult, error) {
-	return nil, mcpNoSurface("SecretsVersions", mcpNoSecretVersionTool)
+// SecretsVersions calls secret_list_versions. The tool pages by limit only,
+// so a cursor is refused, not dropped.
+func (m *MCPAdapter) SecretsVersions(ctx context.Context, name string, opts SecretsVersionsOptions) (*SecretsVersionsResult, error) {
+	if opts.Cursor != "" {
+		return nil, mcpNoSurface("SecretsVersions", mcpNoSecretVersionsCursor)
+	}
+	args := map[string]interface{}{"secret_id": name}
+	if opts.Limit > 0 {
+		args["limit"] = opts.Limit
+	}
+
+	var resp baasservice.ListSecretVersionsResponse
+	if err := m.callTool(ctx, "secret_list_versions", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return mcpSecretVersions(name, &resp), nil
 }
 
 // SecretsVersion calls secret_get for one version.
@@ -1351,12 +1388,65 @@ func (m *MCPAdapter) SecretsVersion(ctx context.Context, name string, version ui
 	}, nil
 }
 
-// SecretsRollback has no MCP surface.
-func (m *MCPAdapter) SecretsRollback(_ context.Context, _ string, _ uint64) (*SecretsRollbackResult, error) {
-	return nil, mcpNoSurface("SecretsRollback", mcpNoSecretVersionTool)
+// SecretsRollback calls secret_rollback.
+func (m *MCPAdapter) SecretsRollback(ctx context.Context, name string, targetVersion uint64) (*SecretsRollbackResult, error) {
+	args := map[string]interface{}{"secret_id": name, "target_version": targetVersion}
+
+	var resp baasservice.RollbackSecretResponse
+	if err := m.callTool(ctx, "secret_rollback", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &SecretsRollbackResult{
+		SecretID:   resp.SecretID,
+		NewVersion: resp.NewVersion,
+		Timestamp:  resp.Timestamp,
+	}, nil
 }
 
-// SecretsStatus has no MCP surface.
-func (m *MCPAdapter) SecretsStatus(_ context.Context, _ string, _ bool) (*SecretsStatusResult, error) {
-	return nil, mcpNoSurface("SecretsStatus", mcpNoSecretVersionTool)
+// SecretsStatus calls secret_update_status with enabled or disabled.
+func (m *MCPAdapter) SecretsStatus(ctx context.Context, name string, enabled bool) (*SecretsStatusResult, error) {
+	args := map[string]interface{}{"secret_id": name, "status": string(mcpSecretStatus(enabled))}
+
+	var resp baasservice.UpdateSecretStatusResponse
+	if err := m.callTool(ctx, "secret_update_status", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &SecretsStatusResult{
+		SecretID:  resp.SecretID,
+		Status:    strings.ToUpper(string(resp.NewStatus)),
+		Timestamp: resp.Timestamp,
+	}, nil
+}
+
+// mcpSecretStatus maps the enable flag to the secret_update_status value.
+func mcpSecretStatus(enabled bool) baasservice.SecretStatus {
+	if enabled {
+		return baasservice.SecretStatusEnabled
+	}
+	return baasservice.SecretStatusDisabled
+}
+
+// mcpSecretVersions maps a secret_list_versions result to the shared
+// versions result; the tool lists versions without their data.
+func mcpSecretVersions(name string, resp *baasservice.ListSecretVersionsResponse) *SecretsVersionsResult {
+	versions := make([]SecretVersionInfo, 0, len(resp.Versions))
+	for _, v := range resp.Versions {
+		if v == nil {
+			continue
+		}
+		versions = append(versions, SecretVersionInfo{
+			Version:   v.Version,
+			CreatedAt: v.CreatedAt,
+			CreatedBy: v.CreatedBy,
+			ExpiresAt: mcpTime(v.ExpiresAt),
+		})
+	}
+	return &SecretsVersionsResult{
+		SecretID:   name,
+		Versions:   versions,
+		HasMore:    resp.HasMore,
+		NextCursor: resp.NextCursor,
+	}
 }
