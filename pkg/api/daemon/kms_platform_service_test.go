@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -616,6 +617,32 @@ func TestPlatformKMSBackendListKeys(t *testing.T) {
 		}
 		if resp.Keys[0].KeyID != "key-d" {
 			t.Errorf("unexpected first key: %s", resp.Keys[0].KeyID)
+		}
+	})
+
+	t.Run("pages walk each key once when the sdk order changes", func(t *testing.T) {
+		t.Parallel()
+		listKeys := rotatingKeyOrder(t, "key-a", "key-b", "key-c", "key-d", "key-e")
+		backend := newTestPlatformKMSBackend(&platformMockKMSClient{listKeysFn: listKeys}, &platformMockCryptoClient{})
+
+		var walked []string
+		cursor := ""
+		for {
+			page, err := backend.ListKeys(ctx, &grpcapi.KMSListKeysRequest{Limit: 2, Cursor: cursor})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, k := range page.Keys {
+				walked = append(walked, k.KeyID)
+			}
+			if !page.HasMore {
+				break
+			}
+			cursor = page.NextCursor
+		}
+		want := []string{"key-a", "key-b", "key-c", "key-d", "key-e"}
+		if !slices.Equal(walked, want) {
+			t.Errorf("pages walked %v, want each key once in KeyID order %v", walked, want)
 		}
 	})
 

@@ -332,8 +332,9 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 	}
 
 	// The SDK ListKeys call takes no paging or filter arguments, so the
-	// adapter applies the request's filter, limit and cursor itself.
-	keys := resp.Keys
+	// adapter applies the request's filter, limit and cursor itself, over a
+	// sorted copy so every page request slices the same order.
+	keys := sortKeyInfos(resp.Keys)
 	if len(req.GetFilter()) > 0 {
 		keys, err = filterKeyInfos(keys, req.GetFilter())
 		if err != nil {

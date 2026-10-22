@@ -14,8 +14,10 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -425,7 +427,7 @@ func (b *PlatformKMSBackend) ListKeys(
 		return nil, err
 	}
 
-	keys := resp.Keys
+	keys := sortKeyInfos(resp.Keys)
 	if len(req.Filter) > 0 {
 		keys, err = filterKeyInfos(keys, req.Filter)
 		if err != nil {
@@ -1381,4 +1383,19 @@ func filterKeyInfos(keys []kms.KeyInfo, filter map[string]string) ([]kms.KeyInfo
 		result = append(result, k)
 	}
 	return result, nil
+}
+
+// sortKeyInfos returns a copy of keys in a deterministic order: by KeyID,
+// then by Version. The SDK key listing aggregates backends and map-backed
+// metadata in no fixed order, so offset pagination over it is only stable
+// once every request sorts the same way.
+func sortKeyInfos(keys []kms.KeyInfo) []kms.KeyInfo {
+	sorted := slices.Clone(keys)
+	slices.SortFunc(sorted, func(a, b kms.KeyInfo) int {
+		if c := cmp.Compare(a.KeyID, b.KeyID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Version, b.Version)
+	})
+	return sorted
 }
