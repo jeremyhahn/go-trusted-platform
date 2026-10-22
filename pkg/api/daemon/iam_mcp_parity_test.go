@@ -40,11 +40,6 @@ import (
 	sdkmcp "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 )
 
-// wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
-func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
-	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
-}
-
 // wiredIAMToolRegistry is the MCP tool registry on an in-memory IAM client,
 // built the way createMCPServer builds it.
 func wiredIAMToolRegistry(iam *memIAM) *mcp.ToolRegistry {

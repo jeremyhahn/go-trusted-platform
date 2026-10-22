@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -25,6 +26,11 @@ import (
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
+
+// wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
+func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
+	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+}
 
 // memIAMCreated is the creation time of every record memIAM stores, so two
 // runs of the same calls produce the same answers.
