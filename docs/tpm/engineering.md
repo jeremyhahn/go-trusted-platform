@@ -138,7 +138,8 @@ downgrade is invisible in every downstream artefact.
    `.endorsementAuthSet` (TPM 2.0 Part 2 §8.6), read with
    `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, TPM_PT_PERMANENT)` (Part 3
    §30.2) right after `OpenTPM` in `InitTPM` and again in
-   `InitPlatformKeyStore` (`pkg/app/tpm_ownership.go`). A clear bit means the
+   `InitPlatformKeyStore` (`pkg/app/tpm_ownership.go`, over the shared
+   `pkg/tpmowner`). A clear bit means the
    hierarchy's auth is empty; a set bit means it is the SO PIN. There is no
    file or datastore flag: the bits survive reboot and only `TPM2_Clear`
    resets them.
@@ -148,7 +149,7 @@ downgrade is invisible in every downstream artefact.
      PIN, which sets `ownerAuthSet`.
    - **Every later start (owner bit set)** — the SO PIN is presented. It is
      checked first with an owner-authorized `TPM2_CreatePrimary` (Part 3
-     §24.1); a wrong SO PIN fails with `OwnerAuthRejectedError`, naming the
+     §24.1); a wrong SO PIN fails with `tpmowner.OwnerAuthRejectedError`, naming the
      owner hierarchy, before the Platform KeyStore opens. The owner hierarchy
      is not dictionary-attack protected, so the check costs no lockout.
    - The endorsement auth is presented as its bit says and is never changed;
