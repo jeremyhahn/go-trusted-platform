@@ -72,6 +72,10 @@ SDK `ListKeys` takes no paging arguments, so the daemon pages the full list
 itself; a cursor that is not a non-negative number, or another filter key, is
 refused with InvalidArgument.
 
+**`RotateKey`** answers `old_version` and `new_version` on every transport. The
+SDK `RotateKeyResponse` carries only the new version, and a rotation adds
+exactly one version, so `old_version` is `new_version - 1`.
+
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.

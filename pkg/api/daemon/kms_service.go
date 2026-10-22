@@ -380,7 +380,9 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 
 	return &pb.RotateKeyResponse{
 		KeyId:      resp.KeyID,
+		OldVersion: rotatedFromVersion(resp.NewVersion),
 		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 

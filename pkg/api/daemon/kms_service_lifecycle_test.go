@@ -725,6 +725,56 @@ func TestKMSServerAdapterListKeysPagination(t *testing.T) {
 	})
 }
 
+func TestKMSServerAdapterRotateKeyVersions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReportsReplacedVersion", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{
+			rotateKeyFn: func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error) {
+				return &kms.RotateKeyResponse{KeyID: keyID, NewVersion: 2}, nil
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.RotateKey(context.Background(), &pb.RotateKeyRequest{KeyId: "key-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetOldVersion() != 1 || resp.GetNewVersion() != 2 {
+			t.Errorf("OldVersion=%d NewVersion=%d, want 1 2", resp.GetOldVersion(), resp.GetNewVersion())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.RotateKey(context.Background(), &pb.RotateKeyRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestRotatedFromVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		newVersion int
+		want       uint64
+	}{
+		{newVersion: 2, want: 1},
+		{newVersion: 1, want: 0},
+		{newVersion: 0, want: 0},
+		{newVersion: -1, want: 0},
+	}
+	for _, tt := range tests {
+		if got := rotatedFromVersion(tt.newVersion); got != tt.want {
+			t.Errorf("rotatedFromVersion(%d) = %d, want %d", tt.newVersion, got, tt.want)
+		}
+	}
+}
+
 func TestKMSServerAdapterGetPublicKey(t *testing.T) {
 	t.Parallel()
 
