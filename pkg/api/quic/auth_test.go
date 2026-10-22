@@ -543,6 +543,32 @@ func TestAuthMiddleware_GuardRequest_UnclassifiedIsDenied(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware_GuardRequest_OrchestratorCategory(t *testing.T) {
+	// The guard, not the orchestrator handler, refuses a sub-opcode the
+	// category does not classify, even for a peer authorized for every
+	// classified operation.
+	m := NewAuthMiddleware(WithQUICPeerAuthenticated())
+
+	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpOrchestratorCategory, Payload: []byte{0x7F}})
+	if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("unknown sub-opcode: expected PermissionDenied, got %+v", resp)
+	}
+	want := ErrOperationNotClassified{Opcode: quicwire.OpOrchestratorCategory, Sub: 0x7F, HasSub: true}.Error()
+	if string(resp.Payload) != want {
+		t.Fatalf("payload = %q, want %q", resp.Payload, want)
+	}
+
+	_, resp = m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpOrchestratorCategory})
+	if resp == nil || resp.Status != quicwire.StatusInvalidRequest {
+		t.Fatalf("empty payload: expected InvalidRequest, got %+v", resp)
+	}
+
+	_, resp = m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpOrchestratorCategory, Payload: []byte{quicwire.OrchestratorSubHealth}})
+	if resp != nil {
+		t.Fatalf("health: expected the guard to pass the request, got %+v", resp)
+	}
+}
+
 func TestAuthMiddleware_GuardRequest_AuthenticatesBeforeClassifying(t *testing.T) {
 	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: true}))
 
