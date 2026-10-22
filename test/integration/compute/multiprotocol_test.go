@@ -142,6 +142,8 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	vmID := createResult.VMID
 
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		if _, stopErr := adapter.StopVM(ctx, StopVMOptions{VMID: vmID, Force: true}); stopErr != nil {
 			t.Logf("Cleanup: failed to stop VM %s: %v", vmID, stopErr)
 		}
@@ -327,6 +329,8 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 	vmID := createResult.VMID
 
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		if _, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{VMID: vmID, DeleteDisks: true}); deleteErr != nil {
 			t.Logf("Cleanup: failed to delete VM %s: %v", vmID, deleteErr)
 		}
@@ -402,6 +406,8 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 
 	// Ensure cleanup on test exit
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		_, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{
 			VMID:        vmID,
 			DeleteDisks: true,
@@ -447,10 +453,14 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		t.Errorf("Expected VM state 'running' after start, got %q", getResult.State)
 	}
 
-	// Stop VM
+	// Stop VM. The test VM's disk is blank, so no guest OS answers the
+	// power button: the stop always runs to the end of its power-down window
+	// and then sends SIGTERM. A one-second window drives that same graceful
+	// path over every transport without spending 30 seconds of the suite's
+	// deadline on each.
 	stopResult, err := adapter.StopVM(ctx, StopVMOptions{
 		VMID:           vmID,
-		TimeoutSeconds: 30,
+		TimeoutSeconds: 1,
 	})
 	if err != nil {
 		surface.RequireImplemented(t, err)
@@ -511,6 +521,8 @@ func testVMGet(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 
 	vmID := createResult.VMID
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		_, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{
 			VMID:        vmID,
 			DeleteDisks: true,
@@ -571,6 +583,8 @@ func testVMList(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 
 	// Cleanup all created VMs
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		for _, id := range vmIDs {
 			_, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{
 				VMID:        id,
@@ -632,6 +646,8 @@ func testVMListFiltered(t *testing.T, ctx context.Context, adapter ComputeComman
 
 	vmID := createResult.VMID
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		_, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{
 			VMID:        vmID,
 			DeleteDisks: true,
@@ -695,6 +711,8 @@ func testVMCreateWithLabels(t *testing.T, ctx context.Context, adapter ComputeCo
 
 	vmID := createResult.VMID
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		_, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{
 			VMID:        vmID,
 			DeleteDisks: true,
@@ -851,6 +869,8 @@ func testVMSuspendResumeReboot(t *testing.T, ctx context.Context, adapter Comput
 	vmID := createResult.VMID
 
 	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
 		if _, stopErr := fixture.StopVM(ctx, StopVMOptions{VMID: vmID, Force: true}); stopErr != nil {
 			t.Logf("Cleanup: failed to stop VM %s: %v", vmID, stopErr)
 		}
@@ -911,4 +931,15 @@ func requireVMState(t *testing.T, ctx context.Context, adapter ComputeCommands, 
 	if getResult.State != want {
 		t.Fatalf("VM state over %s: got %q, want %q", adapter.Name(), getResult.State, want)
 	}
+}
+
+// cleanupTimeout bounds the calls of one cleanup.
+const cleanupTimeout = 30 * time.Second
+
+// cleanupContext gives a cleanup its own bounded context. The suite's context
+// may be spent by the time a cleanup runs (a case that failed on its
+// deadline), and a cleanup on a dead context cannot stop or delete the VM it
+// left behind.
+func cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), cleanupTimeout)
 }
