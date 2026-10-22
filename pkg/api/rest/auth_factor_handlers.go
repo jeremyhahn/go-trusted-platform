@@ -241,6 +241,10 @@ type AuthFactorHandlers struct {
 	ca     authCA
 	logger *slog.Logger
 
+	// guard authenticates the caller whose role decides whether it may have
+	// another user's certificate issued; nil admits no admin.
+	guard *ScopeGuard
+
 	// aaguid cache — keyed by lowercase UUID string
 	cacheMu sync.RWMutex
 	cache   map[string]aaguidEntry
@@ -265,6 +269,14 @@ func NewAuthFactorHandlers(ca quicbaasca.CACertificateAuthority, logger *slog.Lo
 	if ca != nil {
 		h.ca = ca
 	}
+	return h
+}
+
+// WithScopeGuard sets the guard that authenticates the caller of the
+// certificate issuance route. A caller it resolves with the admin role may
+// have any user's certificate issued; without a guard only the user may.
+func (h *AuthFactorHandlers) WithScopeGuard(guard *ScopeGuard) *AuthFactorHandlers {
+	h.guard = guard
 	return h
 }
 
