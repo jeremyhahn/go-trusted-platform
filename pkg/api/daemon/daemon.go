@@ -1370,8 +1370,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// gRPC (TCP and UDS), QUIC and the embedded transport through
 	// iamGRPCService, MCP through createMCPServer. Servers start in Start(),
 	// so wiring it here is race-free.
-	iamTokenService := newIAMTokenService(
-		selectIAMTokenVerifier(platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
+	iamTokenService := newIAMTokenService(iamTokenVerifierFor(
+		config, logger, platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
 	if iamGRPCService != nil {
 		iamGRPCService.SetTokenService(iamTokenService)
 	}
