@@ -1271,6 +1271,12 @@ func pbUsagesToSDK(usages []pb.KeyUsage) []kms.KeyUsage {
 			result = append(result, kms.KeyUsageVerify)
 		case pb.KeyUsage_KEY_USAGE_WRAP_KEY:
 			result = append(result, kms.KeyUsageWrap)
+		// The SDK KeyUsage has no MAC usage; an HMAC key is generated with
+		// sign and verify, as the REST surface does.
+		case pb.KeyUsage_KEY_USAGE_GENERATE_MAC:
+			result = append(result, kms.KeyUsageSign)
+		case pb.KeyUsage_KEY_USAGE_VERIFY_MAC:
+			result = append(result, kms.KeyUsageVerify)
 		}
 	}
 	return result

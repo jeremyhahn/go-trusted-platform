@@ -1401,6 +1401,14 @@ func TestPbUsagesToSDK(t *testing.T) {
 				quicbaas.KeyUsageWrap,
 			},
 		},
+		{
+			// The SDK has no MAC usage: an HMAC key is generated with
+			// sign and verify, as the REST surface does. Dropping the MAC
+			// usages instead left the request with none at all.
+			"mac usages map to sign and verify",
+			[]pb.KeyUsage{pb.KeyUsage_KEY_USAGE_GENERATE_MAC, pb.KeyUsage_KEY_USAGE_VERIFY_MAC},
+			[]quicbaas.KeyUsage{quicbaas.KeyUsageSign, quicbaas.KeyUsageVerify},
+		},
 	}
 
 	for _, tc := range tests {
