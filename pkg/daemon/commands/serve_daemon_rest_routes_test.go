@@ -14,8 +14,11 @@
 package commands
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,7 +27,11 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
@@ -131,6 +138,82 @@ func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
 			root.ServeHTTP(rec, req)
 			assert.Equal(t, tt.want, rec.Code)
 			assert.Equal(t, tt.reachedGate, rec.Header().Get(refusedByGateHeader) != "", "reached the webservice gate")
+		})
+	}
+}
+
+// replayCA is the daemon's platform CA in the issue-cert test: it really
+// certifies the CSR and returns its root as the chain.
+type replayCA struct{ *issuancetest.CA }
+
+func (c replayCA) CABundle() ([]byte, error) {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Root.Raw}), nil
+}
+
+// callerAs is the webservice login check for a session whose principal is
+// caller: it publishes caller to the daemon handler, as the replay does.
+func callerAs(caller *platformtoken.AuthorizedContext) v1.DaemonCallerAuthenticator {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(restapi.WithCaller(r.Context(), caller)))
+		})
+	}
+}
+
+// The daemon's own issue-cert route, replayed on the webservice, decides
+// admin from the caller the login check publishes: without one it is
+// refused, a user issues for themselves only, and an admin role, not an
+// admin-named certificate, issues for anyone (#983).
+func TestDaemonRESTRoutes_IssueCertTakesTheReplayedCaller(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	key := issuancetest.RSAKey(t)
+	user := &platformtoken.AuthorizedContext{Subject: "alice", TenantID: "system", Roles: []string{"user"}}
+	admin := &platformtoken.AuthorizedContext{Subject: "ops", TenantID: "system", Roles: []string{common.ROLE_ADMIN}}
+
+	tests := []struct {
+		name   string
+		caller v1.DaemonCallerAuthenticator
+		userID string
+		want   int
+	}{
+		{"no caller", refusingCaller, "alice", http.StatusUnauthorized},
+		{"own subject", callerAs(user), "alice", http.StatusCreated},
+		{"other subject without admin", callerAs(user), "bob", http.StatusForbidden},
+		{"admin role for another subject", callerAs(admin), "bob", http.StatusCreated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ca := replayCA{issuancetest.NewCA(t)}
+			cfg := webserviceModeDaemonConfig(t)
+			cfg.MTLSClientCAPool = platform.CAPool
+			cfg.CAService = ca
+			d, err := daemon.New(cfg)
+			require.NoError(t, err)
+			defer func() { _ = d.ForceStop() }()
+
+			root := mux.NewRouter()
+			api := root.PathPrefix("/api/v1").Subrouter()
+			writer := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+			require.NoError(t, v1.MountDaemonRESTRoutes(api, daemonRESTRoutes(d), writer, refusingAuthorizer, tt.caller))
+
+			body, err := json.Marshal(restapi.IssueMTLSCertRequest{CSRPEM: string(issuancetest.CSR(t, key, tt.userID))})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+tt.userID+"/factors/mtls/issue-cert", bytes.NewReader(body))
+			leaf, err := x509.ParseCertificate(platform.ClientCert.Certificate[0])
+			require.NoError(t, err)
+			req.TLS = &tls.ConnectionState{
+				PeerCertificates: []*x509.Certificate{leaf},
+				VerifiedChains:   [][]*x509.Certificate{{leaf, platform.CACert}},
+			}
+			rec := httptest.NewRecorder()
+			root.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
+			if tt.want == http.StatusCreated {
+				assert.NotNil(t, ca.Opts, "the CA signed the CSR")
+			} else {
+				assert.Nil(t, ca.Opts, "a refused caller must not reach the CA")
+			}
 		})
 	}
 }
