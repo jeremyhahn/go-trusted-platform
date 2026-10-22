@@ -18,40 +18,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// The verbs go through the quicbaas KMS client, the client `key metadata`,
+// `key policy` and `key revoke` use (docs/kms/cli.md §3): platformd's
+// UpdateKeyStatus RPC reaches the embedded quicbaas.KMS/UpdateKeyStatus
+// handler with a request type it refuses.
+var _ keyStatusClient = quicbaassdk.KMSClient(nil)
 
 // keyStatusFake is a KMS that answers UpdateKeyStatus by echoing the request,
 // or with err, and records the request.
 type keyStatusFake struct {
-	err     error
-	keyID   string
-	version uint64
-	status  platformv1.KeyStatus
+	err error
+	req *kms.UpdateKeyStatusRequest
 }
 
-func (f *keyStatusFake) UpdateKeyStatus(_ context.Context, keyID string, version uint64, status platformv1.KeyStatus) (*platformv1.UpdateKeyStatusResponse, error) {
-	f.keyID, f.version, f.status = keyID, version, status
+func (f *keyStatusFake) UpdateKeyStatus(_ context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error) {
+	f.req = req
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &platformv1.UpdateKeyStatusResponse{KeyId: keyID, Version: version, KeyStatus: status, Timestamp: 1700000000}, nil
+	return &kms.UpdateKeyStatusResponse{KeyID: req.KeyID, Version: req.Version, Status: req.Status}, nil
 }
 
 func TestUpdateKeyStatus_PrintsTheDocumentedJSON(t *testing.T) {
 	fake := &keyStatusFake{}
 
-	out, err := updateKeyStatus(context.Background(), fake, "tenant-a-kek", 2, platformv1.KeyStatus_KEY_STATUS_DISABLED)
+	out, err := updateKeyStatus(context.Background(), fake, "tenant-a-kek", 2, kms.KeyStatusDisabled)
 	require.NoError(t, err)
-	assert.Equal(t, "tenant-a-kek", fake.keyID)
-	assert.Equal(t, uint64(2), fake.version)
-	assert.Equal(t, platformv1.KeyStatus_KEY_STATUS_DISABLED, fake.status)
+	require.NotNil(t, fake.req)
+	assert.Equal(t, &kms.UpdateKeyStatusRequest{KeyID: "tenant-a-kek", Version: 2, Status: kms.KeyStatusDisabled}, fake.req)
 
 	var buf bytes.Buffer
 	require.NoError(t, printKeyStatus(cli.NewPrinterWithWriter(cli.OutputFormatJSON, true, &buf), cli.OutputFormatJSON, out))
@@ -59,10 +65,9 @@ func TestUpdateKeyStatus_PrintsTheDocumentedJSON(t *testing.T) {
 	var printed map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &printed))
 	assert.Equal(t, map[string]any{
-		"key_id":     "tenant-a-kek",
-		"version":    float64(2),
-		"status":     "KEY_STATUS_DISABLED",
-		"updated_at": float64(1700000000),
+		"key_id":  "tenant-a-kek",
+		"version": float64(2),
+		"status":  "DISABLED",
 	}, printed)
 }
 
@@ -80,20 +85,27 @@ func TestKeyStatusVerbs_SendTheirStatus(t *testing.T) {
 
 func TestPrintKeyStatus_Table(t *testing.T) {
 	var buf bytes.Buffer
-	out := &keyStatusOutput{KeyID: "tenant-a-kek", Version: 1, Status: "KEY_STATUS_ENABLED", UpdatedAt: 1700000000}
+	out := &keyStatusOutput{KeyID: "tenant-a-kek", Version: 1, Status: "ENABLED"}
 
 	require.NoError(t, printKeyStatus(cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf), cli.OutputFormatTable, out))
-	assert.Contains(t, buf.String(), "KEY_STATUS_ENABLED")
+	assert.Contains(t, buf.String(), "Key tenant-a-kek is now ENABLED")
 }
 
 func TestUpdateKeyStatus_Errors(t *testing.T) {
 	cause := errors.New("key not found")
-	_, err := updateKeyStatus(context.Background(), &keyStatusFake{err: cause}, "missing", 0, platformv1.KeyStatus_KEY_STATUS_ENABLED)
+	_, err := updateKeyStatus(context.Background(), &keyStatusFake{err: cause}, "missing", 0, kms.KeyStatusEnabled)
 
 	var statusErr ErrUpdateKeyStatusFailed
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, "missing", statusErr.KeyID)
 	assert.ErrorIs(t, err, cause)
+
+	unsent := &keyStatusFake{}
+	_, err = updateKeyStatus(context.Background(), unsent, "k1", math.MaxUint64, kms.KeyStatusEnabled)
+	var rangeErr ErrKeyVersionOutOfRange
+	require.ErrorAs(t, err, &rangeErr)
+	assert.Equal(t, uint64(math.MaxUint64), rangeErr.Version)
+	assert.Nil(t, unsent.req, "an out-of-range version is never sent")
 
 	err = printKeyStatus(cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &bytes.Buffer{}), cli.OutputFormat("xml"), &keyStatusOutput{})
 	var formatErr cli.ErrInvalidOutputFormat

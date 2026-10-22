@@ -98,7 +98,9 @@ client.
 `--transport` connection (`Client.KMS()`). The verbs that platform service has
 no RPC for open the CLI's quicbaas client (`Client.QuicBaaS()`) instead: `kms
 status`, `key algorithms`, `key csr` (its public key; the signature goes
-through platformd), `key policy`, `key metadata` and `key revoke`.
+through platformd), `key policy`, `key metadata`, `key revoke` and `key status`
+(platformd's `UpdateKeyStatus` RPC reaches the embedded quicbaas transport with a
+request type it refuses), plus `key generate --name` for the display name.
 `--transport` does not select that connection. Its address and transport
 follow the rules in [barrier cli.md §2](../barrier/cli.md#2-where-the-verbs-go):
 a local context dials `/run/quicbaas.sock` unless `quicbaas_addr` or
@@ -156,7 +158,10 @@ Generate a key.
 
 `<key-id>` travels as the generate request's `name` and becomes the key's ID
 (`api.md` §2). `--name` is a display name, not the ID: the generate request
-has no display-name field, so set it with `key metadata update <key-id> --name`.
+has no display-name field, so once the key exists the command sets it as key
+metadata, as `key metadata update <key-id> --name` does, and prints it. If that
+update fails the key still exists and the command exits non-zero; rerun
+`key metadata update` to set the name.
 
 Algorithms: `aes-128`, `aes-192`, `aes-256`, `chacha20-poly1305`, `rsa-2048`,
 `rsa-3072`, `rsa-4096`, `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
@@ -336,8 +341,10 @@ refuses every cryptographic operation until it is enabled again.
 |---|---|---|---|
 | `--version` | | uint64 | `0` — every version |
 
-`--output json` prints `key_id`, `version`, `status` (e.g.
-`KEY_STATUS_DISABLED`) and `updated_at` (Unix seconds).
+The verbs use the quicbaas client (§3, "Two connections"). `--output json` prints `key_id`,
+`version` and `status` (`ENABLED` or `DISABLED`). There is no `updated_at`:
+the quicbaas response carries no timestamp, so read it with
+`key metadata get <key-id>`.
 
 ```bash
 platformctl kms key status disable tenant-a-kek --version 1
@@ -571,7 +578,7 @@ and omitted when unset.
 
 | Verb | Arguments | Flags (type, default) | SDK call | JSON |
 |---|---|---|---|---|
-| `dek create` | `<path>` | none | `CreateDEK`, algorithm `AES-256-GCM` (the transports' default) | the DEK |
+| `dek create` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `0`); `0` leaves a limit to the server default | `CreateDEK`, algorithm `AES-256-GCM` (the transports' default) | the DEK |
 | `dek get` | `<path>` | none | `GetDEK` | the DEK |
 | `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`, must be > 0), `--cursor` | `ListDEKs` | `deks`, `total_count` |
 | `dek delete` | `<path>` | `--force` (bool, bypass deletion protection) | `DeleteDEK` | `path`, `deleted` |
@@ -585,9 +592,15 @@ The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
 `created_at`, `rotated_at`, `usage_count`, `bytes_used`, `max_usage_count`,
 `max_bytes_used`, `warning_percent`, `description`, `backend_type`.
 
-- `dek create` has no algorithm, description or limit flags. Set limits
-  afterwards with `dek set-safety`. The gRPC, QUIC, MCP and REST transports
-  accept those fields on create (see [api.md](api.md) §4).
+- `dek create` has no algorithm or description flags. It sends its limit
+  flags in `CreateDEK`, which every SDK transport serves; the gRPC, QUIC, MCP
+  and REST transports accept the same fields on create (see [api.md](api.md)
+  §4).
+- Over the gRPC transport, `dek set-safety` and `dek clear-safety` exit 1
+  with `UNIMPLEMENTED`: the pinned go-quicbaas SDK (v0.12.0-alpha) has no
+  gRPC handler for `SetDEKSafety` or `ClearDEKSafety`
+  (`transport/grpc/kms_handler.go`). Set limits on a new DEK with
+  `dek create` instead.
 - `dek list --cursor` exits 1 with `ErrDEKSDKGap`: the SDK's
   `ListDEKsRequest` has no cursor, so `ListDEKs` cannot page.
 - `dek set-default` takes no version. `SetDefaultDEK(path)` makes the DEK at
@@ -597,8 +610,7 @@ The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
 - An SDK failure is `ErrDEKOperationFailed{Verb, Path, Err}`.
 
 ```bash
-platformctl kms dek create /tenant/myapp/default -o json
-platformctl kms dek set-safety /tenant/myapp/default --max-operations 1000000
+platformctl kms dek create /tenant/myapp/default --max-operations 1000000 -o json
 platformctl kms dek list --prefix /tenant/myapp --recursive -o json
 ```
 

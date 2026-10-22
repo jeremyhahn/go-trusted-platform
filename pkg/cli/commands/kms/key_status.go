@@ -16,12 +16,13 @@ package kms
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
 
 // ErrUpdateKeyStatusFailed is returned when updating key status fails
@@ -47,18 +48,27 @@ func (e ErrInvalidKeyStatus) Error() string {
 	return fmt.Sprintf("invalid key status: %s (valid values: enabled, disabled)", e.Status)
 }
 
-// keyStatusClient is the part of the platform KMS client that enables and
+// ErrKeyVersionOutOfRange is returned when --version exceeds the largest
+// version the quicbaas KMS client can carry.
+type ErrKeyVersionOutOfRange struct {
+	Version uint64
+}
+
+func (e ErrKeyVersionOutOfRange) Error() string {
+	return fmt.Sprintf("key version %d is out of range (maximum %d)", e.Version, math.MaxInt)
+}
+
+// keyStatusClient is the part of the quicbaas KMS client that enables and
 // disables keys.
 type keyStatusClient interface {
-	UpdateKeyStatus(ctx context.Context, keyID string, version uint64, status platformv1.KeyStatus) (*platformv1.UpdateKeyStatusResponse, error)
+	UpdateKeyStatus(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
 }
 
 // keyStatusOutput is the result of `kms key status enable|disable`.
 type keyStatusOutput struct {
-	KeyID     string `json:"key_id" yaml:"key_id"`
-	Version   uint64 `json:"version" yaml:"version"`
-	Status    string `json:"status" yaml:"status"`
-	UpdatedAt int64  `json:"updated_at" yaml:"updated_at"`
+	KeyID   string `json:"key_id" yaml:"key_id"`
+	Version uint64 `json:"version" yaml:"version"`
+	Status  string `json:"status" yaml:"status"`
 }
 
 // newKeyStatusCommand creates the key status subcommand group
@@ -72,14 +82,14 @@ A disabled key cannot be used for cryptographic operations but can be
 re-enabled later. Use this for temporary access control or key suspension.`,
 	}
 
-	cmd.AddCommand(newKeyStatusVerbCommand(getFlags, "enable", platformv1.KeyStatus_KEY_STATUS_ENABLED,
+	cmd.AddCommand(newKeyStatusVerbCommand(getFlags, "enable", kms.KeyStatusEnabled,
 		"Enable a key or key version",
 		`Enable a previously disabled key or key version.
 
 Examples:
   platformctl kms key status enable my-key
   platformctl kms key status enable my-key --version 2`))
-	cmd.AddCommand(newKeyStatusVerbCommand(getFlags, "disable", platformv1.KeyStatus_KEY_STATUS_DISABLED,
+	cmd.AddCommand(newKeyStatusVerbCommand(getFlags, "disable", kms.KeyStatusDisabled,
 		"Disable a key or key version",
 		`Disable a key or key version, preventing it from being used.
 
@@ -92,7 +102,7 @@ Examples:
 
 // newKeyStatusVerbCommand creates `key status enable` or `key status disable`,
 // which set the key, or one version of it, to status.
-func newKeyStatusVerbCommand(getFlags func() *cli.CommonFlags, verb string, status platformv1.KeyStatus, short, long string) *cobra.Command {
+func newKeyStatusVerbCommand(getFlags func() *cli.CommonFlags, verb string, status kms.KeyStatus, short, long string) *cobra.Command {
 	var version uint64
 
 	cmd := &cobra.Command{
@@ -111,14 +121,17 @@ func newKeyStatusVerbCommand(getFlags func() *cli.CommonFlags, verb string, stat
 }
 
 // runKeyStatus sets a key's status through platformd's KMS service.
-func runKeyStatus(flags *cli.CommonFlags, keyID string, version uint64, status platformv1.KeyStatus) error {
+func runKeyStatus(flags *cli.CommonFlags, keyID string, version uint64, status kms.KeyStatus) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
 	}
 	defer base.Close()
 
-	client := kmssvc.NewClientFromGRPC(base.Client().KMS())
+	client, err := openKMSClient(base)
+	if err != nil {
+		return err
+	}
 	out, err := updateKeyStatus(base.Context(), client, keyID, version, status)
 	if err != nil {
 		return err
@@ -128,16 +141,22 @@ func runKeyStatus(flags *cli.CommonFlags, keyID string, version uint64, status p
 
 // updateKeyStatus sets the status of a key, or of one version when version
 // is not 0.
-func updateKeyStatus(ctx context.Context, client keyStatusClient, keyID string, version uint64, status platformv1.KeyStatus) (*keyStatusOutput, error) {
-	resp, err := client.UpdateKeyStatus(ctx, keyID, version, status)
+func updateKeyStatus(ctx context.Context, client keyStatusClient, keyID string, version uint64, status kms.KeyStatus) (*keyStatusOutput, error) {
+	if version > math.MaxInt {
+		return nil, ErrKeyVersionOutOfRange{Version: version}
+	}
+	resp, err := client.UpdateKeyStatus(ctx, &kms.UpdateKeyStatusRequest{
+		KeyID:   keyID,
+		Version: int(version),
+		Status:  status,
+	})
 	if err != nil {
 		return nil, ErrUpdateKeyStatusFailed{KeyID: keyID, Err: err}
 	}
 	return &keyStatusOutput{
-		KeyID:     resp.GetKeyId(),
-		Version:   resp.GetVersion(),
-		Status:    resp.GetKeyStatus().String(),
-		UpdatedAt: resp.GetTimestamp(),
+		KeyID:   resp.KeyID,
+		Version: uint64(max(resp.Version, 0)),
+		Status:  resp.Status.String(),
 	}, nil
 }
 
@@ -152,7 +171,6 @@ func printKeyStatus(printer *cli.Printer, format cli.OutputFormat, out *keyStatu
 		printer.PrintKeyValue("Key ID", out.KeyID)
 		printer.PrintKeyValue("Version", fmt.Sprintf("%d", out.Version))
 		printer.PrintKeyValue("Status", out.Status)
-		printer.PrintKeyValue("Updated At", formatKeyTimestamp(out.UpdatedAt))
 		return nil
 
 	default:

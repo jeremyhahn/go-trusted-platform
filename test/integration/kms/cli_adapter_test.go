@@ -106,11 +106,10 @@ func TestCLIAdapter_DEKRefusesOptionsWithoutACLIFlag(t *testing.T) {
 	}
 }
 
-func TestCLIAdapter_DEKCreateSendsLimitsWithSetSafety(t *testing.T) {
-	argsFile := filepath.Join(t.TempDir(), "set-safety-args")
+func TestCLIAdapter_DEKCreateSendsLimitsOnCreate(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "create-args")
 	adapter := scriptedPlatformCTL(t, `case "$*" in
-*"dek create"*) printf '{"path":"p","algorithm":"AES-256-GCM","version":1,"status":"active","is_default":true,"created_at":"2026-10-21T12:00:00Z"}' ;;
-*"dek set-safety"*) echo "$*" > `+argsFile+`; printf '[SUCCESS] DEK p safety limits set' ;;
+*"dek create"*) echo "$*" > `+argsFile+`; printf '{"path":"p","algorithm":"AES-256-GCM","version":1,"status":"active","is_default":true,"created_at":"2026-10-21T12:00:00Z"}' ;;
 *) exit 1 ;;
 esac`)
 
@@ -124,17 +123,15 @@ esac`)
 
 	sent, err := os.ReadFile(argsFile)
 	require.NoError(t, err)
-	assert.Equal(t, "kms dek set-safety p --max-operations 1000 --max-bytes 2000 --warn-percent 75\n", string(sent))
+	assert.Equal(t, "kms dek create p --max-operations 1000 --max-bytes 2000 --warn-percent 75\n", string(sent),
+		"one call: set-safety's SetDEKSafety is not served by the SDK's gRPC transport")
 }
 
-func TestCLIAdapter_DEKCreateFailsWhenSetSafetyFails(t *testing.T) {
-	adapter := scriptedPlatformCTL(t, `case "$*" in
-*"dek create"*) printf '{"path":"p","algorithm":"AES-256-GCM","version":1,"status":"active","is_default":true}' ;;
-*) exit 1 ;;
-esac`)
+func TestCLIAdapter_DEKCreateReportsTheFailedCreate(t *testing.T) {
+	adapter := failingPlatformCTL(t)
 
 	_, err := adapter.DEKCreate(context.Background(), DEKCreateOptions{Path: "p", MaxOperations: 10})
-	assert.Contains(t, commandLine(t, err), "kms dek set-safety p --max-operations 10")
+	assert.Equal(t, "kms dek create p --max-operations 10", commandLine(t, err))
 }
 
 func TestCLIAdapter_DEKStatusReadsTheFlatJSON(t *testing.T) {
@@ -199,6 +196,33 @@ func TestCLIKeyAlgorithm_PassesOtherNamesThrough(t *testing.T) {
 	assert.Equal(t, "ECDSA-P256", cliKeyAlgorithm("ECDSA-P256"))
 	assert.Equal(t, "not-an-algorithm", cliKeyAlgorithm("not-an-algorithm"),
 		"an unknown name reaches the CLI unchanged, so the CLI's own error reports it")
+}
+
+func TestCLIAdapter_HashReportsTheSuiteAlgorithmName(t *testing.T) {
+	adapter := scriptedPlatformCTL(t, `cat >/dev/null; printf '{"algorithm":"SHA-256","hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","timestamp":"1700000000"}'`)
+
+	result, err := adapter.CryptoHash(context.Background(), []byte("data"), "SHA256")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256", result.Algorithm, "the gRPC and QUIC adapters report SHA256")
+	assert.Len(t, result.Hash, 32)
+}
+
+func TestCLIHashAlgorithmName_MapsWhatTheCLIPrints(t *testing.T) {
+	printed := map[kmssvc.HashAlgorithm]string{
+		kmssvc.HashAlgorithmSHA1:   "SHA1",
+		kmssvc.HashAlgorithmSHA256: "SHA256",
+		kmssvc.HashAlgorithmSHA384: "SHA384",
+		kmssvc.HashAlgorithmSHA512: "SHA512",
+	}
+	for algorithm, want := range printed {
+		assert.Equal(t, want, cliHashAlgorithmName(string(algorithm)), "%s", algorithm)
+	}
+}
+
+func TestCLIHashAlgorithmName_PassesOtherNamesThrough(t *testing.T) {
+	assert.Equal(t, "SHA3-256", cliHashAlgorithmName(string(kmssvc.HashAlgorithmSHA3256)))
+	assert.Equal(t, "not-a-hash", cliHashAlgorithmName("not-a-hash"),
+		"an unknown name is reported as printed, so the assertion names it")
 }
 
 func TestCLIAdapter_RunCommandInputSelectsJSONAndPipesStdin(t *testing.T) {
