@@ -1619,6 +1619,50 @@ func TestExecuteIAMUpdateGroup_ServiceError(t *testing.T) {
 	}
 }
 
+func TestExecuteIAMUpdateRole_PassesFields(t *testing.T) {
+	svc := newMockServiceProvider()
+	var got *IAMUpdateRoleRequest
+	svc.iamUpdateRoleFunc = func(_ context.Context, req *IAMUpdateRoleRequest) (interface{}, error) {
+		got = req
+		return map[string]string{"role_id": req.RoleID}, nil
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	result, err := registry.ExecuteTool(context.Background(), "iam_update_role", map[string]interface{}{
+		"tenant_id":   "tenant-123",
+		"role_id":     "role-456",
+		"name":        "Auditor",
+		"description": "reads audit logs",
+		"permissions": []interface{}{"audit:read", "iam:read"},
+	})
+	if err != nil || result == nil {
+		t.Fatalf("ExecuteTool = %v, %v; want a result", result, err)
+	}
+	want := &IAMUpdateRoleRequest{
+		TenantID: "tenant-123", RoleID: "role-456", Name: "Auditor", Description: "reads audit logs",
+		Permissions: []string{"audit:read", "iam:read"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("service got %+v, want %+v", got, want)
+	}
+}
+
+func TestExecuteIAMUpdateRole_ServiceError(t *testing.T) {
+	svc := newMockServiceProvider()
+	svc.iamUpdateRoleFunc = func(context.Context, *IAMUpdateRoleRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	_, err := registry.ExecuteTool(context.Background(), "iam_update_role", map[string]interface{}{
+		"tenant_id": "tenant-123",
+		"role_id":   "role-456",
+	})
+	if !errors.Is(err, ErrMockServiceError) {
+		t.Errorf("err = %v, want the service error", err)
+	}
+}
+
 func TestExecuteIAMListGroups_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()

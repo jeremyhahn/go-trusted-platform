@@ -1046,6 +1046,22 @@ func (r *ToolRegistry) executeIAMGetRole(ctx context.Context, args map[string]in
 	return marshalResult(role)
 }
 
+func (r *ToolRegistry) executeIAMUpdateRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMUpdateRoleRequest{
+		TenantID:    getString(args, "tenant_id"),
+		RoleID:      getString(args, "role_id"),
+		Name:        getString(args, "name"),
+		Description: getString(args, "description"),
+		Permissions: getStringSlice(args, "permissions"),
+	}
+
+	role, err := r.service.IAMUpdateRole(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(role)
+}
+
 func (r *ToolRegistry) executeIAMListRoles(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	roles, err := r.service.IAMListRoles(ctx, getString(args, "tenant_id"), getIAMPagination(args))
 	if err != nil {

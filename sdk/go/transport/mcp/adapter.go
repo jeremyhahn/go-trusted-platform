@@ -331,6 +331,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/CreateRole": "iam_create_role",
 	"/platform.v1.PlatformIAMService/DeleteRole": "iam_delete_role",
 	"/platform.v1.PlatformIAMService/GetRole":    "iam_get_role",
+	"/platform.v1.PlatformIAMService/UpdateRole": "iam_update_role",
 	"/platform.v1.PlatformIAMService/ListRoles":  "iam_list_roles",
 	"/platform.v1.PlatformIAMService/AssignRole": "iam_assign_role",
 	"/platform.v1.PlatformIAMService/RevokeRole": "iam_revoke_role",

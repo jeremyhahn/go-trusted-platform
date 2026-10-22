@@ -366,6 +366,38 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_update_role",
+		Description: "Update an IAM role's name, description or permissions",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"role_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Role ID to update",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "New role display name",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "New role description",
+				},
+				"permissions": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Permissions the role grants after the update",
+				},
+			},
+			"required": []string{"tenant_id", "role_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_list_roles",
 		Description: "List IAM roles in a tenant with pagination",
 		InputSchema: map[string]interface{}{

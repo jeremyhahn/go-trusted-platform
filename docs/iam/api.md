@@ -123,7 +123,7 @@ for them — see [SPEC](../SPEC.md#interfaces).
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Role CRUD | `/api/v1/iam/roles`, `/roles/{id}` | ✅ | `0xB5` create, `0xB6` delete, `0xB7` get, `0xB8` list | `iam_create_role` `iam:write`, `iam_get_role` `iam:read`, `iam_list_roles` `iam:read`, `iam_delete_role` `iam:delete` | ✅ |
-| Update role | `PUT /api/v1/iam/roles/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Update role | `PUT /api/v1/iam/roles/{id}` | ✅ | `MISSING` | `iam_update_role`, `iam:write` | ✅ |
 | Policy CRUD | `/api/v1/iam/policies`, `/policies/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 | **Validate policy** | `POST /api/v1/iam/policies/validate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 | **Test policy** | `POST /api/v1/iam/policies/test` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
@@ -131,7 +131,7 @@ for them — see [SPEC](../SPEC.md#interfaces).
 | Rotate app secret | `POST /api/v1/iam/apps/{id}/rotate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 
 **Policies and applications have no MCP tools and no QUIC opcodes.**
-Twenty-seven `iam_*` tools cover users, groups, roles, tenants, tokens and the
+Twenty-eight `iam_*` tools cover users, groups, roles, tenants, tokens and the
 permission check — neither the authorization policies themselves nor OAuth
 applications. QUIC has no IAM policy, application or role-update
 byte; the SDK's QUIC transport cannot reach those RPCs. Group update rides the
@@ -354,14 +354,14 @@ on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
 ([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,
 and the catalog could not give one byte both meanings' scopes.
 
-**Twenty-four of the 27 `iam_*` MCP tools are in the MCP authorization map
+**Twenty-five of the 28 `iam_*` MCP tools are in the MCP authorization map
 (#304)**, each with the `resource:action` of the `PlatformIAMService` method
 it answers through (`pkg/api/grpc/method_permissions.go`;
 `toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
 
 | Scope | Tools |
 |---|---|
-| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_update_group`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
+| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_update_group`, `iam_create_role`, `iam_update_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
 | `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_group`, `iam_delete_tenant` |
 | `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_group`, `iam_list_groups`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
 
@@ -377,7 +377,7 @@ gRPC, Unix, QUIC and MCP alike.
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Every one of the 524 registered tools is in the map: 512 carry a
+Every one of the 525 registered tools is in the map: 513 carry a
 `resource:action` permission and 12 are classified open (`""`) (measured from
 `NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
 `TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).

@@ -139,6 +139,16 @@ type IAMCreateRoleRequest struct {
 	Permissions []string `json:"permissions,omitempty"`
 }
 
+// IAMUpdateRoleRequest represents a role update request for MCP, the
+// fields of gRPC UpdateIAMRoleRequest.
+type IAMUpdateRoleRequest struct {
+	TenantID    string   `json:"tenant_id"`
+	RoleID      string   `json:"role_id"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+}
+
 // IAMAuthenticateRequest represents an authentication request for MCP.
 type IAMAuthenticateRequest struct {
 	TenantID    string `json:"tenant_id"`
@@ -842,6 +852,7 @@ type ServiceProvider interface {
 	IAMCreateRole(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
 	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
 	IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
+	IAMUpdateRole(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error)
 	IAMListRoles(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 
 	// IAM Role assignment operations

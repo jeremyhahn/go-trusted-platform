@@ -217,6 +217,27 @@ func (r memRoles) Get(_ context.Context, tenantID, roleID string) (*sdkiam.Role,
 	return &copied, nil
 }
 
+// Update applies the non-empty fields, as the SDK's partial update does.
+func (r memRoles) Update(_ context.Context, tenantID, roleID string, req *sdkiam.UpdateRoleRequest) (*sdkiam.Role, error) {
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	role, err := memFind(r.m.roles, "iam.role.update", tenantID, roleID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != "" {
+		role.Name = req.Name
+	}
+	if req.Description != "" {
+		role.Description = req.Description
+	}
+	if req.Permissions != nil {
+		role.Permissions = req.Permissions
+	}
+	copied := *role
+	return &copied, nil
+}
+
 func (r memRoles) Delete(_ context.Context, tenantID, roleID string) error {
 	r.m.mu.Lock()
 	defer r.m.mu.Unlock()

@@ -131,6 +131,9 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	require.NoError(t, err)
 	got, err := c.GetRole(ctx, "acme", "admin")
 	require.NoError(t, err)
+	updated, err := c.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "admin", Description: "all of it, audited"})
+	require.NoError(t, err)
+	require.Equal(t, "all of it, audited", updated.GetDescription(), "the update reached the IAM client")
 	alice, err := c.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
 	require.NoError(t, err)
 	require.NoError(t, c.AssignRole(ctx, "acme", alice.GetId(), "admin"))
@@ -147,7 +150,7 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	_, remainingTotal, err := c.ListRoles(ctx, listReq)
 	require.NoError(t, err)
 
-	answers := []proto.Message{admin, got, assigned, revoked, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
+	answers := []proto.Message{admin, got, updated, assigned, revoked, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
 	for _, role := range listed {
 		answers = append(answers, role)
 	}
@@ -301,6 +304,22 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_update_user", args: map[string]interface{}{"tenant_id": "acme", "name": "N"},
+			want: codes.InvalidArgument,
+		},
+		"roles/update not found": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "nobody", Name: "N"})
+				return err
+			},
+			tool: "iam_update_role", args: map[string]interface{}{"tenant_id": "acme", "role_id": "nobody", "name": "N"},
+			want: codes.NotFound,
+		},
+		"roles/update no role id": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{TenantId: "acme", Name: "N"})
+				return err
+			},
+			tool: "iam_update_role", args: map[string]interface{}{"tenant_id": "acme", "name": "N"},
 			want: codes.InvalidArgument,
 		},
 		"groups/update not found": {

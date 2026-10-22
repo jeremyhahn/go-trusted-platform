@@ -1724,6 +1724,17 @@ func (p *MCPServiceProvider) IAMGetRole(ctx context.Context, tenantID string, ro
 	return p.iam.GetRole(ctx, &platformv1.GetIAMRoleRequest{TenantId: tenantID, RoleId: roleID})
 }
 
+// IAMUpdateRole updates an IAM role, as gRPC UpdateRole.
+func (p *MCPServiceProvider) IAMUpdateRole(ctx context.Context, req *mcp.IAMUpdateRoleRequest) (interface{}, error) {
+	return p.iam.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    req.TenantID,
+		RoleId:      req.RoleID,
+		Name:        req.Name,
+		Description: req.Description,
+		Permissions: req.Permissions,
+	})
+}
+
 // IAMListRoles lists a tenant's IAM roles, as gRPC ListRoles.
 func (p *MCPServiceProvider) IAMListRoles(ctx context.Context, tenantID string, page mcp.IAMPagination) (interface{}, error) {
 	return p.iam.ListRoles(ctx, &platformv1.ListIAMRolesRequest{

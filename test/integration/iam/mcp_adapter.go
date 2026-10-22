@@ -581,10 +581,7 @@ func (a *MCPAdapter) GetRole(ctx context.Context, opts GetRoleOptions) (*GetRole
 	return &GetRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
-// UpdateRole updates an existing role
-// Note: MCP does not have a dedicated update_role tool, so this implementation
-// falls back to returning the current role. In production, this should be
-// implemented properly once the MCP tool is available.
+// UpdateRole updates an existing role through iam_update_role.
 func (a *MCPAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*UpdateRoleResult, error) {
 	// Build update arguments
 	args := map[string]interface{}{
@@ -601,29 +598,16 @@ func (a *MCPAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*U
 		args["permissions"] = opts.Permissions
 	}
 
-	// Try to call iam_update_role if it exists
 	result, err := a.callTool(ctx, "iam_update_role", args)
 	if err != nil {
-		// If update tool doesn't exist, fall back to get role
-		getResult, getErr := a.GetRole(ctx, GetRoleOptions{
-			TenantID: opts.TenantID,
-			RoleID:   opts.RoleID,
-		})
-		if getErr != nil {
-			return nil, err
-		}
-		return &UpdateRoleResult{Role: getResult.Role}, nil
+		return nil, err
 	}
 
-	var role Role
-	if err := json.Unmarshal(result, &role); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "UpdateRole",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMRoleResponse
+	if err := decodeReply("UpdateRole", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &UpdateRoleResult{Role: &role}, nil
+	return &UpdateRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
 // DeleteRole removes a role

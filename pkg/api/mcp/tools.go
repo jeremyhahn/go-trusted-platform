@@ -1628,6 +1628,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIAMDeleteRole(ctx, args)
 	case "iam_get_role":
 		return r.executeIAMGetRole(ctx, args)
+	case "iam_update_role":
+		return r.executeIAMUpdateRole(ctx, args)
 	case "iam_list_roles":
 		return r.executeIAMListRoles(ctx, args)
 	case "iam_assign_role":

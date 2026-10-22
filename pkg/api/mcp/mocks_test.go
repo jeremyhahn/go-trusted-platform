@@ -151,6 +151,7 @@ type mockServiceProvider struct {
 	iamCreateRoleFunc      func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
 	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) (interface{}, error)
 	iamGetRoleFunc         func(ctx context.Context, tenantID, roleID string) (interface{}, error)
+	iamUpdateRoleFunc      func(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error)
 	iamListRolesFunc       func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 	iamAssignRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
 	iamRevokeRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
@@ -1526,6 +1527,13 @@ func (m *mockServiceProvider) IAMDeleteRole(ctx context.Context, tenantID, roleI
 func (m *mockServiceProvider) IAMGetRole(ctx context.Context, tenantID, roleID string) (interface{}, error) {
 	if m.iamGetRoleFunc != nil {
 		return m.iamGetRoleFunc(ctx, tenantID, roleID)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) IAMUpdateRole(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error) {
+	if m.iamUpdateRoleFunc != nil {
+		return m.iamUpdateRoleFunc(ctx, req)
 	}
 	return nil, nil
 }
