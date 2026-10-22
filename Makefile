@@ -2155,7 +2155,13 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 
 # The docker build arguments every devcontainer stage shares. $(comma) because a
 # literal comma inside $(if ...) would end its condition.
+# The key of the image's apt layer: the UTC day, so Debian's fixes reach the
+# image within a day although BuildKit caches the layer. Pass APT_REFRESH=<key>
+# to rebuild against a fixed key.
+APT_REFRESH ?= $(shell date -u +%Y-%m-%d)
+
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
+	--build-arg APT_REFRESH=$(APT_REFRESH) \
 	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
