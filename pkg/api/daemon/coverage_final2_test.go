@@ -126,13 +126,13 @@ func TestCoverageFinal2CryptoServerAdapterNilClient(t *testing.T) {
 
 	t.Run("BatchEncrypt", func(t *testing.T) {
 		t.Parallel()
-		_, err := adapter.BatchEncrypt(ctx, &pb.EncryptBatchRequest{KeyId: "k1"})
+		_, err := adapter.EncryptBatch(ctx, &pb.EncryptBatchRequest{KeyId: "k1"})
 		assertGRPCStatusCode(t, err, codes.Unavailable)
 	})
 
 	t.Run("BatchDecrypt", func(t *testing.T) {
 		t.Parallel()
-		_, err := adapter.BatchDecrypt(ctx, &pb.DecryptBatchRequest{KeyId: "k1"})
+		_, err := adapter.DecryptBatch(ctx, &pb.DecryptBatchRequest{KeyId: "k1"})
 		assertGRPCStatusCode(t, err, codes.Unavailable)
 	})
 

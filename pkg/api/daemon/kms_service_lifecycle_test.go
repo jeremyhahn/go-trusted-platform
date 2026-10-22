@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // errKMSLifecycleMock is the typed error returned by the lifecycle mocks
@@ -171,8 +172,8 @@ func (m *mockSDKKMSClient) UnwrapKey(ctx context.Context, req *kms.UnwrapKeyRequ
 }
 
 // mockSDKCryptoClient implements the full quicbaas.CryptoClient interface.
-// Only Hash delegates to a configurable function field; all other methods
-// return errKMSLifecycleMock.
+// Hash, the HMAC, random and data-key methods delegate to configurable
+// function fields; the rest return errKMSLifecycleMock.
 type mockSDKCryptoClient struct {
 	hashFn              func(ctx context.Context, req *quicbaas.HashRequest) (*quicbaas.HashResponse, error)
 	lastHashReq         *quicbaas.HashRequest
@@ -180,6 +181,12 @@ type mockSDKCryptoClient struct {
 	lastGenerateHMACReq *quicbaas.GenerateHMACRequest
 	verifyHMACFn        func(ctx context.Context, req *quicbaas.VerifyHMACRequest) (*quicbaas.VerifyHMACResponse, error)
 	lastVerifyHMACReq   *quicbaas.VerifyHMACRequest
+	generateRandomFn    func(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error)
+	lastRandomReq       *quicbaas.GenerateRandomRequest
+	generateDataKeyFn   func(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error)
+	lastDataKeyReq      *quicbaas.GenerateDataKeyRequest
+	generateWrappedFn   func(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error)
+	lastWrappedReq      *quicbaas.GenerateWrappedDataKeyRequest
 }
 
 var _ quicbaas.CryptoClient = (*mockSDKCryptoClient)(nil)
@@ -213,10 +220,18 @@ func (m *mockSDKCryptoClient) DecryptBatch(ctx context.Context, req *quicbaas.De
 }
 
 func (m *mockSDKCryptoClient) GenerateDataKey(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error) {
+	m.lastDataKeyReq = req
+	if m.generateDataKeyFn != nil {
+		return m.generateDataKeyFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "GenerateDataKey"}
 }
 
 func (m *mockSDKCryptoClient) GenerateWrappedDataKey(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error) {
+	m.lastWrappedReq = req
+	if m.generateWrappedFn != nil {
+		return m.generateWrappedFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "GenerateWrappedDataKey"}
 }
 
@@ -237,6 +252,10 @@ func (m *mockSDKCryptoClient) VerifyHMAC(ctx context.Context, req *quicbaas.Veri
 }
 
 func (m *mockSDKCryptoClient) GenerateRandom(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
+	m.lastRandomReq = req
+	if m.generateRandomFn != nil {
+		return m.generateRandomFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "GenerateRandom"}
 }
 
@@ -1515,5 +1534,197 @@ func TestSdkHashAlgorithmToPb(t *testing.T) {
 				t.Errorf("sdkHashAlgorithmToPb(%v) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// =============================================================================
+// CryptoServerAdapter.GenerateRandom
+// =============================================================================
+
+func TestCryptoServerAdapterGenerateRandom(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKCryptoClient{
+			generateRandomFn: func(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
+				return &quicbaas.GenerateRandomResponse{RandomBytes: make([]byte, req.NumBytes)}, nil
+			},
+		}
+		adapter := NewCryptoServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: kmsMaxRandomBytes})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.lastRandomReq.NumBytes != int(kmsMaxRandomBytes) {
+			t.Errorf("NumBytes = %d, want %d", mock.lastRandomReq.NumBytes, kmsMaxRandomBytes)
+		}
+		if len(resp.GetRandomBytes()) != int(kmsMaxRandomBytes) {
+			t.Errorf("len(RandomBytes) = %d, want %d", len(resp.GetRandomBytes()), kmsMaxRandomBytes)
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(nil, slog.Default())
+		_, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: 16})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	for _, numBytes := range []int32{0, -1, kmsMaxRandomBytes + 1} {
+		t.Run("OutOfRange", func(t *testing.T) {
+			t.Parallel()
+			mock := &mockSDKCryptoClient{}
+			adapter := NewCryptoServerAdapter(mock, slog.Default())
+			_, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: numBytes})
+			assertGRPCStatusCode(t, err, codes.InvalidArgument)
+			if mock.lastRandomReq != nil {
+				t.Errorf("num_bytes %d reached the SDK", numBytes)
+			}
+		})
+	}
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: 16})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+// =============================================================================
+// CryptoServerAdapter.GenerateDataKey / GenerateWrappedDataKey
+// =============================================================================
+
+func TestCryptoServerAdapterGenerateDataKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKCryptoClient{
+			generateDataKeyFn: func(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error) {
+				return &quicbaas.GenerateDataKeyResponse{KeyID: req.KeyID, Plaintext: []byte("dek"), CiphertextBlob: []byte("wrapped-dek")}, nil
+			},
+		}
+		adapter := NewCryptoServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{
+			KeyId:   "kek",
+			KeySpec: &pb.KeySpec{KeySize: 128},
+			Context: []byte("aad"),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got := mock.lastDataKeyReq
+		if got.KeyID != "kek" || got.KeySize != 128 || string(got.Context) != "aad" {
+			t.Errorf("SDK request = %q/%d/%q, want kek/128/aad", got.KeyID, got.KeySize, got.Context)
+		}
+		if resp.GetKeyId() != "kek" || string(resp.GetPlaintext()) != "dek" || string(resp.GetCiphertextBlob()) != "wrapped-dek" {
+			t.Errorf("response = %q/%q/%q, want kek/dek/wrapped-dek", resp.GetKeyId(), resp.GetPlaintext(), resp.GetCiphertextBlob())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(nil, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("NegativeKeySize", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{KeyId: "kek", KeySpec: &pb.KeySpec{KeySize: -256}})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestCryptoServerAdapterGenerateWrappedDataKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKCryptoClient{
+			generateWrappedFn: func(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error) {
+				return &quicbaas.GenerateWrappedDataKeyResponse{KeyID: req.KeyID, CiphertextBlob: []byte("wrapped-dek")}, nil
+			},
+		}
+		adapter := NewCryptoServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{
+			KeyId:   "kek",
+			KeySpec: &pb.KeySpec{KeySize: 256},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.lastWrappedReq.KeyID != "kek" || mock.lastWrappedReq.KeySize != 256 {
+			t.Errorf("SDK request = %q/%d, want kek/256", mock.lastWrappedReq.KeyID, mock.lastWrappedReq.KeySize)
+		}
+		if resp.GetKeyId() != "kek" || string(resp.GetCiphertextBlob()) != "wrapped-dek" {
+			t.Errorf("response = %q/%q, want kek/wrapped-dek", resp.GetKeyId(), resp.GetCiphertextBlob())
+		}
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(nil, slog.Default())
+		_, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+// TestCryptoServerAdapterServesEveryMethod dispatches every unary method of
+// the Crypto service descriptor to the adapter. An adapter without a client
+// answers Unavailable from each method it implements; a method it does not
+// implement (or implements under another name) falls through to the embedded
+// UnimplementedCryptoServer and answers Unimplemented.
+func TestCryptoServerAdapterServesEveryMethod(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewCryptoServerAdapter(nil, slog.Default())
+	decodeNothing := func(interface{}) error { return nil }
+
+	for _, method := range pb.Crypto_ServiceDesc.Methods {
+		_, err := method.Handler(adapter, context.Background(), decodeNothing, nil)
+		if code := status.Code(err); code != codes.Unavailable {
+			t.Errorf("Crypto/%s answered %v, want Unavailable: %v", method.MethodName, code, err)
+		}
 	}
 }

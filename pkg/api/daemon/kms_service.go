@@ -765,9 +765,9 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 	}, nil
 }
 
-// BatchEncrypt implements pb.CryptoServer.BatchEncrypt.
+// EncryptBatch implements pb.CryptoServer.EncryptBatch.
 // It encrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
+func (a *CryptoServerAdapter) EncryptBatch(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
@@ -817,9 +817,9 @@ func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptB
 	}, nil
 }
 
-// BatchDecrypt implements pb.CryptoServer.BatchDecrypt.
+// DecryptBatch implements pb.CryptoServer.DecryptBatch.
 // It decrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
+func (a *CryptoServerAdapter) DecryptBatch(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
@@ -1013,6 +1013,98 @@ func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*p
 		Hash:      resp.Hash,
 		Timestamp: time.Now().Unix(),
 	}, nil
+}
+
+// GenerateRandom implements pb.CryptoServer.GenerateRandom by delegating to
+// the SDK crypto client. num_bytes must lie in 1..kmsMaxRandomBytes, the
+// bound the QUIC transport enforces too.
+func (a *CryptoServerAdapter) GenerateRandom(ctx context.Context, req *pb.GenerateRandomRequest) (*pb.GenerateRandomResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	numBytes := req.GetNumBytes()
+	if numBytes <= 0 || numBytes > kmsMaxRandomBytes {
+		return nil, status.Errorf(codes.InvalidArgument, "num_bytes must be between 1 and %d", kmsMaxRandomBytes)
+	}
+
+	resp, err := a.client.GenerateRandom(ctx, &quicbaas.GenerateRandomRequest{NumBytes: int(numBytes)})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "random generation failed: %v", err)
+	}
+
+	return &pb.GenerateRandomResponse{
+		RandomBytes: resp.RandomBytes,
+		Timestamp:   time.Now().Unix(),
+	}, nil
+}
+
+// GenerateDataKey implements pb.CryptoServer.GenerateDataKey by delegating to
+// the SDK crypto client. It returns the data key in plaintext and wrapped by
+// key_id; key_spec.key_size is in bits, and zero leaves the size to the SDK.
+func (a *CryptoServerAdapter) GenerateDataKey(ctx context.Context, req *pb.GenerateDataKeyRequest) (*pb.GenerateDataKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	keySize, err := dataKeyRequestSize(req.GetKeyId(), req.GetKeySpec())
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := a.client.GenerateDataKey(ctx, &quicbaas.GenerateDataKeyRequest{
+		KeyID:   req.GetKeyId(),
+		KeySize: keySize,
+		Context: req.GetContext(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "data key generation failed: %v", err)
+	}
+
+	return &pb.GenerateDataKeyResponse{
+		KeyId:          req.GetKeyId(),
+		Plaintext:      resp.Plaintext,
+		CiphertextBlob: resp.CiphertextBlob,
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// GenerateWrappedDataKey implements pb.CryptoServer.GenerateWrappedDataKey by
+// delegating to the SDK crypto client. Only the data key wrapped by key_id is
+// returned; the plaintext never leaves the service.
+func (a *CryptoServerAdapter) GenerateWrappedDataKey(ctx context.Context, req *pb.GenerateWrappedDataKeyRequest) (*pb.GenerateWrappedDataKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	keySize, err := dataKeyRequestSize(req.GetKeyId(), req.GetKeySpec())
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := a.client.GenerateWrappedDataKey(ctx, &quicbaas.GenerateWrappedDataKeyRequest{
+		KeyID:   req.GetKeyId(),
+		KeySize: keySize,
+		Context: req.GetContext(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "wrapped data key generation failed: %v", err)
+	}
+
+	return &pb.GenerateWrappedDataKeyResponse{
+		KeyId:          req.GetKeyId(),
+		CiphertextBlob: resp.CiphertextBlob,
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// dataKeyRequestSize checks the fields both data-key methods share and
+// returns the requested key size in bits.
+func dataKeyRequestSize(keyID string, spec *pb.KeySpec) (int, error) {
+	if keyID == "" {
+		return 0, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if spec.GetKeySize() < 0 {
+		return 0, status.Error(codes.InvalidArgument, "key_spec.key_size must not be negative")
+	}
+	return int(spec.GetKeySize()), nil
 }
 
 // GenerateHMAC implements pb.CryptoServer.GenerateHMAC by delegating to the
