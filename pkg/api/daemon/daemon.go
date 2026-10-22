@@ -1180,6 +1180,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// REST, gRPC, MCP, and the Unix socket.
 		quicHandler.SetNTPService(ntpGRPCService)
 		quicHandler.SetVPNService(vpnGRPCService)
+		quicHandler.SetOrchestratorService(orchestratorGRPCService)
 		quicHandler.SetAppServices(appServices)
 		quicHandler.SetIDevIDService(idevidService)
 

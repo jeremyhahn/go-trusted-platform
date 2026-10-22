@@ -127,6 +127,11 @@ type QUICServiceHandler struct {
 	// vpnService serves the VPN category opcode (quicwire.OpVPNCategory,
 	// 0x52). It is the same VPNGRPCService instance the other transports use.
 	vpnService platformv1.VPNServiceServer
+
+	// orchestratorService serves the orchestrator category opcode
+	// (quicwire.OpOrchestratorCategory, 0x66). It is the same
+	// OrchestratorGRPCService instance the other transports use.
+	orchestratorService platformv1.OrchestratorServiceServer
 	// cacheService, schedulerService, messagingService and
 	// objectStorageService serve the application service category opcodes
 	// (quicwire.OpCacheCategory, OpSchedulerCategory, OpMessagingCategory and
@@ -611,6 +616,11 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode == quicwire.OpVPNCategory:
 		return h.handleVPNCategory(ctx, req)
 
+	// Orchestrator Category Opcode (0x66) - the go-quicbaas agent fleet:
+	// health, agents, sessions and jobs.
+	case req.Opcode == quicwire.OpOrchestratorCategory:
+		return h.handleOrchestratorCategory(ctx, req)
+
 	// Application Service Category Opcodes (0x53-0x55, 0x60) - cache,
 	// scheduler, messaging and object storage through the composed
 	// go-quicbaas SDK - and the switch category (0xCC), each served by its
@@ -638,8 +648,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// sub-opcodes AND the container sub-opcodes (create/start/stop/remove/
 	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
 	// ranges) in payload[0]; handleVMServiceOperation routes each to its
-	// handler. 0x60 is the object storage category above; the rest of
-	// 0x61-0x6A is unassigned.
+	// handler. 0x60 is the object storage category and 0x66 the
+	// orchestrator category above; the rest of 0x61-0x6A is unassigned.
 	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
 

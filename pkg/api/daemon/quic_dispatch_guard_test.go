@@ -139,6 +139,7 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"configdelivery": {payload: []byte{quicwire.ProvisioningSubGetNonce}, status: quicwire.StatusUnavailable, body: "config delivery service is not available"},
 	"ntp":            {payload: []byte{quicwire.NTPSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: ntp"},
 	"vpn":            {payload: []byte{quicwire.VPNSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: vpn"},
+	"orchestrator":   {payload: []byte{quicwire.OrchestratorSubHealth}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: orchestrator"},
 	"cache":          {payload: []byte{quicwire.CacheSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: cache"},
 	"scheduler":      {payload: []byte{quicwire.SchedulerSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: scheduler"},
 	"messaging":      {payload: []byte{quicwire.MessagingSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: messaging"},
@@ -155,6 +156,7 @@ var quicCategoryProbeSubs = map[byte]byte{
 	quicwire.OpGatewayCategory:       quicwire.OpGatewayStatus,
 	quicwire.OpIPAMCategory:          quicwire.OpGatewayListIPAMPools,
 	quicwire.OpNTPCategory:           quicwire.NTPSubGetStatus,
+	quicwire.OpOrchestratorCategory:  quicwire.OrchestratorSubHealth,
 	quicwire.OpIAMCategory:           quicwire.IAMSubTenantList,
 	quicwire.OpVMExtendedCategory:    quicwire.OpVMRestart,
 	quicwire.OpTPM2Category:          quicwire.SubOpTPM2Info,
@@ -215,7 +217,9 @@ var quicWireOwners = []struct {
 	{0x55, 0x55, "messaging"},
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x60, "objectstorage"},
-	{0x61, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
+	{0x61, 0x65, "reserved"}, // retired top-level VM bytes (#704), unclassified
+	{0x66, 0x66, "orchestrator"},
+	{0x67, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
 	{0x69, 0x69, "vm"},
 	{0x6A, 0x6A, "reserved"}, // retired VMGetState (#704), unclassified
 	{0x6B, 0x6E, "tpm2"},
@@ -390,6 +394,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpNTPCategory":               {value: quicwire.OpNTPCategory, mode: wireDirect, family: "ntp"},
 	"OpIAMCategory":               {value: quicwire.OpIAMCategory, mode: wireDirect, family: "iam"},
 	"OpVPNCategory":               {value: quicwire.OpVPNCategory, mode: wireDirect, family: "vpn"},
+	"OpOrchestratorCategory":      {value: quicwire.OpOrchestratorCategory, mode: wireDirect, family: "orchestrator"},
 	"OpCacheCategory":             {value: quicwire.OpCacheCategory, mode: wireDirect, family: "cache"},
 	"OpSchedulerCategory":         {value: quicwire.OpSchedulerCategory, mode: wireDirect, family: "scheduler"},
 	"OpMessagingCategory":         {value: quicwire.OpMessagingCategory, mode: wireDirect, family: "messaging"},

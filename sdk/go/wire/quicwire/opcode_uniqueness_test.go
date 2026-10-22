@@ -53,6 +53,7 @@ var opcodeNamespaces = map[string]string{
 	"cluster_opcodes.go":       nsTopLevel, // "Cluster category opcode"
 	"iam_opcodes.go":           nsTopLevel, // "IAM category opcode"
 	"vpn_opcodes.go":           nsTopLevel, // "VPN category opcode"
+	"orchestrator_opcodes.go":  nsTopLevel, // "Orchestrator category opcode"
 	"appservice_opcodes.go":    nsTopLevel, // "Application service category opcodes"
 	"phase35_opcodes.go":       nsTopLevel, // "Phase 3.5 category opcodes"
 	"provisioning_opcodes.go":  nsTopLevel, // "Provisioning (config delivery) category opcode"

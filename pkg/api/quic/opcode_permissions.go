@@ -198,6 +198,9 @@ var (
 	ntpRead  = OpcodePermission{Resource: "ntp", Action: actionRead}
 	ntpWrite = OpcodePermission{Resource: "ntp", Action: actionWrite}
 
+	orchestratorRead  = OpcodePermission{Resource: "orchestrator", Action: actionRead}
+	orchestratorWrite = OpcodePermission{Resource: "orchestrator", Action: actionWrite}
+
 	vpnRead  = OpcodePermission{Resource: "vpn", Action: actionRead}
 	vpnWrite = OpcodePermission{Resource: "vpn", Action: actionWrite}
 	vpnAdmin = OpcodePermission{Resource: "vpn", Action: actionAdmin}
@@ -635,6 +638,20 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.NTPSubGetStatus:   ntpRead,
 		quicwire.NTPSubListSources: ntpRead,
 		quicwire.NTPSubStep:        ntpWrite,
+	},
+
+	// go-quicbaas agent fleet (gRPC OrchestratorService)
+	quicwire.OpOrchestratorCategory: {
+		quicwire.OrchestratorSubHealth:       orchestratorRead,
+		quicwire.OrchestratorSubListAgents:   orchestratorRead,
+		quicwire.OrchestratorSubGetAgent:     orchestratorRead,
+		quicwire.OrchestratorSubDisableAgent: orchestratorWrite,
+		quicwire.OrchestratorSubEnableAgent:  orchestratorWrite,
+		quicwire.OrchestratorSubListSessions: orchestratorRead,
+		quicwire.OrchestratorSubCloseSession: orchestratorWrite,
+		quicwire.OrchestratorSubListJobs:     orchestratorRead,
+		quicwire.OrchestratorSubGetJob:       orchestratorRead,
+		quicwire.OrchestratorSubCancelJob:    orchestratorWrite,
 	},
 
 	// VPN control plane (gRPC VPNService). Posture policies are tenant

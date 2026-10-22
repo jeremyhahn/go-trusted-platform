@@ -197,7 +197,8 @@ const (
 
 	// Compute (0x69). The VM verbs travel as OpVMExtendedCategory
 	// sub-opcodes (vm_opcodes.go). 0x60 is OpObjectStorageCategory
-	// (appservice_opcodes.go); the rest of 0x61-0x6A is unassigned.
+	// (appservice_opcodes.go) and 0x66 is OpOrchestratorCategory
+	// (orchestrator_opcodes.go); the rest of 0x61-0x6A is unassigned.
 	//
 	// OpVMExtendedCategory multiplexes the VM operations (create, delete,
 	// start, stop, get, list, restart, suspend, resume and the operational
@@ -854,6 +855,9 @@ var opcodeNames = map[byte]string{
 
 	// VPN control plane
 	OpVPNCategory: "VPNCategory",
+
+	// go-quicbaas agent fleet
+	OpOrchestratorCategory: "OrchestratorCategory",
 
 	// Application services served over the composed go-quicbaas SDK
 	OpCacheCategory:         "CacheCategory",
