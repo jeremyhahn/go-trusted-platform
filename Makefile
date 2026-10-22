@@ -3020,7 +3020,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # decision logic, tested over testdata fixtures with no network. Discovery
 # lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
 # unit stage.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/
+#
+# scripts/foreignfailures added 2026-10-22 (ruling 125): the foreign-failure
+# baseline checker the Integration job runs on a failed suite, and the test
+# that holds .github/foreign-failures.tsv to the ruling. Same reason as
+# depscheck: discovery would not reach it.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/ ./scripts/foreignfailures/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

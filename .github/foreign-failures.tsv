@@ -1,0 +1,222 @@
+# Foreign-failure baseline (Company Agent ruling 125, rulings.md 9589c37).
+#
+# A failure in the Integration job that ruling 104 counts as foreign (fixed
+# only by an upstream release this repository pins, named on an open upstream
+# issue) does not block a merge. The job passes when every failed leaf test is
+# a row below and the run adds no failure main lacks at the same tip;
+# scripts/foreignfailures decides it, and anything it cannot attribute to a
+# listed leaf (a build failure, a panic or timeout, a package that fails with
+# no failing test, a target that fails outside go test) still gates.
+#
+# Only ruling-104 foreign classes may be listed. A row names exactly one leaf
+# test (kind test: the full subtest name in its module-relative package) or one
+# runner target (kind job: an ALL_TARGETS name in run-integration-tests.sh); no
+# wildcards or patterns, so a new failure can never hide under a row. upstream
+# is the open issue, repo#number (several joined by +); closing_release is the
+# release whose adoption fixes it. A row is removed in the PR that adopts its
+# closing release. arm-merge stays the one gate; nothing is admin-merged.
+# docs/test/integration.md describes the baseline.
+#
+# kind	package	name	upstream	closing_release
+test	test/integration	TestMultiProtocolMatrix/iam/gRPC-TCP/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/gRPC-TCP/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/gRPC-TCP/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestMultiProtocolMatrix/iam/gRPC-UDS/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/gRPC-UDS/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/gRPC-UDS/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestMultiProtocolMatrix/iam/QUIC/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/QUIC/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/QUIC/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestMultiProtocolMatrix/iam/MCP/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/MCP/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestMultiProtocolMatrix/iam/MCP/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestServiceProtocolByName/iam/gRPC-TCP/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/gRPC-TCP/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/gRPC-TCP/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestServiceProtocolByName/iam/gRPC-UDS/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/gRPC-UDS/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/gRPC-UDS/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestServiceProtocolByName/iam/QUIC/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/QUIC/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/QUIC/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestServiceProtocolByName/iam/MCP/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/MCP/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestServiceProtocolByName/iam/MCP/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestProtocolByName/gRPC-TCP/iam/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/gRPC-TCP/iam/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/gRPC-TCP/iam/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestProtocolByName/gRPC-UDS/iam/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/gRPC-UDS/iam/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/gRPC-UDS/iam/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestProtocolByName/QUIC/iam/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/QUIC/iam/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/QUIC/iam/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration	TestProtocolByName/MCP/iam/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/MCP/iam/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration	TestProtocolByName/MCP/iam/CheckPermission	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration/iam	TestIAMMultiProtocol/CLI/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleCRUD/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleCRUD/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleCRUD/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleCRUD/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleCRUD/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleHierarchy/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleHierarchy/RevokeRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/CLI/RoleHierarchy/MultipleRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleCRUD/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleCRUD/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleCRUD/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleCRUD/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleCRUD/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleHierarchy/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleHierarchy/RevokeRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/gRPC/RoleHierarchy/MultipleRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleCRUD/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleCRUD/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleCRUD/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleCRUD/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleCRUD/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleHierarchy/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleHierarchy/RevokeRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/QUIC/RoleHierarchy/MultipleRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleCRUD/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleCRUD/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleCRUD/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleCRUD/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleCRUD/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleHierarchy/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleHierarchy/RevokeRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/MCP/RoleHierarchy/MultipleRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleCRUD/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleCRUD/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleCRUD/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleCRUD/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleCRUD/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleHierarchy/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleHierarchy/RevokeRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol/Unix/RoleHierarchy/MultipleRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol_ErrorHandling/CLI/CreateRole_DuplicateID	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMultiProtocol_ErrorHandling/MCP/CreateRole_DuplicateID	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMCLI/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMCLI/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMCLI/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMCLI/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMCLI/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMCLI/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMGRPC/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMGRPC/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMGRPC/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMGRPC/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMGRPC/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMGRPC/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMQUIC/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMQUIC/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMQUIC/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMQUIC/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMQUIC/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMQUIC/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMCP/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMMCP/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMCP/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMCP/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMCP/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMMCP/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMUnix/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/iam	TestIAMUnix/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMUnix/GetRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMUnix/UpdateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMUnix/DeleteRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/iam	TestIAMUnix/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/kms	TestKMSMultiProtocol/CLI/KeyManagement/DisableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/CLI/KeyManagement/EnableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/CLI/CryptoOperations	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/kms	TestKMSMultiProtocol/gRPC/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/kms	TestKMSMultiProtocol/gRPC/SecretsManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/gRPC/SecretsManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/QUIC/SecretsManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/QUIC/SecretsManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/MCP/KeyManagement/DisableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/MCP/KeyManagement/EnableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/MCP/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/kms	TestKMSMultiProtocol/Unix/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/kms	TestKMSMultiProtocol/Unix/SecretsManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/Unix/SecretsManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/quic	TestQUICIAM/IAM_CheckPermission_validates_access	go-quicbaas#1564	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1564
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/VersionManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/VersionManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/StatusAndPolicy/DisableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/StatusAndPolicy/EnableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/StatusAndPolicy/SetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/StatusAndPolicy/GetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/StatusAndPolicy/DisableRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/VersionManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/VersionManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/StatusAndPolicy/DisableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/StatusAndPolicy/EnableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/StatusAndPolicy/SetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/StatusAndPolicy/GetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/QUIC/StatusAndPolicy/DisableRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/MCP/StatusAndPolicy/GetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/VersionManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/VersionManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/StatusAndPolicy/DisableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/StatusAndPolicy/EnableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/StatusAndPolicy/SetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/StatusAndPolicy/GetRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/secrets	TestSecretsMultiProtocol/Unix/StatusAndPolicy/DisableRotationPolicy	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/tpm	TestTPMAttrMultiProtocol/REST/PlatformAttributes	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMAttrMultiProtocol/gRPC/PlatformAttributes	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMAttrMultiProtocol/QUIC/PlatformAttributes	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMAttrMultiProtocol/MCP/PlatformAttributes	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMAttrMultiProtocol/Unix/PlatformAttributes	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/CLI/SRK/SRKInfo	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/CLI/SealUnseal/SealAndUnsealBasic	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/CLI/SealUnseal/SealAndUnsealWithPassword	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/REST/SRK/SRKInfo	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/REST/SealUnseal/SealAndUnsealBasic	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/REST/SealUnseal/SealAndUnsealWithPassword	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/gRPC/SRK/SRKInfo	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/gRPC/SealUnseal/SealAndUnsealBasic	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/gRPC/SealUnseal/SealAndUnsealWithPassword	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/QUIC/SRK/SRKInfo	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/QUIC/SealUnseal/SealAndUnsealBasic	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/QUIC/SealUnseal/SealAndUnsealWithPassword	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/MCP/SRK/SRKInfo	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/MCP/SealUnseal/SealAndUnsealBasic	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/MCP/SealUnseal/SealAndUnsealWithPassword	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/Unix/SRK/SRKInfo	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/Unix/SealUnseal/SealAndUnsealBasic	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/ReadOnly/Unix/SealUnseal/SealAndUnsealWithPassword	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/CLI/EK/EKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/CLI/SRKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/CLI/SRKDelete	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/CLI/SRKCreateECDSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/REST/EK/EKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/REST/SRKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/REST/SRKDelete	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/REST/SRKCreateECDSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/gRPC/EK/EKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/gRPC/SRKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/gRPC/SRKDelete	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/gRPC/SRKCreateECDSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/QUIC/EK/EKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/QUIC/SRKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/QUIC/SRKDelete	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/QUIC/SRKCreateECDSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/MCP/EK/EKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/MCP/SRKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/MCP/SRKDelete	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/MCP/SRKCreateECDSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/Unix/EK/EKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/Unix/SRKCreateRSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/Unix/SRKDelete	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
+test	test/integration/tpm	TestTPMMultiProtocol/Lifecycle/Unix/SRKCreateECDSA	go-quicbaas#1777+go-xkms#1667	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1777 and requires a go-xkms tag carrying go-xkms#1669
