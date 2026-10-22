@@ -909,7 +909,10 @@ func stringsToKeyUsages(usages []string) []pb.KeyUsage {
 func keyUsagesToStrings(usages []pb.KeyUsage) []string {
 	result := make([]string, 0, len(usages))
 	for _, u := range usages {
-		result = append(result, u.String())
+		// The short name (ENCRYPT, WRAP_KEY, ...) is the form REST answers
+		// and stringToKeyUsage accepts, so a policy read over QUIC can be
+		// written back unchanged.
+		result = append(result, strings.TrimPrefix(u.String(), "KEY_USAGE_"))
 	}
 	return result
 }

@@ -82,6 +82,12 @@ stored: the KMS stamps each set with the request's version plus one. The SDK
 the set; a read-back failure fails the request with its class, and the new
 policy is already in force.
 
+A **QUIC key policy** names its `allowed_operations` as strings. QUIC answers
+the short names `ENCRYPT`, `DECRYPT`, `SIGN`, `VERIFY`, `WRAP_KEY`,
+`DERIVE_KEY`, `GENERATE_MAC` and `VERIFY_MAC`, the form REST answers. A request
+may also use any case, dashes for underscores, or the `KEY_USAGE_` prefix, so a
+policy read over QUIC can be written back unchanged.
+
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.
