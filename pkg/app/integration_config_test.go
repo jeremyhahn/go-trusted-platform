@@ -224,6 +224,24 @@ func TestIntegrationConfig_ServesRESTThroughWebservice(t *testing.T) {
 	assert.True(t, ws.Key.PlatformPolicy, "the key is sealed with the swtpm platform policy")
 }
 
+// TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin pins the relying
+// party the harness admin session registers its passkey against: the
+// helper's origin is PLATFORM_REST_ENDPOINT, https://localhost:<REST port>.
+func TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+
+	require.Len(t, a.WebServices, 1, "one webservice serves the harness REST")
+	ws := a.WebServices[0]
+	require.NotNil(t, ws.WebAuthn, "the admin claim registers a passkey, so a relying party is required")
+
+	script, err := os.ReadFile(integrationRunner)
+	require.NoError(t, err)
+	port, ok := harnessRESTPort(script)
+	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+	assert.Equal(t, "localhost", ws.WebAuthn.RPID, "the RP id is the host the adapters dial")
+	assert.Equal(t, []string{"https://localhost:" + port}, ws.WebAuthn.RPOrigins)
+}
+
 func TestIntegrationConfig_HarnessRESTPortMissing(t *testing.T) {
 	port, ok := harnessRESTPort([]byte("PLATFORMD_GRPC_PORT=\"10443\"\n# PLATFORMD_REST_PORT=\"8443\"\n"))
 	assert.False(t, ok, "a commented or absent REST port is not the runner's")

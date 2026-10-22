@@ -314,8 +314,12 @@ sdn:
 # trust verifies it, and their client-bundle.pem completes the TLS handshake
 # (both under <platform-dir>/tls). It is no session for the admin-gated
 # routes, which take a platform-minted bearer token
-# (docs/auth/architecture.md §6c). The key is sealed with the
-# TPM platform policy, which the swtpm platform-srk above provides.
+# (docs/auth/architecture.md §6c). The REST adapters get that bearer from
+# helpers.NewAdminHTTPClient, which claims the platform console once through
+# /api/v1/admin/claim and registers a test-side passkey against the
+# webauthn relying party below (docs/test/integration.md, "Admin session").
+# The key is sealed with the TPM platform policy, which the swtpm
+# platform-srk above provides.
 
 webservices:
   - name: integration
@@ -344,3 +348,8 @@ webservices:
       sans:
         dns:
           - localhost
+    webauthn:
+      display-name: Trusted Platform Integration Tests
+      id: localhost
+      origins:
+        - https://localhost:8443
