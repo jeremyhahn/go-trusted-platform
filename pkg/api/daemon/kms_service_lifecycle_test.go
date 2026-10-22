@@ -46,6 +46,8 @@ type mockSDKKMSClient struct {
 	updateKeyStatusFn func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
 	listKeyVersionsFn func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
 	getPublicKeyFn    func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error)
+	listKeysFn        func(ctx context.Context) (*kms.ListKeysResponse, error)
+	rotateKeyFn       func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
 
 	lastImportReq       *kms.ImportKeyRequest
 	lastPublicKeyID     string
@@ -73,10 +75,16 @@ func (m *mockSDKKMSClient) GetPublicKey(ctx context.Context, keyID string) (*kms
 }
 
 func (m *mockSDKKMSClient) ListKeys(ctx context.Context) (*kms.ListKeysResponse, error) {
+	if m.listKeysFn != nil {
+		return m.listKeysFn(ctx)
+	}
 	return nil, errKMSLifecycleMock{method: "ListKeys"}
 }
 
 func (m *mockSDKKMSClient) RotateKey(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error) {
+	if m.rotateKeyFn != nil {
+		return m.rotateKeyFn(ctx, keyID)
+	}
 	return nil, errKMSLifecycleMock{method: "RotateKey"}
 }
 
@@ -642,6 +650,129 @@ func TestKMSServerAdapterListKeyVersions(t *testing.T) {
 		_, err := adapter.ListKeyVersions(context.Background(), &pb.ListKeyVersionsRequest{KeyId: "key-1"})
 		assertGRPCStatusCode(t, err, codes.Internal)
 	})
+}
+
+func TestKMSServerAdapterListKeysPagination(t *testing.T) {
+	t.Parallel()
+
+	threeKeys := func(ctx context.Context) (*kms.ListKeysResponse, error) {
+		return &kms.ListKeysResponse{Keys: []kms.KeyInfo{
+			{KeyID: "key-a", Version: 1, Algorithm: kms.AlgorithmAES256GCM},
+			{KeyID: "key-b", Version: 1, Algorithm: kms.AlgorithmAES256GCM},
+			{KeyID: "key-c", Version: 2, Algorithm: kms.AlgorithmAES256GCM},
+		}}, nil
+	}
+
+	t.Run("LimitAndCursor", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+
+		first, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(first.GetKeys()) != 2 {
+			t.Fatalf("first page length = %d, want 2", len(first.GetKeys()))
+		}
+		if !first.GetHasMore() || first.GetNextCursor() != "2" || first.GetTotalCount() != 3 {
+			t.Errorf("first page HasMore=%v NextCursor=%q TotalCount=%d, want true \"2\" 3",
+				first.GetHasMore(), first.GetNextCursor(), first.GetTotalCount())
+		}
+
+		second, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2, Cursor: first.GetNextCursor()})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(second.GetKeys()) != 1 || second.GetKeys()[0].GetKeyId() != "key-c" {
+			t.Fatalf("second page = %v, want [key-c]", second.GetKeys())
+		}
+		if second.GetHasMore() || second.GetNextCursor() != "" {
+			t.Errorf("second page HasMore=%v NextCursor=%q, want false \"\"", second.GetHasMore(), second.GetNextCursor())
+		}
+	})
+
+	t.Run("NoLimitReturnsAll", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+		resp, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetKeys()) != 3 || resp.GetHasMore() {
+			t.Errorf("length=%d HasMore=%v, want 3 false", len(resp.GetKeys()), resp.GetHasMore())
+		}
+	})
+
+	t.Run("InvalidCursor", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Cursor: "not-a-number"})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("UnsupportedFilter", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Filter: map[string]string{"status": "enabled"}})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestKMSServerAdapterRotateKeyVersions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReportsReplacedVersion", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{
+			rotateKeyFn: func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error) {
+				return &kms.RotateKeyResponse{KeyID: keyID, NewVersion: 2}, nil
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.RotateKey(context.Background(), &pb.RotateKeyRequest{KeyId: "key-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetOldVersion() != 1 || resp.GetNewVersion() != 2 {
+			t.Errorf("OldVersion=%d NewVersion=%d, want 1 2", resp.GetOldVersion(), resp.GetNewVersion())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.RotateKey(context.Background(), &pb.RotateKeyRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestRotatedFromVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		newVersion int
+		want       uint64
+	}{
+		{newVersion: 2, want: 1},
+		{newVersion: 1, want: 0},
+		{newVersion: 0, want: 0},
+		{newVersion: -1, want: 0},
+	}
+	for _, tt := range tests {
+		if got := rotatedFromVersion(tt.newVersion); got != tt.want {
+			t.Errorf("rotatedFromVersion(%d) = %d, want %d", tt.newVersion, got, tt.want)
+		}
+	}
 }
 
 func TestKMSServerAdapterGetPublicKey(t *testing.T) {

@@ -363,6 +363,9 @@ func testKeyStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 
 	t.Run("DisableKey", func(t *testing.T) {
 		result, err := cmd.KeyStatus(testCtx, keyID, 0, false)
+		if requireKeyStatusSDKGap(t, cmd.Name(), err) {
+			return
+		}
 		require.NoError(t, err, "KeyStatus (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -370,10 +373,35 @@ func testKeyStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 
 	t.Run("EnableKey", func(t *testing.T) {
 		result, err := cmd.KeyStatus(testCtx, keyID, 0, true)
+		if requireKeyStatusSDKGap(t, cmd.Name(), err) {
+			return
+		}
 		require.NoError(t, err, "KeyStatus (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
 	})
+}
+
+// keyStatusSDKGapAdapters are the adapters whose key status update reaches
+// kms.Client.UpdateKeyStatus through the daemon's KMS adapter, which the
+// pinned SDK's embedded transport refuses (helpers.KMSKeyStatusSDKGap).
+var keyStatusSDKGapAdapters = map[string]bool{
+	"gRPC": true,
+	"QUIC": true,
+	"Unix": true,
+}
+
+// requireKeyStatusSDKGap asserts the typed SDK-gap refusal for the adapters in
+// keyStatusSDKGapAdapters and reports whether it did; other adapters return
+// false and keep their own assertions.
+func requireKeyStatusSDKGap(t *testing.T, adapter string, err error) bool {
+	t.Helper()
+	if !keyStatusSDKGapAdapters[adapter] {
+		return false
+	}
+	require.ErrorIs(t, helpers.CLIUpstreamGap("kms key status", helpers.KMSKeyStatusSDKGap, err),
+		helpers.ErrCLIUpstreamGap{}, "%s key status must answer the SDK refusal", adapter)
+	return true
 }
 
 func testKeyAlgorithms(t *testing.T, ctx context.Context, cmd KMSCommands, prefix string) {

@@ -365,8 +365,12 @@ func TestKMSServerAdapterSetKeyPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Success", func(t *testing.T) {
+		updated := time.Unix(1700000000, 0)
 		mock := &extKMSClientMock{
 			setKeyPolicyFn: func(ctx context.Context, req *kms.SetKeyPolicyRequest) error { return nil },
+			getKeyPolicyFn: func(ctx context.Context, keyID string) (*kms.KeyPolicy, error) {
+				return &kms.KeyPolicy{KeyID: keyID, Version: 3, UpdatedAt: updated}, nil
+			},
 		}
 		adapter := NewKMSServerAdapter(mock, slog.Default())
 
@@ -386,7 +390,9 @@ func TestKMSServerAdapterSetKeyPolicy(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "key-1", resp.KeyId)
-		assert.Equal(t, uint64(2), resp.PolicyVersion)
+		// The version is the one the KMS stored, not the request's.
+		assert.Equal(t, uint64(3), resp.PolicyVersion)
+		assert.Equal(t, updated.Unix(), resp.Timestamp)
 
 		require.NotNil(t, mock.lastSetPolicyReq)
 		policy := mock.lastSetPolicyReq.Policy
@@ -415,6 +421,26 @@ func TestKMSServerAdapterSetKeyPolicy(t *testing.T) {
 
 	t.Run("BackendError", func(t *testing.T) {
 		adapter := NewKMSServerAdapter(&extKMSClientMock{}, slog.Default())
+		_, err := adapter.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{KeyId: "key-1", Policy: &pb.KeyPolicy{}})
+		requireGRPCCode(t, err, codes.Internal)
+	})
+
+	t.Run("ReadBackError", func(t *testing.T) {
+		mock := &extKMSClientMock{
+			setKeyPolicyFn: func(ctx context.Context, req *kms.SetKeyPolicyRequest) error { return nil },
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+		_, err := adapter.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{KeyId: "key-1", Policy: &pb.KeyPolicy{}})
+		requireGRPCCode(t, err, codes.Internal)
+		assert.Contains(t, err.Error(), "read-back")
+	})
+
+	t.Run("ReadBackNoPolicy", func(t *testing.T) {
+		mock := &extKMSClientMock{
+			setKeyPolicyFn: func(ctx context.Context, req *kms.SetKeyPolicyRequest) error { return nil },
+			getKeyPolicyFn: func(ctx context.Context, keyID string) (*kms.KeyPolicy, error) { return nil, nil },
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
 		_, err := adapter.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{KeyId: "key-1", Policy: &pb.KeyPolicy{}})
 		requireGRPCCode(t, err, codes.Internal)
 	})

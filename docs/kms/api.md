@@ -65,6 +65,29 @@ export: it returns the public key (PEM or DER) through `GetPublicKey`, not
 is refused with NotFound, because the SDK serves only the current version. REST
 and QUIC have no public-key route yet.
 
+**`ListKeys`** pages on every transport: `limit` caps the page, `cursor` is the
+offset `next_cursor` returned, and the reply carries `has_more` and
+`total_count`. `filter` accepts `name` (exact) and `algorithm` (any case). The
+SDK `ListKeys` takes no paging arguments, so the daemon pages the full list
+itself; a cursor that is not a non-negative number, or another filter key, is
+refused with InvalidArgument.
+
+**`RotateKey`** answers `old_version` and `new_version` on every transport. The
+SDK `RotateKeyResponse` carries only the new version, and a rotation adds
+exactly one version, so `old_version` is `new_version - 1`.
+
+**`SetKeyPolicy`** on gRPC, QUIC and Unix answers the `policy_version` the KMS
+stored: the KMS stamps each set with the request's version plus one. The SDK
+`SetKeyPolicy` returns only an error, so the daemon reads the policy back after
+the set; a read-back failure fails the request with its class, and the new
+policy is already in force.
+
+A **QUIC key policy** names its `allowed_operations` as strings. QUIC answers
+the short names `ENCRYPT`, `DECRYPT`, `SIGN`, `VERIFY`, `WRAP_KEY`,
+`DERIVE_KEY`, `GENERATE_MAC` and `VERIFY_MAC`, the form REST answers. A request
+may also use any case, dashes for underscores, or the `KEY_USAGE_` prefix, so a
+policy read over QUIC can be written back unchanged.
+
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.
@@ -244,6 +267,16 @@ status. A daemon on a remote quicbaas transport serves them.
 secrets` and `kms dek` call `Security().Secrets()` and `Security().DEK()`, so
 against an embedded daemon the same seven secrets verbs exit 1 with the SDK's
 unknown-method error. See [cli.md](cli.md) §7.
+
+**An embedded daemon cannot disable or enable a key.** Seam: go-quicbaas
+`sdk/go` `kms.Client.UpdateKeyStatus`. The SDK client sends
+`*kms.UpdateKeyStatusRequest`, and the pinned embedded handler for
+`quicbaas.KMS/UpdateKeyStatus` (`sdk/go/transport/embedded`, v0.12.0-alpha and
+still v0.14.0-alpha) accepts only `*service.UpdateKeyStatusRequest`, so the
+gRPC, Unix and QUIC `UpdateKeyStatus` routes, which call the SDK through
+`KMSServerAdapter.UpdateKeyStatus`, answer its `invalid request type for
+quicbaas.KMS/UpdateKeyStatus` error. A daemon on a remote quicbaas transport
+serves them.
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on

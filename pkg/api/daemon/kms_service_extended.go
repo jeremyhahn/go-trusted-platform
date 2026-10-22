@@ -133,10 +133,20 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 		return nil, status.Errorf(errclass.Code(err), "key policy update failed: %v", err)
 	}
 
+	// The KMS stamps the stored policy with a new version, but the SDK
+	// SetKeyPolicy call returns only an error, so the version is read back.
+	stored, err := a.client.GetKeyPolicy(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "key policy read-back failed: %v", err)
+	}
+	if stored == nil {
+		return nil, status.Error(codes.Internal, "key policy read-back returned no policy")
+	}
+
 	return &pb.SetKeyPolicyResponse{
 		KeyId:         req.GetKeyId(),
-		PolicyVersion: req.GetPolicy().GetVersion(),
-		Timestamp:     time.Now().Unix(),
+		PolicyVersion: uint64(stored.Version),
+		Timestamp:     stored.UpdatedAt.Unix(),
 	}, nil
 }
 

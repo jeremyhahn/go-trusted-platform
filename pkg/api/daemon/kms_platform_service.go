@@ -504,13 +504,9 @@ func (b *PlatformKMSBackend) RotateKey(
 		return nil, err
 	}
 
-	var oldVersion uint64
-	if resp.NewVersion > 0 {
-		oldVersion = uint64(resp.NewVersion) - 1
-	}
 	return &grpcapi.KMSRotateKeyResponse{
 		KeyID:      resp.KeyID,
-		OldVersion: oldVersion,
+		OldVersion: rotatedFromVersion(resp.NewVersion),
 		NewVersion: uint64(resp.NewVersion),
 		Timestamp:  unixNow(),
 	}, nil
@@ -1332,6 +1328,16 @@ func unixOrZero(t time.Time) int64 {
 // paginateKMSOffset applies offset-cursor pagination over total items. The
 // cursor is a decimal offset produced by a previous call; an empty cursor
 // starts at offset 0. A limit <= 0 returns all remaining items.
+// rotatedFromVersion returns the version a rotation replaced. The SDK
+// RotateKeyResponse carries only the new version, and a rotation always adds
+// exactly one version, so the replaced one is the version before it.
+func rotatedFromVersion(newVersion int) uint64 {
+	if newVersion <= 0 {
+		return 0
+	}
+	return uint64(newVersion) - 1
+}
+
 func paginateKMSOffset(total int, limit int32, cursor string) (start, end int, nextCursor string, hasMore bool, err error) {
 	if cursor != "" {
 		offset, parseErr := strconv.Atoi(cursor)

@@ -30,6 +30,12 @@ import (
 // GetRotationPolicy or SetRotationPolicy, so version and policy fail there.
 const SecretsSDKGapIssue = "go-quicbaas #1619"
 
+// KMSKeyStatusSDKGap names the KMS verb the pinned go-quicbaas SDK's embedded
+// transport refuses: kms.Client.UpdateKeyStatus sends *kms.UpdateKeyStatusRequest
+// and the embedded handler for quicbaas.KMS/UpdateKeyStatus accepts only
+// *service.UpdateKeyStatusRequest, so disabling or enabling a key fails there.
+const KMSKeyStatusSDKGap = "go-quicbaas sdk/go kms.Client.UpdateKeyStatus: embedded transport rejects *kms.UpdateKeyStatusRequest"
+
 // cliUpstreamGapMarkers are the texts platformctl prints on stderr when the
 // SDK does not serve a method: the embedded transport's own answers, and the
 // CLI's ErrSecretsSDKGap, which carries any transport's unimplemented refusal.
