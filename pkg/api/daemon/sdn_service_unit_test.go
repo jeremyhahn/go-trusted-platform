@@ -51,7 +51,7 @@ func newTestSDNService(mockClient *ConfigurableMockOVSClient) *SDNService {
 
 func TestSDNServiceUnit_CreateBridge_Success(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
-	mockClient.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+	mockClient.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 		return &ovs.Bridge{
 			UUID:        "uuid-" + name,
 			Name:        name,
@@ -85,20 +85,16 @@ func TestSDNServiceUnit_CreateBridge_Success(t *testing.T) {
 	assert.Equal(t, "uuid-br0", svc.bridges["br0"].id)
 
 	// Verify mock was called
-	assert.Equal(t, 1, mockClient.GetCallCount("CreateBridge"))
+	assert.Equal(t, 1, mockClient.GetCallCount("CreateBridgeWithOptions"))
 }
 
 func TestSDNServiceUnit_CreateBridge_WithFailMode(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
-	setBridgeFailModeCalled := false
-	mockClient.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
-		return &ovs.Bridge{UUID: "uuid-" + name, Name: name}, nil
-	})
-	mockClient.OnSetBridgeFailMode(func(ctx context.Context, name string, failMode string) error {
-		setBridgeFailModeCalled = true
-		assert.Equal(t, "br0", name)
-		assert.Equal(t, "standalone", failMode)
-		return nil
+	var gotFailMode string
+	mockClient.OnCreateBridgeWithOptions(func(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error) {
+		require.NotNil(t, opts)
+		gotFailMode = opts.FailMode
+		return &ovs.Bridge{UUID: "uuid-" + name, Name: name, FailMode: opts.FailMode}, nil
 	})
 
 	svc := newTestSDNService(mockClient)
@@ -108,7 +104,7 @@ func TestSDNServiceUnit_CreateBridge_WithFailMode(t *testing.T) {
 		Config: &platformv1.BridgeConfig{
 			Name: "br0",
 			Options: map[string]string{
-				"fail_mode": "standalone",
+				"fail_mode": "secure",
 			},
 		},
 	}
@@ -118,12 +114,37 @@ func TestSDNServiceUnit_CreateBridge_WithFailMode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.True(t, resp.Status.Success)
-	assert.True(t, setBridgeFailModeCalled)
+	// The fail mode rides the create transaction: no second reconfiguration,
+	// no window where a secure bridge runs standalone.
+	assert.Equal(t, "secure", gotFailMode)
+	assert.Equal(t, 1, mockClient.GetCallCount("CreateBridgeWithOptions"))
+	assert.Equal(t, 0, mockClient.GetCallCount("SetBridgeFailMode"))
+}
+
+func TestSDNServiceUnit_CreateBridge_InvalidFailMode(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	mockClient.OnCreateBridgeWithOptions(func(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error) {
+		return nil, &ovs.ErrInvalidFailMode{FailMode: opts.FailMode}
+	})
+
+	svc := newTestSDNService(mockClient)
+
+	_, err := svc.CreateBridge(context.Background(), &platformv1.CreateBridgeRequest{
+		Config: &platformv1.BridgeConfig{
+			Name:    "br0",
+			Options: map[string]string{"fail_mode": "bogus"},
+		},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "bogus")
+	assert.NotContains(t, svc.bridges, "br0")
 }
 
 func TestSDNServiceUnit_CreateBridge_OVSError(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
-	mockClient.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+	mockClient.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 		return nil, errors.New("OVS connection failed")
 	})
 
@@ -171,7 +192,7 @@ func TestSDNServiceUnit_CreateBridge_AlreadyExists(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 
 	// Verify OVS client was not called
-	assert.Equal(t, 0, mockClient.GetCallCount("CreateBridge"))
+	assert.Equal(t, 0, mockClient.GetCallCount("CreateBridgeWithOptions"))
 }
 
 // =============================================================================
@@ -434,6 +455,54 @@ func TestSDNServiceUnit_AddPort_Success(t *testing.T) {
 
 	// Verify port was tracked
 	assert.Contains(t, svc.ports, "port0")
+}
+
+func TestSDNServiceUnit_AddPort_InterfaceType(t *testing.T) {
+	tests := []struct {
+		name     string
+		portType platformv1.PortType
+		want     string
+	}{
+		{"internal port gets an internal interface", platformv1.PortType_PORT_TYPE_INTERNAL, "internal"},
+		{"vxlan port gets a vxlan interface", platformv1.PortType_PORT_TYPE_VXLAN, "vxlan"},
+		{"unspecified port attaches a system device", platformv1.PortType_PORT_TYPE_UNSPECIFIED, ""},
+		{"physical port attaches a system device", platformv1.PortType_PORT_TYPE_PHYSICAL, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := NewConfigurableMockOVSClient()
+			svc := newTestSDNService(mockClient)
+			svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+			_, err := svc.AddPort(context.Background(), &platformv1.AddPortRequest{
+				BridgeId: "br0",
+				Config:   &platformv1.PortConfig{Name: "port0", Type: tt.portType},
+			})
+			require.NoError(t, err)
+
+			calls := mockClient.GetCalls("AddPortWithType")
+			require.Len(t, calls, 1)
+			assert.Equal(t, tt.want, calls[0].Args[2])
+		})
+	}
+}
+
+func TestSDNServiceUnit_AddPort_TypedAddFails(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	mockClient.OnAddPort(func(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+		return nil, ovs.ErrPortExists
+	})
+	svc := newTestSDNService(mockClient)
+	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+	_, err := svc.AddPort(context.Background(), &platformv1.AddPortRequest{
+		BridgeId: "br0",
+		Config:   &platformv1.PortConfig{Name: "port0", Type: platformv1.PortType_PORT_TYPE_INTERNAL},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, svc.ports, "port0")
 }
 
 func TestSDNServiceUnit_AddPort_WithVLAN(t *testing.T) {
@@ -1562,7 +1631,7 @@ func TestSDNServiceUnit_OVSClient_Getter(t *testing.T) {
 
 func TestSDNServiceUnit_ConcurrentBridgeAccess(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
-	mockClient.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+	mockClient.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 		return &ovs.Bridge{UUID: "uuid-" + name, Name: name}, nil
 	})
 	mockClient.OnListBridges(func(ctx context.Context) ([]*ovs.Bridge, error) {

@@ -196,17 +196,18 @@ func (s *SDNService) CreateBridge(ctx context.Context, req *platformv1.CreateBri
 
 	client := s.getOVSClient()
 
-	// Create the bridge via OVS without holding the lock
-	ovsBridge, err := client.CreateBridge(ctx, config.GetName())
+	// Create the bridge with its fail mode in one OVS transaction, without
+	// holding the lock: setting the fail mode afterwards costs a second
+	// ovs-vswitchd reconfiguration and leaves a "secure" bridge running as a
+	// standalone learning switch in between.
+	opts := &ovs.BridgeOptions{FailMode: config.GetOptions()["fail_mode"]}
+	ovsBridge, err := client.CreateBridgeWithOptions(ctx, config.GetName(), opts)
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create bridge: %v", err))
-	}
-
-	// Set fail mode if specified (best-effort, no lock needed)
-	if config.GetOptions() != nil {
-		if failMode, ok := config.GetOptions()["fail_mode"]; ok {
-			_ = client.SetBridgeFailMode(ctx, config.GetName(), failMode)
+		var invalidFailMode *ovs.ErrInvalidFailMode
+		if errors.As(err, &invalidFailMode) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create bridge: %v", err))
 	}
 
 	// Track the bridge under write lock
@@ -307,6 +308,15 @@ func (s *SDNService) ListBridges(ctx context.Context, req *platformv1.ListBridge
 	}, nil
 }
 
+// portInterfaceTypes maps a requested port type to the Open vSwitch Interface
+// type that implements it. Every other type is "" (system): an existing kernel
+// device of the port's name, which for PORT_TYPE_TAP AddPort creates first.
+var portInterfaceTypes = map[platformv1.PortType]string{
+	platformv1.PortType_PORT_TYPE_INTERNAL: "internal",
+	platformv1.PortType_PORT_TYPE_VXLAN:    "vxlan",
+	platformv1.PortType_PORT_TYPE_GRE:      "gre",
+}
+
 // AddPort adds a port to a bridge (requires root)
 func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error) {
 	if req.GetBridgeId() == "" {
@@ -355,8 +365,9 @@ func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest
 		_ = s.netlinkManager.SetTAPUp(config.GetName())
 	}
 
-	// Add port to bridge via OVS without holding the lock
-	ovsPort, err := client.AddPort(ctx, bridgeName, config.GetName())
+	// Add port to bridge via OVS without holding the lock, its interface
+	// typed in the same transaction
+	ovsPort, err := client.AddPortWithType(ctx, bridgeName, config.GetName(), portInterfaceTypes[config.GetType()])
 	if err != nil {
 		// Clean up TAP if we created it
 		if config.GetType() == platformv1.PortType_PORT_TYPE_TAP {

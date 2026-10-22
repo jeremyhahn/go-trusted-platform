@@ -499,15 +499,13 @@ type NetworkZoneListResponse struct {
 // SDNServiceInterface defines the interface for SDN operations.
 type SDNServiceInterface interface {
 	// Bridge operations
-	CreateBridge(ctx context.Context, name string) (*ovs.Bridge, error)
+	CreateBridgeWithOptions(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error)
 	DeleteBridge(ctx context.Context, name string) error
 	GetBridge(ctx context.Context, name string) (*ovs.Bridge, error)
 	ListBridges(ctx context.Context) ([]*ovs.Bridge, error)
-	SetBridgeFailMode(ctx context.Context, name, failMode string) error
-	SetBridgeProtocols(ctx context.Context, name string, protocols []string) error
 
 	// Port operations
-	AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error)
+	AddPortWithType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error)
 	DeletePort(ctx context.Context, bridgeName, portName string) error
 	GetPort(ctx context.Context, name string) (*ovs.Port, error)
 	ListPorts(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
@@ -649,24 +647,18 @@ func (h *SDNHandlers) handleCreateBridge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bridge, err := h.sdnService.CreateBridge(ctx, req.Name)
+	// The fail mode and protocols go in the bridge's own row, in one
+	// transaction: a bridge asked for as "secure" never exists in the
+	// standalone (learning-switch) mode, and the create waits for
+	// ovs-vswitchd once, not once per setting.
+	bridge, err := h.sdnService.CreateBridgeWithOptions(ctx, req.Name, &ovs.BridgeOptions{
+		FailMode:  req.FailMode,
+		Protocols: req.Protocols,
+	})
 	if err != nil {
 		h.logger.Error("Failed to create bridge", "error", err, "name", req.Name)
 		h.writeSDNError(w, "create_bridge", err)
 		return
-	}
-
-	// Set additional properties if specified
-	if req.FailMode != "" {
-		if err := h.sdnService.SetBridgeFailMode(ctx, req.Name, req.FailMode); err != nil {
-			h.logger.Warn("Failed to set bridge fail mode", "error", err, "name", req.Name)
-		}
-	}
-
-	if len(req.Protocols) > 0 {
-		if err := h.sdnService.SetBridgeProtocols(ctx, req.Name, req.Protocols); err != nil {
-			h.logger.Warn("Failed to set bridge protocols", "error", err, "name", req.Name)
-		}
 	}
 
 	resp := h.ovsBridgeToResponse(bridge)
@@ -796,7 +788,9 @@ func (h *SDNHandlers) handleAddPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port, err := h.sdnService.AddPort(ctx, bridgeID, req.Name)
+	// The interface type is written in the insert itself: an "internal" port
+	// never exists as a system interface attaching a kernel device of its name.
+	port, err := h.sdnService.AddPortWithType(ctx, bridgeID, req.Name, req.Type)
 	if err != nil {
 		h.logger.Error("Failed to add port", "error", err, "bridge", bridgeID, "port", req.Name)
 		h.writeSDNError(w, "add_port", err)
@@ -1298,11 +1292,17 @@ func (h *SDNHandlers) writeSDNError(w http.ResponseWriter, operation string, err
 	var status int
 	var invalidPolicing *ovs.ErrInvalidPolicing
 	var invalidShaping *ovs.ErrInvalidShaping
+	var invalidFailMode *ovs.ErrInvalidFailMode
+	var invalidPortType *ovs.ErrInvalidPortType
 
 	switch {
 	case errors.As(err, &invalidPolicing):
 		status = http.StatusBadRequest
 	case errors.As(err, &invalidShaping):
+		status = http.StatusBadRequest
+	case errors.As(err, &invalidFailMode), errors.As(err, &invalidPortType):
+		status = http.StatusBadRequest
+	case errors.Is(err, ovs.ErrInvalidProtocol):
 		status = http.StatusBadRequest
 	case errors.Is(err, ovs.ErrInterfaceNotFound):
 		status = http.StatusNotFound
@@ -1712,17 +1712,34 @@ var portStates = map[string]ovs.PortState{
 
 // interfaceToPortState reports an Open vSwitch interface's state.
 func interfaceToPortState(bridgeID, portID string, iface *ovs.Interface) PortStateResponse {
+	linkState := recordedState(iface.LinkState)
 	return PortStateResponse{
 		BridgeID:   bridgeID,
 		PortID:     portID,
 		PortNumber: iface.OFPort,
-		AdminState: iface.AdminState,
-		OperState:  iface.LinkState,
-		LinkState:  iface.LinkState,
+		AdminState: recordedState(iface.AdminState),
+		OperState:  linkState,
+		LinkState:  linkState,
 		Speed:      iface.Speed,
 		Duplex:     iface.Duplex,
 		UpdatedAt:  time.Now().UTC(),
 	}
+}
+
+// portStateUnknown is the state reported for an interface whose state Open
+// vSwitch has not recorded: ovs-vswitchd writes admin_state and link_state
+// only once it has opened the interface's network device, so a port with no
+// device behind it has neither. It is the webservice router's word for the
+// same case (PORT_STATUS_UNSPECIFIED).
+const portStateUnknown = "unknown"
+
+// recordedState returns the state Open vSwitch recorded, or portStateUnknown
+// when it recorded none.
+func recordedState(state string) string {
+	if state == "" {
+		return portStateUnknown
+	}
+	return state
 }
 
 // =============================================================================
