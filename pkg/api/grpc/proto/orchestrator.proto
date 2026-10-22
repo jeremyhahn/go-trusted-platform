@@ -1,0 +1,223 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// OrchestratorService is the platform operator's surface over the go-quicbaas
+// orchestrator: fleet health, agents, sessions and jobs. The platform holds
+// no orchestrator state of its own; every RPC is answered by
+// quicbaas.Client.Orchestrator() through the platform service layer
+// (pkg/orchestrator).
+service OrchestratorService {
+  // Health returns the orchestrator's health check report.
+  rpc Health(OrchestratorHealthRequest) returns (OrchestratorHealthResponse);
+
+  // ListAgents returns one page of a tenant's registered fleet agents.
+  rpc ListAgents(ListOrchestratorAgentsRequest) returns (ListOrchestratorAgentsResponse);
+
+  // GetAgent returns one registered agent.
+  rpc GetAgent(GetOrchestratorAgentRequest) returns (GetOrchestratorAgentResponse);
+
+  // DisableAgent administratively disables an agent and revokes its
+  // credentials.
+  rpc DisableAgent(DisableOrchestratorAgentRequest) returns (DisableOrchestratorAgentResponse);
+
+  // EnableAgent re-activates a disabled agent.
+  rpc EnableAgent(EnableOrchestratorAgentRequest) returns (EnableOrchestratorAgentResponse);
+
+  // ListSessions returns one page of agent sessions.
+  rpc ListSessions(ListOrchestratorSessionsRequest) returns (ListOrchestratorSessionsResponse);
+
+  // CloseSession terminates an agent session.
+  rpc CloseSession(CloseOrchestratorSessionRequest) returns (CloseOrchestratorSessionResponse);
+
+  // ListJobs returns one page of a tenant's orchestration jobs.
+  rpc ListJobs(ListOrchestratorJobsRequest) returns (ListOrchestratorJobsResponse);
+
+  // GetJob returns the current status of one orchestration job.
+  rpc GetJob(GetOrchestratorJobRequest) returns (GetOrchestratorJobResponse);
+
+  // CancelJob cancels a running orchestration job.
+  rpc CancelJob(CancelOrchestratorJobRequest) returns (CancelOrchestratorJobResponse);
+}
+
+// OrchestratorPage selects one page of a listing. Zero values take the
+// server's default page.
+message OrchestratorPage {
+  // limit is the page size; the server caps it at its maximum.
+  int32 limit = 1;
+
+  // offset is how many records to skip.
+  int32 offset = 2;
+}
+
+// OrchestratorPageInfo reports the page the server applied.
+message OrchestratorPageInfo {
+  // total is how many records matched before the page was cut.
+  int32 total = 1;
+
+  // limit and offset are the values the server applied.
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message OrchestratorHealthRequest {}
+
+message OrchestratorHealthResponse {
+  bool healthy = 1;
+  string status = 2;
+
+  // components maps each orchestrator component to its status.
+  map<string, string> components = 3;
+
+  // timestamp is the Unix time of the report.
+  int64 timestamp = 4;
+}
+
+// OrchestratorAgent is a registered fleet agent.
+message OrchestratorAgent {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string host = 4;
+  string backend = 5;
+  string model = 6;
+  string agent_type = 7;
+  string status = 8;
+  int64 last_seen = 9;
+  int64 registered_at = 10;
+  map<string, string> metadata = 11;
+}
+
+message ListOrchestratorAgentsRequest {
+  string tenant_id = 1;
+
+  // status, host and backend narrow the listing; empty matches all.
+  string status = 2;
+  string host = 3;
+  string backend = 4;
+
+  OrchestratorPage page = 5;
+}
+
+message ListOrchestratorAgentsResponse {
+  repeated OrchestratorAgent agents = 1;
+  OrchestratorPageInfo page = 2;
+}
+
+message GetOrchestratorAgentRequest {
+  string tenant_id = 1;
+  string agent_id = 2;
+}
+
+message GetOrchestratorAgentResponse {
+  OrchestratorAgent agent = 1;
+}
+
+message DisableOrchestratorAgentRequest {
+  string tenant_id = 1;
+  string agent_id = 2;
+}
+
+message DisableOrchestratorAgentResponse {
+  string agent_id = 1;
+  bool disabled = 2;
+
+  // disabled_at is the Unix time the agent was disabled.
+  int64 disabled_at = 3;
+}
+
+message EnableOrchestratorAgentRequest {
+  string tenant_id = 1;
+  string agent_id = 2;
+}
+
+message EnableOrchestratorAgentResponse {
+  string agent_id = 1;
+  bool enabled = 2;
+}
+
+// OrchestratorSession is one agent session.
+message OrchestratorSession {
+  string session_id = 1;
+  string backend = 2;
+  string model = 3;
+  string status = 4;
+  int64 created_at = 5;
+  int64 last_active = 6;
+  string job_id = 7;
+  string runner = 8;
+  string agent_id = 9;
+}
+
+message ListOrchestratorSessionsRequest {
+  // status, job_id and agent_id narrow the listing; empty matches all.
+  string status = 1;
+  string job_id = 2;
+  string agent_id = 3;
+
+  OrchestratorPage page = 4;
+}
+
+message ListOrchestratorSessionsResponse {
+  repeated OrchestratorSession sessions = 1;
+  OrchestratorPageInfo page = 2;
+}
+
+message CloseOrchestratorSessionRequest {
+  string session_id = 1;
+}
+
+message CloseOrchestratorSessionResponse {
+  string session_id = 1;
+  bool closed = 2;
+}
+
+// OrchestratorJob summarizes one orchestration job.
+message OrchestratorJob {
+  string job_id = 1;
+  string state = 2;
+  string description = 3;
+  int32 task_count = 4;
+  int32 completed = 5;
+  int32 failed = 6;
+  int64 started_at = 7;
+  int64 updated_at = 8;
+  string error = 9;
+  string task_id = 10;
+  string runner = 11;
+}
+
+message ListOrchestratorJobsRequest {
+  string tenant_id = 1;
+
+  // statuses narrows the listing to jobs in any of these states.
+  repeated string statuses = 2;
+
+  OrchestratorPage page = 3;
+}
+
+message ListOrchestratorJobsResponse {
+  repeated OrchestratorJob jobs = 1;
+  OrchestratorPageInfo page = 2;
+}
+
+message GetOrchestratorJobRequest {
+  string tenant_id = 1;
+  string job_id = 2;
+}
+
+message GetOrchestratorJobResponse {
+  OrchestratorJob job = 1;
+}
+
+message CancelOrchestratorJobRequest {
+  string tenant_id = 1;
+  string job_id = 2;
+}
+
+message CancelOrchestratorJobResponse {
+  string job_id = 1;
+  bool cancelled = 2;
+}
