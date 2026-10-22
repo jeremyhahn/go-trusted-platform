@@ -39,6 +39,7 @@ import (
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -154,28 +155,8 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 
 	logger.Info("Testing certificate-based network access")
 
-	require.NotNil(t, env.deviceCertificate, "Device must have certificate")
-
-	// Step 1: Enrollment event
-	enrollmentEvent := &policy.EnrollmentEvent{
-		Context:             ctx,
-		Certificate:         env.deviceCertificate,
-		CertificatePEM:      pemEncodeCertificate(env.deviceCertificate),
-		ClientIP:            env.clientIP,
-		IsTCGCSR:            true,
-		ProductModel:        env.deviceModel,
-		ProductSerial:       env.deviceSerial,
-		PermanentIdentifier: env.deviceSerial,
-	}
-
-	// Step 2: Process enrollment
-	err := env.enrollmentHook.OnEnrollmentComplete(enrollmentEvent)
-	require.NoError(t, err, "Enrollment hook should succeed")
-
-	// Step 3: Verify port state
-	portState, err := env.policyEngine.GetPortState(env.portID)
-	require.NoError(t, err)
-	assert.Equal(t, policy.PortStateEnrolled, portState)
+	// Steps 1-3: enrollment stores this subtest's own pending activation
+	enrollDevice(t, ctx, env)
 
 	// Step 4: Activate device — precheck issues the plan, activation
 	// consumes it
@@ -188,7 +169,7 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 	assert.Equal(t, policy.ActivationStatusActivated, result.Status)
 
 	// Step 5: Verify authorized state
-	portState, err = env.policyEngine.GetPortState(env.portID)
+	portState, err := env.policyEngine.GetPortState(env.portID)
 	require.NoError(t, err)
 	assert.Equal(t, policy.PortStateAuthorized, portState)
 
@@ -200,8 +181,11 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 func testEndToEndEnrollment(t *testing.T, ctx context.Context, env *testEnvironment) {
 	logger := env.logger
 
-	require.NotNil(t, env.deviceCertificate, "Device must have certificate")
 	require.NotNil(t, env.devicePrivateKey, "Device must have private key")
+
+	// Enrollment stores this subtest's own pending activation; an earlier
+	// subtest's activation consumed the one it created.
+	enrollDevice(t, ctx, env)
 
 	// Create provisioning client
 	provisioningClient := createProvisioningClient(t, env)
@@ -217,8 +201,49 @@ func testEndToEndEnrollment(t *testing.T, ctx context.Context, env *testEnvironm
 	activateResp, err := provisioningClient.Activate(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "activated", activateResp.Status)
+	assert.Equal(t, productionVLAN, activateResp.VLAN)
+
+	portState, err := env.policyEngine.GetPortState(env.portID)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateAuthorized, portState)
+
+	// A successful activation consumes the pending activation, so activating
+	// again is a 404, not a server fault (docs/sdn/provisioning.md, "POST
+	// /api/v1/device/activate" errors). The port stays authorized.
+	_, err = provisioningClient.Activate(ctx)
+	require.ErrorIs(t, err, provisioning.ErrServerError)
+	assert.ErrorContains(t, err, "server returned status 404")
+
+	portState, err = env.policyEngine.GetPortState(env.portID)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateAuthorized, portState)
 
 	logger.Info("Device activation completed", "vlan", activateResp.VLAN)
+}
+
+// enrollDevice runs the enrollment hook for the suite's device certificate,
+// which stores a fresh pending activation, and asserts the port is enrolled.
+func enrollDevice(t *testing.T, ctx context.Context, env *testEnvironment) {
+	t.Helper()
+
+	require.NotNil(t, env.deviceCertificate, "Device must have certificate")
+
+	enrollmentEvent := &policy.EnrollmentEvent{
+		Context:             ctx,
+		Certificate:         env.deviceCertificate,
+		CertificatePEM:      pemEncodeCertificate(env.deviceCertificate),
+		ClientIP:            env.clientIP,
+		IsTCGCSR:            true,
+		ProductModel:        env.deviceModel,
+		ProductSerial:       env.deviceSerial,
+		PermanentIdentifier: env.deviceSerial,
+	}
+	require.NoError(t, env.enrollmentHook.OnEnrollmentComplete(enrollmentEvent),
+		"Enrollment hook should succeed")
+
+	portState, err := env.policyEngine.GetPortState(env.portID)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateEnrolled, portState)
 }
 
 // testEnrollmentErrorCases tests various error scenarios
