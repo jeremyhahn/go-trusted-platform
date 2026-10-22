@@ -113,7 +113,6 @@ func allRoutes() []route {
 		{http.MethodGet, "/api/v1/tenants/test-tenant-id", ""},
 		{http.MethodGet, "/api/v1/tenants/test-tenant-id/quotas", ""},
 		{http.MethodGet, "/api/v1/tenants/test-tenant-id/usage", ""},
-		{http.MethodGet, "/api/v1/tenants/test-tenant-id/bridge", ""},
 		{http.MethodGet, "/api/v1/tenants/test-tenant-id/dek", ""},
 		{http.MethodGet, "/api/v1/tenants/test-tenant-id/barrier", ""},
 
@@ -157,7 +156,6 @@ func allRoutes() []route {
 		{http.MethodGet, "/api/v1/kms/keys", ""},
 		{http.MethodGet, "/api/v1/sdn/bridges", ""},
 		{http.MethodGet, "/api/v1/dns/zones", ""},
-		{http.MethodGet, "/api/v1/vtpm/instances", ""},
 		{http.MethodGet, "/api/v1/platform/health", ""},
 		{http.MethodGet, "/api/v1/devices", ""},
 		{http.MethodGet, "/api/v1/ca/info", ""},
