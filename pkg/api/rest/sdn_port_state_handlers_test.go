@@ -67,6 +67,20 @@ func TestGetPortState(t *testing.T) {
 		assert.False(t, resp.UpdatedAt.IsZero())
 	})
 
+	t.Run("reports unknown until ovs-vswitchd has reported the state", func(t *testing.T) {
+		svc, router := portStateRouter()
+		svc.interfaces["eth1"] = &ovs.Interface{Name: "eth1"}
+
+		w := serveSDN(router, http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/eth1/state", nil)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var resp PortStateResponse
+		decodeSDNResponse(t, w.Body, &resp)
+		assert.Equal(t, "unknown", resp.AdminState)
+		assert.Equal(t, "unknown", resp.OperState)
+		assert.Equal(t, "unknown", resp.LinkState)
+	})
+
 	t.Run("answers 404 for an unknown port", func(t *testing.T) {
 		_, router := portStateRouter()
 

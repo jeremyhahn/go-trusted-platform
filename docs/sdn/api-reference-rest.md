@@ -62,7 +62,9 @@ GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 
 The state and stats routes read the port's Open vSwitch interface row. State
 answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
-`link_state`, `speed` and `duplex`. Stats answers the interface counters:
+`link_state`, `speed` and `duplex`. ovs-vswitchd writes the interface's
+`admin_state` and `link_state` once it has opened the network device; until
+then (or when it cannot open it) those three fields are `unknown`. Stats answers the interface counters:
 `rx_`/`tx_` `packets`, `bytes`, `dropped` and `errors`, plus `rx_frame_err`,
 `rx_over_err`, `rx_crc_err` and `collisions`.
 
