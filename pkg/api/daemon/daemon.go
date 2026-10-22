@@ -42,6 +42,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/orchestrator"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
@@ -236,6 +237,9 @@ type Daemon struct {
 	pxeGRPCService *PXEGRPCService
 	ntpGRPCService *NTPGRPCService
 	vpnGRPCService *VPNGRPCService
+	// orchestratorGRPCService serves the go-quicbaas agent fleet on every
+	// transport (docs/orchestrator/).
+	orchestratorGRPCService *OrchestratorGRPCService
 	// vpnControlPlane is the store behind vpnGRPCService, or nil when the
 	// daemon runs without a platform store.
 	vpnControlPlane *vpn.Service
@@ -1016,6 +1020,19 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("NTP gRPC service registered")
 
+	// Create the orchestrator gRPC service over the pkg/orchestrator service
+	// layer. The go-quicbaas orchestrator client is resolved on every call;
+	// until the quicbaas factory has an SDK client every RPC returns a typed
+	// Unavailable error on every transport.
+	orchestratorGRPCService := NewOrchestratorGRPCService(orchestrator.NewService(orchestratorClientResolver(config)))
+	if grpcServer != nil {
+		platformv1.RegisterOrchestratorServiceServer(grpcServer, orchestratorGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterOrchestratorServiceServer(grpcUDSServer, orchestratorGRPCService)
+	}
+	logger.Info("Orchestrator gRPC service registered")
+
 	// Create the VPN control-plane gRPC service. It is backed by the
 	// platform store; without one every RPC answers the typed
 	// not-configured status on every transport.
@@ -1424,6 +1441,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		dnsGRPCService:               dnsGRPCService,
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
+		orchestratorGRPCService:      orchestratorGRPCService,
 		vpnGRPCService:               vpnGRPCService,
 		vpnControlPlane:              vpnControlPlane,
 		switchGRPCService:            switchGRPCService,
@@ -3153,6 +3171,12 @@ func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
 // Returns nil if not configured.
 func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 	return d.ntpGRPCService
+}
+
+// OrchestratorGRPCServiceServer returns the orchestrator gRPC service backing
+// /api/v1/orchestrator. It is never nil once New returns.
+func (d *Daemon) OrchestratorGRPCServiceServer() *OrchestratorGRPCService {
+	return d.orchestratorGRPCService
 }
 
 // VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.

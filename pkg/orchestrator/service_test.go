@@ -37,6 +37,10 @@ type fakeClient struct {
 
 var disabledAt = time.Unix(1700000000, 0)
 
+func serviceOver(client sdkorch.Client) *Service {
+	return NewService(func() sdkorch.Client { return client })
+}
+
 func (f *fakeClient) Health(context.Context) (*sdkorch.HealthCheckReport, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -167,7 +171,11 @@ func TestService_EveryOperationRefusesWithoutClient(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			err := run(context.Background(), NewService(nil))
 			if !errors.Is(err, ErrNotConfigured{}) {
-				t.Fatalf("err = %v, want ErrNotConfigured", err)
+				t.Fatalf("nil resolver: err = %v, want ErrNotConfigured", err)
+			}
+			err = run(context.Background(), NewService(func() sdkorch.Client { return nil }))
+			if !errors.Is(err, ErrNotConfigured{}) {
+				t.Fatalf("resolver without a client: err = %v, want ErrNotConfigured", err)
 			}
 			if Classify(err) != KindUnavailable {
 				t.Fatalf("Classify = %v, want KindUnavailable", Classify(err))
@@ -180,7 +188,7 @@ func TestService_EveryOperationWrapsSDKError(t *testing.T) {
 	sdkErr := sdkerrors.NewNotFound("orchestrator", "no such record")
 	for name, run := range validCalls {
 		t.Run(name, func(t *testing.T) {
-			err := run(context.Background(), NewService(&fakeClient{err: sdkErr}))
+			err := run(context.Background(), serviceOver(&fakeClient{err: sdkErr}))
 			var opErr *OperationError
 			if !errors.As(err, &opErr) || opErr.Op != name {
 				t.Fatalf("err = %v, want OperationError for %s", err, name)
@@ -194,7 +202,7 @@ func TestService_EveryOperationWrapsSDKError(t *testing.T) {
 
 func TestService_MissingFields(t *testing.T) {
 	ctx := context.Background()
-	s := NewService(&fakeClient{})
+	s := serviceOver(&fakeClient{})
 	cases := map[string]struct {
 		run   func() error
 		field string
@@ -249,7 +257,7 @@ func TestService_MissingFields(t *testing.T) {
 func TestService_NegativePageRefused(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakeClient{}
-	s := NewService(fake)
+	s := serviceOver(fake)
 	bad := &platformv1.OrchestratorPage{Limit: -1}
 	_, agentsErr := s.ListAgents(ctx, &platformv1.ListOrchestratorAgentsRequest{TenantId: "t1", Page: bad})
 	_, sessionsErr := s.ListSessions(ctx, &platformv1.ListOrchestratorSessionsRequest{Page: &platformv1.OrchestratorPage{Offset: -2}})
@@ -265,7 +273,7 @@ func TestService_NegativePageRefused(t *testing.T) {
 }
 
 func TestService_Health(t *testing.T) {
-	resp, err := NewService(&fakeClient{}).Health(context.Background(), &platformv1.OrchestratorHealthRequest{})
+	resp, err := serviceOver(&fakeClient{}).Health(context.Background(), &platformv1.OrchestratorHealthRequest{})
 	if err != nil {
 		t.Fatalf("Health: %v", err)
 	}
@@ -276,7 +284,7 @@ func TestService_Health(t *testing.T) {
 
 func TestService_ListAgentsPassesFiltersAndPage(t *testing.T) {
 	fake := &fakeClient{}
-	resp, err := NewService(fake).ListAgents(context.Background(), &platformv1.ListOrchestratorAgentsRequest{
+	resp, err := serviceOver(fake).ListAgents(context.Background(), &platformv1.ListOrchestratorAgentsRequest{
 		TenantId: "t1", Status: "online", Host: "h1", Backend: "claude",
 		Page: &platformv1.OrchestratorPage{Limit: 10, Offset: 20},
 	})
@@ -296,7 +304,7 @@ func TestService_ListAgentsPassesFiltersAndPage(t *testing.T) {
 }
 
 func TestService_GetAgent(t *testing.T) {
-	resp, err := NewService(&fakeClient{}).GetAgent(context.Background(), &platformv1.GetOrchestratorAgentRequest{TenantId: "t1", AgentId: "a9"})
+	resp, err := serviceOver(&fakeClient{}).GetAgent(context.Background(), &platformv1.GetOrchestratorAgentRequest{TenantId: "t1", AgentId: "a9"})
 	if err != nil {
 		t.Fatalf("GetAgent: %v", err)
 	}
@@ -307,7 +315,7 @@ func TestService_GetAgent(t *testing.T) {
 
 func TestService_DisableAndEnableAgent(t *testing.T) {
 	ctx := context.Background()
-	s := NewService(&fakeClient{})
+	s := serviceOver(&fakeClient{})
 	disabled, err := s.DisableAgent(ctx, &platformv1.DisableOrchestratorAgentRequest{TenantId: "t1", AgentId: "a1"})
 	if err != nil {
 		t.Fatalf("DisableAgent: %v", err)
@@ -327,7 +335,7 @@ func TestService_DisableAndEnableAgent(t *testing.T) {
 func TestService_ListSessionsAndClose(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakeClient{}
-	s := NewService(fake)
+	s := serviceOver(fake)
 	list, err := s.ListSessions(ctx, &platformv1.ListOrchestratorSessionsRequest{JobId: "j1", Status: "active", AgentId: "a1"})
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
@@ -350,7 +358,7 @@ func TestService_ListSessionsAndClose(t *testing.T) {
 func TestService_Jobs(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakeClient{}
-	s := NewService(fake)
+	s := serviceOver(fake)
 	list, err := s.ListJobs(ctx, &platformv1.ListOrchestratorJobsRequest{TenantId: "t1", Statuses: []string{"running"}})
 	if err != nil {
 		t.Fatalf("ListJobs: %v", err)

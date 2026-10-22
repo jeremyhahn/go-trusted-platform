@@ -233,7 +233,7 @@ var wildcardOnlyScopes = map[string]string{
 func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 	platformResources := map[string]bool{
 		"vtpm": true, "dns": true, "device": true, "sdn": true, "kms": true,
-		"iam": true, "proxy": true, "ntp": true, "platform": true,
+		"iam": true, "proxy": true, "ntp": true, "platform": true, "orchestrator": true,
 		"attestation": true, "bmc": true, "cluster": true, "container": true,
 		"vm": true, "provisioning": true, "eab": true, "fido2": true,
 		"idevid": true, "invitation": true, "luks": true, "pxe": true,

@@ -54,6 +54,7 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerNTPHandlers(m, reg)
 	registerLUKSHandlers(m, reg)
 	registerSwitchHandlers(m, reg)
+	registerOrchestratorHandlers(m, reg)
 	registerCacheHandlers(m, reg)
 	registerSchedulerHandlers(m, reg)
 	registerMessagingHandlers(m, reg)
@@ -1518,6 +1519,45 @@ func registerNTPHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.NTPService_Step_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Step(ctx, req.(*platformv1.StepNTPClockRequest))
+	}
+}
+
+// registerOrchestratorHandlers registers OrchestratorService handlers.
+func registerOrchestratorHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Orchestrator == nil {
+		return
+	}
+	svc := reg.Orchestrator
+
+	m[platformv1.OrchestratorService_Health_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Health(ctx, req.(*platformv1.OrchestratorHealthRequest))
+	}
+	m[platformv1.OrchestratorService_ListAgents_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListAgents(ctx, req.(*platformv1.ListOrchestratorAgentsRequest))
+	}
+	m[platformv1.OrchestratorService_GetAgent_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetAgent(ctx, req.(*platformv1.GetOrchestratorAgentRequest))
+	}
+	m[platformv1.OrchestratorService_DisableAgent_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DisableAgent(ctx, req.(*platformv1.DisableOrchestratorAgentRequest))
+	}
+	m[platformv1.OrchestratorService_EnableAgent_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnableAgent(ctx, req.(*platformv1.EnableOrchestratorAgentRequest))
+	}
+	m[platformv1.OrchestratorService_ListSessions_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSessions(ctx, req.(*platformv1.ListOrchestratorSessionsRequest))
+	}
+	m[platformv1.OrchestratorService_CloseSession_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CloseSession(ctx, req.(*platformv1.CloseOrchestratorSessionRequest))
+	}
+	m[platformv1.OrchestratorService_ListJobs_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListJobs(ctx, req.(*platformv1.ListOrchestratorJobsRequest))
+	}
+	m[platformv1.OrchestratorService_GetJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetJob(ctx, req.(*platformv1.GetOrchestratorJobRequest))
+	}
+	m[platformv1.OrchestratorService_CancelJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CancelJob(ctx, req.(*platformv1.CancelOrchestratorJobRequest))
 	}
 }
 

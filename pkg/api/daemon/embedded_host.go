@@ -225,5 +225,8 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	if svc := d.SwitchService(); svc != nil {
 		registry.Switch = svc
 	}
+	if svc := d.OrchestratorGRPCServiceServer(); svc != nil {
+		registry.Orchestrator = svc
+	}
 	return registry
 }

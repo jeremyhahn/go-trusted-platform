@@ -26,22 +26,31 @@ import (
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
 )
 
+// ClientResolver returns the SDK orchestrator client, or nil while the
+// embedded SDK is not running. The daemon resolves it on every call because
+// its quicbaas factory comes up after the transports are wired.
+type ClientResolver func() sdkorch.Client
+
 // Service answers OrchestratorService operations from the SDK client.
 type Service struct {
-	client sdkorch.Client
+	resolve ClientResolver
 }
 
-// NewService returns a Service over client. A nil client yields a Service
-// whose every operation fails with ErrNotConfigured.
-func NewService(client sdkorch.Client) *Service {
-	return &Service{client: client}
+// NewService returns a Service over resolve. A nil resolver, or one that
+// returns nil, makes every operation fail with ErrNotConfigured.
+func NewService(resolve ClientResolver) *Service {
+	return &Service{resolve: resolve}
 }
 
 func (s *Service) sdk() (sdkorch.Client, error) {
-	if s == nil || s.client == nil {
+	if s == nil || s.resolve == nil {
 		return nil, ErrNotConfigured{}
 	}
-	return s.client, nil
+	client := s.resolve()
+	if client == nil {
+		return nil, ErrNotConfigured{}
+	}
+	return client, nil
 }
 
 func required(field, value string) error {

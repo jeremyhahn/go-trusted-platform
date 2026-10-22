@@ -76,6 +76,10 @@ type ServiceRegistry struct {
 	// enable, disable).
 	Switch platformv1.SwitchServiceServer
 
+	// Orchestrator backs the go-quicbaas agent-fleet verbs (health, agents,
+	// sessions, jobs).
+	Orchestrator platformv1.OrchestratorServiceServer
+
 	// Cache, Scheduler, Messaging and ObjectStorage back the application
 	// services the composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
 	Cache         platformv1.CacheServiceServer

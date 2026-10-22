@@ -112,22 +112,23 @@ func isPreAuthMethod(fullMethod string) bool {
 // contract test pins the parity.
 func buildGRPCMethodPermissions() map[string]string {
 	const (
-		read   = "read"
-		write  = "write"
-		del    = "delete"
-		power  = "power"
-		media  = "media"
-		admin  = "admin"
-		vtpm   = "vtpm"
-		dns    = "dns"
-		device = "device"
-		sdn    = "sdn"
-		kms    = "kms"
-		iam    = "iam"
-		ca     = "ca"
-		prox   = "proxy"
-		ntp    = "ntp"
-		vpn    = "vpn"
+		read         = "read"
+		write        = "write"
+		del          = "delete"
+		power        = "power"
+		media        = "media"
+		admin        = "admin"
+		vtpm         = "vtpm"
+		dns          = "dns"
+		device       = "device"
+		sdn          = "sdn"
+		kms          = "kms"
+		iam          = "iam"
+		ca           = "ca"
+		prox         = "proxy"
+		ntp          = "ntp"
+		orchestrator = "orchestrator"
+		vpn          = "vpn"
 
 		cacheRes     = "cache"
 		schedulerRes = "scheduler"
@@ -247,6 +248,22 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.NTPService/GetStatus":   scope(ntp, read),
 		"/platform.v1.NTPService/ListSources": scope(ntp, read),
 		"/platform.v1.NTPService/Step":        scope(ntp, write),
+
+		// ---------------------------------------------------------------------
+		// Orchestrator (OrchestratorService) — the go-quicbaas agent fleet.
+		// Disabling or enabling an agent, closing a session and cancelling a
+		// job change fleet state, so they require orchestrator:write.
+		// ---------------------------------------------------------------------
+		"/platform.v1.OrchestratorService/Health":       scope(orchestrator, read),
+		"/platform.v1.OrchestratorService/ListAgents":   scope(orchestrator, read),
+		"/platform.v1.OrchestratorService/GetAgent":     scope(orchestrator, read),
+		"/platform.v1.OrchestratorService/DisableAgent": scope(orchestrator, write),
+		"/platform.v1.OrchestratorService/EnableAgent":  scope(orchestrator, write),
+		"/platform.v1.OrchestratorService/ListSessions": scope(orchestrator, read),
+		"/platform.v1.OrchestratorService/CloseSession": scope(orchestrator, write),
+		"/platform.v1.OrchestratorService/ListJobs":     scope(orchestrator, read),
+		"/platform.v1.OrchestratorService/GetJob":       scope(orchestrator, read),
+		"/platform.v1.OrchestratorService/CancelJob":    scope(orchestrator, write),
 
 		// ---------------------------------------------------------------------
 		// VPN (VPNService) — peer enrolment, session status and tenant
