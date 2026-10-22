@@ -219,6 +219,12 @@ reply is ready (`pkg/api/mcp/server.go`). Either way a graceful stop that runs
 past the server's 30-second write timeout still answers instead of closing
 the connection.
 
+No transport puts a deadline of its own on the call either. A gRPC call runs
+until its client's deadline; an MCP tool runs until its HTTP request ends
+(`ToolRegistry.ExecuteTool`, `pkg/api/mcp/tools.go`, adds none), so a reboot,
+a stop window plus a start, finishes over MCP as it does over gRPC. Over stdio
+the server's `RequestTimeout` still bounds each call.
+
 The client waits as long. The SDK owns the window
 (`StopReplyWindow` in `sdk/go/services/compute/stop_window.go`) and
 `StopOptions.ReplyWindow` uses its margin, so the two cannot drift. The SDK's
