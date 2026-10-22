@@ -60,7 +60,11 @@ at the CLI.
 **`update` replaces rather than merges.** The help text says so explicitly for
 `--roles`, `--groups` and `--attributes`: *"(replaces existing)"*. Passing
 `--roles admin` on a user who had `admin,operator` leaves them with `admin`
-alone. To add a role, use `assign-role`.
+alone. To add a role, use `assign-role`. `update` without `--roles` leaves the
+roles alone.
+
+`<role>` and `--roles` take role names (`admin`) or role IDs; a role the tenant
+does not hold is refused as not found and nothing is changed.
 
 `--attributes` is comma-separated `key=value` pairs.
 

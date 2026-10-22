@@ -105,11 +105,20 @@ registration's mirror failed with `iam.role: not_found`.
   refused with `iam.role: not_found` even on a tenant holding the role.
   `restiam.ResolveRoleIDs` (`pkg/webservice/v1/rest/iam/role_ids.go`) lists the
   tenant's roles, built-in ones included, and maps each reference (an ID, else
-  a name) to its ID before the user is created. Both user-creation paths
-  resolve: `QuicBaaSIAMAdapter.CreateUser` (REST and the mirror) and the
-  daemon's gRPC service, which CLI, Unix, QUIC and MCP answer through. A reference the tenant does
-  not hold is `restiam.ErrRoleNotFound` (gRPC `NotFound`), and a failed role
-  read is `restiam.ErrRoleListFailed`; no user is created in either case.
+  a name) to its ID before anything is written. Every path that hands roles to
+  the SDK resolves — creating a user, `assign-role`, `revoke-role` and
+  `update --roles` — in both `QuicBaaSIAMAdapter` (REST and the mirror) and
+  the daemon's gRPC service, which CLI, Unix, QUIC and MCP answer through. A
+  reference the tenant does not hold is `restiam.ErrRoleNotFound` (gRPC
+  `NotFound`, REST 404), and a failed role read is
+  `restiam.ErrRoleListFailed`; nothing is written in either case.
+- **`update --roles` replaces the roles.** The SDK's `UpdateUserRequest`
+  carries no roles, so the update used to drop them silently.
+  `restiam.SetUserRoles` resolves the references, then assigns each missing
+  role and revokes each extra one, assigning first so a failure part-way
+  (`restiam.ErrUserRolesSyncFailed`) never leaves the user with fewer roles
+  than before. It runs before the field update, so an unknown role refuses the
+  whole update. An update naming no roles leaves them alone.
 - **The owner's mirror is part of registration.** When `RegisterNewUser`
   cannot mirror the new tenant owner, it deletes the platform user and the
   tenant it just created and returns `service.ErrIAMMirrorFailed`. The

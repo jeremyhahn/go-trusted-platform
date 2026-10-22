@@ -65,6 +65,78 @@ func ResolveRoleIDs(ctx context.Context, roles iamsdk.RoleClient, tenantID strin
 	return resolved, nil
 }
 
+// ResolveRoleID is ResolveRoleIDs for the single role reference that assigning
+// or revoking a role takes. An empty reference is ErrMissingRole.
+func ResolveRoleID(ctx context.Context, roles iamsdk.RoleClient, tenantID, ref string) (string, error) {
+	if ref == "" {
+		return "", ErrMissingRole{}
+	}
+	ids, err := ResolveRoleIDs(ctx, roles, tenantID, []string{ref})
+	if err != nil {
+		return "", err
+	}
+	return ids[0], nil
+}
+
+// SetUserRoles replaces a user's roles with the roles refs reference (names or
+// IDs). The SDK's UpdateUserRequest carries no roles, so this is how a user
+// update replaces them. Every reference is resolved before anything is written,
+// so an unknown role (ErrRoleNotFound) changes nothing. No references changes
+// nothing either: an update that does not name roles leaves them alone.
+func SetUserRoles(ctx context.Context, client iamsdk.Client, tenantID, userID string, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	if client == nil {
+		return ErrIAMClientMissing{}
+	}
+	want, err := ResolveRoleIDs(ctx, client.Role(), tenantID, refs)
+	if err != nil {
+		return err
+	}
+	user, err := client.User().Get(ctx, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	var current []string
+	if user != nil {
+		current = user.Roles
+	}
+	return syncUserRoles(ctx, client.User(), tenantID, userID, current, want)
+}
+
+// syncUserRoles brings a user holding the role IDs current to exactly the role
+// IDs want: it assigns each wanted role the user lacks, then revokes each role
+// the user holds that is not wanted. Assigning first means a failure part-way
+// never leaves the user with fewer roles than it had. A failed assignment or
+// revocation is ErrUserRolesSyncFailed.
+func syncUserRoles(ctx context.Context, users iamsdk.UserClient, tenantID, userID string, current, want []string) error {
+	held := make(map[string]struct{}, len(current))
+	for _, id := range current {
+		held[id] = struct{}{}
+	}
+	wanted := make(map[string]struct{}, len(want))
+	for _, id := range want {
+		wanted[id] = struct{}{}
+		if _, ok := held[id]; ok {
+			continue
+		}
+		if err := users.AssignRole(ctx, tenantID, userID, id); err != nil {
+			return ErrUserRolesSyncFailed{TenantID: tenantID, UserID: userID, RoleID: id, Err: err}
+		}
+		held[id] = struct{}{}
+	}
+	for _, id := range current {
+		if _, ok := wanted[id]; ok {
+			continue
+		}
+		if err := users.RevokeRole(ctx, tenantID, userID, id); err != nil {
+			return ErrUserRolesSyncFailed{TenantID: tenantID, UserID: userID, RoleID: id, Err: err}
+		}
+	}
+	return nil
+}
+
 // tenantRoleIDs reads every role of the tenant, system roles included, and
 // returns the set of role IDs and the role ID of each role name.
 func tenantRoleIDs(ctx context.Context, roles iamsdk.RoleClient, tenantID string) (map[string]struct{}, map[string]string, error) {

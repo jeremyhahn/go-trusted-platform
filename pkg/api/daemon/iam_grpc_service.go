@@ -350,6 +350,13 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
+	// The SDK's update carries no roles; roles are replaced first, so an unknown
+	// role refuses the whole update before anything is written.
+	if err := restiam.SetUserRoles(ctx, s.iamClient, req.GetTenantId(), req.GetUserId(), req.GetRoles()); err != nil {
+		s.logger.Error("failed to set user roles", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId())
+		return nil, s.roleResolveError(err)
+	}
+
 	sdkReq := &sdkiam.UpdateUserRequest{
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
@@ -648,7 +655,14 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	err := s.iamClient.User().AssignRole(ctx, req.GetTenantId(), req.GetUserId(), req.GetRoleId())
+	// role_id may name the role ("admin"); the SDK takes its ID.
+	roleID, err := restiam.ResolveRoleID(ctx, s.iamClient.Role(), req.GetTenantId(), req.GetRoleId())
+	if err != nil {
+		s.logger.Error("failed to resolve role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
+		return nil, s.roleResolveError(err)
+	}
+
+	err = s.iamClient.User().AssignRole(ctx, req.GetTenantId(), req.GetUserId(), roleID)
 	if err != nil {
 		s.logger.Error("failed to assign role", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId(), "role_id", req.GetRoleId())
 		return nil, s.wrapError(err)
@@ -689,7 +703,14 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	err := s.iamClient.User().RevokeRole(ctx, req.GetTenantId(), req.GetUserId(), req.GetRoleId())
+	// role_id may name the role ("admin"); the SDK takes its ID.
+	roleID, err := restiam.ResolveRoleID(ctx, s.iamClient.Role(), req.GetTenantId(), req.GetRoleId())
+	if err != nil {
+		s.logger.Error("failed to resolve role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
+		return nil, s.roleResolveError(err)
+	}
+
+	err = s.iamClient.User().RevokeRole(ctx, req.GetTenantId(), req.GetUserId(), roleID)
 	if err != nil {
 		s.logger.Error("failed to revoke role", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId(), "role_id", req.GetRoleId())
 		return nil, s.wrapError(err)
@@ -2029,9 +2050,10 @@ var sdkErrorCodes = map[sdkerrors.ErrorCode]codes.Code{
 //
 // A gRPC status keeps its code and message; a QuicBaaS SDK error takes the
 // code of its category (sdkErrorCodes); anything else is Internal.
-// roleResolveError maps a restiam.ResolveRoleIDs failure to its gRPC status:
-// a role the tenant does not hold is NotFound, an empty role reference is
-// InvalidArgument, and a failed role read keeps the IAM client's own code.
+// roleResolveError maps a restiam.ResolveRoleIDs or restiam.SetUserRoles
+// failure to its gRPC status: a role the tenant does not hold is NotFound, an
+// empty role reference is InvalidArgument, and a failed role read or role
+// change keeps the IAM client's own code, as does any other IAM client error.
 func (s *IAMGRPCService) roleResolveError(err error) error {
 	var notFound restiam.ErrRoleNotFound
 	if errors.As(err, &notFound) {
@@ -2045,7 +2067,11 @@ func (s *IAMGRPCService) roleResolveError(err error) error {
 	if errors.As(err, &listFailed) {
 		return s.wrapError(listFailed.Err)
 	}
-	return status.Error(codes.Internal, err.Error())
+	var syncFailed restiam.ErrUserRolesSyncFailed
+	if errors.As(err, &syncFailed) {
+		return s.wrapError(syncFailed.Err)
+	}
+	return s.wrapError(err)
 }
 
 func (s *IAMGRPCService) wrapError(err error) error {

@@ -42,7 +42,10 @@ func (c *pagedRoleClient) List(_ context.Context, _ string, req *iamsdk.ListRole
 	if c.err != nil {
 		return nil, c.err
 	}
-	page := len(c.requests) - 1
+	page := 0
+	if req.PageToken != "" {
+		page = int(req.PageToken[0]-'a') + 1
+	}
 	resp := &iamsdk.ListRolesResponse{Roles: c.pages[page]}
 	if page+1 < len(c.pages) {
 		resp.Pagination = iamsdk.PaginationInfo{HasMore: true, NextPageToken: string(rune('a' + page))}
@@ -111,10 +114,32 @@ func TestResolveRoleIDs_NilRoleClient(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRoleClientMissing{})
 }
 
-// recordingUserClient records the create request the adapter sends.
+// recordingUserClient records the create request and the role assignments and
+// revocations sent to it; user is what Get returns.
 type recordingUserClient struct {
 	iamsdk.UserClient
-	created *iamsdk.CreateUserRequest
+	created   *iamsdk.CreateUserRequest
+	user      *iamsdk.User
+	assigned  []string
+	revoked   []string
+	assignErr error
+}
+
+func (c *recordingUserClient) Get(_ context.Context, _, _ string) (*iamsdk.User, error) {
+	return c.user, nil
+}
+
+func (c *recordingUserClient) AssignRole(_ context.Context, _, _, roleID string) error {
+	if c.assignErr != nil {
+		return c.assignErr
+	}
+	c.assigned = append(c.assigned, roleID)
+	return nil
+}
+
+func (c *recordingUserClient) RevokeRole(_ context.Context, _, _, roleID string) error {
+	c.revoked = append(c.revoked, roleID)
+	return nil
 }
 
 func (c *recordingUserClient) Create(_ context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
@@ -171,4 +196,140 @@ func TestErrRoleListFailed_Unwrap(t *testing.T) {
 	assert.Equal(t, "rest/iam: listing the roles of tenant tenant-a: role store unavailable", err.Error())
 	assert.True(t, errors.Is(err, errRoleListUnavailable{}))
 	assert.NotEmpty(t, ErrRoleClientMissing{}.Error())
+}
+
+func TestErrUserRolesSyncFailed_Unwrap(t *testing.T) {
+	err := ErrUserRolesSyncFailed{TenantID: "tenant-a", UserID: "user-1", RoleID: "0b5e-admin", Err: errRoleListUnavailable{}}
+
+	assert.Equal(t, "rest/iam: setting role 0b5e-admin on user user-1 in tenant tenant-a: role store unavailable", err.Error())
+	assert.ErrorIs(t, err, errRoleListUnavailable{})
+	assert.NotEmpty(t, ErrIAMClientMissing{}.Error())
+}
+
+func TestResolveRoleID_ResolvesName(t *testing.T) {
+	id, err := ResolveRoleID(context.Background(), tenantRoles(), "tenant-a", "operator")
+
+	require.NoError(t, err)
+	assert.Equal(t, "0b5e-operator", id)
+}
+
+func TestResolveRoleID_EmptyReferenceReadsNothing(t *testing.T) {
+	roles := tenantRoles()
+
+	_, err := ResolveRoleID(context.Background(), roles, "tenant-a", "")
+
+	assert.ErrorIs(t, err, ErrMissingRole{})
+	assert.Empty(t, roles.requests)
+}
+
+// userHolding is an SDK client whose user holds the given role IDs.
+func userHolding(roleIDs ...string) *adapterSDKClient {
+	return &adapterSDKClient{
+		users: &recordingUserClient{user: &iamsdk.User{ID: "user-1", Roles: roleIDs}},
+		roles: tenantRoles(),
+	}
+}
+
+func TestSetUserRoles_ReplacesTheRoleSet(t *testing.T) {
+	client := userHolding("0b5e-admin", "0b5e-custom")
+
+	err := SetUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"operator", "admin"})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"0b5e-operator"}, client.users.assigned, "only the missing role is assigned")
+	assert.Equal(t, []string{"0b5e-custom"}, client.users.revoked, "only the unwanted role is revoked")
+}
+
+func TestSetUserRoles_NoReferencesLeavesRolesAlone(t *testing.T) {
+	client := userHolding("0b5e-admin")
+
+	require.NoError(t, SetUserRoles(context.Background(), client, "tenant-a", "user-1", nil))
+
+	assert.Empty(t, client.roles.requests)
+	assert.Empty(t, client.users.assigned)
+	assert.Empty(t, client.users.revoked)
+}
+
+func TestSetUserRoles_UnknownRoleChangesNothing(t *testing.T) {
+	client := userHolding("0b5e-custom")
+
+	err := SetUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"admin", "owner"})
+
+	var notFound ErrRoleNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, "owner", notFound.RoleID)
+	assert.Empty(t, client.users.assigned)
+	assert.Empty(t, client.users.revoked)
+}
+
+func TestSetUserRoles_AssignFailureIsTypedAndRevokesNothing(t *testing.T) {
+	client := userHolding("0b5e-custom")
+	client.users.assignErr = errRoleListUnavailable{}
+
+	err := SetUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"admin"})
+
+	var failed ErrUserRolesSyncFailed
+	require.ErrorAs(t, err, &failed)
+	assert.Equal(t, "0b5e-admin", failed.RoleID)
+	assert.Empty(t, client.users.revoked, "no role is revoked before every wanted role is assigned")
+}
+
+func TestSetUserRoles_NilClient(t *testing.T) {
+	err := SetUserRoles(context.Background(), nil, "tenant-a", "user-1", []string{"admin"})
+
+	assert.ErrorIs(t, err, ErrIAMClientMissing{})
+}
+
+func TestQuicBaaSIAMAdapter_AssignRole_SendsRoleID(t *testing.T) {
+	client := userHolding()
+
+	require.NoError(t, NewQuicBaaSIAMAdapter(client).AssignRole(context.Background(), "tenant-a", "user-1", "admin"))
+
+	assert.Equal(t, []string{"0b5e-admin"}, client.users.assigned)
+}
+
+func TestQuicBaaSIAMAdapter_AssignRole_RefusesUnknownRole(t *testing.T) {
+	client := userHolding()
+
+	err := NewQuicBaaSIAMAdapter(client).AssignRole(context.Background(), "tenant-a", "user-1", "owner")
+
+	var notFound ErrRoleNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Empty(t, client.users.assigned)
+}
+
+func TestQuicBaaSIAMAdapter_RevokeRole_SendsRoleID(t *testing.T) {
+	client := userHolding("0b5e-admin")
+
+	require.NoError(t, NewQuicBaaSIAMAdapter(client).RevokeRole(context.Background(), "tenant-a", "user-1", "admin"))
+
+	assert.Equal(t, []string{"0b5e-admin"}, client.users.revoked)
+}
+
+func TestQuicBaaSIAMAdapter_RevokeRole_RefusesUnknownRole(t *testing.T) {
+	client := userHolding("0b5e-admin")
+
+	err := NewQuicBaaSIAMAdapter(client).RevokeRole(context.Background(), "tenant-a", "user-1", "owner")
+
+	var notFound ErrRoleNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Empty(t, client.users.revoked)
+}
+
+func TestQuicBaaSIAMAdapter_SetUserRoles_ResolvesNames(t *testing.T) {
+	client := userHolding()
+
+	require.NoError(t, NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"}))
+
+	assert.Equal(t, []string{"0b5e-admin"}, client.users.assigned)
+}
+
+func TestQuicBaaSIAMAdapter_SetUserRoles_RefusesUnknownRole(t *testing.T) {
+	client := userHolding()
+
+	err := NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"owner"})
+
+	var notFound ErrRoleNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Empty(t, client.users.assigned)
 }
