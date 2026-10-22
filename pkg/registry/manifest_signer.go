@@ -20,15 +20,16 @@ import (
 )
 
 // defaultSigningKeyID is the signing key a push uses when it names none,
-// the same default the encryption path uses for its key.
+// the same default the encryption path uses for its key. The registry does
+// not create it: until an operator creates an ECDSA P-256 or P-384 key of
+// this ID in the KMS, such a push is refused with ErrSigningKeyUnavailable.
 const defaultSigningKeyID = "registry-default"
 
 // SigningKMSClient is the signing half of the registry's KMS seam, beside
-// KMSClient: Sign signs a SHA-256 digest with keyID's asymmetric key,
-// creating the key on its first use, and names the signature algorithm.
-// The private key never leaves the KMS. LocalKMSClient implements it on a
-// single node; the SDK's KMS().GenerateKey plus Crypto().Sign is the same
-// pair of operations for the daemon's swap.
+// KMSClient: Sign signs a SHA-256 digest with keyID's asymmetric key and
+// names the signature algorithm. The private key never leaves the KMS, and
+// a missing key is an error: the signer never creates one. SDKSigner
+// implements it on the SDK KMS (Security().KMS() plus Security().Crypto()).
 type SigningKMSClient interface {
 	Sign(ctx context.Context, keyID string, digest []byte) (signature []byte, algorithm string, err error)
 }

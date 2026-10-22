@@ -58,25 +58,30 @@ Everything below the platform — keys, blobs, identity — is reached through
 the storage config's own doc comment names the stack's object-storage service as
 the sole supported production backend.
 
-### Decision: the signing key lives behind the KMS seam
+### Decision: manifests are signed with the SDK KMS key the push names
 
 A push with `sign` set is signed by the registry, after encryption and before
-anything is stored (see [engineering.md](engineering.md)). The signing key is
-reached through the same KMS seam as the encryption keys, not through a key
-store of its own: `KMSClient` (`pkg/registry/encryption.go`) carries the
-symmetric wrap/unwrap operations and `SigningKMSClient`
-(`pkg/registry/manifest_signer.go`) its signing half, `Sign(ctx, keyID,
-digest)`, so the private key never leaves the KMS. `LocalKMSClient` implements
-both on a single node, keeping each signing key as
-`<PlatformDir>/registry/keys/<sha256(keyID)>.sign.pem` (PKCS#8, mode 0600,
-created on first use) beside the AES keys, and the daemon passes the one client
-to both `WithEncryptor` and `WithSigner`. The SDK pairs the same two operations
-(`Security().KMS().GenerateKey`, `Security().Crypto().Sign`), so the swap to an
-SDK-backed KMS stays a single change, as it already is for encryption.
+anything is stored (see [engineering.md](engineering.md)). The registry signs
+through `SigningKMSClient` (`pkg/registry/manifest_signer.go`),
+`Sign(ctx, keyID, digest)`, and the daemon wires `SDKSigner`
+(`pkg/registry/sdk_signer.go`) on the quicbaas SDK: it looks the key up with
+`Security().KMS().GetKey` and signs the digest with `Security().Crypto().Sign`
+(pre-hashed SHA-256). The key a push names is that SDK KMS key, so its
+policies and lifecycle apply and the private key never leaves the KMS.
 
-Rejected: a second, signing-only key directory beside `keys/`. It would be a
-parallel key store with its own backup, permissions and swap, the duplication
-the SDK Consumption Invariant forbids.
+The signer never creates a key. A key the KMS does not hold is refused with
+`ErrSigningKeyUnavailable`, and a key that is not ECDSA P-256 or P-384 with
+`ErrSigningKeyUnsupported`. A push that names no key uses `registry-default`,
+which the platform does not create either: until an operator creates it, for
+example `platformctl kms key generate registry-default --algorithm ECDSA-P256
+--purpose sign`, such a push is refused. A daemon with no SDK client wires no
+signer, and a signed push is refused with `ErrSigningNotConfigured`.
+
+Rejected: signing with local keys (`<PlatformDir>/registry/keys/*.sign.pem`,
+created on first use). A push naming a managed KMS key would have been signed
+with unrelated material outside that key's policies, and the platform would
+have kept a parallel key store, the duplication the SDK Consumption Invariant
+forbids. `LocalKMSClient` keeps only the encryption half.
 
 ## Trust boundaries
 

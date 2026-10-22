@@ -60,7 +60,8 @@ session state; do not widen it to return the session itself.
 | `NewImageEncryptor(kms KMSClient, opts ...EncryptorOption) (*ImageEncryptor, error)` | `encryption.go` | Per-layer DEK envelope encryption |
 | `NewQuicBaaSStorage(client QuicBaaSStorageClient, opts ...StorageOption) (*QuicBaaSStorage, error)` | `storage.go` | The production blob backend |
 | `NewFileStorageClient(root string) (*FileStorageClient, error)` | `file_storage.go` | Local filesystem backend for development and tests |
-| `NewLocalKMSClient(root string) (*LocalKMSClient, error)` | `local_kms.go` | Single-node KMS. **Reached by the shipped daemon** — see the correction below |
+| `NewLocalKMSClient(root string) (*LocalKMSClient, error)` | `local_kms.go` | Single-node KMS for layer encryption only. **Reached by the shipped daemon** — see the correction below |
+| `NewSDKSigner(keys SDKKeyReader, crypto SDKSignClient) (*SDKSigner, error)` | `sdk_signer.go` | Manifest signer on the SDK KMS (`Security().KMS()`, `Security().Crypto()`); never creates a key |
 | `NewGRPCAdapter(r *Registry) *GRPCAdapter` | `grpc_adapter.go` | Bridges `*Registry` to the generated `RegistryService` server |
 
 The four option types — `RegistryOption`, `EncryptorOption`, `StorageOption`
@@ -117,13 +118,18 @@ a live backend. They are the fault-injection points:
    (`PushAnnotationSigningKeyID`) names the key, default `registry-default`.
    Push drops any caller-supplied signature annotation, then signs last —
    after encryption, so the signature covers the encryption annotations —
-   through the `SigningKMSClient` (`WithSigner`). It signs the SHA-256 of
+   through the `SigningKMSClient` (`WithSigner`), which in the daemon is
+   `SDKSigner` on the SDK KMS. It signs the SHA-256 of
    `manifestSigningPayload`, which is the manifest JSON with its reference,
    minus signature annotations and timestamps. The manifest records
    `org.letstrust.registry.{signed,signing-key-id,signature-algorithm,signature}`
-   (ECDSA P-256, ASN.1 DER, base64). If no signer is wired, the push is
-   refused with `ErrSigningNotConfigured`. If the KMS fails, the push is
-   refused with `ErrManifestSigningFailed`. In both cases nothing is stored,
+   (ECDSA P-256 or P-384, ASN.1 DER, base64). If no signer is wired (the
+   daemon has no SDK client), the push is refused with
+   `ErrSigningNotConfigured`. If the SDK KMS has no key of that ID, the push
+   is refused with `ErrManifestSigningFailed` wrapping
+   `ErrSigningKeyUnavailable`; the key is never created, and that includes
+   `registry-default`, which an operator creates. Any other KMS failure is
+   `ErrManifestSigningFailed`. In both cases nothing is stored,
    and an unsigned image is never reported as signed. The
    image config is decoded before anything is stored: a config that is not
    JSON is `ErrInvalidManifest`, and Inspect reports its `os`,

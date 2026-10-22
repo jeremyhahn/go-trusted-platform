@@ -132,6 +132,14 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 	return stdout.Bytes(), nil
 }
 
+// GenerateSigningKey creates an ECDSA P-256 signing key named keyID in the
+// SDK KMS through `platformctl kms key generate`. The registry signs a
+// manifest only with a KMS key that already exists; it never creates one.
+func (c *CLIAdapter) GenerateSigningKey(ctx context.Context, keyID string) error {
+	_, err := c.runCommand(ctx, "kms", "key", "generate", keyID, "--algorithm", "ECDSA-P256", "--purpose", "sign")
+	return err
+}
+
 // =============================================================================
 // Image Management Commands
 // =============================================================================

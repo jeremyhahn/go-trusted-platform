@@ -17,36 +17,42 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 )
 
 // newSigningTestRegistry builds a registry that encrypts and signs through
 // one LocalKMSClient, the daemon's wiring.
-func newSigningTestRegistry(t *testing.T) (*Registry, *LocalKMSClient) {
+func newSigningTestRegistry(t *testing.T) (*Registry, *fakeSDKKMS) {
 	t.Helper()
 	storage, err := NewQuicBaaSStorage(newMockStorageClient())
 	if err != nil {
 		t.Fatalf("NewQuicBaaSStorage: %v", err)
 	}
-	kms, err := NewLocalKMSClient(t.TempDir())
+	localKMS, err := NewLocalKMSClient(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocalKMSClient: %v", err)
 	}
-	enc, err := NewImageEncryptor(kms)
+	enc, err := NewImageEncryptor(localKMS)
 	if err != nil {
 		t.Fatalf("NewImageEncryptor: %v", err)
 	}
-	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage), WithEncryptor(enc), WithSigner(kms))
+	sdkKMS := newFakeSDKKMS()
+	sdkKMS.addECDSAKey(t, defaultSigningKeyID, elliptic.P256(), kms.AlgorithmECDSAP256)
+	sdkKMS.addECDSAKey(t, "web-sign", elliptic.P256(), kms.AlgorithmECDSAP256)
+	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage), WithEncryptor(enc), WithSigner(newTestSDKSigner(t, sdkKMS)))
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	t.Cleanup(func() { _ = reg.Close() })
-	return reg, kms
+	return reg, sdkKMS
 }
 
 // signTestImage is an image with one layer per content.
@@ -69,7 +75,7 @@ func signTestImage(annotations map[string]string, layers ...[]byte) *Image {
 // manifestSignatureVerifies rebuilds m's signing payload for ref, as a
 // verifier holding the stored manifest would, and checks the recorded
 // signature against the KMS's key for the recorded key ID.
-func manifestSignatureVerifies(t *testing.T, kms *LocalKMSClient, ref string, m *ImageManifest) bool {
+func manifestSignatureVerifies(t *testing.T, sdkKMS *fakeSDKKMS, ref string, m *ImageManifest) bool {
 	t.Helper()
 	sig, err := base64.StdEncoding.DecodeString(m.Annotations[ManifestAnnotationSignature])
 	if err != nil {
@@ -80,11 +86,11 @@ func manifestSignatureVerifies(t *testing.T, kms *LocalKMSClient, ref string, m 
 		t.Fatalf("manifestSigningPayload: %v", err)
 	}
 	digest := sha256.Sum256(payload)
-	return ecdsa.VerifyASN1(signingPublicKey(t, kms, m.Annotations[ManifestAnnotationSigningKeyID]), digest[:], sig)
+	return ecdsa.VerifyASN1(sdkKMS.publicKey(t, m.Annotations[ManifestAnnotationSigningKeyID]), digest[:], sig)
 }
 
 func TestRegistryPush_SignsAfterEncryption(t *testing.T) {
-	reg, kms := newSigningTestRegistry(t)
+	reg, sdkKMS := newSigningTestRegistry(t)
 	ctx := context.Background()
 	const ref = "apps/web:v1"
 
@@ -107,20 +113,20 @@ func TestRegistryPush_SignsAfterEncryption(t *testing.T) {
 			t.Errorf("annotation %s = %q, want %q", k, got, v)
 		}
 	}
-	if !manifestSignatureVerifies(t, kms, ref, stored) {
+	if !manifestSignatureVerifies(t, sdkKMS, ref, stored) {
 		t.Fatal("the stored manifest's signature does not verify")
 	}
 
 	// The signature covers the encryption annotations: rewriting the
 	// recorded encryption key breaks it.
 	stored.Annotations[ManifestAnnotationKeyID] = "attacker-key"
-	if manifestSignatureVerifies(t, kms, ref, stored) {
+	if manifestSignatureVerifies(t, sdkKMS, ref, stored) {
 		t.Fatal("the signature does not cover the encryption key annotation")
 	}
 }
 
 func TestRegistryPush_SignsWithTheNamedKey(t *testing.T) {
-	reg, kms := newSigningTestRegistry(t)
+	reg, sdkKMS := newSigningTestRegistry(t)
 	ctx := context.Background()
 	const ref = "apps/web:v2"
 
@@ -134,7 +140,7 @@ func TestRegistryPush_SignsWithTheNamedKey(t *testing.T) {
 	if got := stored.Annotations[ManifestAnnotationSigningKeyID]; got != "web-sign" {
 		t.Fatalf("signing key ID = %q, want web-sign", got)
 	}
-	if !manifestSignatureVerifies(t, kms, ref, stored) {
+	if !manifestSignatureVerifies(t, sdkKMS, ref, stored) {
 		t.Fatal("signature does not verify under web-sign")
 	}
 }
@@ -171,7 +177,7 @@ func TestRegistryPush_StripsForgedSignatureAnnotations(t *testing.T) {
 	})
 
 	t.Run("signed push replaces the forged signature", func(t *testing.T) {
-		reg, kms := newSigningTestRegistry(t)
+		reg, sdkKMS := newSigningTestRegistry(t)
 		ctx := context.Background()
 		if err := reg.Push(ctx, "apps/web:v1", signTestImage(forged(), []byte("layer")), PushOptions{SignImage: true}); err != nil {
 			t.Fatalf("Push: %v", err)
@@ -183,7 +189,7 @@ func TestRegistryPush_StripsForgedSignatureAnnotations(t *testing.T) {
 		if stored.Annotations[ManifestAnnotationSignature] == forged()[ManifestAnnotationSignature] {
 			t.Fatal("the forged signature was stored")
 		}
-		if !manifestSignatureVerifies(t, kms, "apps/web:v1", stored) {
+		if !manifestSignatureVerifies(t, sdkKMS, "apps/web:v1", stored) {
 			t.Fatal("the registry's signature does not verify")
 		}
 	})
@@ -224,6 +230,32 @@ func TestRegistryPush_SigningFailureStoresNothing(t *testing.T) {
 	}
 	if _, err := reg.storage.GetBlob(ctx, img.Layers[0].Digest); err == nil {
 		t.Error("a layer was stored for a push whose signing failed")
+	}
+}
+
+// A push that names a key the SDK KMS does not hold is refused with the
+// typed error; the registry never creates the key and stores nothing.
+func TestRegistryPush_MissingSigningKeyIsRefused(t *testing.T) {
+	reg, sdkKMS := newSigningTestRegistry(t)
+	ctx := context.Background()
+	img := signTestImage(nil, []byte("layer"))
+
+	err := reg.Push(ctx, "apps/web:v1", img, PushOptions{SignImage: true, SigningKeyID: "no-such-key"})
+	var unavailable ErrSigningKeyUnavailable
+	if !errors.As(err, &unavailable) || unavailable.KeyID != "no-such-key" {
+		t.Fatalf("Push error = %v, want ErrSigningKeyUnavailable for no-such-key", err)
+	}
+	if !errors.As(err, &ErrManifestSigningFailed{}) {
+		t.Errorf("Push error = %v, want it wrapped in ErrManifestSigningFailed", err)
+	}
+	if sdkKMS.generated != 0 {
+		t.Errorf("a signed push created %d KMS keys, want none", sdkKMS.generated)
+	}
+	if _, ok := sdkKMS.keys["no-such-key"]; ok {
+		t.Error("the missing signing key now exists in the KMS")
+	}
+	if _, err := reg.storage.GetManifest(ctx, "apps/web:v1"); err == nil {
+		t.Error("a manifest was stored for a push whose signing key is missing")
 	}
 }
 
