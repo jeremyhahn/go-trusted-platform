@@ -473,6 +473,10 @@ the daemon's certificate is refused by `New` (#844). The
 Unix-domain-socket transport is the single sanctioned non-TLS carve-out
 (filesystem-permission-scoped); MCP binds loopback only. With no
 TLS-terminating transport enabled (UDS-only mode), startup proceeds without provisioning a TLS identity.
+A daemon whose REST routes are served by the webservice listener
+(`RESTRoutesOnly`) is not UDS-only: that listener terminates TLS for the
+routes and they verify clients against the daemon's roots, so the identity
+is provisioned even with every daemon transport off.
 
 The server key and certificate live in the platform CA keystore; the only
 TLS file on disk is `ca-bundle.crt`, the public CA trust bundle (`0644`), in
