@@ -64,6 +64,7 @@ What keeps the two stores in step (#641; the why is in
 | Guarantee | Where | Typed error |
 |---|---|---|
 | A new IAM tenant carries the built-in roles the mirror names | `tenant.Manager.CreateTenant` → `EnsureDefaultRoles` → SDK `iam.RoleClient.Reconcile` (`pkg/tenant/manager.go`) | `tenant.ErrDefaultRolesFailed`; the IAM tenant is rolled back |
+| A role named on a new user (`admin`) is stored as that role's ID, which the SDK requires | `restiam.ResolveRoleIDs` (`pkg/webservice/v1/rest/iam/role_ids.go`), called by `QuicBaaSIAMAdapter.CreateUser` (REST and the mirror) and `IAMGRPCService.CreateUser` (CLI, Unix, gRPC, QUIC, MCP) | `restiam.ErrRoleNotFound` (gRPC `NotFound`), `restiam.ErrRoleListFailed`, `restiam.ErrMissingRole`; no user is created |
 | A registered tenant owner is in the IAM tenant | `TenantUserService.RegisterNewUser` (`pkg/platform/service/tenant_user.go`) mirrors the owner with `iamMirrorRoles` (`admin`) | `service.ErrIAMMirrorFailed`; the platform user and the tenant are deleted |
 | A platform user missing from its IAM tenant is mirrored once | `service.IAMUserReconciler.Reconcile` (`pkg/platform/service/iam_user_reconcile.go`), started in the background by `HandlerRegistry.startIAMUserReconcile` (`pkg/webservice/v1/registry.go`); membership is read through `QuicBaaSUserMirror.MirroredEmails` and compared by lower-cased email | `service.ErrIAMReconcileFailed` only when the platform user store cannot be read; per-user and per-tenant failures are logged with `user_id` and counted in `IAMUserReconcileReport.Failed` |
 

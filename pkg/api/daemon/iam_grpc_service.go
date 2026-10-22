@@ -202,13 +202,20 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
+	// The request names roles ("admin"); the SDK takes role IDs.
+	roleIDs, err := restiam.ResolveRoleIDs(ctx, s.iamClient.Role(), req.GetTenantId(), req.GetRoles())
+	if err != nil {
+		s.logger.Error("failed to resolve user roles", "error", err, "tenant_id", req.GetTenantId())
+		return nil, s.roleResolveError(err)
+	}
+
 	// The request carries no username; the SDK refuses an empty one, so it
 	// is derived from the email exactly as the REST handler derives it.
 	sdkReq := &sdkiam.CreateUserRequest{
 		Username:    restiam.UsernameFromEmail(req.GetEmail()),
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
-		Roles:       req.GetRoles(),
+		Roles:       roleIDs,
 		Groups:      req.GetGroups(),
 		Metadata:    req.GetAttributes(),
 	}
@@ -2022,6 +2029,25 @@ var sdkErrorCodes = map[sdkerrors.ErrorCode]codes.Code{
 //
 // A gRPC status keeps its code and message; a QuicBaaS SDK error takes the
 // code of its category (sdkErrorCodes); anything else is Internal.
+// roleResolveError maps a restiam.ResolveRoleIDs failure to its gRPC status:
+// a role the tenant does not hold is NotFound, an empty role reference is
+// InvalidArgument, and a failed role read keeps the IAM client's own code.
+func (s *IAMGRPCService) roleResolveError(err error) error {
+	var notFound restiam.ErrRoleNotFound
+	if errors.As(err, &notFound) {
+		return status.Error(codes.NotFound, err.Error())
+	}
+	var missing restiam.ErrMissingRole
+	if errors.As(err, &missing) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	var listFailed restiam.ErrRoleListFailed
+	if errors.As(err, &listFailed) {
+		return s.wrapError(listFailed.Err)
+	}
+	return status.Error(codes.Internal, err.Error())
+}
+
 func (s *IAMGRPCService) wrapError(err error) error {
 	if st, ok := status.FromError(err); ok {
 		return status.Error(st.Code(), st.Message())

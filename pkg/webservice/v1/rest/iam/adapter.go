@@ -111,9 +111,20 @@ func NewQuicBaaSIAMAdapter(client quicbaassdk.IAMClient) *QuicBaaSIAMAdapter {
 // User operations — direct delegation, types are shared between REST and SDK.
 // -----------------------------------------------------------------------------
 
-// CreateUser delegates to iamsdk.UserClient.Create.
+// CreateUser delegates to iamsdk.UserClient.Create, first resolving the
+// request's role references, which may name roles, to the role IDs the SDK
+// takes (ResolveRoleIDs). The caller's request is not modified.
 func (a *QuicBaaSIAMAdapter) CreateUser(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
-	return a.client.User().Create(ctx, tenantID, req)
+	if req == nil {
+		return nil, ErrInvalidRequestBody{Reason: "create user request is required"}
+	}
+	roleIDs, err := ResolveRoleIDs(ctx, a.client.Role(), tenantID, req.Roles)
+	if err != nil {
+		return nil, err
+	}
+	resolved := *req
+	resolved.Roles = roleIDs
+	return a.client.User().Create(ctx, tenantID, &resolved)
 }
 
 // GetUser delegates to iamsdk.UserClient.Get.

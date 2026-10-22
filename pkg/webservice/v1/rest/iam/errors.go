@@ -217,3 +217,26 @@ type ErrPEPClientMissing struct{}
 func (e ErrPEPClientMissing) Error() string {
 	return "rest/iam: no policy enforcement point is wired to check permissions"
 }
+
+// ErrRoleClientMissing is returned when role references are resolved without
+// an IAM role client to read the tenant's roles through.
+type ErrRoleClientMissing struct{}
+
+func (e ErrRoleClientMissing) Error() string {
+	return "rest/iam: no IAM role client to resolve role references"
+}
+
+// ErrRoleListFailed is returned when the tenant's roles could not be read to
+// resolve role references. Err is the IAM client's error.
+type ErrRoleListFailed struct {
+	TenantID string
+	Err      error
+}
+
+func (e ErrRoleListFailed) Error() string {
+	return fmt.Sprintf("rest/iam: listing the roles of tenant %s: %v", e.TenantID, e.Err)
+}
+
+func (e ErrRoleListFailed) Unwrap() error {
+	return e.Err
+}

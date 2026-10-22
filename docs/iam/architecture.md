@@ -99,6 +99,17 @@ registration's mirror failed with `iam.role: not_found`.
   absent, never touches a custom role, and writes nothing on a tenant that
   already has them. A failure is `tenant.ErrDefaultRolesFailed` and rolls the
   IAM tenant back: a tenant that cannot hold users is not created.
+- **Role names are resolved to role IDs.** The SDK's `CreateUserRequest.Roles`
+  carries role IDs, and a built-in role's ID is not its name (go-qrdb derives
+  it, and tenants seeded earlier keep legacy IDs). Sending `admin` there was
+  refused with `iam.role: not_found` even on a tenant holding the role.
+  `restiam.ResolveRoleIDs` (`pkg/webservice/v1/rest/iam/role_ids.go`) lists the
+  tenant's roles, built-in ones included, and maps each reference (an ID, else
+  a name) to its ID before the user is created. Both user-creation paths
+  resolve: `QuicBaaSIAMAdapter.CreateUser` (REST and the mirror) and the
+  daemon's gRPC service, which CLI, Unix, QUIC and MCP answer through. A reference the tenant does
+  not hold is `restiam.ErrRoleNotFound` (gRPC `NotFound`), and a failed role
+  read is `restiam.ErrRoleListFailed`; no user is created in either case.
 - **The owner's mirror is part of registration.** When `RegisterNewUser`
   cannot mirror the new tenant owner, it deletes the platform user and the
   tenant it just created and returns `service.ErrIAMMirrorFailed`. The
