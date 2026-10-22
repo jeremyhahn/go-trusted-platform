@@ -72,13 +72,18 @@ const (
 )
 
 // lbBackendServer is a TCP server that identifies itself on every line.
+//
+// The load balancer's prober connects to every backend and closes without
+// sending anything, so the server counts a connection, and records its
+// source, only when the connection's first request line arrives. Counting
+// accepts would count the probes as client connections.
 type lbBackendServer struct {
 	id       string
 	listener net.Listener
 	wg       sync.WaitGroup
 
 	mu         sync.Mutex
-	accepted   int
+	served     int
 	lastRemote string
 }
 
@@ -98,16 +103,17 @@ func startLBBackend(t *testing.T, ns, addr, id string) *lbBackendServer {
 			if acceptErr != nil {
 				return
 			}
-			srv.mu.Lock()
-			srv.accepted++
-			srv.lastRemote = conn.RemoteAddr().(*net.TCPAddr).IP.String()
-			srv.mu.Unlock()
 			srv.wg.Add(1)
 			go func(c net.Conn) {
 				defer srv.wg.Done()
 				defer c.Close()
 				scanner := bufio.NewScanner(c)
+				first := true
 				for scanner.Scan() {
+					if first {
+						srv.recordRequest(c)
+						first = false
+					}
 					fmt.Fprintf(c, "%s\n", srv.id)
 				}
 			}(conn)
@@ -124,14 +130,24 @@ func (s *lbBackendServer) Stop() {
 	s.wg.Wait()
 }
 
-// Accepted returns the number of accepted connections.
-func (s *lbBackendServer) Accepted() int {
+// recordRequest counts a connection that sent a request and records its
+// source address.
+func (s *lbBackendServer) recordRequest(c net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.accepted
+	s.served++
+	s.lastRemote = c.RemoteAddr().(*net.TCPAddr).IP.String()
 }
 
-// LastRemote returns the source address of the last accepted connection.
+// Served returns the number of connections that sent a request.
+func (s *lbBackendServer) Served() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.served
+}
+
+// LastRemote returns the source address of the last connection that sent
+// a request.
 func (s *lbBackendServer) LastRemote() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -458,7 +474,7 @@ func TestGroupLoadBalancer(t *testing.T) {
 
 	t.Run("DistributionAcrossBackends", func(t *testing.T) {
 		hits := map[string]int{}
-		before := srv1.Accepted() + srv2.Accepted()
+		before := srv1.Served() + srv2.Served()
 		for i := 0; i < 24; i++ {
 			id, dialErr := dialVIPAndIdentify(t, 5*time.Second)
 			require.NoError(t, dialErr, "VIP connection %d", i)
@@ -466,7 +482,7 @@ func TestGroupLoadBalancer(t *testing.T) {
 		}
 		require.Greater(t, hits["backend-1"], 0, "backend-1 must receive connections: %v", hits)
 		require.Greater(t, hits["backend-2"], 0, "backend-2 must receive connections: %v", hits)
-		require.Equal(t, 24, srv1.Accepted()+srv2.Accepted()-before, "every connection lands on a real backend")
+		require.Equal(t, 24, srv1.Served()+srv2.Served()-before, "every connection lands on a real backend")
 	})
 
 	t.Run("PerConnectionStickiness", func(t *testing.T) {
