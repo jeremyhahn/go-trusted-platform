@@ -19,9 +19,12 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
 )
@@ -30,6 +33,20 @@ import (
 // daemon route takes behind the client-certificate gate: the webservice's
 // own admin gate, plus scope when scope is not empty.
 type DaemonRouteAuthorizer func(scope string) func(http.Handler) http.Handler
+
+// DaemonCallerAuthenticator authenticates the caller of a replayed daemon
+// route whose handler authorizes by its caller's role, and publishes that
+// caller to the handler (restapi.WithCaller).
+type DaemonCallerAuthenticator func(http.Handler) http.Handler
+
+// callerCheckedDaemonMethodRoutes lists, keyed "METHOD template", the
+// replayed daemon routes that stay open to every user but whose handler
+// decides by its caller: issue-cert serves a user their own certificate and
+// an admin anyone's. The certificate on the connection names no role, so
+// these take the webservice session's principal.
+var callerCheckedDaemonMethodRoutes = map[string]struct{}{
+	http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert": {},
+}
 
 // privilegedDaemonRoutes maps each daemon CA route that mutates the CA or
 // enumerates what it issued to the scope its webservice twin requires on
@@ -309,6 +326,24 @@ func (ErrDaemonRouteNoAuthorizer) Error() string {
 	return "daemon routes not mounted: no authorizer for the privileged daemon routes"
 }
 
+// ErrDaemonRouteNoCallerAuthenticator is returned by MountDaemonRESTRoutes
+// when no caller authenticator is given: the daemon handlers that decide from
+// their caller's role would have no caller to decide from, so no route is
+// mounted.
+type ErrDaemonRouteNoCallerAuthenticator struct{}
+
+func (ErrDaemonRouteNoCallerAuthenticator) Error() string {
+	return "daemon routes not mounted: no caller authenticator for the caller-checked daemon routes"
+}
+
+// ErrDaemonRouteNoSession is returned by a caller-checked replayed daemon
+// route when the authentication seam ran but published no session.
+type ErrDaemonRouteNoSession struct{}
+
+func (ErrDaemonRouteNoSession) Error() string {
+	return "no authenticated session for the replayed daemon route"
+}
+
 // MountDaemonRESTRoutes mounts the daemon-owned route groups on api behind
 // a client-certificate gate. On the daemon's own REST listener these
 // routes are reached only over mTLS against the daemon's client roots,
@@ -324,7 +359,7 @@ func (ErrDaemonRouteNoAuthorizer) Error() string {
 // the authorization their webservice twins apply, every other state-changing
 // or inventory route the admin gate and the scope its MCP and gRPC
 // operation takes (privilegedDaemonMethodRoutes).
-func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer response.HttpWriter, authorize DaemonRouteAuthorizer) error {
+func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer response.HttpWriter, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
 	roots := routes.ClientCAs()
 	if roots == nil {
 		return ErrDaemonRouteNoClientRoots{}
@@ -332,18 +367,21 @@ func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer resp
 	if authorize == nil {
 		return ErrDaemonRouteNoAuthorizer{}
 	}
+	if caller == nil {
+		return ErrDaemonRouteNoCallerAuthenticator{}
+	}
 	group := api.NewRoute().Subrouter()
 	group.Use(requireDaemonClientCert(writer, roots))
 	if err := routes.MountRESTRoutes(group); err != nil {
 		return err
 	}
-	return guardPrivilegedDaemonRoutes(group, authorize)
+	return guardPrivilegedDaemonRoutes(group, authorize, caller)
 }
 
 // guardPrivilegedDaemonRoutes wraps the handler of every replayed route in
 // privilegedDaemonRoutes in authorize. The guard runs after the client
 // certificate gate, so a privileged route needs both credentials.
-func guardPrivilegedDaemonRoutes(group *mux.Router, authorize DaemonRouteAuthorizer) error {
+func guardPrivilegedDaemonRoutes(group *mux.Router, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
 	return group.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
 		// A route without a path template matches no privileged path.
 		template, err := route.GetPathTemplate()
@@ -352,9 +390,28 @@ func guardPrivilegedDaemonRoutes(group *mux.Router, authorize DaemonRouteAuthori
 		}
 		if scope, ok := privilegedDaemonRouteScope(route, template); ok {
 			route.Handler(authorize(scope)(route.GetHandler()))
+			return nil
+		}
+		if callerCheckedDaemonRoute(route, template) {
+			route.Handler(caller(route.GetHandler()))
 		}
 		return nil
 	})
+}
+
+// callerCheckedDaemonRoute reports whether one of route's methods names it in
+// callerCheckedDaemonMethodRoutes.
+func callerCheckedDaemonRoute(route *mux.Route, template string) bool {
+	methods, err := route.GetMethods()
+	if err != nil {
+		return false
+	}
+	for _, method := range methods {
+		if _, ok := callerCheckedDaemonMethodRoutes[method+" "+template]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // privilegedDaemonRouteScope reports whether route is privileged and the
@@ -424,7 +481,7 @@ func (v1Router *Router) daemonRoutes() {
 	if routes == nil {
 		return
 	}
-	if err := MountDaemonRESTRoutes(v1Router.router, routes, v1Router.responseWriter, v1Router.daemonRouteAuthorizer()); err != nil {
+	if err := MountDaemonRESTRoutes(v1Router.router, routes, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()); err != nil {
 		v1Router.logger.Error(err, "Daemon REST routes not mounted")
 	}
 }
@@ -443,5 +500,34 @@ func (v1Router *Router) daemonRouteAuthorizer() DaemonRouteAuthorizer {
 		return func(next http.Handler) http.Handler {
 			return operator(requireScope(next))
 		}
+	}
+}
+
+// daemonCallerAuthenticator authenticates a caller-checked replayed daemon
+// route through the webservice's own seam, with no role gate, and publishes
+// the session's principal to the daemon handler, which decides by its role.
+func (v1Router *Router) daemonCallerAuthenticator() DaemonCallerAuthenticator {
+	authenticate, _, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err, "caller-checked daemon routes will deny every request")
+		return DaemonCallerAuthenticator(v1Router.denyAll(err))
+	}
+	return func(next http.Handler) http.Handler {
+		return authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			session, ok := iammw.GetSessionFromContext(r.Context())
+			if !ok {
+				v1Router.responseWriter.Error401(w, r, ErrDaemonRouteNoSession{})
+				return
+			}
+			caller := &platformtoken.AuthorizedContext{
+				Subject:  session.UserID(),
+				TenantID: session.TenantID(),
+				Roles:    session.Roles(),
+			}
+			if user := session.User(); user != nil {
+				caller.Username = user.Username
+			}
+			next.ServeHTTP(w, r.WithContext(restapi.WithCaller(r.Context(), caller)))
+		}))
 	}
 }
