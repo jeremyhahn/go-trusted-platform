@@ -104,3 +104,59 @@ func RequireCLIRefusal(t require.TestingT, adapter string, err, want error) bool
 	require.ErrorIs(t, err, want)
 	return true
 }
+
+// ErrCLINoCommandGroup is a suite CLI adapter's refusal of an operation whose
+// platformctl command group does not exist. The SDK serves the operation over
+// every other transport; only the operator CLI is missing, and Issue names the
+// issue that records the omission.
+type ErrCLINoCommandGroup struct {
+	Group     string
+	Operation string
+	Issue     string
+}
+
+func (e ErrCLINoCommandGroup) Error() string {
+	return fmt.Sprintf("platformctl has no %s command group, so %s has no CLI (%s)", e.Group, e.Operation, e.Issue)
+}
+
+// Is matches any ErrCLINoCommandGroup, so a suite asserts the refusal with
+// errors.Is against the zero value.
+func (e ErrCLINoCommandGroup) Is(target error) bool {
+	_, ok := target.(ErrCLINoCommandGroup)
+	return ok
+}
+
+// ErrCLICommandGroupPresent is returned by a suite CLI adapter's Setup when
+// platformctl lists a command group the adapter still declares missing. The
+// declared gap has closed: the adapter must drive the group instead.
+type ErrCLICommandGroupPresent struct {
+	Group string
+	Issue string
+}
+
+func (e ErrCLICommandGroupPresent) Error() string {
+	return fmt.Sprintf("platformctl now has a %s command group, but the CLI adapter still declares it missing (%s): drive the group", e.Group, e.Issue)
+}
+
+// CLIHasCommandGroup reports whether platformctl help output lists group under
+// "Available Commands:".
+func CLIHasCommandGroup(help, group string) bool {
+	listing := false
+	for _, line := range strings.Split(help, "\n") {
+		if strings.HasPrefix(line, "Available Commands:") {
+			listing = true
+			continue
+		}
+		if !listing {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			return false
+		}
+		if fields[0] == group {
+			return true
+		}
+	}
+	return false
+}
