@@ -239,6 +239,9 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	if customized == nil || !customized.Success {
 		t.Fatalf("missing prerequisite: customizing the ISO fixture reported no success: %+v", customized)
 	}
+	if err := requireOfflineRepository(isoDir); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 	// The customized EFI GRUB finds its root by volume label: without --config,
 	// iso customize bakes the default output label into it, so the build must
 	// write that label or the guest stops at the GRUB menu with no kernel.
@@ -257,6 +260,22 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 		t.Fatalf("missing prerequisite: %v", ErrISONotFound{Path: isoPath})
 	}
 	return isoPath
+}
+
+// offlineRepositoryIndex is the index of the APK repository iso customize
+// pre-fetches into an ISO tree for the default architecture.
+func offlineRepositoryIndex(isoDir string) string {
+	return filepath.Join(isoDir, "apks-prefetch", pkgiso.DefaultISOBuildConfig().Architecture, "APKINDEX.tar.gz")
+}
+
+// requireOfflineRepository refuses a customized tree the autoinstall cannot
+// install from, before a VM boots it.
+func requireOfflineRepository(isoDir string) error {
+	index := offlineRepositoryIndex(isoDir)
+	if !FileExists(index) {
+		return ErrOfflineRepositoryMissing{Index: index}
+	}
+	return nil
 }
 
 // installOptions installs isoPath onto the work directory's test disk.
@@ -841,6 +860,14 @@ type recordingISOCommands struct {
 func (r *recordingISOCommands) Customize(_ context.Context, opts CustomizeOptions) (*CustomizeResult, error) {
 	r.calls = append(r.calls, "customize")
 	r.customize = opts
+	// A real iso customize pre-fetches the offline repository by default.
+	index := offlineRepositoryIndex(opts.ISODir)
+	if err := os.MkdirAll(filepath.Dir(index), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(index, []byte("index"), 0o644); err != nil {
+		return nil, err
+	}
 	return &CustomizeResult{Success: true, ISODir: opts.ISODir}, nil
 }
 
@@ -897,6 +924,29 @@ func TestEnsureBuiltISO_BuildsWithTheLabelGRUBSearches(t *testing.T) {
 	assert.Empty(t, cmd.customize.ConfigFile)
 	assert.Equal(t, "TRUSTED_PLATFORM", cmd.build.VolumeID)
 	assert.Equal(t, pkgiso.DefaultISOBuildConfig().OutputLabel, cmd.build.VolumeID)
+}
+
+func TestRequireOfflineRepository_AcceptsAPrefetchedTree(t *testing.T) {
+	isoDir := t.TempDir()
+	index := offlineRepositoryIndex(isoDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(index), 0o755))
+	require.NoError(t, os.WriteFile(index, []byte("index"), 0o644))
+
+	assert.Equal(t, filepath.Join(isoDir, "apks-prefetch", "x86_64", "APKINDEX.tar.gz"), index)
+	assert.NoError(t, requireOfflineRepository(isoDir))
+}
+
+// The stock Alpine tree carries apks/ but not the packages the install adds:
+// such a tree is refused before a VM spends minutes failing in the guest.
+func TestRequireOfflineRepository_RefusesAStockTree(t *testing.T) {
+	isoDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(isoDir, "apks", "x86_64"), 0o755))
+
+	err := requireOfflineRepository(isoDir)
+
+	var missing ErrOfflineRepositoryMissing
+	require.ErrorAs(t, err, &missing)
+	assert.Equal(t, offlineRepositoryIndex(isoDir), missing.Index)
 }
 
 func TestEnsureBuiltISO_ReusesAnExistingISO(t *testing.T) {

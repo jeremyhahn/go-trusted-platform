@@ -899,16 +899,19 @@ func alpineReleaseBranch(version string) string {
 // three-way auto-detect that buildAutoinstallScript bakes into the installer
 // so the branch logic is unit-testable without booting a node:
 //
-//  1. cdromPresent — vmedia/CD boot: the local pre-fetched repos (OFFLINE).
-//     PXE has no /media/cdrom, which is exactly why this branch is first.
+//  1. offlineRepo — a vmedia/CD boot whose medium carries apks-prefetch: the
+//     local pre-fetched repos (OFFLINE). PXE has no /media/cdrom, which is
+//     exactly why this branch is first. A medium built without pre-fetch
+//     carries only the stock apks, which lack the install's packages, so it
+//     takes the mirror branches.
 //  2. mirror != "" — a configured install mirror (platform_apk_mirror=).
 //  3. otherwise    — the public Alpine mirror fallback.
 //
 // branch is the release-branch component (e.g. "v3.22"); mirror is trimmed
 // of any trailing slash so the joined URLs are well-formed.
-func apkRepositoryLines(cdromPresent bool, mirror, branch string) []string {
+func apkRepositoryLines(offlineRepo bool, mirror, branch string) []string {
 	switch {
-	case cdromPresent:
+	case offlineRepo:
 		return []string{"/media/cdrom/apks", "/media/cdrom/apks-prefetch"}
 	case mirror != "":
 		base := strings.TrimRight(mirror, "/")

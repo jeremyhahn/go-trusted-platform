@@ -3679,16 +3679,18 @@ fi
 # platform_apk_mirror= is appended to the PXE kernel cmdline by the bootstrap
 # server (pkg/bootstrap/container/server.go) and to the ISO grub.cfg when an
 # install mirror is configured. It is ABSENT on plain vmedia/CD boots, which
-# is exactly why the /media/cdrom branch below takes priority.
+# is exactly why the offline /media/cdrom branch below takes priority.
 APK_MIRROR=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep '^platform_apk_mirror=' | cut -d= -f2- | tail -1)
 APK_MIRROR="${APK_MIRROR%/}"
 
 log "Setting up repositories (auto-detect: cdrom > mirror > public)..."
 [ -f /etc/apk/repositories ] && cp /etc/apk/repositories /etc/apk/repositories.original 2>/dev/null || true
 
-if [ -d /media/cdrom/apks ]; then
+if [ -d /media/cdrom/apks-prefetch ]; then
     # OFFLINE vmedia/CD boot — use the pre-fetched local repos. These
-    # packages are unsigned, so apk must be told to trust them.
+    # packages are unsigned, so apk must be told to trust them. The stock
+    # /media/cdrom/apks lacks lvm2, parted and the rest, so a CD built with
+    # --pre-fetch=false takes the mirror branches below.
     log "Using local CD repositories (offline install)"
     cat > /etc/apk/repositories << 'REPOEOF'
 /media/cdrom/apks
@@ -3705,9 +3707,9 @@ elif [ -n "$APK_MIRROR" ]; then
     } > /etc/apk/repositories
     APK_ALLOW_UNTRUSTED=""
 else
-    # No CD and no mirror — fall back to the public Alpine mirror so
-    # internet-connected installs still work out of the box.
-    log "No CD and no mirror configured; falling back to public mirror"
+    # No offline repository and no mirror — fall back to the public Alpine
+    # mirror so internet-connected installs still work out of the box.
+    log "No offline CD repository and no mirror configured; falling back to public mirror"
     {
         echo "$PUBLIC_APK_MIRROR/$ALPINE_BRANCH/main"
         echo "$PUBLIC_APK_MIRROR/$ALPINE_BRANCH/community"
