@@ -27,6 +27,7 @@ import (
 	"time"
 
 	gojwt "github.com/golang-jwt/jwt/v5"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -334,6 +335,14 @@ func TestIAMTokenServiceVerifyLocalValidator(t *testing.T) {
 	t.Run("QuicBaaS rejection", func(t *testing.T) {
 		rejecting := fakeQuicBaaSTokenService{resp: &quicbaas.ValidateTokenResponse{Valid: false}}
 		got, err := service(rejecting).Verify(ctx, "opaque-quicbaas-token")
+		require.NoError(t, err)
+		assert.False(t, got.Valid)
+		assert.Equal(t, IAMTokenRejected, got.Reason)
+	})
+
+	t.Run("QuicBaaS refusing the token as unauthorized is a rejection", func(t *testing.T) {
+		refusing := fakeQuicBaaSTokenService{err: sdkerrors.NewUnauthorized("ValidateToken", "invalid token")}
+		got, err := service(refusing).Verify(ctx, "not-a-jwt")
 		require.NoError(t, err)
 		assert.False(t, got.Valid)
 		assert.Equal(t, IAMTokenRejected, got.Reason)
