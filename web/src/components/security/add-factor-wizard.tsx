@@ -40,6 +40,7 @@ import { authFactorsApi, isFIDO2Available } from "@/utils/auth-factors-api";
 import type { AuthFactor, AuthFactorType } from "@/types/auth-factors";
 import { getBaseUrl } from "@/utils/getBaseUrl";
 import { getCookie } from "@/utils/cookie";
+import { generateMTLSCredential } from "@/lib/csr";
 
 interface AddFactorWizardProps {
   open: boolean;
@@ -62,6 +63,8 @@ interface WizardState {
   // mTLS
   mtlsMode: MTLSMode;
   mtlsCertPEM: string;
+  // PKCS#8 PEM of a key generated in the browser; empty for an uploaded cert.
+  mtlsKeyPEM: string;
   // FIDO2 — the raw response from navigator.credentials.create
   fido2Response: unknown;
   fido2VendorName: string;
@@ -80,6 +83,7 @@ const INITIAL: WizardState = {
   label: "",
   mtlsMode: "generate",
   mtlsCertPEM: "",
+  mtlsKeyPEM: "",
   fido2Response: null,
   fido2VendorName: "",
   pivCertPEM: "",
@@ -220,12 +224,18 @@ function StepPickType({
 }
 
 /** Step 2a: mTLS */
+function pemDataURL(pem: string): string {
+  return `data:application/x-pem-file;charset=utf-8,${encodeURIComponent(pem)}`;
+}
+
 function StepMTLS({
   mode,
   certPEM,
   onModeChange,
   onCertPEM,
   onGenerated,
+  onError,
+  keyPEM,
   userId,
   error,
   busy,
@@ -234,44 +244,32 @@ function StepMTLS({
   certPEM: string;
   onModeChange: (m: MTLSMode) => void;
   onCertPEM: (pem: string) => void;
-  onGenerated: (pem: string) => void;
+  onGenerated: (certPEM: string, keyPEM: string) => void;
+  onError: (message: string) => void;
+  keyPEM: string;
   userId: string;
   error: string;
   busy: boolean;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const [generating, setGenerating] = useState(false);
 
   async function handleGenerate() {
+    setGenerating(true);
     try {
-      // Generate ECDSA P-256 keypair via WebCrypto and send CSR to platform CA.
-      const kp = await crypto.subtle.generateKey(
-        { name: "ECDSA", namedCurve: "P-256" },
-        true,
-        ["sign", "verify"]
-      );
-      const pubExported = await crypto.subtle.exportKey("spki", kp.publicKey);
-      const pubB64 = btoa(String.fromCharCode(...new Uint8Array(pubExported)));
-
-      const jwt = getCookie("jwt");
-      const resp = await fetch(`${getBaseUrl()}/api/v1/users/${encodeURIComponent(userId)}/factors/mtls/issue-cert`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
-        },
-        body: JSON.stringify({ public_key_spki_b64: pubB64 }),
-      });
-
-      if (!resp.ok) {
-        const body = (await resp.json()) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${resp.status}`);
+      // The key pair stays in the browser; the platform CA signs a CSR whose
+      // subject is exactly CN=<user id>, which is all issue-cert accepts.
+      const { csrPEM, privateKeyPEM } = await generateMTLSCredential(userId);
+      const result = await authFactorsApi.issueMTLSCert(userId, csrPEM);
+      if (!result.ok) {
+        onError(result.error);
+        return;
       }
-
-      const { cert_pem } = (await resp.json()) as { cert_pem: string };
-      onGenerated(cert_pem);
+      onGenerated(result.data.cert_pem, privateKeyPEM);
     } catch (err) {
-      onGenerated("");
+      onError(err instanceof Error ? err.message : "Certificate generation failed");
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -321,17 +319,39 @@ function StepMTLS({
             platform CA will sign the CSR and return the certificate.
           </p>
           {certPEM ? (
-            <div className="rounded-md bg-muted p-3 font-mono text-xs break-all">
-              {certPEM.slice(0, 120)}…
+            <div className="space-y-2">
+              <div className="rounded-md bg-muted p-3 font-mono text-xs break-all">
+                {certPEM.slice(0, 120)}…
+              </div>
+              {keyPEM && (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Save the private key now: it exists only in this browser
+                    and the certificate is useless without it.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={pemDataURL(keyPEM)} download="mtls-client.key">
+                        Download private key
+                      </a>
+                    </Button>
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={pemDataURL(certPEM)} download="mtls-client.crt">
+                        Download certificate
+                      </a>
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <Button
               variant="outline"
               onClick={handleGenerate}
-              disabled={busy}
+              disabled={busy || generating}
               type="button"
             >
-              {busy ? (
+              {busy || generating ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
                 <Key className="h-4 w-4 mr-2" />
@@ -663,9 +683,15 @@ export function AddFactorWizard({
             <StepMTLS
               mode={state.mtlsMode}
               certPEM={state.mtlsCertPEM}
-              onModeChange={(m) => setState((s) => ({ ...s, mtlsMode: m, mtlsCertPEM: "" }))}
-              onCertPEM={(pem) => setState((s) => ({ ...s, mtlsCertPEM: pem }))}
-              onGenerated={(pem) => setState((s) => ({ ...s, mtlsCertPEM: pem }))}
+              onModeChange={(m) =>
+                setState((s) => ({ ...s, mtlsMode: m, mtlsCertPEM: "", mtlsKeyPEM: "" }))
+              }
+              onCertPEM={(pem) => setState((s) => ({ ...s, mtlsCertPEM: pem, mtlsKeyPEM: "" }))}
+              onGenerated={(certPEM, keyPEM) =>
+                setState((s) => ({ ...s, mtlsCertPEM: certPEM, mtlsKeyPEM: keyPEM, error: "" }))
+              }
+              onError={(message) => setState((s) => ({ ...s, error: message }))}
+              keyPEM={state.mtlsKeyPEM}
               userId={userId}
               error={state.error}
               busy={state.busy}

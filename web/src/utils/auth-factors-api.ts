@@ -17,6 +17,8 @@ import type {
   RotateAuthFactorRequest,
   RelabelAuthFactorRequest,
   MFAPolicyRequest,
+  IssueMTLSCertRequest,
+  IssueMTLSCertResponse,
 } from "@/types/auth-factors";
 
 interface ApiOk<T> {
@@ -142,6 +144,18 @@ export const authFactorsApi = {
     return factorsFetch<void>(
       `/api/v1/users/${encodeURIComponent(userId)}/factors/${encodeURIComponent(req.factor_id)}/label`,
       { method: "PATCH", body: JSON.stringify({ label: req.label }) }
+    );
+  },
+
+  /** Asks the platform CA to sign a client-auth certificate for the CSR. */
+  issueMTLSCert(
+    userId: string,
+    csrPEM: string
+  ): Promise<ApiResult<IssueMTLSCertResponse>> {
+    const req: IssueMTLSCertRequest = { csr_pem: csrPEM };
+    return factorsFetch<IssueMTLSCertResponse>(
+      `/api/v1/users/${encodeURIComponent(userId)}/factors/mtls/issue-cert`,
+      { method: "POST", body: JSON.stringify(req) }
     );
   },
 

@@ -182,6 +182,13 @@ platformctl auth factor add --type piv   --label "piv-badge" --reader "Example R
 platformctl auth factor add --type mtls  --label "laptop-cert" --cert ./client.pem
 ```
 
+In the web console, **Account → Security → Add factor → mTLS Certificate →
+Generate new cert** creates an ECDSA P-256 key in your browser and sends the
+platform CA only a certificate request (PKCS#10) whose subject is
+`CN=<your user id>`. The private key never reaches the server: download it
+with the certificate before you close the wizard, because it cannot be
+fetched again.
+
 `--label` is required and should say something a future you will recognise —
 `"yubikey-5c-desk"`, not `"key2"`.
 

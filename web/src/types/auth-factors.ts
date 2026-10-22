@@ -56,6 +56,17 @@ export interface MFAPolicyRequest {
   require_factor_count: number;
 }
 
+/** Body of POST /api/v1/users/{id}/factors/mtls/issue-cert. */
+export interface IssueMTLSCertRequest {
+  /** PKCS#10 CSR, PEM; its subject must be exactly CN=<user id>. */
+  csr_pem: string;
+}
+
+export interface IssueMTLSCertResponse {
+  cert_pem: string;
+  chain_pem?: string;
+}
+
 /** Vendor badge resolved from AAGUID lookup or cert inference. */
 export interface VendorBadge {
   name: string;
