@@ -156,7 +156,10 @@ Generate a key.
 
 `<key-id>` travels as the generate request's `name` and becomes the key's ID
 (`api.md` §2). `--name` is a display name, not the ID: the generate request
-has no display-name field, so set it with `key metadata update <key-id> --name`.
+has no display-name field, so once the key exists the command sets it as key
+metadata, as `key metadata update <key-id> --name` does, and prints it. If that
+update fails the key still exists and the command exits non-zero; rerun
+`key metadata update` to set the name.
 
 Algorithms: `aes-128`, `aes-192`, `aes-256`, `chacha20-poly1305`, `rsa-2048`,
 `rsa-3072`, `rsa-4096`, `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
