@@ -249,3 +249,118 @@ func TestQUICIAMCategoryCreateRequiresID(t *testing.T) {
 		t.Fatalf("payload %q does not name the IAM tenant operation", resp.Payload)
 	}
 }
+
+// newIAMGroupCategoryHandler is a QUIC handler on an in-memory IAM client
+// holding group "ops" in tenant "acme".
+func newIAMGroupCategoryHandler(t *testing.T) *QUICServiceHandler {
+	t.Helper()
+	iam := newMemIAM()
+	if _, err := iam.Group().Create(context.Background(), "acme",
+		&sdkiam.CreateGroupRequest{ID: "ops", Name: "Ops", Description: "on call"}); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetIAMGRPCService(wiredIAMGRPCService(iam))
+	return handler
+}
+
+func TestQUICIAMCategoryUpdatesGroup(t *testing.T) {
+	handler := newIAMGroupCategoryHandler(t)
+	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
+		&platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "on call, nights"}))
+	if resp.Status != quicwire.StatusOK {
+		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
+	}
+	var updated platformv1.IAMGroupResponse
+	if err := quicwire.DecodePayload(resp.Payload, &updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if got := updated.GetGroup(); got.GetId() != "ops" || got.GetName() != "Ops" || got.GetDescription() != "on call, nights" {
+		t.Fatalf("group = %+v, want ops/Ops with the new description", got)
+	}
+}
+
+func TestQUICIAMCategoryGroupUpdateRejectsBadRequests(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+		want    byte
+	}{
+		{"undecodable body", []byte{quicwire.IAMSubGroupUpdate, 0xC1}, quicwire.StatusInvalidRequest},
+	}
+	handler := newIAMGroupCategoryHandler(t)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: tc.payload})
+			if resp.Status != tc.want {
+				t.Fatalf("status = 0x%02x, want 0x%02x (payload %q)", resp.Status, tc.want, resp.Payload)
+			}
+		})
+	}
+
+	t.Run("unknown group", func(t *testing.T) {
+		resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
+			&platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "nobody", Name: "x"}))
+		if resp.Status != quicwire.StatusNotFound {
+			t.Fatalf("status = 0x%02x, want NotFound (payload %q)", resp.Status, resp.Payload)
+		}
+		if !strings.Contains(string(resp.Payload), "IAMGroupUpdate") {
+			t.Fatalf("payload %q does not name the IAM group operation", resp.Payload)
+		}
+	})
+}
+
+// newIAMRoleCategoryHandler is a QUIC handler on an in-memory IAM client
+// holding role "reader" in tenant "acme".
+func newIAMRoleCategoryHandler(t *testing.T) *QUICServiceHandler {
+	t.Helper()
+	iam := newMemIAM()
+	if _, err := iam.Role().Create(context.Background(), "acme", &sdkiam.CreateRoleRequest{
+		ID: "reader", Name: "Reader", Description: "reads", Permissions: []string{"device:read"},
+	}); err != nil {
+		t.Fatalf("seed role: %v", err)
+	}
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetIAMGRPCService(wiredIAMGRPCService(iam))
+	return handler
+}
+
+func TestQUICIAMCategoryUpdatesRole(t *testing.T) {
+	handler := newIAMRoleCategoryHandler(t)
+	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubRoleUpdate,
+		&platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "reader", Description: "reads, audited"}))
+	if resp.Status != quicwire.StatusOK {
+		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
+	}
+	var updated platformv1.IAMRoleResponse
+	if err := quicwire.DecodePayload(resp.Payload, &updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if got := updated.GetRole(); got.GetId() != "reader" || got.GetName() != "Reader" || got.GetDescription() != "reads, audited" {
+		t.Fatalf("role = %+v, want reader/Reader with the new description", got)
+	}
+}
+
+func TestQUICIAMCategoryRoleUpdateRejectsBadRequests(t *testing.T) {
+	handler := newIAMRoleCategoryHandler(t)
+
+	t.Run("undecodable body", func(t *testing.T) {
+		resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+			Opcode: quicwire.OpIAMCategory, Payload: []byte{quicwire.IAMSubRoleUpdate, 0xC1},
+		})
+		if resp.Status != quicwire.StatusInvalidRequest {
+			t.Fatalf("status = 0x%02x, want InvalidRequest (payload %q)", resp.Status, resp.Payload)
+		}
+	})
+
+	t.Run("unknown role", func(t *testing.T) {
+		resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubRoleUpdate,
+			&platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "nobody", Name: "x"}))
+		if resp.Status != quicwire.StatusNotFound {
+			t.Fatalf("status = 0x%02x, want NotFound (payload %q)", resp.Status, resp.Payload)
+		}
+		if !strings.Contains(string(resp.Payload), "IAMRoleUpdate") {
+			t.Fatalf("payload %q does not name the IAM role operation", resp.Payload)
+		}
+	})
+}

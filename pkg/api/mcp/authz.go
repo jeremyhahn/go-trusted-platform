@@ -668,8 +668,8 @@ func toolPermissionCatalog() map[string]string {
 	// scope of CreateToken and RevokeToken, which refuse on every transport
 	// with the same OIDC error.
 	for _, tool := range []string{
-		"iam_create_user", "iam_create_role", "iam_assign_role", "iam_revoke_role",
-		"iam_create_group", "iam_add_group_member", "iam_remove_group_member",
+		"iam_create_user", "iam_update_user", "iam_create_role", "iam_update_role", "iam_assign_role", "iam_revoke_role",
+		"iam_create_group", "iam_update_group", "iam_add_group_member", "iam_remove_group_member",
 		"iam_create_tenant", "iam_create_token", "iam_revoke_token",
 	} {
 		permissions[tool] = "iam:write"

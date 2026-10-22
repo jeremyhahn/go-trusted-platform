@@ -116,6 +116,7 @@ func newUserListCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var tenantID string
 	var page uint32
 	var pageSize uint32
+	var filter iamsvc.UserListFilter
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -127,19 +128,25 @@ Examples:
   platformctl iam user list --tenant my-tenant
 
   # List users with pagination
-  platformctl iam user list --tenant my-tenant --page 1 --page-size 20`,
+  platformctl iam user list --tenant my-tenant --page 1 --page-size 20
+
+  # List the users that hold a role and belong to a group
+  platformctl iam user list --tenant my-tenant --role admin --group ops`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tenantID == "" {
 				return ErrMissingTenantID{}
 			}
 			flags := getFlags()
-			return runUserList(flags, tenantID, page, pageSize)
+			return runUserList(flags, tenantID, page, pageSize, filter)
 		},
 	}
 
 	cmd.Flags().StringVar(&tenantID, "tenant", "", "tenant ID (required)")
 	cmd.Flags().Uint32VarP(&page, "page", "p", 1, "page number")
 	cmd.Flags().Uint32VarP(&pageSize, "page-size", "s", 50, "maximum number of users per page")
+	cmd.Flags().StringVar(&filter.Email, "email", "", "list only users whose email contains this text")
+	cmd.Flags().StringVar(&filter.Role, "role", "", "list only users that hold this role ID")
+	cmd.Flags().StringVar(&filter.Group, "group", "", "list only users in this group ID")
 
 	return cmd
 }
@@ -311,7 +318,7 @@ func runUserGet(flags *cli.CommonFlags, tenantID, userID string) error {
 	}
 }
 
-func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32) error {
+func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32, filter iamsvc.UserListFilter) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -321,7 +328,7 @@ func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
 	ctx := base.Context()
 
-	result, err := sdkClient.ListUsersDomain(ctx, tenantID, page, pageSize)
+	result, err := sdkClient.ListUsersDomain(ctx, tenantID, page, pageSize, filter)
 	if err != nil {
 		return &WrappedError{Msg: "failed to list users", Err: err}
 	}

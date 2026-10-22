@@ -1679,6 +1679,19 @@ func (p *MCPServiceProvider) IAMGetUser(ctx context.Context, tenantID string, us
 	return p.iam.GetUser(ctx, &platformv1.GetIAMUserRequest{TenantId: tenantID, UserId: userID})
 }
 
+// IAMUpdateUser updates an IAM user, as gRPC UpdateUser.
+func (p *MCPServiceProvider) IAMUpdateUser(ctx context.Context, req *mcp.IAMUpdateUserRequest) (interface{}, error) {
+	return p.iam.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{
+		TenantId:   req.TenantID,
+		UserId:     req.UserID,
+		Email:      req.Email,
+		Name:       req.Name,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
+		Attributes: req.Attributes,
+	})
+}
+
 // IAMListUsers lists a tenant's IAM users, as gRPC ListUsers.
 func (p *MCPServiceProvider) IAMListUsers(ctx context.Context, req *mcp.IAMListUsersRequest) (interface{}, error) {
 	return p.iam.ListUsers(ctx, &platformv1.ListIAMUsersRequest{
@@ -1709,6 +1722,17 @@ func (p *MCPServiceProvider) IAMDeleteRole(ctx context.Context, tenantID string,
 // IAMGetRole returns an IAM role, as gRPC GetRole.
 func (p *MCPServiceProvider) IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error) {
 	return p.iam.GetRole(ctx, &platformv1.GetIAMRoleRequest{TenantId: tenantID, RoleId: roleID})
+}
+
+// IAMUpdateRole updates an IAM role, as gRPC UpdateRole.
+func (p *MCPServiceProvider) IAMUpdateRole(ctx context.Context, req *mcp.IAMUpdateRoleRequest) (interface{}, error) {
+	return p.iam.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    req.TenantID,
+		RoleId:      req.RoleID,
+		Name:        req.Name,
+		Description: req.Description,
+		Permissions: req.Permissions,
+	})
 }
 
 // IAMListRoles lists a tenant's IAM roles, as gRPC ListRoles.
@@ -1770,6 +1794,16 @@ func (p *MCPServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID string
 // IAMGetGroup returns an IAM group, as gRPC GetGroup.
 func (p *MCPServiceProvider) IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error) {
 	return p.iam.GetGroup(ctx, &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: groupID})
+}
+
+// IAMUpdateGroup updates an IAM group, as gRPC UpdateGroup.
+func (p *MCPServiceProvider) IAMUpdateGroup(ctx context.Context, req *mcp.IAMUpdateGroupRequest) (interface{}, error) {
+	return p.iam.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{
+		TenantId:    req.TenantID,
+		GroupId:     req.GroupID,
+		Name:        req.Name,
+		Description: req.Description,
+	})
 }
 
 // IAMListGroups lists a tenant's IAM groups, as gRPC ListGroups.

@@ -322,7 +322,7 @@ distinct values, twenty-three names:
 | `0x2F` | `OpProxyCategory` | **An alias of `OpGatewayCategory`**, not a separate value |
 | `0x3F` | `OpIPAMCategory` | IPAM |
 | `0x50` | `OpNTPCategory` | Time synchronisation |
-| `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB`. `InvitationService` on `InvitationSub*` `0x10`–`0x16` ([docs/tenant/api.md](../tenant/api.md) §10) |
+| `0x51` | `OpIAMCategory` | IAM tenant records, sub-opcodes `IAMSubTenant*` `0x01`–`0x05`, group update, `IAMSubGroupUpdate` `0x06`, and role update, `IAMSubRoleUpdate` `0x07`. Not the platform tenancy opcodes `0xDB`–`0xEB`. `InvitationService` on `InvitationSub*` `0x10`–`0x16` ([docs/tenant/api.md](../tenant/api.md) §10) |
 | `0x52` | `OpVPNCategory` | VPN control plane; sub-opcodes `VPNSub*` `0x01`–`0x08`, scopes `vpn:read`/`vpn:write`/`vpn:admin` ([docs/vpn/api.md](../vpn/api.md)) |
 | `0x53` | `OpCacheCategory` | Cache through the composed go-quicbaas SDK; sub-opcodes `CacheSub*` `0x01`–`0x04`, scopes `cache:read`/`cache:write`/`cache:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |

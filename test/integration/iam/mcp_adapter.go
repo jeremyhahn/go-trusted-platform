@@ -26,6 +26,7 @@ import (
 
 	"sync/atomic"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -226,15 +227,11 @@ func (a *MCPAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*C
 		return nil, err
 	}
 
-	var user User
-	if err := json.Unmarshal(result, &user); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "CreateUser",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMUserResponse
+	if err := decodeReply("CreateUser", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &CreateUserResult{User: &user}, nil
+	return &CreateUserResult{User: pbUserToUser(resp.GetUser())}, nil
 }
 
 // GetUser retrieves a user by ID
@@ -249,15 +246,11 @@ func (a *MCPAdapter) GetUser(ctx context.Context, opts GetUserOptions) (*GetUser
 		return nil, err
 	}
 
-	var user User
-	if err := json.Unmarshal(result, &user); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetUser",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMUserResponse
+	if err := decodeReply("GetUser", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &GetUserResult{User: &user}, nil
+	return &GetUserResult{User: pbUserToUser(resp.GetUser())}, nil
 }
 
 // UpdateUser updates an existing user
@@ -286,29 +279,16 @@ func (a *MCPAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*U
 		args["attributes"] = opts.Attributes
 	}
 
-	// Try to call iam_update_user if it exists
 	result, err := a.callTool(ctx, "iam_update_user", args)
 	if err != nil {
-		// If update tool doesn't exist, fall back to get user
-		getResult, getErr := a.GetUser(ctx, GetUserOptions{
-			TenantID: opts.TenantID,
-			UserID:   opts.UserID,
-		})
-		if getErr != nil {
-			return nil, err
-		}
-		return &UpdateUserResult{User: getResult.User}, nil
+		return nil, err
 	}
 
-	var user User
-	if err := json.Unmarshal(result, &user); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "UpdateUser",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMUserResponse
+	if err := decodeReply("UpdateUser", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &UpdateUserResult{User: &user}, nil
+	return &UpdateUserResult{User: pbUserToUser(resp.GetUser())}, nil
 }
 
 // DeleteUser removes a user
@@ -332,19 +312,16 @@ func (a *MCPAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Lis
 		"tenant_id": opts.TenantID,
 	}
 	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Offset > 0 {
-		args["offset"] = opts.Offset
+		args["pagination"] = map[string]interface{}{"page_size": opts.Limit}
 	}
 	if opts.Email != "" {
-		args["email"] = opts.Email
+		args["email_filter"] = opts.Email
 	}
 	if opts.Role != "" {
-		args["role"] = opts.Role
+		args["role_filter"] = opts.Role
 	}
 	if opts.Group != "" {
-		args["group"] = opts.Group
+		args["group_filter"] = opts.Group
 	}
 
 	result, err := a.callTool(ctx, "iam_list_users", args)
@@ -352,21 +329,15 @@ func (a *MCPAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Lis
 		return nil, err
 	}
 
-	var listResult ListUsersResult
-	if err := json.Unmarshal(result, &listResult); err != nil {
-		// Try parsing as array of users directly
-		var users []*User
-		if err := json.Unmarshal(result, &users); err != nil {
-			return nil, &MCPAdapterError{
-				Operation: "ListUsers",
-				Message:   "failed to parse response: " + err.Error(),
-			}
-		}
-		listResult.Users = users
-		listResult.Total = int64(len(users))
+	var resp platformv1.ListIAMUsersResponse
+	if err := decodeReply("ListUsers", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &listResult, nil
+	users := make([]*User, 0, len(resp.GetUsers()))
+	for _, u := range resp.GetUsers() {
+		users = append(users, pbUserToUser(u))
+	}
+	return &ListUsersResult{Users: users, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
 // AssignRole assigns a role to a user
@@ -374,7 +345,7 @@ func (a *MCPAdapter) AssignRole(ctx context.Context, opts AssignRoleOptions) (*A
 	args := map[string]interface{}{
 		"tenant_id": opts.TenantID,
 		"user_id":   opts.UserID,
-		"role":      opts.RoleID,
+		"role_id":   opts.RoleID,
 	}
 
 	_, err := a.callTool(ctx, "iam_assign_role", args)
@@ -390,7 +361,7 @@ func (a *MCPAdapter) RevokeRole(ctx context.Context, opts RevokeRoleOptions) (*R
 	args := map[string]interface{}{
 		"tenant_id": opts.TenantID,
 		"user_id":   opts.UserID,
-		"role":      opts.RoleID,
+		"role_id":   opts.RoleID,
 	}
 
 	_, err := a.callTool(ctx, "iam_revoke_role", args)
@@ -423,15 +394,11 @@ func (a *MCPAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) (
 		return nil, err
 	}
 
-	var group Group
-	if err := json.Unmarshal(result, &group); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "CreateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMGroupResponse
+	if err := decodeReply("CreateGroup", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &CreateGroupResult{Group: &group}, nil
+	return &CreateGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
 // GetGroup retrieves a group by ID
@@ -446,15 +413,11 @@ func (a *MCPAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGr
 		return nil, err
 	}
 
-	var group Group
-	if err := json.Unmarshal(result, &group); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetGroup",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMGroupResponse
+	if err := decodeReply("GetGroup", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &GetGroupResult{Group: &group}, nil
+	return &GetGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
 // UpdateGroup updates an existing group
@@ -474,29 +437,16 @@ func (a *MCPAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (
 		args["description"] = opts.Description
 	}
 
-	// Try to call iam_update_group if it exists
 	result, err := a.callTool(ctx, "iam_update_group", args)
 	if err != nil {
-		// If update tool doesn't exist, fall back to get group
-		getResult, getErr := a.GetGroup(ctx, GetGroupOptions{
-			TenantID: opts.TenantID,
-			GroupID:  opts.GroupID,
-		})
-		if getErr != nil {
-			return nil, err
-		}
-		return &UpdateGroupResult{Group: getResult.Group}, nil
+		return nil, err
 	}
 
-	var group Group
-	if err := json.Unmarshal(result, &group); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "UpdateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMGroupResponse
+	if err := decodeReply("UpdateGroup", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &UpdateGroupResult{Group: &group}, nil
+	return &UpdateGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
 // DeleteGroup removes a group
@@ -520,10 +470,7 @@ func (a *MCPAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*L
 		"tenant_id": opts.TenantID,
 	}
 	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Offset > 0 {
-		args["offset"] = opts.Offset
+		args["pagination"] = map[string]interface{}{"page_size": opts.Limit}
 	}
 
 	result, err := a.callTool(ctx, "iam_list_groups", args)
@@ -531,21 +478,24 @@ func (a *MCPAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*L
 		return nil, err
 	}
 
-	var listResult ListGroupsResult
-	if err := json.Unmarshal(result, &listResult); err != nil {
-		// Try parsing as array of groups directly
-		var groups []*Group
-		if err := json.Unmarshal(result, &groups); err != nil {
-			return nil, &MCPAdapterError{
-				Operation: "ListGroups",
-				Message:   "failed to parse response: " + err.Error(),
-			}
-		}
-		listResult.Groups = groups
-		listResult.Total = int64(len(groups))
+	var resp platformv1.ListIAMGroupsResponse
+	if err := decodeReply("ListGroups", result, &resp); err != nil {
+		return nil, err
 	}
+	groups := make([]*Group, 0, len(resp.GetGroups()))
+	for _, g := range resp.GetGroups() {
+		groups = append(groups, pbGroupToGroup(g))
+	}
+	return &ListGroupsResult{Groups: groups, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
+}
 
-	return &listResult, nil
+// decodeReply decodes a tool result: the JSON of the tool's gRPC reply
+// message, as each iam_* tool returns it (docs/iam/api.md).
+func decodeReply(operation string, raw json.RawMessage, reply interface{}) error {
+	if err := json.Unmarshal(raw, reply); err != nil {
+		return &MCPAdapterError{Operation: operation, Message: "failed to parse response: " + err.Error()}
+	}
+	return nil
 }
 
 // AddMember adds a user to a group
@@ -605,15 +555,11 @@ func (a *MCPAdapter) CreateRole(ctx context.Context, opts CreateRoleOptions) (*C
 		return nil, err
 	}
 
-	var role Role
-	if err := json.Unmarshal(result, &role); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "CreateRole",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMRoleResponse
+	if err := decodeReply("CreateRole", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &CreateRoleResult{Role: &role}, nil
+	return &CreateRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
 // GetRole retrieves a role by ID
@@ -628,21 +574,14 @@ func (a *MCPAdapter) GetRole(ctx context.Context, opts GetRoleOptions) (*GetRole
 		return nil, err
 	}
 
-	var role Role
-	if err := json.Unmarshal(result, &role); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetRole",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMRoleResponse
+	if err := decodeReply("GetRole", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &GetRoleResult{Role: &role}, nil
+	return &GetRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
-// UpdateRole updates an existing role
-// Note: MCP does not have a dedicated update_role tool, so this implementation
-// falls back to returning the current role. In production, this should be
-// implemented properly once the MCP tool is available.
+// UpdateRole updates an existing role through iam_update_role.
 func (a *MCPAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*UpdateRoleResult, error) {
 	// Build update arguments
 	args := map[string]interface{}{
@@ -659,29 +598,16 @@ func (a *MCPAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*U
 		args["permissions"] = opts.Permissions
 	}
 
-	// Try to call iam_update_role if it exists
 	result, err := a.callTool(ctx, "iam_update_role", args)
 	if err != nil {
-		// If update tool doesn't exist, fall back to get role
-		getResult, getErr := a.GetRole(ctx, GetRoleOptions{
-			TenantID: opts.TenantID,
-			RoleID:   opts.RoleID,
-		})
-		if getErr != nil {
-			return nil, err
-		}
-		return &UpdateRoleResult{Role: getResult.Role}, nil
+		return nil, err
 	}
 
-	var role Role
-	if err := json.Unmarshal(result, &role); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "UpdateRole",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	var resp platformv1.IAMRoleResponse
+	if err := decodeReply("UpdateRole", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &UpdateRoleResult{Role: &role}, nil
+	return &UpdateRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
 // DeleteRole removes a role
@@ -705,10 +631,7 @@ func (a *MCPAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Lis
 		"tenant_id": opts.TenantID,
 	}
 	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Offset > 0 {
-		args["offset"] = opts.Offset
+		args["pagination"] = map[string]interface{}{"page_size": opts.Limit}
 	}
 
 	result, err := a.callTool(ctx, "iam_list_roles", args)
@@ -716,21 +639,15 @@ func (a *MCPAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Lis
 		return nil, err
 	}
 
-	var listResult ListRolesResult
-	if err := json.Unmarshal(result, &listResult); err != nil {
-		// Try parsing as array of roles directly
-		var roles []*Role
-		if err := json.Unmarshal(result, &roles); err != nil {
-			return nil, &MCPAdapterError{
-				Operation: "ListRoles",
-				Message:   "failed to parse response: " + err.Error(),
-			}
-		}
-		listResult.Roles = roles
-		listResult.Total = int64(len(roles))
+	var resp platformv1.ListIAMRolesResponse
+	if err := decodeReply("ListRoles", result, &resp); err != nil {
+		return nil, err
 	}
-
-	return &listResult, nil
+	roles := make([]*Role, 0, len(resp.GetRoles()))
+	for _, r := range resp.GetRoles() {
+		roles = append(roles, pbRoleToRole(r))
+	}
+	return &ListRolesResult{Roles: roles, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
 // ============================================================================
@@ -740,10 +657,10 @@ func (a *MCPAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Lis
 // CheckPermission checks if a subject has permission for an action on a resource
 func (a *MCPAdapter) CheckPermission(ctx context.Context, opts CheckPermissionOptions) (*CheckPermissionResult, error) {
 	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"user_id":   opts.SubjectID,
-		"resource":  opts.Resource,
-		"action":    opts.Action,
+		"tenant_id":  opts.TenantID,
+		"subject_id": opts.SubjectID,
+		"resource":   opts.Resource,
+		"action":     opts.Action,
 	}
 	if len(opts.Roles) > 0 {
 		args["roles"] = opts.Roles
