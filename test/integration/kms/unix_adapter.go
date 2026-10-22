@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -1333,7 +1334,9 @@ func (s *UnixAdapter) stringsToKeyUsages(operations []string) []pb.KeyUsage {
 
 // stringToKeyUsage converts string to proto KeyUsage.
 func (s *UnixAdapter) stringToKeyUsage(op string) pb.KeyUsage {
-	switch op {
+	// The suite names operations in lower case ("encrypt"); accept any case
+	// and dashes, as the daemon's QUIC mapping does.
+	switch strings.ToUpper(strings.ReplaceAll(op, "-", "_")) {
 	case "ENCRYPT":
 		return pb.KeyUsage_KEY_USAGE_ENCRYPT
 	case "DECRYPT":
