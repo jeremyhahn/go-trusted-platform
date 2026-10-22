@@ -213,6 +213,137 @@ func TestFailuresWithNoPackageResultGate(t *testing.T) {
 	assert.Contains(t, v.Unattributable[0], "no package FAIL line")
 }
 
+// ffdemoBaseline lists the two failing leaves of testdata/failing-package.log.
+const ffdemoBaseline = "# kind\tpackage\tname\tupstream\tclosing_release\n" +
+	"test\ttest/integration/ffdemo\tTestCLI/Create\tgo-quicbaas#1\tgo-quicbaas v9\n" +
+	"test\ttest/integration/ffdemo\tTestCLI/Get\tgo-quicbaas#1\tgo-quicbaas v9\n"
+
+// readFixture returns a testdata log: real go test -v output inside the
+// runner's framing, ending with the binary's FAIL, go test's package line
+// and the go test command's own trailing FAIL.
+func readFixture(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	require.NoError(t, err)
+	return string(data)
+}
+
+func TestARealFailingPackageWithEveryLeafListedPasses(t *testing.T) {
+	v := check(t, ffdemoBaseline, readFixture(t, "failing-package.log"))
+	assert.False(t, v.gating(), "unlisted %v, unattributable %v", v.Unlisted, v.Unattributable)
+	assert.Len(t, v.Hits, 2)
+}
+
+func TestARealFailingPackageWithALeafUnlistedNamesOnlyThatLeaf(t *testing.T) {
+	baselineText := strings.Replace(ffdemoBaseline, "test\ttest/integration/ffdemo\tTestCLI/Get\tgo-quicbaas#1\tgo-quicbaas v9\n", "", 1)
+	v := check(t, baselineText, readFixture(t, "failing-package.log"))
+	assert.True(t, v.gating())
+	assert.Empty(t, v.Unattributable)
+	assert.Equal(t, []failure{{Package: "test/integration/ffdemo", Name: "TestCLI/Get"}}, v.Unlisted)
+}
+
+// sectionProblems parses one runner section around body and returns it.
+func sectionProblems(t *testing.T, pkg string, body ...string) *section {
+	t.Helper()
+	log, err := parseSuiteLog("suite.log", defaultModule, strings.NewReader(suiteOutput(target{name: "t", pkg: pkg, failed: true, body: body})))
+	require.NoError(t, err)
+	require.Contains(t, log.sections, "t")
+	return log.sections["t"]
+}
+
+// The go test command closes with its own FAIL after the last package's
+// result line, whichever kind that line is (real go test -v bytes).
+func TestTheCommandsTrailingFAILAfterAResultLineIsNotABinaryResult(t *testing.T) {
+	cases := map[string][]string{
+		"after a passing package": {
+			"=== RUN   TestOK", "--- PASS: TestOK (0.00s)", "PASS",
+			"ok  \t" + module + "test/integration/ffdemo/passes\t0.001s",
+			"FAIL",
+		},
+		"after a package with no test files": {
+			"--- FAIL: TestCLI (0.00s)", "    --- FAIL: TestCLI/Create (0.00s)", "FAIL",
+			"FAIL\t" + module + "test/integration/ffdemo/fails\t0.002s",
+			"=== RUN   TestOK", "--- PASS: TestOK (0.00s)", "PASS",
+			"ok  \t" + module + "test/integration/ffdemo/passes\t0.001s",
+			"?   \t" + module + "test/integration/ffdemo/notests\t[no test files]",
+			"FAIL",
+		},
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := sectionProblems(t, "test/integration/ffdemo/...", body...)
+			assert.Empty(t, s.Problems)
+			for _, p := range s.Failed {
+				assert.True(t, p.BinaryFailed, p.Package)
+			}
+		})
+	}
+}
+
+// Real go test -v framings that must stay problems, each followed by the
+// command's trailing FAIL, which must add no problem of its own.
+func TestRealBrokenPackagesStayProblems(t *testing.T) {
+	pkg := module + "test/integration/ffdemo/"
+	cases := map[string]struct {
+		body     []string
+		problems []string
+	}{
+		"build failed": {
+			body: []string{
+				"# " + pkg + "build [" + pkg + "build.test]",
+				"test/integration/ffdemo/build/a_test.go:3:28: undefined: undefinedThing",
+				"FAIL\t" + pkg + "build [build failed]",
+				"FAIL",
+			},
+			problems: []string{"FAIL\t" + pkg + "build [build failed]"},
+		},
+		"setup failed": {
+			body: []string{
+				"# " + pkg + "setup",
+				"test/integration/ffdemo/setup/a_test.go:4:2: no required module provides package " + module + "nope; to add it:",
+				"\tgo get " + module + "nope",
+				"FAIL\t" + pkg + "setup [setup failed]",
+				"FAIL",
+			},
+			problems: []string{"FAIL\t" + pkg + "setup [setup failed]"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := sectionProblems(t, "test/integration/ffdemo/...", tc.body...)
+			assert.Equal(t, tc.problems, s.Problems)
+		})
+	}
+}
+
+// A test calling os.Exit: go test prints the package line but the binary
+// never printed its own FAIL. The command's trailing FAIL must not stand
+// in for it.
+func TestARealExitedBinaryStaysUnfinished(t *testing.T) {
+	baselineText := ffdemoBaseline + "test\ttest/integration/ffdemo/exits\tTestE/Sub\tgo-quicbaas#1\tgo-quicbaas v9\n"
+	exited := target{name: "ffdemo", pkg: "test/integration/ffdemo/...", failed: true, body: []string{
+		"=== RUN   TestE",
+		"=== RUN   TestE/Sub",
+		"    a_test.go:6: x",
+		"FAIL\t" + module + "test/integration/ffdemo/exits\t0.001s",
+		"FAIL",
+	}}
+	v := check(t, baselineText, suiteOutput(exited))
+	assert.True(t, v.gating())
+	assert.Equal(t, []string{"ffdemo: test/integration/ffdemo/exits: the test binary did not run to the end"}, v.Unattributable)
+}
+
+// Fail-closed after a result line: a later package's failing leaves and its
+// binary's FAIL, with no package line, are still a binary that died.
+func TestFailuresAfterAResultLineWithNoPackageLineGate(t *testing.T) {
+	s := sectionProblems(t, "test/integration/ffdemo/...",
+		"ok  \t"+module+"test/integration/ffdemo/passes\t0.001s",
+		"    --- FAIL: TestCLI/Create (0.00s)",
+		"FAIL",
+	)
+	assert.Equal(t, []string{"failed tests with no package FAIL line: the test binary did not run to the end"}, s.Problems)
+}
+
 func TestAPackageOutsideTheModuleGates(t *testing.T) {
 	foreign := target{name: "iam", pkg: "test/integration/iam", failed: true, body: []string{
 		"    --- FAIL: TestIAMCLI/CreateRole (0.01s)",

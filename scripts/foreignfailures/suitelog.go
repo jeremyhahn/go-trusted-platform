@@ -23,6 +23,9 @@ var (
 	packageFailRe = regexp.MustCompile(`^FAIL\t(\S+)\t\d+(\.\d+)?s$`)
 	// packageOKRe is go test's result line for a package that passed.
 	packageOKRe = regexp.MustCompile(`^ok  \t\S+`)
+	// packageNoTestsRe is go test's result line for a package with no test
+	// files.
+	packageNoTestsRe = regexp.MustCompile(`^\?   \t\S+\t\[no test files\]$`)
 	// packageBrokenRe is go test's result line for a package that did not
 	// build or set up, so no test ran.
 	packageBrokenRe = regexp.MustCompile(`^FAIL\t\S+ \[[^]]+\]$`)
@@ -64,7 +67,11 @@ type section struct {
 
 	// pending gathers the current package's output until its result line.
 	pending packageResult
-	module  string
+	// afterResult is set while the last line read was a package result
+	// line. A bare "FAIL" then is the go test command's own closing line,
+	// not a test binary's.
+	afterResult bool
+	module      string
 }
 
 // suiteLog is what the checker reads from one run of the suite.
@@ -141,6 +148,11 @@ func parseSuiteLog(name, module string, r io.Reader) (*suiteLog, error) {
 
 // read records one line of a target's go test output.
 func (s *section) read(line string) {
+	if line == "FAIL" && s.afterResult {
+		// The go test command's overall result after its last package.
+		return
+	}
+	s.afterResult = false
 	if m := testFailRe.FindStringSubmatch(line); m != nil {
 		s.pending.FailedTests = append(s.pending.FailedTests, m[1])
 		return
@@ -154,18 +166,22 @@ func (s *section) read(line string) {
 		result.Package = rel
 		s.Failed = append(s.Failed, &result)
 		s.pending = packageResult{}
+		s.afterResult = true
 		return
 	}
 	switch {
 	case line == "FAIL":
 		s.pending.BinaryFailed = true
-	case packageOKRe.MatchString(line):
+	case packageOKRe.MatchString(line), packageNoTestsRe.MatchString(line):
 		if s.pending.failed() {
 			s.Problems = append(s.Problems, "failed tests were printed before a passing package's result: "+line)
 		}
 		s.pending = packageResult{}
-	case packageBrokenRe.MatchString(line),
-		compileErrorRe.MatchString(line),
+		s.afterResult = true
+	case packageBrokenRe.MatchString(line):
+		s.Problems = append(s.Problems, line)
+		s.afterResult = true
+	case compileErrorRe.MatchString(line),
 		strings.HasPrefix(line, "panic: "),
 		strings.HasPrefix(line, "*** Test killed"):
 		s.Problems = append(s.Problems, line)
