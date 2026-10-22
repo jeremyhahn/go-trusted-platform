@@ -51,6 +51,17 @@ var privilegedDaemonRoutes = map[string]string{
 	"/api/v1/ca/sign-csr":                     restca.SignCSRScope,
 }
 
+// privilegedDaemonMethodRoutes is privilegedDaemonRoutes for a replayed
+// daemon route whose path template also serves a method any certificate
+// holder may call, so only the named method takes the gate. Keys are
+// "METHOD template". The webservice serves no twin for these, and no scope
+// names them, so they take the admin role alone.
+var privilegedDaemonMethodRoutes = map[string]string{
+	// Changing a tenant's MFA policy is a tenant-administration act; reading
+	// it stays on the certificate gate, as the login flow does.
+	http.MethodPut + " /api/v1/tenants/{id}/security/mfa-policy": "",
+}
+
 // DaemonRESTRoutes is the daemon's REST route table: the route groups only
 // the daemon serves (health, version, services, protocols, BMC, ceremony,
 // PIV, LUKS, FIDO2 and cluster). When a webservices: section replaces the
@@ -145,11 +156,31 @@ func guardPrivilegedDaemonRoutes(group *mux.Router, authorize DaemonRouteAuthori
 		if err != nil {
 			return nil
 		}
-		if scope, ok := privilegedDaemonRoutes[template]; ok {
+		if scope, ok := privilegedDaemonRouteScope(route, template); ok {
 			route.Handler(authorize(scope)(route.GetHandler()))
 		}
 		return nil
 	})
+}
+
+// privilegedDaemonRouteScope reports whether route is privileged and the
+// scope it takes: by its template from privilegedDaemonRoutes, else by one of
+// its methods from privilegedDaemonMethodRoutes.
+func privilegedDaemonRouteScope(route *mux.Route, template string) (string, bool) {
+	if scope, ok := privilegedDaemonRoutes[template]; ok {
+		return scope, true
+	}
+	// A route without a method restriction matches no method entry.
+	methods, err := route.GetMethods()
+	if err != nil {
+		return "", false
+	}
+	for _, method := range methods {
+		if scope, ok := privilegedDaemonMethodRoutes[method+" "+template]; ok {
+			return scope, true
+		}
+	}
+	return "", false
 }
 
 // requireDaemonClientCert refuses, with 401, a request whose TLS handshake

@@ -217,3 +217,117 @@ func TestPrivilegedDaemonRoutes_CoverTheDaemonCATable(t *testing.T) {
 		assert.Truef(t, registered[template], "privileged entry %s is not a daemon CA route", template)
 	}
 }
+
+// mfaPolicyTemplate is the daemon's tenant MFA policy route: GET reads the
+// policy, PUT changes it.
+const mfaPolicyTemplate = "/api/v1/tenants/{id}/security/mfa-policy"
+
+// authFactorDaemonRoutes stands in for the daemon's auth-factor route
+// table: the MFA policy routes, one per method, and mTLS cert issuance,
+// recording "METHOD template" for each request it serves.
+type authFactorDaemonRoutes struct {
+	roots  *x509.CertPool
+	served []string
+}
+
+func (a *authFactorDaemonRoutes) ClientCAs() *x509.CertPool { return a.roots }
+
+func (a *authFactorDaemonRoutes) MountRESTRoutes(api *mux.Router) error {
+	routes := map[string]string{
+		http.MethodGet:  mfaPolicyTemplate,
+		http.MethodPut:  mfaPolicyTemplate,
+		http.MethodPost: "/api/v1/users/{id}/factors/mtls/issue-cert",
+	}
+	for method, template := range routes {
+		api.HandleFunc(strings.TrimPrefix(template, "/api/v1"), func(w http.ResponseWriter, _ *http.Request) {
+			a.served = append(a.served, method+" "+template)
+			w.WriteHeader(http.StatusOK)
+		}).Methods(method)
+	}
+	return nil
+}
+
+func serveWithTLS(root http.Handler, method, path string, state *tls.ConnectionState) int {
+	req := httptest.NewRequest(method, path, nil)
+	req.TLS = state
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// Changing a tenant's MFA policy through the webservice takes the admin
+// role, as the client certificate gate admits every user the platform
+// anchor issued; reading it stays on the certificate gate.
+func TestRegisterRoutes_DaemonMFAPolicyPutTakesAdmin(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	const policyPath = "/api/v1/tenants/system/security/mfa-policy"
+
+	tests := []struct {
+		name   string
+		auth   jwt.TokenHandler
+		method string
+		want   int
+	}{
+		{"PUT without a session", &anonymousAuth{}, http.MethodPut, http.StatusUnauthorized},
+		{"PUT with the user role", &sessionAuth{roles: []string{"user"}, tenantID: "system"}, http.MethodPut, http.StatusForbidden},
+		{"PUT with the admin role", &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}, http.MethodPut, http.StatusOK},
+		{"GET without a session", &anonymousAuth{}, http.MethodGet, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
+			root := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: tt.auth, daemonRoutes: daemon})
+
+			assert.Equal(t, tt.want, serveWithTLS(root, tt.method, policyPath, verifiedClientState(t, platform)))
+			if tt.want == http.StatusOK {
+				assert.Equal(t, []string{tt.method + " " + mfaPolicyTemplate}, daemon.served)
+			} else {
+				assert.Empty(t, daemon.served, "the daemon MFA policy handler must not run")
+			}
+		})
+	}
+}
+
+// Only the named method of a method entry takes the authorizer: with every
+// caller refused, PUT on the MFA policy is refused while GET on the same
+// template and cert issuance reach the daemon.
+func TestMountDaemonRESTRoutes_MethodEntryGuardsOnlyItsMethod(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
+	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
+	writer := response.NewResponseWriter(testLogger(), nil)
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, refuseAll))
+
+	state := verifiedClientState(t, platform)
+	assert.Equal(t, http.StatusForbidden, serveWithTLS(api, http.MethodPut, "/api/v1/tenants/system/security/mfa-policy", state))
+	assert.Equal(t, http.StatusOK, serveWithTLS(api, http.MethodGet, "/api/v1/tenants/system/security/mfa-policy", state))
+	assert.Equal(t, http.StatusOK, serveWithTLS(api, http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", state))
+	assert.Equal(t, []string{
+		http.MethodGet + " " + mfaPolicyTemplate,
+		http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert",
+	}, daemon.served)
+}
+
+// Every method entry names a route the daemon's auth-factor table really
+// registers, so a renamed daemon route cannot silently drop its gate.
+func TestPrivilegedDaemonMethodRoutes_NameDaemonAuthFactorRoutes(t *testing.T) {
+	daemon := mux.NewRouter()
+	restapi.NewAuthFactorHandlers(nil, slog.Default()).RegisterRoutes(daemon)
+
+	registered := map[string]bool{}
+	require.NoError(t, daemon.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		template, err := route.GetPathTemplate()
+		require.NoError(t, err)
+		methods, err := route.GetMethods()
+		require.NoError(t, err)
+		for _, method := range methods {
+			registered[method+" "+template] = true
+		}
+		return nil
+	}))
+
+	require.NotEmpty(t, privilegedDaemonMethodRoutes)
+	for key := range privilegedDaemonMethodRoutes {
+		assert.Truef(t, registered[key], "privileged method entry %s is not a daemon auth-factor route", key)
+	}
+}

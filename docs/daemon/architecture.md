@@ -118,11 +118,21 @@ daemon handler runs:
 | `POST /ca/certificates/verify` | admin + `certs:read` |
 | `POST /ca/sign-csr` | admin + `ca:sign-csr` (and the daemon's own token check) |
 | `GET /ca/info`, `/ca/crl`, `/ca/bundle` | client certificate only (public twins) |
+| `PUT /tenants/{id}/security/mfa-policy` | admin (no scope names it) |
+| `GET /tenants/{id}/security/mfa-policy` | client certificate only (the login flow reads it) |
+| `POST /users/{id}/factors/mtls/issue-cert` | client certificate, then the handler: the caller is the user or an admin, and the CSR is bound to the user (below) |
 
 With the webservice CA configured, its own handlers shadow every one of these
 except `POST .../{serial}/revoke`, which only the daemon serves.
 `TestPrivilegedDaemonRoutes_CoverTheDaemonCATable` fails if the daemon gains a CA
-route that is in neither set. Without an authorizer, `MountDaemonRESTRoutes`
+route that is in neither set. A template that also serves an open method is
+gated per method (`privilegedDaemonMethodRoutes`, keyed `METHOD template`), and
+`TestPrivilegedDaemonMethodRoutes_NameDaemonAuthFactorRoutes` fails if an entry
+stops naming a daemon auth-factor route. The CA signs an issue-cert CSR's
+subject and SANs as given, so the handler refuses, with 403
+`ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which carries an OU
+the caller's own certificate does not (or `admin`), or which carries any SAN.
+Without an authorizer, `MountDaemonRESTRoutes`
 refuses to mount (`ErrDaemonRouteNoAuthorizer`).
 `pkg/webservice/v1/testdata/daemon_routes.golden` lists every route the
 webservice mounts for these groups, and `daemon_routes_golden_test.go` sends each
