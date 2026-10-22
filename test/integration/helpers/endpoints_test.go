@@ -21,8 +21,11 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // runnerScript is the integration runner, relative to this package.
@@ -145,6 +148,133 @@ func TestCheckRunnerBindingRejectsAMismatchedRunner(t *testing.T) {
 			}
 			if bindingErr.env != envQUICEndpoint {
 				t.Errorf("error names %q, want %q", bindingErr.env, envQUICEndpoint)
+			}
+		})
+	}
+}
+
+// integrationConfig is the config the runner starts platformd with.
+const integrationConfig = "../config.yaml"
+
+// webServiceBindingError reports a runner whose exported webservice endpoint
+// does not reach the listener the config declares.
+type webServiceBindingError struct {
+	reason string
+}
+
+func (e *webServiceBindingError) Error() string {
+	return "webservice endpoint: " + e.reason
+}
+
+// checkWebServiceBinding verifies that the runner exports
+// PLATFORM_WEBSERVICE_ENDPOINT built from PLATFORMD_WEBSERVICE_TLS_PORT, and
+// that the variable holds the tls-port of the config's one webservice. The
+// port is not a serve flag, so unlike checkRunnerBinding the agreement is
+// between the runner and the config file.
+func checkWebServiceBinding(script string, config []byte) error {
+	var cfg struct {
+		WebServices []struct {
+			TLSPort int `yaml:"tls-port"`
+		} `yaml:"webservices"`
+	}
+	if err := yaml.Unmarshal(config, &cfg); err != nil {
+		return &webServiceBindingError{reason: "config does not parse: " + err.Error()}
+	}
+	if len(cfg.WebServices) != 1 {
+		return &webServiceBindingError{reason: "config declares " + strconv.Itoa(len(cfg.WebServices)) + " webservices, want 1"}
+	}
+	portValue := regexp.MustCompile(`(?m)^PLATFORMD_WEBSERVICE_TLS_PORT="(\d+)"`).FindStringSubmatch(script)
+	if portValue == nil {
+		return &webServiceBindingError{reason: "PLATFORMD_WEBSERVICE_TLS_PORT is not set to a port"}
+	}
+	if configPort := strconv.Itoa(cfg.WebServices[0].TLSPort); portValue[1] != configPort {
+		return &webServiceBindingError{reason: "runner port " + portValue[1] + ", config tls-port " + configPort}
+	}
+	exported := regexp.MustCompile(`(?m)^\s*export ` + envWebServiceEndpoint + `="([^"]*)"`).FindStringSubmatch(script)
+	if exported == nil {
+		return &webServiceBindingError{reason: envWebServiceEndpoint + " not exported"}
+	}
+	if !strings.HasSuffix(exported[1], ":${PLATFORMD_WEBSERVICE_TLS_PORT}") {
+		return &webServiceBindingError{reason: "exported as " + exported[1] + ", not built from ${PLATFORMD_WEBSERVICE_TLS_PORT}"}
+	}
+	return nil
+}
+
+func TestWebServiceEndpointHelperReadsTheRunnerVariable(t *testing.T) {
+	t.Setenv(envWebServiceEndpoint, "https://localhost:18444")
+	if got := GetWebServiceEndpoint(); got != "https://localhost:18444" {
+		t.Errorf("with %s set the helper returned %q", envWebServiceEndpoint, got)
+	}
+}
+
+func TestWebServiceEndpointHelperFallsBackOutsideTheRunner(t *testing.T) {
+	t.Setenv(envWebServiceEndpoint, "")
+	if got := GetWebServiceEndpoint(); got != defaultWebServiceEndpoint {
+		t.Errorf("with %s empty the helper returned %q, want %q", envWebServiceEndpoint, got, defaultWebServiceEndpoint)
+	}
+}
+
+func TestRunnerExportsTheWebServiceEndpointTheConfigListensOn(t *testing.T) {
+	script, err := os.ReadFile(runnerScript)
+	if err != nil {
+		t.Fatalf("read the runner: %v", err)
+	}
+	config, err := os.ReadFile(integrationConfig)
+	if err != nil {
+		t.Fatalf("read the integration config: %v", err)
+	}
+	if err := checkWebServiceBinding(string(script), config); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), "\nPLATFORMD_WEBSERVICE_TLS_PORT=\""+strings.TrimPrefix(defaultWebServiceEndpoint, "https://localhost:")+"\"\n") {
+		t.Errorf("default %s is not on the runner's webservice port", defaultWebServiceEndpoint)
+	}
+}
+
+func TestCheckWebServiceBindingRejectsAMismatch(t *testing.T) {
+	const runner = "PLATFORMD_WEBSERVICE_TLS_PORT=\"8444\"\n" +
+		"    export PLATFORM_WEBSERVICE_ENDPOINT=\"https://localhost:${PLATFORMD_WEBSERVICE_TLS_PORT}\"\n"
+	const config = "webservices:\n  - name: integration\n    tls-port: 8444\n"
+	if err := checkWebServiceBinding(runner, []byte(config)); err != nil {
+		t.Fatalf("matching runner and config rejected: %v", err)
+	}
+
+	const portLine = "PLATFORMD_WEBSERVICE_TLS_PORT=\"8444\"\n"
+	cases := map[string]struct {
+		runner string
+		config string
+	}{
+		"no webservice in the config": {
+			runner: runner,
+			config: "dns:\n  enabled: true\n",
+		},
+		"config on another port": {
+			runner: runner,
+			config: "webservices:\n  - tls-port: 9443\n",
+		},
+		"config does not parse": {
+			runner: runner,
+			config: "webservices: [\n",
+		},
+		"port not set": {
+			runner: "    export PLATFORM_WEBSERVICE_ENDPOINT=\"https://localhost:8444\"\n",
+			config: config,
+		},
+		"not exported": {
+			runner: portLine + "    export WEBSERVICE_ADDR=\"https://localhost:${PLATFORMD_WEBSERVICE_TLS_PORT}\"\n",
+			config: config,
+		},
+		"exported from a literal": {
+			runner: portLine + "    export PLATFORM_WEBSERVICE_ENDPOINT=\"https://localhost:8444\"\n",
+			config: config,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := checkWebServiceBinding(tc.runner, []byte(tc.config))
+			var bindingErr *webServiceBindingError
+			if !errors.As(err, &bindingErr) {
+				t.Fatalf("got %v, want a *webServiceBindingError", err)
 			}
 		})
 	}

@@ -2,7 +2,7 @@
 #
 # Minimal production-style config for integration tests.
 # Used by run-integration-tests.sh to start a real platformd instance.
-# No webservices section (daemon-only mode with all protocol APIs).
+# All protocol APIs, plus one webservice listener (see webservices: below).
 
 debug: true
 debug-secrets: true
@@ -209,9 +209,9 @@ argon2:
 # dns suite's REST, QUIC, MCP, Unix and CLI adapters reach real zone and
 # record storage. CoreDNS listens on an unprivileged port; the suite creates
 # and deletes its own zones, so the configured zone only seeds the server.
-# DNSSEC and DANE stay off, and with no webservices nothing would publish
-# TLSA records anyway; the bootstrap suite, whose DANE tests need them, is
-# out of the runner's default set for that reason.
+# DNSSEC and DANE stay off, so nothing publishes TLSA records; the bootstrap
+# suite, whose DANE tests need them, is out of the runner's default set for
+# that reason.
 
 dns:
   default-ttl: 300
@@ -302,3 +302,32 @@ sdn:
     underlay-interface: lo
     # A single-node test overlay: the loopback VTEP is explicit (#93).
     vtep-address: 127.0.0.1
+
+# One webservice listener: the control plane's webservice router, which
+# mounts what the daemon REST server does not, such as the gatewayd-facing
+# POST /api/v1/gateway/telemetry (docs/gateway/api.md). The sdn suite posts
+# gateway telemetry here with the harness client certificate. TLS only, on
+# loopback; the local CA issues its certificate. No ACME, JWT or WebAuthn:
+# nothing in the runner's suites needs them. The runner exports its endpoint
+# as PLATFORM_WEBSERVICE_ENDPOINT from the same port.
+webservices:
+  - name: integration
+    bind-host: 127.0.0.1
+    tls-port: 8444
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "123456"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: localhost
+        organization: Trusted Platform Integration Tests
+      sans:
+        dns:
+          - localhost

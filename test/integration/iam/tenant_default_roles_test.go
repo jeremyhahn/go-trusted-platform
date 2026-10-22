@@ -38,8 +38,8 @@ const tenantOwnerRole = "admin"
 // the admin role - is accepted and appears in the tenant's IAM user list, on
 // every protocol.
 //
-// The integration platformd runs without webservices, so WebAuthn
-// registration itself cannot run here; this exercises the IAM operation the
+// The integration platformd's webservice listener has no WebAuthn configured,
+// so WebAuthn registration itself cannot run here; this exercises the IAM operation the
 // mirror performs, on a tenant created the way registration creates one.
 func TestIAMTenantDefaultRoles_OwnerMirrorSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

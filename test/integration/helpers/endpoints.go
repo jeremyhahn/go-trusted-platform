@@ -41,6 +41,17 @@ const (
 	defaultSocketPath   = "/run/platformd.sock"
 )
 
+// The harness webservice listener (test/integration/config.yaml
+// webservices[0]) serves the control plane's webservice router, which the
+// daemon REST server does not: the gateway-facing routes such as
+// POST /api/v1/gateway/telemetry (docs/gateway/api.md). Its port comes from
+// that config, not a serve flag; the runner exports the endpoint built from
+// the same port.
+const (
+	envWebServiceEndpoint     = "PLATFORM_WEBSERVICE_ENDPOINT"
+	defaultWebServiceEndpoint = "https://localhost:8444"
+)
+
 // envOrDefault returns the value of the environment variable name, or
 // fallback when it is unset or empty.
 func envOrDefault(name, fallback string) string {
@@ -73,6 +84,11 @@ func GetMCPEndpoint() string {
 // GetSocketPath returns the Unix socket path for testing
 func GetSocketPath() string {
 	return envOrDefault(envSocketPath, defaultSocketPath)
+}
+
+// GetWebServiceEndpoint returns the harness webservice listener's endpoint.
+func GetWebServiceEndpoint() string {
+	return envOrDefault(envWebServiceEndpoint, defaultWebServiceEndpoint)
 }
 
 // EndpointConfig holds all protocol endpoints for testing
