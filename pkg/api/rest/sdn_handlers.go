@@ -499,12 +499,10 @@ type NetworkZoneListResponse struct {
 // SDNServiceInterface defines the interface for SDN operations.
 type SDNServiceInterface interface {
 	// Bridge operations
-	CreateBridge(ctx context.Context, name string) (*ovs.Bridge, error)
+	CreateBridgeWithOptions(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error)
 	DeleteBridge(ctx context.Context, name string) error
 	GetBridge(ctx context.Context, name string) (*ovs.Bridge, error)
 	ListBridges(ctx context.Context) ([]*ovs.Bridge, error)
-	SetBridgeFailMode(ctx context.Context, name, failMode string) error
-	SetBridgeProtocols(ctx context.Context, name string, protocols []string) error
 
 	// Port operations
 	AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error)
@@ -649,24 +647,18 @@ func (h *SDNHandlers) handleCreateBridge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bridge, err := h.sdnService.CreateBridge(ctx, req.Name)
+	// The fail mode and protocols go in the bridge's own row, in one
+	// transaction: a bridge asked for as "secure" never exists in the
+	// standalone (learning-switch) mode, and the create waits for
+	// ovs-vswitchd once, not once per setting.
+	bridge, err := h.sdnService.CreateBridgeWithOptions(ctx, req.Name, &ovs.BridgeOptions{
+		FailMode:  req.FailMode,
+		Protocols: req.Protocols,
+	})
 	if err != nil {
 		h.logger.Error("Failed to create bridge", "error", err, "name", req.Name)
 		h.writeSDNError(w, "create_bridge", err)
 		return
-	}
-
-	// Set additional properties if specified
-	if req.FailMode != "" {
-		if err := h.sdnService.SetBridgeFailMode(ctx, req.Name, req.FailMode); err != nil {
-			h.logger.Warn("Failed to set bridge fail mode", "error", err, "name", req.Name)
-		}
-	}
-
-	if len(req.Protocols) > 0 {
-		if err := h.sdnService.SetBridgeProtocols(ctx, req.Name, req.Protocols); err != nil {
-			h.logger.Warn("Failed to set bridge protocols", "error", err, "name", req.Name)
-		}
 	}
 
 	resp := h.ovsBridgeToResponse(bridge)
@@ -1298,11 +1290,16 @@ func (h *SDNHandlers) writeSDNError(w http.ResponseWriter, operation string, err
 	var status int
 	var invalidPolicing *ovs.ErrInvalidPolicing
 	var invalidShaping *ovs.ErrInvalidShaping
+	var invalidFailMode *ovs.ErrInvalidFailMode
 
 	switch {
 	case errors.As(err, &invalidPolicing):
 		status = http.StatusBadRequest
 	case errors.As(err, &invalidShaping):
+		status = http.StatusBadRequest
+	case errors.As(err, &invalidFailMode):
+		status = http.StatusBadRequest
+	case errors.Is(err, ovs.ErrInvalidProtocol):
 		status = http.StatusBadRequest
 	case errors.Is(err, ovs.ErrInterfaceNotFound):
 		status = http.StatusNotFound

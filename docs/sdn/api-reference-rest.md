@@ -46,7 +46,10 @@ DELETE /api/v1/sdn/bridges/{id}     # Delete bridge
 ```
 
 Create body: `name` (required), optional `datapath_type`, `fail_mode`,
-`protocols`, `stp`, `options` and `labels`. List takes no query parameters
+`protocols`, `stp`, `options` and `labels`. The bridge is created with its
+`fail_mode` and `protocols` in one Open vSwitch transaction, so a `secure`
+bridge never runs as a standalone learning switch; an invalid `fail_mode` or
+`protocols` entry is `400` and creates nothing. List takes no query parameters
 and answers `{bridges, count, timestamp}`.
 
 ## Port Endpoints
