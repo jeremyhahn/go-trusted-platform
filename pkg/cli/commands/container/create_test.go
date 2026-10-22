@@ -82,8 +82,6 @@ func TestNewCreateCommand_Flags(t *testing.T) {
 		{"workdir", "w", ""},
 		{"tpm-access", "", "false"},
 		{"start", "", "false"},
-		{"user", "u", ""},
-		{"restart", "", ""},
 		{"attest", "", "false"},
 	}
 
@@ -170,46 +168,6 @@ func TestParseCPUCount_InvalidInput(t *testing.T) {
 	}
 }
 
-func TestParseRestartPolicy_ValidInput(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected computesvc.RestartPolicy
-	}{
-		{"", ""},
-		{"no", computesvc.RestartPolicyNo},
-		{"on-failure", computesvc.RestartPolicyOnFailure},
-		{"Always", computesvc.RestartPolicyAlways},
-		{"unless-stopped", computesvc.RestartPolicyUnlessStopped},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := parseRestartPolicy(tt.input)
-			if err != nil {
-				t.Fatalf("parseRestartPolicy(%q) error: %v", tt.input, err)
-			}
-			if got != tt.expected {
-				t.Errorf("parseRestartPolicy(%q) = %q, want %q", tt.input, got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestParseRestartPolicy_InvalidInputIsAConfigError(t *testing.T) {
-	for _, input := range []string{"sometimes", "UNSPECIFIED", "on_failure"} {
-		t.Run(input, func(t *testing.T) {
-			_, err := parseRestartPolicy(input)
-			var cfgErr ErrInvalidContainerConfig
-			if !errors.As(err, &cfgErr) {
-				t.Fatalf("parseRestartPolicy(%q) error = %v, want ErrInvalidContainerConfig", input, err)
-			}
-			if cfgErr.Field != "restart" {
-				t.Errorf("error field = %q, want %q", cfgErr.Field, "restart")
-			}
-		})
-	}
-}
-
 func TestPrintContainerDetails_NilContainer(t *testing.T) {
 	// This should not panic
 	printer := cli.NewPrinter(cli.OutputFormatTable, true)
@@ -291,5 +249,31 @@ func TestPrintCreatedContainer(t *testing.T) {
 	err = printCreatedContainer(printer, cli.OutputFormat("xml"), "web", created)
 	if !errors.As(err, new(cli.ErrInvalidOutputFormat)) {
 		t.Fatalf("unknown format: got %v, want cli.ErrInvalidOutputFormat", err)
+	}
+}
+
+func TestCreateFailed_NamesTheCreatedContainer(t *testing.T) {
+	cause := &computesvc.ErrContainerCreateIncomplete{ID: "c-9", Message: "attestation failed"}
+	err := createFailed("web", &computesvc.Container{ID: "c-9"}, cause)
+
+	var failed ErrContainerOperationFailed
+	if !errors.As(err, &failed) || failed.Operation != "create" || failed.ID != "c-9" {
+		t.Fatalf("error = %v, want a create failure naming container c-9", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("error %v does not wrap the SDK cause", err)
+	}
+}
+
+func TestCreateFailed_WithoutAContainerNamesTheRequestedName(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := createFailed("web", nil, cause)
+
+	var failed ErrContainerOperationFailed
+	if !errors.As(err, &failed) || failed.ID != "web" {
+		t.Fatalf("error = %v, want a create failure naming web", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("error %v does not wrap the cause", err)
 	}
 }

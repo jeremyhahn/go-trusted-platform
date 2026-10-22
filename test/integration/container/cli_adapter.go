@@ -138,8 +138,9 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // =============================================================================
 
 // Create creates a new container via CLI.
-// Supported options: name, image, command, environment, labels, workdir, user,
-// privileged, network mode, memory, cpus, restart policy, and attestation.
+// Supported options: name, image, command, environment, labels, workdir,
+// privileged, network mode, memory, cpus, and attestation. platformctl takes
+// no --user or --restart: the daemon does not apply either yet.
 func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
 	if opts.Name == "" {
 		return nil, ErrCommandFailed{Command: "container create", Output: "container name is required", Err: fmt.Errorf("empty name")}
@@ -168,10 +169,6 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 		args = append(args, "--workdir", opts.WorkingDir)
 	}
 
-	if opts.User != "" {
-		args = append(args, "--user", opts.User)
-	}
-
 	if opts.Privileged {
 		args = append(args, "--privileged")
 	}
@@ -186,10 +183,6 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 
 	if opts.CPUs > 0 {
 		args = append(args, "--cpu", strconv.FormatFloat(opts.CPUs, 'f', 2, 64))
-	}
-
-	if opts.RestartPolicy != "" {
-		args = append(args, "--restart", opts.RestartPolicy)
 	}
 
 	if opts.AttestOnCreate {

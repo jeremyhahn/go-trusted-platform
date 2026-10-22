@@ -38,8 +38,6 @@ type createOptions struct {
 	workDir     string
 	tpmAccess   bool
 	start       bool
-	user        string
-	restart     string
 	attest      bool
 }
 
@@ -103,8 +101,6 @@ Examples:
 	cmd.Flags().StringVarP(&opts.workDir, "workdir", "w", "", "working directory inside container")
 	cmd.Flags().BoolVar(&opts.tpmAccess, "tpm-access", false, "mount host TPM device into container")
 	cmd.Flags().BoolVar(&opts.start, "start", false, "start container immediately after creation")
-	cmd.Flags().StringVarP(&opts.user, "user", "u", "", "user to run as inside container (name, uid or uid:gid)")
-	cmd.Flags().StringVar(&opts.restart, "restart", "", "restart policy (no, on-failure, always, unless-stopped)")
 	cmd.Flags().BoolVar(&opts.attest, "attest", false, "measure the container into the TPM event log on create")
 
 	// Mark required flags
@@ -171,11 +167,6 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		return err
 	}
 
-	restartPolicy, err := parseRestartPolicy(opts.restart)
-	if err != nil {
-		return err
-	}
-
 	// Build create params
 	params := &computesvc.CreateContainerParams{
 		Name:           opts.name,
@@ -188,8 +179,6 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		Network:        opts.networkMode,
 		Command:        opts.command,
 		WorkingDir:     opts.workDir,
-		User:           opts.user,
-		RestartPolicy:  restartPolicy,
 		TpmAccess:      opts.tpmAccess,
 		AttestOnCreate: opts.attest,
 		Start:          opts.start,
@@ -206,10 +195,22 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 	ctx := base.Context()
 	container, err := sdkClient.CreateContainerDomain(ctx, params)
 	if err != nil {
-		return ErrContainerOperationFailed{Operation: "create", ID: opts.name, Err: err}
+		return createFailed(opts.name, container, err)
 	}
 
 	return printCreatedContainer(base.Printer(), flags.OutputFormat, opts.name, container)
+}
+
+// createFailed wraps a failed create. A create that failed after the
+// container was made, as when attest-on-create could not attest it, names the
+// container's ID so the caller can inspect or remove it; otherwise the error
+// names the requested container name.
+func createFailed(name string, container *computesvc.Container, err error) error {
+	id := name
+	if container != nil && container.ID != "" {
+		id = container.ID
+	}
+	return ErrContainerOperationFailed{Operation: "create", ID: id, Err: err}
 }
 
 // printCreatedContainer prints the container the daemon created. A create
@@ -278,23 +279,4 @@ func parseCPUCount(spec string) (uint32, error) {
 	}
 
 	return uint32(value), nil
-}
-
-// parseRestartPolicy converts the --restart value into an SDK restart
-// policy. An empty value leaves the policy unset so the server default
-// applies.
-func parseRestartPolicy(spec string) (computesvc.RestartPolicy, error) {
-	if spec == "" {
-		return "", nil
-	}
-
-	policy, ok := computesvc.ParseRestartPolicy(spec)
-	if !ok {
-		return "", ErrInvalidContainerConfig{
-			Field:  "restart",
-			Reason: fmt.Sprintf("unknown restart policy %q (want no, on-failure, always or unless-stopped)", spec),
-		}
-	}
-
-	return policy, nil
 }
