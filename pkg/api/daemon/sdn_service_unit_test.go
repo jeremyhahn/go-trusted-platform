@@ -457,6 +457,54 @@ func TestSDNServiceUnit_AddPort_Success(t *testing.T) {
 	assert.Contains(t, svc.ports, "port0")
 }
 
+func TestSDNServiceUnit_AddPort_InterfaceType(t *testing.T) {
+	tests := []struct {
+		name     string
+		portType platformv1.PortType
+		want     string
+	}{
+		{"internal port gets an internal interface", platformv1.PortType_PORT_TYPE_INTERNAL, "internal"},
+		{"vxlan port gets a vxlan interface", platformv1.PortType_PORT_TYPE_VXLAN, "vxlan"},
+		{"unspecified port attaches a system device", platformv1.PortType_PORT_TYPE_UNSPECIFIED, ""},
+		{"physical port attaches a system device", platformv1.PortType_PORT_TYPE_PHYSICAL, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := NewConfigurableMockOVSClient()
+			svc := newTestSDNService(mockClient)
+			svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+			_, err := svc.AddPort(context.Background(), &platformv1.AddPortRequest{
+				BridgeId: "br0",
+				Config:   &platformv1.PortConfig{Name: "port0", Type: tt.portType},
+			})
+			require.NoError(t, err)
+
+			calls := mockClient.GetCalls("AddPortWithType")
+			require.Len(t, calls, 1)
+			assert.Equal(t, tt.want, calls[0].Args[2])
+		})
+	}
+}
+
+func TestSDNServiceUnit_AddPort_TypedAddFails(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	mockClient.OnAddPort(func(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+		return nil, ovs.ErrPortExists
+	})
+	svc := newTestSDNService(mockClient)
+	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+	_, err := svc.AddPort(context.Background(), &platformv1.AddPortRequest{
+		BridgeId: "br0",
+		Config:   &platformv1.PortConfig{Name: "port0", Type: platformv1.PortType_PORT_TYPE_INTERNAL},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, svc.ports, "port0")
+}
+
 func TestSDNServiceUnit_AddPort_WithVLAN(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
 	setPortVLANCalled := false

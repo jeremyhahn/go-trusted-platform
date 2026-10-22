@@ -199,6 +199,16 @@ func (e *ErrConfigNotApplied) Unwrap() error { return e.Err }
 // must be 0 or a whole multiple of 1000, and a burst needs a rate.
 // ErrInvalidFailMode is returned for a bridge fail mode other than
 // "standalone", "secure" or empty.
+// ErrInvalidPortType is returned when a port is requested with an interface
+// type Open vSwitch does not implement.
+type ErrInvalidPortType struct {
+	Type string
+}
+
+func (e *ErrInvalidPortType) Error() string {
+	return "invalid port type: " + e.Type
+}
+
 type ErrInvalidFailMode struct {
 	FailMode string
 }

@@ -308,6 +308,15 @@ func (s *SDNService) ListBridges(ctx context.Context, req *platformv1.ListBridge
 	}, nil
 }
 
+// portInterfaceTypes maps a requested port type to the Open vSwitch Interface
+// type that implements it. Every other type is "" (system): an existing kernel
+// device of the port's name, which for PORT_TYPE_TAP AddPort creates first.
+var portInterfaceTypes = map[platformv1.PortType]string{
+	platformv1.PortType_PORT_TYPE_INTERNAL: "internal",
+	platformv1.PortType_PORT_TYPE_VXLAN:    "vxlan",
+	platformv1.PortType_PORT_TYPE_GRE:      "gre",
+}
+
 // AddPort adds a port to a bridge (requires root)
 func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error) {
 	if req.GetBridgeId() == "" {
@@ -356,8 +365,9 @@ func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest
 		_ = s.netlinkManager.SetTAPUp(config.GetName())
 	}
 
-	// Add port to bridge via OVS without holding the lock
-	ovsPort, err := client.AddPort(ctx, bridgeName, config.GetName())
+	// Add port to bridge via OVS without holding the lock, its interface
+	// typed in the same transaction
+	ovsPort, err := client.AddPortWithType(ctx, bridgeName, config.GetName(), portInterfaceTypes[config.GetType()])
 	if err != nil {
 		// Clean up TAP if we created it
 		if config.GetType() == platformv1.PortType_PORT_TYPE_TAP {

@@ -505,7 +505,7 @@ type SDNServiceInterface interface {
 	ListBridges(ctx context.Context) ([]*ovs.Bridge, error)
 
 	// Port operations
-	AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error)
+	AddPortWithType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error)
 	DeletePort(ctx context.Context, bridgeName, portName string) error
 	GetPort(ctx context.Context, name string) (*ovs.Port, error)
 	ListPorts(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
@@ -788,7 +788,9 @@ func (h *SDNHandlers) handleAddPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port, err := h.sdnService.AddPort(ctx, bridgeID, req.Name)
+	// The interface type is written in the insert itself: an "internal" port
+	// never exists as a system interface attaching a kernel device of its name.
+	port, err := h.sdnService.AddPortWithType(ctx, bridgeID, req.Name, req.Type)
 	if err != nil {
 		h.logger.Error("Failed to add port", "error", err, "bridge", bridgeID, "port", req.Name)
 		h.writeSDNError(w, "add_port", err)
@@ -1291,13 +1293,14 @@ func (h *SDNHandlers) writeSDNError(w http.ResponseWriter, operation string, err
 	var invalidPolicing *ovs.ErrInvalidPolicing
 	var invalidShaping *ovs.ErrInvalidShaping
 	var invalidFailMode *ovs.ErrInvalidFailMode
+	var invalidPortType *ovs.ErrInvalidPortType
 
 	switch {
 	case errors.As(err, &invalidPolicing):
 		status = http.StatusBadRequest
 	case errors.As(err, &invalidShaping):
 		status = http.StatusBadRequest
-	case errors.As(err, &invalidFailMode):
+	case errors.As(err, &invalidFailMode), errors.As(err, &invalidPortType):
 		status = http.StatusBadRequest
 	case errors.Is(err, ovs.ErrInvalidProtocol):
 		status = http.StatusBadRequest

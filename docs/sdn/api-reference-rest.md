@@ -63,6 +63,11 @@ PUT    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Set port state
 GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 ```
 
+Add takes `name` (required) and an optional `type`, the Open vSwitch interface
+type (`internal`, `vxlan`, `patch`, ...) written in the same transaction that
+creates the port. An empty `type` attaches the existing kernel device of the
+port's name; a type Open vSwitch does not implement is `400` and adds nothing.
+
 The state and stats routes read the port's Open vSwitch interface row. State
 answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
 `link_state`, `speed` and `duplex`. A state Open vSwitch has not recorded (it

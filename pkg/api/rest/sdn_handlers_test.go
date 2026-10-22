@@ -44,6 +44,8 @@ type mockSDNService struct {
 	// createBridgeOpts records the options of every CreateBridgeWithOptions
 	// call that passed validation.
 	createBridgeOpts []*ovs.BridgeOptions
+	// addPortTypes records the interface type of every port added.
+	addPortTypes []string
 
 	createBridgeErr error
 	deleteBridgeErr error
@@ -165,10 +167,16 @@ func (m *mockSDNService) ListBridges(ctx context.Context) ([]*ovs.Bridge, error)
 	return result, nil
 }
 
-func (m *mockSDNService) AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+// AddPortWithType refuses an interface type Open vSwitch does not implement,
+// as the OVS client does, and records the type of every port it adds.
+func (m *mockSDNService) AddPortWithType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error) {
 	if m.addPortErr != nil {
 		return nil, m.addPortErr
 	}
+	if ifType == "bogus" {
+		return nil, &ovs.ErrInvalidPortType{Type: ifType}
+	}
+	m.addPortTypes = append(m.addPortTypes, ifType)
 	if _, exists := m.bridges[bridgeName]; !exists {
 		return nil, ovs.ErrBridgeNotFound
 	}
@@ -776,6 +784,40 @@ func TestAddPort(t *testing.T) {
 		var resp PortResponse
 		decodeSDNResponse(t, w.Body, &resp)
 		assert.Equal(t, "eth0", resp.Name)
+	})
+
+	t.Run("passes the requested interface type", func(t *testing.T) {
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		body, err := json.Marshal(AddPortRequest{Name: "int0", Type: "internal"})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br-test/ports", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		assert.Equal(t, []string{"internal"}, svc.addPortTypes)
+	})
+
+	t.Run("invalid interface type", func(t *testing.T) {
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		body, err := json.Marshal(AddPortRequest{Name: "bad0", Type: "bogus"})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br-test/ports", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.NotContains(t, svc.ports, "bad0")
 	})
 
 	t.Run("with trunk VLANs", func(t *testing.T) {
