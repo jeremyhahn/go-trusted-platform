@@ -268,6 +268,16 @@ secrets` and `kms dek` call `Security().Secrets()` and `Security().DEK()`, so
 against an embedded daemon the same seven secrets verbs exit 1 with the SDK's
 unknown-method error. See [cli.md](cli.md) §7.
 
+**An embedded daemon cannot disable or enable a key.** Seam: go-quicbaas
+`sdk/go` `kms.Client.UpdateKeyStatus`. The SDK client sends
+`*kms.UpdateKeyStatusRequest`, and the pinned embedded handler for
+`quicbaas.KMS/UpdateKeyStatus` (`sdk/go/transport/embedded`, v0.12.0-alpha and
+still v0.14.0-alpha) accepts only `*service.UpdateKeyStatusRequest`, so the
+gRPC, Unix and QUIC `UpdateKeyStatus` routes, which call the SDK through
+`KMSServerAdapter.UpdateKeyStatus`, answer its `invalid request type for
+quicbaas.KMS/UpdateKeyStatus` error. A daemon on a remote quicbaas transport
+serves them.
+
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on
 `/data-keys/wrapped`) and returns it without storing anything: the plaintext and

@@ -60,6 +60,22 @@ func TestCLIUpstreamGapLeavesOtherErrorsAlone(t *testing.T) {
 	assert.False(t, errors.Is(err, ErrCLIUpstreamGap{}))
 }
 
+// TestCLIUpstreamGapClassifiesKMSKeyStatusRefusal pins the text the daemon's
+// KMS adapter answers a key status update with while the SDK's embedded
+// transport refuses *kms.UpdateKeyStatusRequest.
+func TestCLIUpstreamGapClassifiesKMSKeyStatusRefusal(t *testing.T) {
+	cause := errTestCLIFailed{stderr: "rpc error: code = InvalidArgument desc = key status update failed: " +
+		"INVALID_INPUT: embedded: invalid request type for quicbaas.KMS/UpdateKeyStatus: " +
+		"expected *service.UpdateKeyStatusRequest"}
+	err := CLIUpstreamGap("kms key status", KMSKeyStatusSDKGap, cause)
+
+	var gap ErrCLIUpstreamGap
+	require.ErrorAs(t, err, &gap)
+	assert.Equal(t, "kms key status", gap.Operation)
+	assert.Equal(t, KMSKeyStatusSDKGap, gap.Issue)
+	assert.Contains(t, err.Error(), "kms.Client.UpdateKeyStatus")
+}
+
 func TestErrCLINoFlagMatchesByType(t *testing.T) {
 	err := ErrCLINoFlag{Operation: "kms secrets store", Flag: "--expires-at"}
 
