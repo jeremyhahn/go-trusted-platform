@@ -65,6 +65,13 @@ export: it returns the public key (PEM or DER) through `GetPublicKey`, not
 is refused with NotFound, because the SDK serves only the current version. REST
 and QUIC have no public-key route yet.
 
+**`ListKeys`** pages on every transport: `limit` caps the page, `cursor` is the
+offset `next_cursor` returned, and the reply carries `has_more` and
+`total_count`. `filter` accepts `name` (exact) and `algorithm` (any case). The
+SDK `ListKeys` takes no paging arguments, so the daemon pages the full list
+itself; a cursor that is not a non-negative number, or another filter key, is
+refused with InvalidArgument.
+
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.

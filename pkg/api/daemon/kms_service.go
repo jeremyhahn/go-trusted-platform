@@ -331,9 +331,24 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 		return nil, status.Errorf(errclass.Code(err), "list keys failed: %v", err)
 	}
 
-	keys := make([]*pb.KeyHandle, 0, len(resp.Keys))
-	for _, k := range resp.Keys {
-		keys = append(keys, &pb.KeyHandle{
+	// The SDK ListKeys call takes no paging or filter arguments, so the
+	// adapter applies the request's filter, limit and cursor itself.
+	keys := resp.Keys
+	if len(req.GetFilter()) > 0 {
+		keys, err = filterKeyInfos(keys, req.GetFilter())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	start, end, nextCursor, hasMore, err := paginateKMSOffset(len(keys), req.GetLimit(), req.GetCursor())
+	if err != nil {
+		return nil, err
+	}
+
+	handles := make([]*pb.KeyHandle, 0, end-start)
+	for _, k := range keys[start:end] {
+		handles = append(handles, &pb.KeyHandle{
 			KeyId:     k.KeyID,
 			Version:   uint64(k.Version),
 			Algorithm: sdkAlgorithmToPb(k.Algorithm),
@@ -341,7 +356,11 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 	}
 
 	return &pb.ListKeysResponse{
-		Keys: keys,
+		Keys:       handles,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+		TotalCount: int32(len(keys)),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
