@@ -52,16 +52,22 @@ The gRPC code of a failed call becomes a status byte
 | `NOT_FOUND` | `StatusNotFound` |
 | `ALREADY_EXISTS` | `StatusAlreadyExists` |
 | `PERMISSION_DENIED` | `StatusPermissionDenied` |
+| `UNAUTHENTICATED` | `StatusUnauthorized` |
 | `FAILED_PRECONDITION` | `StatusInvalidRequest` |
+| `RESOURCE_EXHAUSTED` | `StatusResourceExhausted` |
 | `UNAVAILABLE` | `StatusUnavailable` |
+| `UNIMPLEMENTED` | `StatusNotImplemented` |
 | `DEADLINE_EXCEEDED` | `StatusTimeout` |
-| anything else | `StatusInternalError` |
+| `INTERNAL`, or any other code | `StatusInternalError` |
 
-An empty payload or an undecodable body is `StatusInvalidRequest`, and a
-daemon with no orchestrator service answers `StatusUnavailable` naming the
-service. An unknown sub-opcode is refused by the authorization guard, which
-has no scope for it; a handler reached without one answers
-`StatusNotImplemented`.
+The authorization guard (`AuthMiddleware.GuardRequest`,
+`pkg/api/quic/auth.go`) runs before the handler. It answers an empty payload
+with `StatusInvalidRequest`, and an unknown sub-opcode, which has no scope in
+`categoryPermissions`, with `StatusPermissionDenied`
+(`ErrOperationNotClassified`), after authenticating the caller. Past the
+guard, an undecodable body is `StatusInvalidRequest`, a daemon with no
+orchestrator service answers `StatusUnavailable` naming the service, and a
+sub-opcode with no handler answers `StatusNotImplemented`.
 
 ## SDK Usage
 
