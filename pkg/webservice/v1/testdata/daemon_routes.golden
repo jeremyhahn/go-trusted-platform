@@ -1,5 +1,9 @@
 DELETE /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}
 DELETE /api/v1/bmc/{profileID:[0-9]+}/virtual-media
+DELETE /api/v1/tpm/iak
+DELETE /api/v1/tpm/iak/cert
+DELETE /api/v1/tpm/idevid
+DELETE /api/v1/tpm/idevid/cert
 GET /api/v1
 GET /api/v1/bmc/{profileID:[0-9]+}/boot-device
 GET /api/v1/bmc/{profileID:[0-9]+}/cert
@@ -30,6 +34,13 @@ GET /api/v1/piv/slots/{slot}
 GET /api/v1/protocols
 GET /api/v1/services
 GET /api/v1/services/{service}
+GET /api/v1/tpm/device/attributes
+GET /api/v1/tpm/iak
+GET /api/v1/tpm/iak/cert
+GET /api/v1/tpm/iak/exists
+GET /api/v1/tpm/idevid
+GET /api/v1/tpm/idevid/cert
+GET /api/v1/tpm/idevid/exists
 GET /api/v1/version
 POST /api/v1/bmc/{profileID:[0-9]+}/boot-device
 POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore
@@ -49,6 +60,7 @@ POST /api/v1/cluster/join
 POST /api/v1/cluster/leave
 POST /api/v1/fido2/authenticate
 POST /api/v1/fido2/register
+POST /api/v1/idevid/ldevid
 POST /api/v1/luks/enroll/fido2
 POST /api/v1/luks/enroll/passphrase
 POST /api/v1/luks/enroll/recovery
@@ -64,6 +76,12 @@ POST /api/v1/piv/slots/{slot}/sign
 POST /api/v1/services/{service}/restart
 POST /api/v1/services/{service}/start
 POST /api/v1/services/{service}/stop
+POST /api/v1/tpm/iak/csr
+POST /api/v1/tpm/iak/generate
+POST /api/v1/tpm/iak/install
+POST /api/v1/tpm/idevid/csr
+POST /api/v1/tpm/idevid/generate
+POST /api/v1/tpm/idevid/install
 PUT /api/v1/bmc/{profileID:[0-9]+}/cert
 PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password
 PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege

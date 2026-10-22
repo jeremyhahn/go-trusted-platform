@@ -3215,8 +3215,7 @@ func (d *Daemon) MountRESTRoutes(api *mux.Router) error {
 	if d.concreteRestServer == nil || api == nil {
 		return ErrRESTRoutesUnavailable{}
 	}
-	d.concreteRestServer.MountOwnedRoutes(api)
-	return nil
+	return d.concreteRestServer.MountOwnedRoutes(api)
 }
 
 // IsRESTEnabled returns true if REST is enabled and the server is available

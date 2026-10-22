@@ -81,9 +81,13 @@ registry). Only REST-only consumers belong to `runWithWebservices` alone.
 no REST listener of its own (`EnableREST` false) but still builds its route
 table (`Config.RESTRoutesOnly`). `runWithWebservices` hands the daemon to the
 webservice registry (`RegistryParams.DaemonRESTRoutes`), and the webservice
-router mounts the daemon-owned groups under `/api/v1`: health, version,
-services, protocols, BMC, ceremony, PIV, LUKS, FIDO2 and cluster
-(`RESTServer.MountOwnedRoutes`, `pkg/webservice/v1/daemon_routes.go`). Those
+router mounts every daemon route group under `/api/v1`: health, version,
+services, protocols, BMC, ceremony, PIV, LUKS, FIDO2, cluster, IDevID/IAK,
+config delivery, and the `pkg/api/rest` groups (proxy, SDN, gateway, overlay,
+NTP, VPN, app services, devices, tenants, KMS, compute, CA, auth factors, TPM,
+vTPM) (`RESTServer.MountOwnedRoutes`, `pkg/webservice/v1/daemon_routes.go`).
+The webservice mounts them after its own routes, so a path it serves itself
+keeps the webservice handler and the daemon group fills only the rest. Those
 routes keep the contract they have on the daemon's own listener: a request
 whose TLS handshake verified no client certificate is refused with 401
 (`ErrDaemonRouteClientCertRequired`), and a verified certificate that does not

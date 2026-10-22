@@ -32,7 +32,7 @@ func (s *RESTServer) SetSDNService(svc *SDNService) {
 		sdnHandlers = rest.NewSDNHandlers(svc.OVSClient(), s.logger)
 		sdnHandlers.SetControlService(svc)
 	}
-	sdnHandlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(sdnHandlers.RegisterRoutes)
 	s.sdnHandlers = sdnHandlers
 }
 
@@ -44,7 +44,7 @@ func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator, status Gate
 	svc := newGatewayRESTService(allocator, s.logger)
 	svc.SetGatewayStatusController(status)
 	handlers := rest.NewGatewayHandlers(svc, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.gatewayService = svc
 	s.gatewayHandlers = handlers
 	s.logger.Info("Gateway REST routes registered (IPAM + gateway status)")
@@ -101,7 +101,7 @@ func (s *RESTServer) SetZoneService(svc gateway.ZoneService) {
 	if s.sdnHandlers == nil {
 		// Ensure handlers exist even if SetSDNService was never called.
 		s.sdnHandlers = rest.NewSDNHandlers(nil, s.logger)
-		s.sdnHandlers.RegisterRoutes(s.router)
+		s.mountOwnedAbsolute(s.sdnHandlers.RegisterRoutes)
 	}
 	s.sdnHandlers.SetZoneService(svc)
 	s.logger.Info("Zone service wired into SDN REST handlers")

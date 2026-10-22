@@ -26,6 +26,6 @@ func (s *RESTServer) SetProxyService(svc rest.ProxyServiceBackend) {
 		return
 	}
 	handlers := rest.NewProxyHandlers(svc, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("Proxy REST routes registered")
 }

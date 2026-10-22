@@ -56,8 +56,7 @@ type ownedRoutes struct{ server *daemon.RESTServer }
 func (o ownedRoutes) ClientCAs() *x509.CertPool { return x509.NewCertPool() }
 
 func (o ownedRoutes) MountRESTRoutes(api *mux.Router) error {
-	o.server.MountOwnedRoutes(api)
-	return nil
+	return o.server.MountOwnedRoutes(api)
 }
 
 // daemonRoutesOnWebservice builds the daemon REST server with every
