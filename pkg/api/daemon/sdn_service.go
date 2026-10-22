@@ -196,17 +196,18 @@ func (s *SDNService) CreateBridge(ctx context.Context, req *platformv1.CreateBri
 
 	client := s.getOVSClient()
 
-	// Create the bridge via OVS without holding the lock
-	ovsBridge, err := client.CreateBridge(ctx, config.GetName())
+	// Create the bridge with its fail mode in one OVS transaction, without
+	// holding the lock: setting the fail mode afterwards costs a second
+	// ovs-vswitchd reconfiguration and leaves a "secure" bridge running as a
+	// standalone learning switch in between.
+	opts := &ovs.BridgeOptions{FailMode: config.GetOptions()["fail_mode"]}
+	ovsBridge, err := client.CreateBridgeWithOptions(ctx, config.GetName(), opts)
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create bridge: %v", err))
-	}
-
-	// Set fail mode if specified (best-effort, no lock needed)
-	if config.GetOptions() != nil {
-		if failMode, ok := config.GetOptions()["fail_mode"]; ok {
-			_ = client.SetBridgeFailMode(ctx, config.GetName(), failMode)
+		var invalidFailMode *ovs.ErrInvalidFailMode
+		if errors.As(err, &invalidFailMode) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create bridge: %v", err))
 	}
 
 	// Track the bridge under write lock

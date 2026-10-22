@@ -69,6 +69,11 @@ vSwitch interface's `admin_state`: `up` is `PORT_STATUS_UP`, `down` is
 interface of its own name (a bond), is `PORT_STATUS_UNSPECIFIED`. A failed read
 is `Internal`. `SetPortState` answers the state it committed.
 
+`CreateBridge` creates the bridge with `config.options["fail_mode"]` in one
+Open vSwitch transaction, so a `secure` bridge never runs as a standalone
+learning switch; a fail mode other than `secure`, `standalone` or empty is
+`INVALID_ARGUMENT` and creates nothing.
+
 ## Key Message Types
 
 Resources are config + status pairs. For example bridges:
