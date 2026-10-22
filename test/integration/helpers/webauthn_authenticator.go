@@ -24,6 +24,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"net/url"
+	"sync"
+
+	"github.com/fxamacker/cbor/v2"
 )
 
 // WebAuthn constants the software authenticator encodes (W3C WebAuthn
@@ -184,11 +187,14 @@ func (a *softwareAuthenticator) register(options creationOptions, origin string)
 		return nil, err
 	}
 
-	attestationObject := cborMap(
-		cborText("fmt"), cborText("none"),
-		cborText("attStmt"), cborMap(),
-		cborText("authData"), cborBytes(authData),
-	)
+	attestation, err := cborEncode(attestationObject{
+		Fmt:      "none",
+		AttStmt:  map[string]any{},
+		AuthData: authData,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	encode := base64.RawURLEncoding.EncodeToString
 	var response attestationResponse
@@ -196,7 +202,7 @@ func (a *softwareAuthenticator) register(options creationOptions, origin string)
 	response.RawID = response.ID
 	response.Type = "public-key"
 	response.Response.ClientDataJSON = encode(clientDataJSON)
-	response.Response.AttestationObject = encode(attestationObject)
+	response.Response.AttestationObject = encode(attestation)
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return nil, ErrRegistrationEncoding{Cause: err}
@@ -235,13 +241,13 @@ func (a *softwareAuthenticator) coseKey() ([]byte, error) {
 	coordinateLen := (len(point) - 1) / 2
 	x := point[1 : 1+coordinateLen]
 	y := point[1+coordinateLen:]
-	return cborMap(
-		cborInt(1), cborInt(coseKeyTypeEC2),
-		cborInt(3), cborInt(coseAlgES256),
-		cborInt(-1), cborInt(coseCurveP256),
-		cborInt(-2), cborBytes(x),
-		cborInt(-3), cborBytes(y),
-	), nil
+	return cborEncode(map[int]any{
+		1:  coseKeyTypeEC2,
+		3:  coseAlgES256,
+		-1: coseCurveP256,
+		-2: x,
+		-3: y,
+	})
 }
 
 // offersES256 reports whether the relying party accepts ES256. An empty
@@ -272,62 +278,30 @@ func relyingPartyID(options creationOptions, origin string) (string, error) {
 	return parsed.Hostname(), nil
 }
 
-// The CBOR encoder below covers the items a registration needs and no
-// more: unsigned and negative integers, byte and text strings, and maps of
-// already-encoded items, all in definite-length form (RFC 8949 §3).
+// attestationObject is the registration's attestation object (WebAuthn
+// §6.5.4) in "none" format: an empty statement over the authenticator
+// data.
+type attestationObject struct {
+	Fmt      string         `cbor:"fmt"`
+	AttStmt  map[string]any `cbor:"attStmt"`
+	AuthData []byte         `cbor:"authData"`
+}
 
-// CBOR major types (RFC 8949 §3.1).
-const (
-	cborMajorUnsigned = 0
-	cborMajorNegative = 1
-	cborMajorBytes    = 2
-	cborMajorText     = 3
-	cborMajorMap      = 5
-)
+// ctap2Encoding is the CTAP2 canonical CBOR encoding (CTAP 2.1 §8, RFC
+// 8949 §4.2.3 length-first key order), the form authenticators emit.
+var ctap2Encoding = sync.OnceValues(func() (cbor.EncMode, error) {
+	return cbor.CTAP2EncOptions().EncMode()
+})
 
-// cborHead encodes a data item head: the major type and its argument in
-// the shortest form (RFC 8949 §3, preferred serialization §4.1).
-func cborHead(major byte, argument uint64) []byte {
-	initial := major << 5
-	switch {
-	case argument < 24:
-		return []byte{initial | byte(argument)}
-	case argument <= 0xff:
-		return []byte{initial | 24, byte(argument)}
-	case argument <= 0xffff:
-		return binary.BigEndian.AppendUint16([]byte{initial | 25}, uint16(argument))
-	case argument <= 0xffffffff:
-		return binary.BigEndian.AppendUint32([]byte{initial | 26}, uint32(argument))
-	default:
-		return binary.BigEndian.AppendUint64([]byte{initial | 27}, argument)
+// cborEncode encodes v in the CTAP2 canonical form.
+func cborEncode(v any) ([]byte, error) {
+	mode, err := ctap2Encoding()
+	if err != nil {
+		return nil, ErrRegistrationEncoding{Cause: err}
 	}
-}
-
-// cborInt encodes an integer; a negative n is major type 1 with argument
-// -1-n (RFC 8949 §3.1).
-func cborInt(n int64) []byte {
-	if n >= 0 {
-		return cborHead(cborMajorUnsigned, uint64(n))
+	encoded, err := mode.Marshal(v)
+	if err != nil {
+		return nil, ErrRegistrationEncoding{Cause: err}
 	}
-	return cborHead(cborMajorNegative, uint64(-1-n))
-}
-
-// cborBytes encodes a byte string.
-func cborBytes(b []byte) []byte {
-	return append(cborHead(cborMajorBytes, uint64(len(b))), b...)
-}
-
-// cborText encodes a UTF-8 text string.
-func cborText(s string) []byte {
-	return append(cborHead(cborMajorText, uint64(len(s))), s...)
-}
-
-// cborMap encodes a map from alternating, already-encoded keys and values,
-// kept in the order given: the caller supplies canonical order.
-func cborMap(keysAndValues ...[]byte) []byte {
-	encoded := cborHead(cborMajorMap, uint64(len(keysAndValues)/2))
-	for _, item := range keysAndValues {
-		encoded = append(encoded, item...)
-	}
-	return encoded
+	return encoded, nil
 }

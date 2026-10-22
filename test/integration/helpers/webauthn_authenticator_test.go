@@ -28,31 +28,39 @@ import (
 
 // TestCBOREncoderMatchesRFC8949Vectors checks the encoder against the
 // RFC 8949 Appendix A examples it can produce.
-func TestCBOREncoderMatchesRFC8949Vectors(t *testing.T) {
+func TestWebAuthnCBOREncoderMatchesRFC8949Vectors(t *testing.T) {
 	cases := []struct {
-		name    string
-		encoded []byte
-		want    string
+		name  string
+		value any
+		want  string
 	}{
-		{"0", cborInt(0), "00"},
-		{"23", cborInt(23), "17"},
-		{"24", cborInt(24), "1818"},
-		{"100", cborInt(100), "1864"},
-		{"1000", cborInt(1000), "1903e8"},
-		{"1000000", cborInt(1000000), "1a000f4240"},
-		{"1000000000000", cborInt(1000000000000), "1b000000e8d4a51000"},
-		{"-1", cborInt(-1), "20"},
-		{"-100", cborInt(-100), "3863"},
-		{"-1000", cborInt(-1000), "3903e7"},
-		{"h''", cborBytes(nil), "40"},
-		{"h'01020304'", cborBytes([]byte{1, 2, 3, 4}), "4401020304"},
-		{`""`, cborText(""), "60"},
-		{`"IETF"`, cborText("IETF"), "6449455446"},
-		{"{}", cborMap(), "a0"},
-		{"{1: 2, 3: 4}", cborMap(cborInt(1), cborInt(2), cborInt(3), cborInt(4)), "a201020304"},
+		{"0", 0, "00"},
+		{"23", 23, "17"},
+		{"24", 24, "1818"},
+		{"100", 100, "1864"},
+		{"1000", 1000, "1903e8"},
+		{"1000000", 1000000, "1a000f4240"},
+		{"1000000000000", int64(1000000000000), "1b000000e8d4a51000"},
+		{"-1", -1, "20"},
+		{"-100", -100, "3863"},
+		{"-1000", -1000, "3903e7"},
+		{"h''", []byte{}, "40"},
+		{"h'01020304'", []byte{1, 2, 3, 4}, "4401020304"},
+		{`""`, "", "60"},
+		{`"IETF"`, "IETF", "6449455446"},
+		{"{}", map[string]any{}, "a0"},
+		{"{1: 2, 3: 4}", map[int]int{3: 4, 1: 2}, "a201020304"},
+		// CTAP2 canonical order sorts keys by encoded length, then
+		// bytewise (CTAP 2.1 §8): the COSE key order 1, 3, -1, -2, -3.
+		{"COSE key order", map[int]int{-3: 0, -2: 0, -1: 0, 3: 0, 1: 0}, "a501000300200021002200"},
 	}
 	for _, tc := range cases {
-		if got := hex.EncodeToString(tc.encoded); got != tc.want {
+		encoded, err := cborEncode(tc.value)
+		if err != nil {
+			t.Errorf("%s: cborEncode: %v", tc.name, err)
+			continue
+		}
+		if got := hex.EncodeToString(encoded); got != tc.want {
 			t.Errorf("%s: encoded %s, want %s", tc.name, got, tc.want)
 		}
 	}
@@ -61,7 +69,7 @@ func TestCBOREncoderMatchesRFC8949Vectors(t *testing.T) {
 // TestSoftwareAuthenticatorRegistersWithNoneAttestation decodes a
 // registration and checks what the relying party verifies: the client
 // data, the RP id hash, the flags, the credential id and the COSE key.
-func TestSoftwareAuthenticatorRegistersWithNoneAttestation(t *testing.T) {
+func TestWebAuthnSoftwareAuthenticatorRegistersWithNoneAttestation(t *testing.T) {
 	authenticator, err := newSoftwareAuthenticator()
 	if err != nil {
 		t.Fatalf("newSoftwareAuthenticator: %v", err)
@@ -95,11 +103,13 @@ func TestSoftwareAuthenticatorRegistersWithNoneAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticatorData: %v", err)
 	}
-	wantObject := cborMap(
-		cborText("fmt"), cborText("none"),
-		cborText("attStmt"), cborMap(),
-		cborText("authData"), cborBytes(authData),
-	)
+	// {"fmt": "none", "attStmt": {}, "authData": h'...'} in CTAP2 key order;
+	// a byte string of 24 to 255 bytes has the head 0x58, length.
+	if len(authData) < 24 || len(authData) > 255 {
+		t.Fatalf("authenticator data is %d bytes, outside the one-byte length head", len(authData))
+	}
+	wantObject := append(mustHex(t, "a363666d74646e6f6e656761747453746d74a068617574684461746158"), byte(len(authData)))
+	wantObject = append(wantObject, authData...)
 	if !bytes.Equal(attestationObject, wantObject) {
 		t.Errorf("attestation object is not the none-format map over the authenticator data")
 	}
@@ -126,13 +136,10 @@ func TestSoftwareAuthenticatorRegistersWithNoneAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public key bytes: %v", err)
 	}
-	wantKey := cborMap(
-		cborInt(1), cborInt(2),
-		cborInt(3), cborInt(-7),
-		cborInt(-1), cborInt(1),
-		cborInt(-2), cborBytes(point[1:33]),
-		cborInt(-3), cborBytes(point[33:65]),
-	)
+	// {1: 2, 3: -7, -1: 1, -2: h'x', -3: h'y'}, 32-byte coordinates.
+	wantKey := append(mustHex(t, "a5010203262001215820"), point[1:33]...)
+	wantKey = append(wantKey, mustHex(t, "225820")...)
+	wantKey = append(wantKey, point[33:65]...)
 	if !bytes.Equal(authData[55+idLen:], wantKey) {
 		t.Errorf("COSE key is not the EC2 P-256 ES256 key of the credential")
 	}
@@ -140,7 +147,7 @@ func TestSoftwareAuthenticatorRegistersWithNoneAttestation(t *testing.T) {
 
 // TestSoftwareAuthenticatorDefaultsRPIDToOriginHost covers options that
 // name no RP id.
-func TestSoftwareAuthenticatorDefaultsRPIDToOriginHost(t *testing.T) {
+func TestWebAuthnSoftwareAuthenticatorDefaultsRPIDToOriginHost(t *testing.T) {
 	options := testCreationOptions("Y2hhbGxlbmdl", "")
 	rpID, err := relyingPartyID(options, "https://platform.example.internal:8443")
 	if err != nil {
@@ -153,7 +160,7 @@ func TestSoftwareAuthenticatorDefaultsRPIDToOriginHost(t *testing.T) {
 
 // TestSoftwareAuthenticatorRejectsUnanswerableOptions covers options the
 // authenticator must refuse rather than answer wrongly.
-func TestSoftwareAuthenticatorRejectsUnanswerableOptions(t *testing.T) {
+func TestWebAuthnSoftwareAuthenticatorRejectsUnanswerableOptions(t *testing.T) {
 	authenticator, err := newSoftwareAuthenticator()
 	if err != nil {
 		t.Fatalf("newSoftwareAuthenticator: %v", err)
@@ -190,6 +197,16 @@ func testCreationOptions(challenge, rpID string) creationOptions {
 	}{{Type: "public-key", Alg: coseAlgES256}}
 	options.SessionID = "session-1"
 	return options
+}
+
+// mustHex decodes a hex literal or fails the test.
+func mustHex(t *testing.T, encoded string) []byte {
+	t.Helper()
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode hex %q: %v", encoded, err)
+	}
+	return decoded
 }
 
 // decodeBase64URL decodes unpadded base64url or fails the test.

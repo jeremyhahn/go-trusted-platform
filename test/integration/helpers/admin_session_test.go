@@ -438,7 +438,7 @@ func TestAdminSessionCorruptCacheIsTyped(t *testing.T) {
 	}
 }
 
-func TestBearerExpiryRejectsMalformedTokens(t *testing.T) {
+func TestAdminSessionBearerExpiryRejectsMalformedTokens(t *testing.T) {
 	noExp := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"admin"}`)) + ".c2ln"
 	notJSON := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte("plain")) + ".c2ln"
 	for _, token := range []string{"", "a.b", "a.!!!.c", notJSON, noExp} {
@@ -453,7 +453,7 @@ func TestBearerExpiryRejectsMalformedTokens(t *testing.T) {
 	}
 }
 
-func TestSignAdminChallengeEd25519SignsTheMessage(t *testing.T) {
+func TestAdminSessionSignAdminChallengeEd25519SignsTheMessage(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -467,7 +467,7 @@ func TestSignAdminChallengeEd25519SignsTheMessage(t *testing.T) {
 	}
 }
 
-func TestAdminBearerTransportAddsBearer(t *testing.T) {
+func TestAdminSessionAdminBearerTransportAddsBearer(t *testing.T) {
 	bundleDir, cert := writeAdminBundle(t)
 	fake, server := newFakeClaimServer(t, cert)
 	session := NewAdminSession(server.URL, bundleDir, filepath.Join(t.TempDir(), "s.json"), server.Client())
@@ -501,7 +501,7 @@ func TestAdminBearerTransportAddsBearer(t *testing.T) {
 	}
 }
 
-func TestAdminBearerTransportFailsBeforeTheRequest(t *testing.T) {
+func TestAdminSessionAdminBearerTransportFailsBeforeTheRequest(t *testing.T) {
 	bundleDir, cert := writeAdminBundle(t)
 	fake, server := newFakeClaimServer(t, cert)
 	fake.configure(func(f *fakeClaimServer) { f.challengeFails = http.StatusForbidden })
