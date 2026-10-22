@@ -301,6 +301,9 @@ transport's class and that no VM is left behind: InvalidArgument over gRPC, the
 Unix socket, QUIC and MCP, HTTP 400 over REST, and `code = InvalidArgument` in
 the CLI's output.
 
+Each case's cleanup runs on its own 30-second context, so a case that failed
+on the test's five-minute deadline still stops and deletes its VM.
+
 The suite's MCP adapter (`test/integration/compute/mcp_adapter.go`) is the
 compute SDK client over MCP, so every case — create with disks, firmware and
 labels, list by label, forced stop and reboot, and delete with its disks —
