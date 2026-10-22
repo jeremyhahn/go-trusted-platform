@@ -273,6 +273,7 @@ The following test packages have multi-protocol adapters implemented:
 | `tenant` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `device` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `objectstorage` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `orchestrator` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Directory Structure
 
