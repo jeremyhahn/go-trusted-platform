@@ -376,7 +376,10 @@ func setupMockCA(t *testing.T, env *testEnvironment) {
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:         true,
+		// Without BasicConstraintsValid crypto/x509 emits no basicConstraints
+		// extension, and the certificate cannot sign the server leaf.
+		BasicConstraintsValid: true,
+		IsCA:                  true,
 	}
 
 	caCertDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caKey.Public(), caKey)
