@@ -136,7 +136,7 @@ func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRo
 	root := mux.NewRouter()
 	api := root.PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logger, nil)
-	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server, roots: roots}, writer, authorize))
+	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server, roots: roots}, writer, authorize, passCaller))
 	return root
 }
 
@@ -145,6 +145,9 @@ func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRo
 func passThrough(string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler { return next }
 }
+
+// passCaller lets every caller through the login-checked routes.
+func passCaller(next http.Handler) http.Handler { return next }
 
 // TestMountDaemonRESTRoutes_EveryDaemonRouteStillExists compares the
 // daemon-owned groups the webservice listener mounts against the checked-in
@@ -270,6 +273,12 @@ func TestPrivilegedDaemonMethodRoutes_NameDaemonRoutes(t *testing.T) {
 	require.NotEmpty(t, v1.PrivilegedDaemonMethodRoutes)
 	for key := range v1.PrivilegedDaemonMethodRoutes {
 		assert.Truef(t, registered[key], "gate entry %s names no daemon route", key)
+	}
+	require.NotEmpty(t, v1.CallerCheckedDaemonMethodRoutes)
+	for key := range v1.CallerCheckedDaemonMethodRoutes {
+		assert.Truef(t, registered[key], "login-checked entry %s names no daemon route", key)
+		_, gated := v1.PrivilegedDaemonMethodRoutes[key]
+		assert.Falsef(t, gated, "login-checked entry %s is also in the admin gate table", key)
 	}
 }
 

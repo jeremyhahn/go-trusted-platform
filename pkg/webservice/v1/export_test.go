@@ -17,3 +17,7 @@ package v1
 // external route tests, which classify every replayed daemon endpoint
 // against it.
 var PrivilegedDaemonMethodRoutes = privilegedDaemonMethodRoutes
+
+// CallerCheckedDaemonMethodRoutes exposes the login-checked route table to
+// the external route tests.
+var CallerCheckedDaemonMethodRoutes = callerCheckedDaemonMethodRoutes

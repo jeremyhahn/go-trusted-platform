@@ -62,6 +62,14 @@ func refusingAuthorizer(string) func(http.Handler) http.Handler {
 	}
 }
 
+// refusingCaller answers 401 on every caller-checked daemon route, standing
+// in for the webservice login check the replay puts in front of them.
+func refusingCaller(http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+}
+
 func TestLeaveRESTToWebservice_BuildsRouteTableWithoutListener(t *testing.T) {
 	cfg := daemon.DefaultConfig()
 	cfg.EnableREST = true
@@ -92,7 +100,7 @@ func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
 	root := mux.NewRouter()
 	api := root.PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	require.NoError(t, v1.MountDaemonRESTRoutes(api, routes, writer, refusingAuthorizer))
+	require.NoError(t, v1.MountDaemonRESTRoutes(api, routes, writer, refusingAuthorizer, refusingCaller))
 
 	verified := func(bundle *testutil.TestTLSBundle) *tls.ConnectionState {
 		leaf, parseErr := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
@@ -136,7 +144,7 @@ func TestDaemonRESTRoutes_DaemonWithoutClientRootsRefusesMount(t *testing.T) {
 
 	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	err = v1.MountDaemonRESTRoutes(api, daemonRESTRoutes(d), writer, refusingAuthorizer)
+	err = v1.MountDaemonRESTRoutes(api, daemonRESTRoutes(d), writer, refusingAuthorizer, refusingCaller)
 	require.ErrorIs(t, err, v1.ErrDaemonRouteNoClientRoots{})
 }
 
@@ -149,6 +157,6 @@ func TestDaemonRESTRoutes_DaemonWithoutRouteTableRefusesMount(t *testing.T) {
 
 	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	err = v1.MountDaemonRESTRoutes(api, daemonRESTRoutes(d), writer, refusingAuthorizer)
+	err = v1.MountDaemonRESTRoutes(api, daemonRESTRoutes(d), writer, refusingAuthorizer, refusingCaller)
 	require.ErrorIs(t, err, daemon.ErrRESTRoutesUnavailable{})
 }

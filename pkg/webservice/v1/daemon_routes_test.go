@@ -116,7 +116,7 @@ func TestMountDaemonRESTRoutes_ReturnsMountError(t *testing.T) {
 	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(testLogger(), nil)
 
-	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{err: errFakeMount{}, roots: x509.NewCertPool()}, writer, permitAll)
+	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{err: errFakeMount{}, roots: x509.NewCertPool()}, writer, permitAll, permitCaller)
 	require.ErrorIs(t, err, errFakeMount{})
 }
 
@@ -124,8 +124,17 @@ func TestMountDaemonRESTRoutes_RefusesWithoutAuthorizer(t *testing.T) {
 	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(testLogger(), nil)
 
-	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{roots: x509.NewCertPool()}, writer, nil)
+	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{roots: x509.NewCertPool()}, writer, nil, permitCaller)
 	require.ErrorIs(t, err, ErrDaemonRouteNoAuthorizer{})
+	assert.Equal(t, http.StatusNotFound, getWithTLS(api, fakeDaemonPath, nil))
+}
+
+func TestMountDaemonRESTRoutes_RefusesWithoutCallerAuthenticator(t *testing.T) {
+	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
+	writer := response.NewResponseWriter(testLogger(), nil)
+
+	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{roots: x509.NewCertPool()}, writer, permitAll, nil)
+	require.ErrorIs(t, err, ErrDaemonRouteNoCallerAuthenticator{})
 	assert.Equal(t, http.StatusNotFound, getWithTLS(api, fakeDaemonPath, nil))
 }
 
@@ -151,7 +160,7 @@ func TestMountDaemonRESTRoutes_RefusesWithoutClientRoots(t *testing.T) {
 	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(testLogger(), nil)
 
-	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{}, writer, permitAll)
+	err := MountDaemonRESTRoutes(api, &fakeDaemonRoutes{}, writer, permitAll, permitCaller)
 	require.ErrorIs(t, err, ErrDaemonRouteNoClientRoots{})
 	assert.Equal(t, http.StatusNotFound, getWithTLS(api, fakeDaemonPath, nil))
 }

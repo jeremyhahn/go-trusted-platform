@@ -122,7 +122,7 @@ daemon handler runs:
 | `GET /ca/info`, `/ca/crl`, `/ca/bundle` | client certificate only (public twins) |
 | `PUT /tenants/{id}/security/mfa-policy` | admin (no scope names it) |
 | `GET /tenants/{id}/security/mfa-policy` | client certificate only (the login flow reads it) |
-| `POST /users/{id}/factors/mtls/issue-cert` | client certificate, then the handler: the caller is the user or an admin, and the CSR is bound to the user (below) |
+| `POST /users/{id}/factors/mtls/issue-cert` | client certificate and a webservice session, then the handler: the session is the user or holds the admin role, and the CSR is bound to the user (below) |
 | `GET /health`, `/version`, `/protocols`, `/services`, `/services/{service}` | admin + `platform:read` |
 | `POST /services/{service}/start`, `/stop`, `/restart` | admin + `platform:write` |
 | `GET /bmc/{profileID}/power`, `/boot-device`, `/virtual-media`, `/sensors`, `/system-info`, `/provision`, `/cert`, `/users` | admin + `bmc:read` |
@@ -169,12 +169,27 @@ route that is in neither set. Every other gated route is gated per method
 naming a replayed daemon route or an auth-factor route, and
 `TestRegisterRoutes_DaemonMethodEntriesTakeAdminAndScope` sends each entry a
 request without a session (401), from a non-admin holding the scope (403), from
-an admin without the scope (403) and from an admin holding it (served). The CA
+an admin without the scope (403) and from an admin holding it (served).
+
+Issue-cert is not in the admin gate, as a user issues for themselves. It takes
+the webservice login check instead (`callerCheckedDaemonMethodRoutes`,
+`Router.daemonCallerAuthenticator`): a caller without a session is refused with
+401 `ErrDaemonRouteNoSession`, and the session's user ID, username, tenant and
+roles reach the daemon handler as its caller (`restapi.WithCaller`). The handler
+decides admin from that caller's `admin` role, never from the certificate: a
+certificate whose CN or OU says `admin` is no admin. On the daemon's own
+listener the caller is the platform token or client certificate its scope guard
+verifies, and a client certificate carries no role, so it issues only for its
+own CN. Without a scope guard the handler refuses every request with 503
+`ErrCallerGuardNotConfigured`. A caller that is neither the path user (subject
+or username) nor an admin is refused with 403 `ErrForbiddenUserID`. The CA
 signs an issue-cert CSR's subject and SANs as given, so the handler refuses,
 with 403 `ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which
 carries an OU the caller's own certificate does not (or `admin`), or which
-carries any SAN. Without an authorizer, `MountDaemonRESTRoutes`
-refuses to mount (`ErrDaemonRouteNoAuthorizer`).
+carries any SAN. `TestRegisterRoutes_DaemonIssueCertTakesTheSessionCaller`
+replays the real handler behind the login check. Without an authorizer or a
+caller authenticator, `MountDaemonRESTRoutes` refuses to mount
+(`ErrDaemonRouteNoAuthorizer`, `ErrDaemonRouteNoCallerAuthenticator`).
 `pkg/webservice/v1/testdata/daemon_routes.golden` lists every route the
 webservice mounts for these groups, and `daemon_routes_golden_test.go` sends each
 endpoint a request without a client certificate and expects that 401.

@@ -14,8 +14,11 @@
 package v1
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -30,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -47,6 +51,17 @@ var publicDaemonCARoutes = []string{
 // permitAll is a DaemonRouteAuthorizer that lets every caller through.
 func permitAll(string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler { return next }
+}
+
+// permitCaller is a DaemonCallerAuthenticator that lets every caller through.
+func permitCaller(next http.Handler) http.Handler { return next }
+
+// refuseCaller is a DaemonCallerAuthenticator that answers 401 to every
+// caller, as the webservice login check does for a request without a session.
+func refuseCaller(http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
 }
 
 // caDaemonRoutes stands in for the daemon's CA route table: one handler
@@ -156,7 +171,7 @@ func TestMountDaemonRESTRoutes_PrivilegedCARoutesTakeTheirScope(t *testing.T) {
 				}
 				api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 				writer := response.NewResponseWriter(testLogger(), nil)
-				require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, authorize))
+				require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, authorize, permitCaller))
 
 				assert.Len(t, asked, len(privilegedDaemonRoutes), "one authorizer per privileged route")
 				assert.Contains(t, asked, scope)
@@ -178,7 +193,7 @@ func TestMountDaemonRESTRoutes_PrivilegedCARoutesTakeTheirScope(t *testing.T) {
 			daemon := &caDaemonRoutes{roots: platform.CAPool}
 			api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 			writer := response.NewResponseWriter(testLogger(), nil)
-			require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, refuseAll))
+			require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, refuseAll, permitCaller))
 
 			assert.Equal(t, http.StatusOK, getWithTLS(api, template, verifiedClientState(t, platform)))
 			assert.Equal(t, []string{template}, daemon.served)
@@ -291,22 +306,35 @@ func TestRegisterRoutes_DaemonMFAPolicyPutTakesAdmin(t *testing.T) {
 
 // Only the named method of a method entry takes the authorizer: with every
 // caller refused, PUT on the MFA policy is refused while GET on the same
-// template and cert issuance reach the daemon.
+// template reaches the daemon. Cert issuance takes the login check instead
+// of the authorizer, so it stops there.
 func TestMountDaemonRESTRoutes_MethodEntryGuardsOnlyItsMethod(t *testing.T) {
 	platform := testutil.GenerateTestTLSBundle(t)
 	daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
 	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(testLogger(), nil)
-	require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, refuseAll))
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, refuseAll, refuseCaller))
 
 	state := verifiedClientState(t, platform)
 	assert.Equal(t, http.StatusForbidden, serveWithTLS(api, http.MethodPut, "/api/v1/tenants/system/security/mfa-policy", state))
 	assert.Equal(t, http.StatusOK, serveWithTLS(api, http.MethodGet, "/api/v1/tenants/system/security/mfa-policy", state))
+	assert.Equal(t, http.StatusUnauthorized, serveWithTLS(api, http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", state))
+	assert.Equal(t, []string{http.MethodGet + " " + mfaPolicyTemplate}, daemon.served)
+}
+
+// With the login check permitting, cert issuance skips the authorizer and
+// reaches the daemon, whose handler decides who may issue for whom.
+func TestMountDaemonRESTRoutes_CallerCheckedRouteSkipsTheAuthorizer(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
+	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
+	writer := response.NewResponseWriter(testLogger(), nil)
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, refuseAll, permitCaller))
+
+	state := verifiedClientState(t, platform)
 	assert.Equal(t, http.StatusOK, serveWithTLS(api, http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", state))
-	assert.Equal(t, []string{
-		http.MethodGet + " " + mfaPolicyTemplate,
-		http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert",
-	}, daemon.served)
+	assert.Equal(t, http.StatusForbidden, serveWithTLS(api, http.MethodPut, "/api/v1/tenants/system/security/mfa-policy", state))
+	assert.Equal(t, []string{http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert"}, daemon.served)
 }
 
 // Every method entry names a route the daemon's auth-factor table really
@@ -387,9 +415,85 @@ func serveMethodEntry(t *testing.T, auth jwt.TokenHandler, key string, platform 
 	daemon := &methodEntryDaemonRoute{roots: platform.CAPool, key: key}
 	root := mux.NewRouter()
 	api := root.PathPrefix("/api/v1").Subrouter()
-	require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer()))
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()))
 
 	method, template, _ := strings.Cut(key, " ")
 	path := daemonPathVariable.ReplaceAllString(template, "1")
 	return serveWithTLS(root, method, path, verifiedClientState(t, platform)), daemon.served
+}
+
+// issueCertCA is the platform CA behind the replayed issue-cert handler: it
+// really certifies the CSR and returns its root as the chain.
+type issueCertCA struct{ *issuancetest.CA }
+
+func (c issueCertCA) CABundle() ([]byte, error) {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Root.Raw}), nil
+}
+
+// issueCertDaemonRoutes replays the daemon's real issue-cert handler, with
+// a caller guard that verifies no credential itself: the only caller it can
+// see is the one the webservice login check publishes.
+type issueCertDaemonRoutes struct {
+	roots    *x509.CertPool
+	handlers *restapi.AuthFactorHandlers
+}
+
+func (d *issueCertDaemonRoutes) ClientCAs() *x509.CertPool { return d.roots }
+
+func (d *issueCertDaemonRoutes) MountRESTRoutes(api *mux.Router) error {
+	daemon := mux.NewRouter()
+	d.handlers.RegisterRoutes(daemon)
+	api.Handle("/users/{id}/factors/mtls/issue-cert", daemon).Methods(http.MethodPost)
+	return nil
+}
+
+// The replayed issue-cert decides admin from the webservice session's role:
+// without a session it is refused, a user issues only for themselves, and
+// an admin issues for anyone (#983).
+func TestRegisterRoutes_DaemonIssueCertTakesTheSessionCaller(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	key := issuancetest.RSAKey(t)
+	session := func(role string) jwt.TokenHandler {
+		return &sessionAuth{roles: []string{role}, tenantID: "system"}
+	}
+
+	tests := []struct {
+		name   string
+		auth   jwt.TokenHandler
+		userID string
+		want   int
+	}{
+		{"no session", &anonymousAuth{}, "probe-user", http.StatusUnauthorized},
+		{"user for themselves", session("user"), "probe-user", http.StatusCreated},
+		{"user for another user", session("user"), "alice", http.StatusForbidden},
+		{"admin for another user", session(common.ROLE_ADMIN), "alice", http.StatusCreated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ca := issueCertCA{issuancetest.NewCA(t)}
+			guard := restapi.NewScopeGuard(nil, nil, slog.Default())
+			daemon := &issueCertDaemonRoutes{
+				roots:    platform.CAPool,
+				handlers: restapi.NewAuthFactorHandlers(ca, slog.Default()).WithScopeGuard(guard),
+			}
+			v1Router := newGatedV1Router(t, &testHandlerRegistry{tokenHandler: tt.auth})
+			root := mux.NewRouter()
+			api := root.PathPrefix("/api/v1").Subrouter()
+			require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()))
+
+			body, err := json.Marshal(restapi.IssueMTLSCertRequest{CSRPEM: string(issuancetest.CSR(t, key, tt.userID))})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+tt.userID+"/factors/mtls/issue-cert", bytes.NewReader(body))
+			req.TLS = verifiedClientState(t, platform)
+			rec := httptest.NewRecorder()
+			root.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
+			if tt.want == http.StatusCreated {
+				assert.NotNil(t, ca.Opts, "the CA signed the CSR")
+			} else {
+				assert.Nil(t, ca.Opts, "a refused caller must not reach the CA")
+			}
+		})
+	}
 }
