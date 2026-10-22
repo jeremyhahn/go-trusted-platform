@@ -83,8 +83,14 @@ func daemonRoutesOnWebservice(t *testing.T) *mux.Router {
 	root := mux.NewRouter()
 	api := root.PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logger, nil)
-	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server}, writer))
+	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server}, writer, passThrough))
 	return root
+}
+
+// passThrough authorizes every privileged route, so these tests see the
+// client-certificate gate alone.
+func passThrough(string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
 }
 
 // TestMountDaemonRESTRoutes_EveryDaemonRouteStillExists compares the

@@ -106,7 +106,11 @@ base64 in proto-JSON) and answers a `VerifyCertificateResponse`.
 
 The daemon REST listener still answers list, revoke, renew and verify with
 its own flat JSON, and it revokes with `POST .../{serial}/revoke`. The SDK's
-revoke, renew and verify claims follow the web service.
+revoke, renew and verify claims follow the web service. When the web service
+replays that daemon `POST .../{serial}/revoke`, a client certificate is not
+enough: the caller needs the admin role and `certs:revoke`, the same as the web
+service's own `DELETE` (`docs/daemon/architecture.md` lists every replayed CA
+route and what it requires).
 
 The MCP `ca_issue` tool takes the request flat — subject fields including
 `address` and `postal_code`, SANs as `dns_names` / `ip_addresses` /

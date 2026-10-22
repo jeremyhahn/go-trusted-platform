@@ -102,6 +102,28 @@ admin trust pool `applyDaemonTLSIdentity` provisions from the platform anchor
 (`Config.MTLSClientCAPool`). A daemon with no such pool has no client it could
 admit, and `MountDaemonRESTRoutes` refuses to mount its routes
 (`ErrDaemonRouteNoClientRoots`).
+A certificate that chains to those roots is not, by itself, authority to change
+the CA: the platform anchor also issues user certificates. The privileged daemon
+CA routes therefore also take the authorization of their webservice twin, through
+the webservice's own admin gate and scope check (`privilegedDaemonRoutes`,
+`Router.daemonRouteAuthorizer`). A caller without a session is refused with 401,
+and a caller without the admin role or the scope is refused with 403, before the
+daemon handler runs:
+
+| Replayed daemon route | Requires |
+|-----------------------|----------|
+| `POST`/`GET /ca/certificates`, `GET /ca/certificates/{serial}` | admin |
+| `POST /ca/certificates/{serial}/revoke` | admin + `certs:revoke` |
+| `POST /ca/certificates/{serial}/renew` | admin + `certs:generate` |
+| `POST /ca/certificates/verify` | admin + `certs:read` |
+| `POST /ca/sign-csr` | admin + `ca:sign-csr` (and the daemon's own token check) |
+| `GET /ca/info`, `/ca/crl`, `/ca/bundle` | client certificate only (public twins) |
+
+With the webservice CA configured, its own handlers shadow every one of these
+except `POST .../{serial}/revoke`, which only the daemon serves.
+`TestPrivilegedDaemonRoutes_CoverTheDaemonCATable` fails if the daemon gains a CA
+route that is in neither set. Without an authorizer, `MountDaemonRESTRoutes`
+refuses to mount (`ErrDaemonRouteNoAuthorizer`).
 `pkg/webservice/v1/testdata/daemon_routes.golden` lists every route the
 webservice mounts for these groups, and `daemon_routes_golden_test.go` sends each
 endpoint a request without a client certificate and expects that 401. The daemon's `/api/v1/status` stays off
