@@ -2072,6 +2072,12 @@ integration-test-webservice: docker-builder-load
 integration-test-sdn: build-devcontainer
 	$(call run-integration-suite,sdn)
 
+.PHONY: integration-test-sdn-stress
+## integration-test-sdn-stress: Run the SDN stress generators (test/integration/sdn/stress) in development container
+## Kept out of integration-test-sdn: they keep every CPU busy for minutes and starved the sdn package's OVS calls.
+integration-test-sdn-stress: build-devcontainer
+	$(call run-integration-suite,sdn-stress)
+
 .PHONY: integration-test-sdn-shell
 ## integration-test-sdn-shell: Start interactive shell for SDN testing
 integration-test-sdn-shell: build-devcontainer
