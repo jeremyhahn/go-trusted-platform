@@ -222,8 +222,11 @@ the connection.
 No transport puts a deadline of its own on the call either. A gRPC call runs
 until its client's deadline; an MCP tool runs until its HTTP request ends
 (`ToolRegistry.ExecuteTool`, `pkg/api/mcp/tools.go`, adds none), so a reboot,
-a stop window plus a start, finishes over MCP as it does over gRPC. Over stdio
-the server's `RequestTimeout` still bounds each call.
+a stop window plus a start, finishes over MCP as it does over gRPC. stdio has
+no request to end with its client, so there the server's `RequestTimeout`
+bounds each call, except that `vm_stop` and `vm_reboot` get
+`StopOptions.ReplyWindow` when it is longer, the window REST moves its reply
+deadline to (`toolReplyWindows`, `pkg/api/mcp/tool_reply_window.go`).
 
 The client waits as long. The SDK owns the window
 (`StopReplyWindow` in `sdk/go/services/compute/stop_window.go`) and

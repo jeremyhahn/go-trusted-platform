@@ -264,11 +264,9 @@ func (s *Server) handleStdioRequests() {
 				continue
 			}
 
-			// Handle request with timeout. stdio has no TLS connection, so
-			// a quote requested over it is refused rather than produced
-			// unbound.
-			ctx, cancel := context.WithTimeout(context.Background(), s.config.RequestTimeout)
-			ctx = channelbind.WithConnectionTLS(ctx, channelbind.TransportMCP, nil)
+			// stdio has no request to end with its client, so each call
+			// runs for RequestTimeout or its tool's reply window.
+			ctx, cancel := s.stdioContext(&req)
 			resp := s.handleRequest(ctx, &req)
 			cancel()
 
