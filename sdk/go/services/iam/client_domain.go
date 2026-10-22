@@ -54,14 +54,17 @@ func (c *Client) GetUserDomain(ctx context.Context, tenantID, userID string) (*U
 	return UserFromProto(resp.User), nil
 }
 
-// ListUsersDomain lists users and returns domain types.
-func (c *Client) ListUsersDomain(ctx context.Context, tenantID string, page, pageSize uint32) (*ListUsersResult, error) {
+// ListUsersDomain lists the users that match filter and returns domain types.
+func (c *Client) ListUsersDomain(ctx context.Context, tenantID string, page, pageSize uint32, filter UserListFilter) (*ListUsersResult, error) {
 	resp, err := c.grpc.ListUsers(ctx, &platformv1.ListIAMUsersRequest{
 		TenantId: tenantID,
 		Pagination: &platformv1.PaginationRequest{
 			Page:     page,
 			PageSize: pageSize,
 		},
+		EmailFilter: filter.Email,
+		RoleFilter:  filter.Role,
+		GroupFilter: filter.Group,
 	})
 	if err != nil {
 		return nil, &ErrListUsersFailed{Cause: err}

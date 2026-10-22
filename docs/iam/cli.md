@@ -54,7 +54,7 @@ at the CLI.
 |---|---|---|
 | `create` | — | `--tenant` (required), `--email` (required), `--name`, `--roles`, `--groups`, `--attributes` |
 | `get` | `<tenant-id> <user-id>` | — |
-| `list` | — | `--tenant` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
+| `list` | — | `--tenant` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`), `--email`, `--role`, `--group` |
 | `update` | — | `--tenant` (required), `--user-id` (required), `--email`, `--name`, `--roles`, `--groups`, `--attributes` |
 | `delete` | `<tenant-id> <user-id>` | — |
 | `assign-role` | `<tenant-id> <user-id> <role>` | — |
@@ -67,7 +67,12 @@ alone. To add a role, use `assign-role`.
 
 `--attributes` is comma-separated `key=value` pairs.
 
+`list` filters with `--email`, `--role` (a role ID) and `--group` (a group ID).
+They are the request's `email_filter`, `role_filter` and `group_filter`, which
+every transport carries.
+
 ```bash
+platformctl iam user list --tenant tenant-a --role admin --group platform-ops
 platformctl iam user create --tenant tenant-a --email ops@example.com \
     --name "Ops" --roles operator --groups platform-ops
 platformctl iam user get tenant-a u-0f21
