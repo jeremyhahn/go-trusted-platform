@@ -1,5 +1,7 @@
 # Platformd P2P Mode
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 Platformd P2P mode enables nodes to participate in the trusted DHT network for decentralized coordination, service discovery, and content distribution. The `--p2p` flag is a **modifier** that can be combined with any existing operating mode (standalone, raft, node) to add P2P network capabilities.

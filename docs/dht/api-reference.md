@@ -1,5 +1,7 @@
 # DHT API Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Distributed Hash Table (DHT) service exposes its functionality via multiple protocols for maximum interoperability. All protocols provide feature parity, allowing clients to choose the transport best suited to their use case. Whether integrating from a web browser, building high-performance microservices, or developing AI agents, the DHT API provides consistent semantics across all access methods.

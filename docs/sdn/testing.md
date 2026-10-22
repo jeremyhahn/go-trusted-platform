@@ -166,8 +166,10 @@ sudo platformctl iso test client-server --use-ovs
 
 ## CI
 
-The CI Gate runs `make test` on every PR. `make test-race` runs in the full
-tier: pushes to main and PRs labelled `ci:full`. No workflow runs
+The CI Gate runs `make test` on every PR but a docs-only one (every changed
+file markdown or under `docs/`), which runs Lint and the Gate only unless it
+is labelled `ci:full`. `make test-race` runs in the full tier: pushes to main
+and PRs labelled `ci:full`. No workflow runs
 `make integration-test-sdn`; run it in the devcontainer before merging SDN
 changes.
 

@@ -1,5 +1,7 @@
 # DHT REST API Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 **Document Version:** 1.0
 **Last Updated:** 2026-01-07
 
