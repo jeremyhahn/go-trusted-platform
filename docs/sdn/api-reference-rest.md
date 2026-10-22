@@ -62,7 +62,10 @@ GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 
 The state and stats routes read the port's Open vSwitch interface row. State
 answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
-`link_state`, `speed` and `duplex`. Stats answers the interface counters:
+`link_state`, `speed` and `duplex`. A state Open vSwitch has not recorded (it
+writes `admin_state` and `link_state` only once it has opened the port's
+network device) is `unknown`, the word the webservice router uses for the same
+case. Stats answers the interface counters:
 `rx_`/`tx_` `packets`, `bytes`, `dropped` and `errors`, plus `rx_frame_err`,
 `rx_over_err`, `rx_crc_err` and `collisions`.
 

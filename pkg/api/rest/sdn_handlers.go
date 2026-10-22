@@ -1712,17 +1712,34 @@ var portStates = map[string]ovs.PortState{
 
 // interfaceToPortState reports an Open vSwitch interface's state.
 func interfaceToPortState(bridgeID, portID string, iface *ovs.Interface) PortStateResponse {
+	linkState := recordedState(iface.LinkState)
 	return PortStateResponse{
 		BridgeID:   bridgeID,
 		PortID:     portID,
 		PortNumber: iface.OFPort,
-		AdminState: iface.AdminState,
-		OperState:  iface.LinkState,
-		LinkState:  iface.LinkState,
+		AdminState: recordedState(iface.AdminState),
+		OperState:  linkState,
+		LinkState:  linkState,
 		Speed:      iface.Speed,
 		Duplex:     iface.Duplex,
 		UpdatedAt:  time.Now().UTC(),
 	}
+}
+
+// portStateUnknown is the state reported for an interface whose state Open
+// vSwitch has not recorded: ovs-vswitchd writes admin_state and link_state
+// only once it has opened the interface's network device, so a port with no
+// device behind it has neither. It is the webservice router's word for the
+// same case (PORT_STATUS_UNSPECIFIED).
+const portStateUnknown = "unknown"
+
+// recordedState returns the state Open vSwitch recorded, or portStateUnknown
+// when it recorded none.
+func recordedState(state string) string {
+	if state == "" {
+		return portStateUnknown
+	}
+	return state
 }
 
 // =============================================================================
