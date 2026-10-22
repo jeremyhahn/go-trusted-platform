@@ -27,8 +27,8 @@ package quicwire
 // The opcode space is otherwise fully allocated, so this reclaims 0x51 from
 // the block reserved after OpNTPCategory.
 const (
-	// OpIAMCategory multiplexes the IAM tenant-record sub-operations and
-	// group update.
+	// OpIAMCategory multiplexes the IAM tenant-record sub-operations, group
+	// update and role update.
 	OpIAMCategory byte = 0x51
 )
 
@@ -55,4 +55,9 @@ const (
 	// create, delete, get, list and add-member, and no byte was left for
 	// update, so it travels in this category.
 	IAMSubGroupUpdate byte = 0x06
+
+	// IAMSubRoleUpdate updates an IAM role. The role bytes 0xB5-0xBA hold
+	// create, delete, get, list, assign and revoke, and 0xBB starts the
+	// group bytes, so update travels in this category.
+	IAMSubRoleUpdate byte = 0x07
 )

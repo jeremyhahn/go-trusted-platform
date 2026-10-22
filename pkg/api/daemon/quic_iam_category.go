@@ -24,8 +24,9 @@ import (
 // OpIAMCategory (0x51) with the sub-opcode in payload[0] and the generated
 // platform.v1 request in payload[1:]. They manage IAM tenant records and
 // delegate to the shared *IAMGRPCService, never to the platform
-// TenantService behind the OpTenant* opcodes (#767). UpdateGroup rides the
-// same category: the group bytes 0xBB-0xBF had no room for it.
+// TenantService behind the OpTenant* opcodes (#767). UpdateGroup and
+// UpdateRole ride the same category: the group bytes 0xBB-0xBF and the role
+// bytes 0xB5-0xBA had no room for them.
 
 // iamCategoryQUICHandler is one IAM category sub-operation handler. body is
 // the request with the sub-opcode stripped.
@@ -39,6 +40,7 @@ var iamCategoryQUICHandlers = map[byte]iamCategoryQUICHandler{
 	quicwire.IAMSubTenantUpdate: (*QUICServiceHandler).handleIAMTenantUpdate,
 	quicwire.IAMSubTenantDelete: (*QUICServiceHandler).handleIAMTenantDelete,
 	quicwire.IAMSubGroupUpdate:  (*QUICServiceHandler).handleIAMGroupUpdate,
+	quicwire.IAMSubRoleUpdate:   (*QUICServiceHandler).handleIAMRoleUpdate,
 }
 
 // handleIAMCategory dispatches the IAM category opcode. payload[0] selects
@@ -138,6 +140,20 @@ func (h *QUICServiceHandler) handleIAMGroupUpdate(ctx context.Context, body []by
 	resp, err := h.iamGRPC.UpdateGroup(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("IAMGroupUpdate", err)
+	}
+	return h.encodeGRPCDelegateResponse(resp)
+}
+
+// handleIAMRoleUpdate updates an IAM role, as gRPC UpdateRole.
+func (h *QUICServiceHandler) handleIAMRoleUpdate(ctx context.Context, body []byte) *quicwire.Response {
+	var pbReq platformv1.UpdateIAMRoleRequest
+	if err := quicwire.DecodePayload(body, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.iamGRPC.UpdateRole(ctx, &pbReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("IAMRoleUpdate", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }

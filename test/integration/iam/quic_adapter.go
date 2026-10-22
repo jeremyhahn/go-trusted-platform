@@ -64,17 +64,6 @@ func (e ErrQUICStatus) Error() string {
 	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
 }
 
-// QUICNotSupportedError represents an operation with no QUIC opcode. Role
-// update has no PlatformIAMService QUIC opcode; the multi-protocol harness
-// treats this as a skip.
-type QUICNotSupportedError struct {
-	Operation string
-}
-
-func (e *QUICNotSupportedError) Error() string {
-	return fmt.Sprintf("QUIC protocol does not support operation: %s", e.Operation)
-}
-
 // QUICAdapter implements IAMCommands using the platform binary QUIC protocol.
 type QUICAdapter struct {
 	endpoint   string
@@ -353,9 +342,23 @@ func (a *QUICAdapter) GetRole(ctx context.Context, opts GetRoleOptions) (*GetRol
 	return &GetRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
-// UpdateRole has no QUIC opcode on the PlatformIAMService surface.
+// UpdateRole updates a role on the IAM category's role-update sub-opcode.
 func (a *QUICAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*UpdateRoleResult, error) {
-	return nil, &QUICNotSupportedError{Operation: "UpdateRole"}
+	payload, err := a.doCategoryRequest(ctx, quicwire.OpIAMCategory, quicwire.IAMSubRoleUpdate, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    opts.TenantID,
+		RoleId:      opts.RoleID,
+		Name:        opts.Name,
+		Description: opts.Description,
+		Permissions: opts.Permissions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMRoleResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "UpdateRole", Message: "failed to decode response: " + err.Error()}
+	}
+	return &UpdateRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
 // DeleteRole removes a role.
