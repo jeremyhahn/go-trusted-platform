@@ -134,7 +134,7 @@ func TestExecuteDEKCreate(t *testing.T) {
 		}}
 		printer, buf := newDEKJSONPrinter()
 
-		require.NoError(t, executeDEKCreate(context.Background(), fake, printer, "/t/app"))
+		require.NoError(t, executeDEKCreate(context.Background(), fake, printer, "/t/app", dekSafetyOptions{}))
 		assert.Equal(t, &dekclient.CreateDEKRequest{Path: "/t/app", Algorithm: "AES-256-GCM"}, got)
 
 		var out dekOutput
@@ -145,12 +145,26 @@ func TestExecuteDEKCreate(t *testing.T) {
 		assert.Empty(t, out.RotatedAt, "a zero rotated_at is omitted, not printed as year 1")
 	})
 
+	t.Run("SendsLimits", func(t *testing.T) {
+		var got *dekclient.CreateDEKRequest
+		fake := &fakeDEKClient{createFn: func(req *dekclient.CreateDEKRequest) (*dekclient.CreateDEKResponse, error) {
+			got = req
+			return &dekclient.CreateDEKResponse{DEK: testDEKInfo(req.Path)}, nil
+		}}
+		limits := dekSafetyOptions{MaxOperations: 1000, MaxBytes: 4096, WarningPercent: 75}
+
+		require.NoError(t, executeDEKCreate(context.Background(), fake, newTestKMSPrinter(), "/t/app", limits))
+		assert.Equal(t, &dekclient.CreateDEKRequest{
+			Path: "/t/app", Algorithm: "AES-256-GCM", MaxOperations: 1000, MaxBytes: 4096, WarningPercent: 75,
+		}, got, "the limits travel on CreateDEK, which every SDK transport serves")
+	})
+
 	t.Run("SDKError", func(t *testing.T) {
 		sdkErr := errors.New("exists")
 		fake := &fakeDEKClient{createFn: func(*dekclient.CreateDEKRequest) (*dekclient.CreateDEKResponse, error) {
 			return nil, sdkErr
 		}}
-		err := executeDEKCreate(context.Background(), fake, newTestKMSPrinter(), "/t/app")
+		err := executeDEKCreate(context.Background(), fake, newTestKMSPrinter(), "/t/app", dekSafetyOptions{})
 		assert.ErrorIs(t, err, sdkErr)
 		assert.Equal(t, ErrDEKOperationFailed{Verb: "create", Path: "/t/app", Err: sdkErr}, err)
 	})
@@ -406,15 +420,16 @@ func TestSetDEKClientFactory(t *testing.T) {
 // at the connection, so an unknown flag or wrong arity fails here instead.
 func TestDEKCommands_ParseDocumentedArguments(t *testing.T) {
 	tests := map[string][]string{
-		"create":       {"create", "/t/app"},
-		"get":          {"get", "/t/app"},
-		"list":         {"list", "--prefix", "/t", "--recursive", "--limit", "5"},
-		"delete":       {"delete", "/t/app", "--force"},
-		"rotate":       {"rotate", "/t/app"},
-		"status":       {"status", "/t/app"},
-		"set-default":  {"set-default", "/t/app"},
-		"set-safety":   {"set-safety", "/t/app", "--max-operations", "10", "--max-bytes", "20", "--warn-percent", "70"},
-		"clear-safety": {"clear-safety", "/t/app", "--force"},
+		"create":        {"create", "/t/app"},
+		"create limits": {"create", "/t/app", "--max-operations", "10", "--max-bytes", "20", "--warn-percent", "70"},
+		"get":           {"get", "/t/app"},
+		"list":          {"list", "--prefix", "/t", "--recursive", "--limit", "5"},
+		"delete":        {"delete", "/t/app", "--force"},
+		"rotate":        {"rotate", "/t/app"},
+		"status":        {"status", "/t/app"},
+		"set-default":   {"set-default", "/t/app"},
+		"set-safety":    {"set-safety", "/t/app", "--max-operations", "10", "--max-bytes", "20", "--warn-percent", "70"},
+		"clear-safety":  {"clear-safety", "/t/app", "--force"},
 	}
 	for name, args := range tests {
 		t.Run(name, func(t *testing.T) {

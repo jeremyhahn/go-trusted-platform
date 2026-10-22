@@ -906,9 +906,8 @@ func (c *CLIAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRan
 
 // DEKCreate creates a new DEK via CLI.
 func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEKCreateResult, error) {
-	// kms dek create has no algorithm, description or limit flags
-	// (docs/kms/cli.md §7): it always creates AES-256-GCM, and the limits
-	// are set afterwards with kms dek set-safety.
+	// kms dek create has no algorithm or description flags (docs/kms/cli.md
+	// §7): it always creates AES-256-GCM. The limits travel on create.
 	if opts.Algorithm != "" && opts.Algorithm != cliDEKAlgorithm {
 		return nil, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--algorithm"}
 	}
@@ -916,29 +915,7 @@ func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEK
 		return nil, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--description"}
 	}
 
-	output, err := c.runCommand(ctx, "kms", "dek", "create", opts.Path)
-	if err != nil {
-		return nil, err
-	}
-
-	var dek cliDEK
-	if err := json.Unmarshal(output, &dek); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "DEKCreate", Output: string(output), Err: err}
-	}
-
-	if opts.MaxOperations > 0 || opts.MaxBytes > 0 || opts.WarningPercent > 0 {
-		if err := c.dekSetSafety(ctx, opts); err != nil {
-			return nil, err
-		}
-	}
-
-	return dek.toCreateResult()
-}
-
-// dekSetSafety sends a DEK's usage limits with kms dek set-safety, which
-// prints only a success line.
-func (c *CLIAdapter) dekSetSafety(ctx context.Context, opts DEKCreateOptions) error {
-	args := []string{"kms", "dek", "set-safety", opts.Path}
+	args := []string{"kms", "dek", "create", opts.Path}
 
 	if opts.MaxOperations > 0 {
 		args = append(args, "--max-operations", strconv.FormatUint(opts.MaxOperations, 10))
@@ -952,8 +929,17 @@ func (c *CLIAdapter) dekSetSafety(ctx context.Context, opts DEKCreateOptions) er
 		args = append(args, "--warn-percent", strconv.FormatInt(int64(opts.WarningPercent), 10))
 	}
 
-	_, err := c.runCommand(ctx, args...)
-	return err
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var dek cliDEK
+	if err := json.Unmarshal(output, &dek); err != nil {
+		return nil, ErrCLIOutputParseFailed{Operation: "DEKCreate", Output: string(output), Err: err}
+	}
+
+	return dek.toCreateResult()
 }
 
 // DEKGet retrieves DEK metadata via CLI.

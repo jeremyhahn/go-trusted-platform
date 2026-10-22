@@ -253,20 +253,30 @@ func runDEK(flags *cli.CommonFlags, action dekAction) error {
 }
 
 func newDEKCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	return &cobra.Command{
+	var limits dekSafetyOptions
+	cmd := &cobra.Command{
 		Use:   "create <path>",
 		Short: "Create a new AES-256-GCM DEK",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDEK(getFlags(), func(ctx context.Context, client dekclient.Client, printer *cli.Printer) error {
-				return executeDEKCreate(ctx, client, printer, args[0])
+				return executeDEKCreate(ctx, client, printer, args[0], limits)
 			})
 		},
 	}
+	// A zero limit is unset: CreateDEK leaves it to the server's default.
+	bindDEKSafetyFlags(cmd, &limits, 0)
+	return cmd
 }
 
-func executeDEKCreate(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string) error {
-	resp, err := client.CreateDEK(ctx, &dekclient.CreateDEKRequest{Path: path, Algorithm: dekCreateAlgorithm})
+func executeDEKCreate(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string, limits dekSafetyOptions) error {
+	resp, err := client.CreateDEK(ctx, &dekclient.CreateDEKRequest{
+		Path:           path,
+		Algorithm:      dekCreateAlgorithm,
+		MaxOperations:  limits.MaxOperations,
+		MaxBytes:       limits.MaxBytes,
+		WarningPercent: int(limits.WarningPercent),
+	})
 	if err != nil {
 		return ErrDEKOperationFailed{Verb: "create", Path: path, Err: err}
 	}
@@ -461,10 +471,16 @@ func newDEKSetSafetyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 			})
 		},
 	}
+	bindDEKSafetyFlags(cmd, &opts, 80)
+	return cmd
+}
+
+// bindDEKSafetyFlags binds the AEAD safety limit flags `dek create` and
+// `dek set-safety` share.
+func bindDEKSafetyFlags(cmd *cobra.Command, opts *dekSafetyOptions, warnPercentDefault int32) {
 	cmd.Flags().Uint64Var(&opts.MaxOperations, "max-operations", 0, "max number of operations")
 	cmd.Flags().Uint64Var(&opts.MaxBytes, "max-bytes", 0, "max bytes encrypted")
-	cmd.Flags().Int32Var(&opts.WarningPercent, "warn-percent", 80, "warning threshold percentage")
-	return cmd
+	cmd.Flags().Int32Var(&opts.WarningPercent, "warn-percent", warnPercentDefault, "warning threshold percentage")
 }
 
 func executeDEKSetSafety(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string, opts dekSafetyOptions) error {

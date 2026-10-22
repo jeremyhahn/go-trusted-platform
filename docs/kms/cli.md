@@ -578,7 +578,7 @@ and omitted when unset.
 
 | Verb | Arguments | Flags (type, default) | SDK call | JSON |
 |---|---|---|---|---|
-| `dek create` | `<path>` | none | `CreateDEK`, algorithm `AES-256-GCM` (the transports' default) | the DEK |
+| `dek create` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `0`); `0` leaves a limit to the server default | `CreateDEK`, algorithm `AES-256-GCM` (the transports' default) | the DEK |
 | `dek get` | `<path>` | none | `GetDEK` | the DEK |
 | `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`, must be > 0), `--cursor` | `ListDEKs` | `deks`, `total_count` |
 | `dek delete` | `<path>` | `--force` (bool, bypass deletion protection) | `DeleteDEK` | `path`, `deleted` |
@@ -592,9 +592,15 @@ The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
 `created_at`, `rotated_at`, `usage_count`, `bytes_used`, `max_usage_count`,
 `max_bytes_used`, `warning_percent`, `description`, `backend_type`.
 
-- `dek create` has no algorithm, description or limit flags. Set limits
-  afterwards with `dek set-safety`. The gRPC, QUIC, MCP and REST transports
-  accept those fields on create (see [api.md](api.md) §4).
+- `dek create` has no algorithm or description flags. It sends its limit
+  flags in `CreateDEK`, which every SDK transport serves; the gRPC, QUIC, MCP
+  and REST transports accept the same fields on create (see [api.md](api.md)
+  §4).
+- Over the gRPC transport, `dek set-safety` and `dek clear-safety` exit 1
+  with `UNIMPLEMENTED`: the pinned go-quicbaas SDK (v0.12.0-alpha) has no
+  gRPC handler for `SetDEKSafety` or `ClearDEKSafety`
+  (`transport/grpc/kms_handler.go`). Set limits on a new DEK with
+  `dek create` instead.
 - `dek list --cursor` exits 1 with `ErrDEKSDKGap`: the SDK's
   `ListDEKsRequest` has no cursor, so `ListDEKs` cannot page.
 - `dek set-default` takes no version. `SetDefaultDEK(path)` makes the DEK at
@@ -604,8 +610,7 @@ The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
 - An SDK failure is `ErrDEKOperationFailed{Verb, Path, Err}`.
 
 ```bash
-platformctl kms dek create /tenant/myapp/default -o json
-platformctl kms dek set-safety /tenant/myapp/default --max-operations 1000000
+platformctl kms dek create /tenant/myapp/default --max-operations 1000000 -o json
 platformctl kms dek list --prefix /tenant/myapp --recursive -o json
 ```
 
