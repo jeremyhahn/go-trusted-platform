@@ -73,7 +73,9 @@ type (
 	goldenTenants struct {
 		restapi.TenantManagerInterface
 	}
-	goldenCA   struct{ quicbaasca.CACertificateAuthority }
+	goldenCA struct {
+		quicbaasca.CACertificateAuthority
+	}
 	goldenVTPM struct{ vtpm.VTPMService }
 )
 

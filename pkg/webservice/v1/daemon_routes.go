@@ -290,10 +290,10 @@ var certificateOnlyDaemonMethodRoutes = map[string]struct{}{
 	// Config delivery, machine half: the machine authenticates inside the
 	// request (nonce, EAB HMAC, EK binding), as the webservice twins
 	// (pkg/webservice/v1/router/device.go) and gRPC serve it pre-auth.
-	http.MethodGet + " /api/v1/provisioning/config/nonce":             {},
+	http.MethodGet + " /api/v1/provisioning/config/nonce":              {},
 	http.MethodGet + " /api/v1/provisioning/sessions/{sessionID}/poll": {},
-	http.MethodPost + " /api/v1/provisioning/config":                  {},
-	http.MethodPost + " /api/v1/provisioning/sign":                    {},
+	http.MethodPost + " /api/v1/provisioning/config":                   {},
+	http.MethodPost + " /api/v1/provisioning/sign":                     {},
 
 	// Read before a session exists, with no webservice twin. The custodians
 	// follow the ceremony with its status before any of them holds a
