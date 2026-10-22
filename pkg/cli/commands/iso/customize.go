@@ -33,6 +33,7 @@ type customizeFlags struct {
 	platformConfig string
 	configFile     string
 	workDir        string
+	preFetch       bool
 	debug          bool
 }
 
@@ -57,6 +58,8 @@ This command:
 - Applies overlay files
 - Copies Secure Boot keys
 - Integrates platformd into the initramfs and writes the autoinstall script
+- Pre-fetches the packages the install needs into the ISO's offline
+  repository (apks-prefetch/<arch>), unless --pre-fetch=false
 
 A platform configuration is required unless the --config file names a
 config server (dynamic configuration).
@@ -80,6 +83,12 @@ Example:
 	// Common flags
 	cmd.Flags().StringVar(&flags.configFile, "config", "", "Path to ISO build configuration file")
 	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Working directory for ISO operations")
+	// The autoinstall script installs from the offline repository when it
+	// boots from the ISO: the stock Alpine repository lacks lvm2, parted and
+	// the rest, so the default matches iso create's.
+	cmd.Flags().BoolVar(&flags.preFetch, "pre-fetch", true,
+		"Pre-download all packages into the ISO for offline installation. "+
+			"Pass --pre-fetch=false only when the install network reaches an Alpine mirror")
 	cmd.Flags().BoolVar(&flags.debug, "debug", false, "Enable debug output")
 
 	// Mark required flags
@@ -156,6 +165,7 @@ func customizeBuildConfig(flags *customizeFlags) (*pkgiso.ISOBuildConfig, error)
 	if buildConfig.PlatformVersion == "" {
 		buildConfig.PlatformVersion = pkgiso.ReadVersionFile()
 	}
+	buildConfig.PreFetch = flags.preFetch
 	buildConfig.Debug = buildConfig.Debug || flags.debug
 
 	if err := buildConfig.Validate(); err != nil {

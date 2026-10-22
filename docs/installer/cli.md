@@ -295,6 +295,13 @@ Two ways to proceed:
 media, air-gapped and PXE installs. `--pre-fetch=false` is only safe when the
 install network is known to permit outbound HTTPS to the Alpine CDN.
 
+The pre-fetched repository is `apks-prefetch/<arch>/` on the media. The
+autoinstall script installs offline, from `/media/cdrom/apks` and
+`/media/cdrom/apks-prefetch`, only when the booted CD carries
+`apks-prefetch`: the stock Alpine `apks` lacks `lvm2`, `parted` and the rest
+of what the install adds. Without it the script takes `platform_apk_mirror=`
+from the kernel command line, else the public Alpine mirror.
+
 **`--platform-apk-dir`** adds `trusted-platform-strongswan`,
 `trusted-platform-strongswan-openrc`, `trusted-platform-p11-host`,
 `trusted-platform-p11-host-openrc` (from the directory, signed by the builder's
@@ -527,7 +534,9 @@ is refused), `--work-dir` (`work`), `--debug`. Prints `success`, `output_dir`,
 `--platformd-binary` (`""` → `platformd` beside `platformctl`),
 `--platform-config` (platform config baked into the ISO; **required** unless
 the `--config` file names a config server), `--config` (ISO build
-configuration file), `--work-dir` (`work`), `--debug`. `platform-initrd` and
+configuration file), `--work-dir` (`work`), `--pre-fetch` (**`true`**, as on
+`iso create`; the flag's value replaces the `--config` file's `pre-fetch`),
+`--debug`. `platform-initrd` and
 `gatewayd` are taken from beside `platformd`; `gatewayd` is required when the
 platform config enables the gateway role, as
 `configs/platform/templates/single-node/default.yaml` does. Prints `success`,
