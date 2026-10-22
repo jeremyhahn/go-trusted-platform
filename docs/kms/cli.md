@@ -98,7 +98,9 @@ client.
 `--transport` connection (`Client.KMS()`). The verbs that platform service has
 no RPC for open the CLI's quicbaas client (`Client.QuicBaaS()`) instead: `kms
 status`, `key algorithms`, `key csr` (its public key; the signature goes
-through platformd), `key policy`, `key metadata` and `key revoke`.
+through platformd), `key policy`, `key metadata`, `key revoke` and `key status`
+(platformd's `UpdateKeyStatus` RPC reaches the embedded quicbaas transport with a
+request type it refuses), plus `key generate --name` for the display name.
 `--transport` does not select that connection. Its address and transport
 follow the rules in [barrier cli.md §2](../barrier/cli.md#2-where-the-verbs-go):
 a local context dials `/run/quicbaas.sock` unless `quicbaas_addr` or
@@ -339,8 +341,10 @@ refuses every cryptographic operation until it is enabled again.
 |---|---|---|---|
 | `--version` | | uint64 | `0` — every version |
 
-`--output json` prints `key_id`, `version`, `status` (e.g.
-`KEY_STATUS_DISABLED`) and `updated_at` (Unix seconds).
+The verbs use the quicbaas client (§3, "Two connections"). `--output json` prints `key_id`,
+`version` and `status` (`ENABLED` or `DISABLED`). There is no `updated_at`:
+the quicbaas response carries no timestamp, so read it with
+`key metadata get <key-id>`.
 
 ```bash
 platformctl kms key status disable tenant-a-kek --version 1
