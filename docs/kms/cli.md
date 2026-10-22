@@ -56,8 +56,10 @@ platformctl kms
         datakey generate | datakey wrapped  works
         batch encrypt | batch decrypt       works
     dek
-        create | get | list | delete | rotate | status
-        set-default | set-safety | clear-safety          not implemented
+        create | get | list | delete | rotate            works
+        status | set-default | set-safety | clear-safety works over REST, QUIC
+                                                         and MCP; exit 1 over
+                                                         gRPC and Unix (§7)
     secrets
         store | get | list | delete | rotate | version | versions
         rollback | status enable | status disable
@@ -596,11 +598,14 @@ The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
   flags in `CreateDEK`, which every SDK transport serves; the gRPC, QUIC, MCP
   and REST transports accept the same fields on create (see [api.md](api.md)
   §4).
-- Over the gRPC transport, `dek set-safety` and `dek clear-safety` exit 1
-  with `UNIMPLEMENTED`: the pinned go-quicbaas SDK (v0.12.0-alpha) has no
-  gRPC handler for `SetDEKSafety` or `ClearDEKSafety`
-  (`transport/grpc/kms_handler.go`). Set limits on a new DEK with
-  `dek create` instead.
+- `dek status`, `dek set-default`, `dek set-safety` and `dek clear-safety`
+  work over the REST, QUIC and MCP SDK transports. Over gRPC and Unix they
+  exit 1 with `ErrDEKOperationFailed` wrapping `UNIMPLEMENTED`: the pinned
+  go-quicbaas SDK (v0.12.0-alpha) gRPC transport has no handler for
+  `GetDEKStatus`, `SetDefaultDEK`, `SetDEKSafety` or `ClearDEKSafety`
+  (`transport/grpc/kms_handler.go`), and its Unix transport delegates to the
+  gRPC one, so the embedded-daemon setup in §3 (`quicbaas_transport: grpc`)
+  gets this refusal. Set limits on a new DEK with `dek create` instead.
 - `dek list --cursor` exits 1 with `ErrDEKSDKGap`: the SDK's
   `ListDEKsRequest` has no cursor, so `ListDEKs` cannot page.
 - `dek set-default` takes no version. `SetDefaultDEK(path)` makes the DEK at

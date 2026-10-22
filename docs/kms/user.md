@@ -20,24 +20,20 @@ which is why a missing capability is almost never fixable here.
 
 ## Two things to know first
 
-### 1. A large part of `platformctl kms` is not implemented
+### 1. Some of `platformctl kms` refuses
 
-These verbs exist in `--help`, parse their flags and then refuse with a typed
+These verbs exist in `--help`, parse their flags and then exit 1 with a typed
 error:
 
-- **the whole `kms secrets` subtree** — store, get, list, delete, rotate,
-  version, versions, rollback, status, policy, prefix, watch
-- **the whole `kms dek` subtree** — create, get, list, delete, rotate, status,
-  set-default, set-safety, clear-safety
-- **`kms key import`, `export`, `unwrap`, `versions`, `status enable|disable`,
-  `backend-test`**
+- **`kms key import`, `export`, `unwrap` and `backend-test`** are not
+  implemented ([cli.md](cli.md) §8).
+- **`kms secrets watch`** is an SDK gap ([cli.md](cli.md) §7).
+- **`kms dek status`, `set-default`, `set-safety` and `clear-safety`** exit 1
+  over the gRPC and Unix SDK transports, the embedded-daemon default; REST,
+  QUIC and MCP serve them ([cli.md](cli.md) §7).
 
-And **`kms key get` crashes** on every invocation; use `kms key metadata get`
-or `kms key list -o json` instead. [cli.md](cli.md) §8–§9 has the exact list.
-
-**The REST API is ahead of the CLI**: secrets and DEK management are fully
-routed under `/api/v1/kms/secrets` and `/api/v1/kms/deks`. Use REST for those.
-For envelope encryption from the CLI, `kms crypto datakey` works.
+The rest of `kms key`, `kms crypto`, `kms dek` and `kms secrets` works;
+[cli.md](cli.md) §2 has the full tree.
 
 ### 2. Which backend are you on?
 
