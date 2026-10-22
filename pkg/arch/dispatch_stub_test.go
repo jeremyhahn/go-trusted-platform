@@ -53,8 +53,8 @@ type stubException struct {
 // and lower stubExceptionCeiling to the new length. Never add an entry for a
 // new stub — implement the operation instead.
 var stubExceptions = []stubException{
-	{"gRPC PlatformIAMService/CreateToken", "pkg/api/daemon/iam_grpc_service.go:1094", "token issuance runs through go-quicbaas OIDC flows; RPC answers Unimplemented"},
-	{"gRPC PlatformIAMService/RevokeToken", "pkg/api/daemon/iam_grpc_service.go:1101", "token revocation runs through go-quicbaas OIDC flows; RPC answers Unimplemented"},
+	{"gRPC PlatformIAMService/CreateToken", "pkg/api/daemon/iam_grpc_service.go:1122", "token issuance runs through go-quicbaas OIDC flows; RPC answers Unimplemented"},
+	{"gRPC PlatformIAMService/RevokeToken", "pkg/api/daemon/iam_grpc_service.go:1129", "token revocation runs through go-quicbaas OIDC flows; RPC answers Unimplemented"},
 	{"QUIC quicwire.OpIAMTokenCreate", "pkg/api/daemon/quic_iam.go:137", "QUIC parity with the OIDC-only gRPC CreateToken"},
 	{"QUIC quicwire.OpIAMTokenRevoke", "pkg/api/daemon/quic_iam.go:139", "QUIC parity with the OIDC-only gRPC RevokeToken"},
 	{"gRPC CAService/InitCA", "sdk/go/gen/ca_grpc.pb.go:256", "daemon CAGRPCService does not override the generated fallback"},
