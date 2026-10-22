@@ -490,16 +490,27 @@ and has_more reports that more exist.`,
 
 // executeSecretsList lists the names under prefix, at most limit of them
 // when limit is above 0, and reads each secret when includeData is set.
+// secretPathsUnder keeps the names that sit under prefix, in their listed
+// order. The SDK gRPC transport does not carry the prefix to the server
+// (quicbaas pkg/api/grpc Client.ListSecrets drops it), so List can answer with
+// every secret in the tenant; the CLI's contract is the names under the prefix.
+func secretPathsUnder(paths []string, prefix string) []string {
+	under := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.HasPrefix(path, prefix) {
+			under = append(under, path)
+		}
+	}
+	return under
+}
+
 func executeSecretsList(ctx context.Context, client quicbaassdk.SecretsClient, printer *cli.Printer, format cli.OutputFormat, prefix string, limit int, includeData bool) error {
 	resp, err := client.List(ctx, prefix)
 	if err != nil {
 		return secretOperationError("list", prefix, err)
 	}
 
-	out := secretListOutput{Prefix: prefix, Secrets: resp.Paths}
-	if out.Secrets == nil {
-		out.Secrets = []string{}
-	}
+	out := secretListOutput{Prefix: prefix, Secrets: secretPathsUnder(resp.Paths, prefix)}
 	if limit > 0 && len(out.Secrets) > limit {
 		out.Secrets = out.Secrets[:limit]
 		out.HasMore = true

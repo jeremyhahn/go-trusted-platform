@@ -658,7 +658,10 @@ secret ID as the path, which need not be that name.
 `<version>` must be a positive integer (`ErrInvalidSecretVersion`, exit 1,
 before any connection). The SDK `List` returns every name at once, so `list`
 has no `--cursor`: `--limit` caps what is printed and `has_more` reports the
-rest. The SDK `Delete` removes a secret with all its versions; there is no soft
+rest. `list` and `prefix list` print only the names that begin with the prefix,
+and `--include-data` reads only those. The go-quicbaas gRPC client does not
+send the prefix to the server, so the SDK can answer with every secret in the
+tenant; the CLI filters that answer itself. The SDK `Delete` removes a secret with all its versions; there is no soft
 delete and no `--force`. A client error exits 1 with `ErrSecretOperationFailed`
 naming the operation and the secret. A call the SDK transport refuses as
 unimplemented exits 1 with `ErrSecretsSDKGap` instead, naming the verb and the
