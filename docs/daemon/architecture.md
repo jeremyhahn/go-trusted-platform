@@ -186,7 +186,12 @@ or username) nor an admin is refused with 403 `ErrForbiddenUserID`. The CA
 signs an issue-cert CSR's subject and SANs as given, so the handler refuses,
 with 403 `ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which
 carries an OU the caller's own certificate does not (or `admin`), or which
-carries any SAN. `TestRegisterRoutes_DaemonIssueCertTakesTheSessionCaller`
+carries any SAN.
+The body is `{"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----..."}`; the web
+console's add-factor wizard builds that CSR in the browser
+(`web/src/lib/csr.ts`: a WebCrypto P-256 key, subject `CN=<user id>`, no
+attributes) and keeps the private key there.
+`TestRegisterRoutes_DaemonIssueCertTakesTheSessionCaller`
 replays the real handler behind the login check. Without an authorizer or a
 caller authenticator, `MountDaemonRESTRoutes` refuses to mount
 (`ErrDaemonRouteNoAuthorizer`, `ErrDaemonRouteNoCallerAuthenticator`).
