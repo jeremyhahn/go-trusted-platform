@@ -26,6 +26,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
@@ -41,6 +42,7 @@ func webserviceModeDaemonConfig(t *testing.T) *daemon.Config {
 	cfg.SocketGroup = ""
 	cfg.EnableGRPCTCP = false
 	cfg.SkipIAMValidation = true
+	cfg.MTLSClientCAPool = x509.NewCertPool()
 	leaveRESTToWebservice(cfg)
 	return cfg
 }
@@ -61,7 +63,11 @@ func TestDaemonRESTRoutes_NilDaemonIsNilInterface(t *testing.T) {
 }
 
 func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
-	d, err := daemon.New(webserviceModeDaemonConfig(t))
+	platform := testutil.GenerateTestTLSBundle(t)
+	callerOnly := testutil.GenerateTestTLSBundle(t)
+	cfg := webserviceModeDaemonConfig(t)
+	cfg.MTLSClientCAPool = platform.CAPool
+	d, err := daemon.New(cfg)
 	require.NoError(t, err)
 	defer func() { _ = d.ForceStop() }()
 
@@ -73,17 +79,21 @@ func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
 	writer := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
 	require.NoError(t, v1.MountDaemonRESTRoutes(api, routes, writer))
 
-	cert := &x509.Certificate{}
-	verified := &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{cert},
-		VerifiedChains:   [][]*x509.Certificate{{cert}},
+	verified := func(bundle *testutil.TestTLSBundle) *tls.ConnectionState {
+		leaf, parseErr := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
+		require.NoError(t, parseErr)
+		return &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{leaf},
+			VerifiedChains:   [][]*x509.Certificate{{leaf, bundle.CACert}},
+		}
 	}
 	tests := []struct {
 		name  string
 		state *tls.ConnectionState
 		want  int
 	}{
-		{"verified client certificate", verified, http.StatusOK},
+		{"client certificate from the daemon's client roots", verified(platform), http.StatusOK},
+		{"client certificate from another anchor", verified(callerOnly), http.StatusForbidden},
 		{"no client certificate", &tls.ConnectionState{}, http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
@@ -95,6 +105,19 @@ func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
 			assert.Equal(t, tt.want, rec.Code)
 		})
 	}
+}
+
+func TestDaemonRESTRoutes_DaemonWithoutClientRootsRefusesMount(t *testing.T) {
+	cfg := webserviceModeDaemonConfig(t)
+	cfg.MTLSClientCAPool = nil
+	d, err := daemon.New(cfg)
+	require.NoError(t, err)
+	defer func() { _ = d.ForceStop() }()
+
+	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
+	writer := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	err = v1.MountDaemonRESTRoutes(api, daemonRESTRoutes(d), writer)
+	require.ErrorIs(t, err, v1.ErrDaemonRouteNoClientRoots{})
 }
 
 func TestDaemonRESTRoutes_DaemonWithoutRouteTableRefusesMount(t *testing.T) {

@@ -86,7 +86,18 @@ services, protocols, BMC, ceremony, PIV, LUKS, FIDO2 and cluster
 (`RESTServer.MountOwnedRoutes`, `pkg/webservice/v1/daemon_routes.go`). Those
 routes keep the contract they have on the daemon's own listener: a request
 whose TLS handshake verified no client certificate is refused with 401
-(`ErrDaemonRouteClientCertRequired`).
+(`ErrDaemonRouteClientCertRequired`), and a verified certificate that does not
+chain to the daemon's own client roots is refused with 403
+(`ErrDaemonRouteClientCertUntrusted`). The webservice handshake verifies against
+a wider pool than the daemon does: its `ClientCAs` also hold the attestation
+caller-admission anchors (`trustCallerAnchors`), so that reporting servers reach
+the caller policy. A chain to one of those anchors is not a daemon client. The
+gate re-verifies the leaf for client authentication against
+`DaemonRESTRoutes.ClientCAs()`, the pool the daemon's own listeners use: the
+admin trust pool `applyDaemonTLSIdentity` provisions from the platform anchor
+(`Config.MTLSClientCAPool`). A daemon with no such pool has no client it could
+admit, and `MountDaemonRESTRoutes` refuses to mount its routes
+(`ErrDaemonRouteNoClientRoots`).
 `pkg/webservice/v1/testdata/daemon_routes.golden` lists every route the
 webservice mounts for these groups, and `daemon_routes_golden_test.go` sends each
 endpoint a request without a client certificate and expects that 401. The daemon's `/api/v1/status` stays off

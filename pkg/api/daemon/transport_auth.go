@@ -359,6 +359,16 @@ func resolveMTLSClientCAPool(config *Config, transport string) (*x509.CertPool, 
 	return pool, nil
 }
 
+// ClientCAs returns the pool the daemon's own listeners verify client
+// certificates against: the provisioned admin trust pool (the platform
+// anchor), set whether or not EnableMTLS requires a certificate. The
+// webservice gates the daemon-owned routes it mounts on this pool, never on
+// its own wider ClientCAs (docs/daemon/architecture.md). Nil when the daemon
+// provisioned no TLS identity.
+func (d *Daemon) ClientCAs() *x509.CertPool {
+	return d.config.MTLSClientCAPool
+}
+
 // newServerTLSConfig builds the server TLS configuration a TCP transport
 // serves cert with. When mTLS is enabled it requires and verifies a client
 // certificate against the pool resolveMTLSClientCAPool resolves for the

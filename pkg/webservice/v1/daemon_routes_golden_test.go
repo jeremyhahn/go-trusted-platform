@@ -14,6 +14,7 @@
 package v1_test
 
 import (
+	"crypto/x509"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,9 @@ type goldenBMC struct{ bmcwebsvc.RestHandler }
 // ownedRoutes adapts the daemon REST server's owned groups to the
 // v1.DaemonRESTRoutes table the webservice router mounts.
 type ownedRoutes struct{ server *daemon.RESTServer }
+
+// ClientCAs is an empty pool: these tests send no client certificate.
+func (o ownedRoutes) ClientCAs() *x509.CertPool { return x509.NewCertPool() }
 
 func (o ownedRoutes) MountRESTRoutes(api *mux.Router) error {
 	o.server.MountOwnedRoutes(api)
