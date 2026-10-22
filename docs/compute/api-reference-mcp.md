@@ -200,7 +200,9 @@ transport ([api.md §2](api.md#2-vm-lifecycle)). An unknown state, any
 `RebootVM` do ([api.md](api.md) §2): `force` with a timeout, or a timeout over
 3600, is invalid argument. A graceful stop may run past the server's 30-second
 `RequestTimeout`; the reply still answers, because the write deadline restarts
-once the reply is ready. The Go SDK's MCP transport waits for that reply for
+once the reply is ready, and the tool runs as long as the HTTP request. Over
+stdio the call runs for its reply window, described next, when that is longer
+than `RequestTimeout`. The Go SDK's MCP transport waits for that reply for
 the stop's reply window — the guest's power-down window (`timeout_seconds`,
 30 by default, none when forced) plus 30 seconds — instead of its 5-second
 default request timeout ([api.md](api.md) §2). The service does not yet read `delete_disks`, on
