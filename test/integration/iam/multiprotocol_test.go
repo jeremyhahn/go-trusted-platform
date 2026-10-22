@@ -519,12 +519,14 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 	testID := uuid.New().String()[:8]
 
 	t.Run("CreateRole", func(t *testing.T) {
+		// Roles carry the platform's documented device scopes
+		// (docs/device/api-reference-rest.md, Device Endpoints).
 		opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID),
 			Name:        "Test Role " + testID,
 			Description: "Test role description",
-			Permissions: []string{"devices:read", "devices:write"},
+			Permissions: []string{"device:read", "device:write"},
 		}
 
 		result, err := adapter.CreateRole(ctx, opts)
@@ -552,7 +554,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID + "-get"),
 			Name:        "Test Role Get " + testID,
 			Description: "Test role for get operation",
-			Permissions: []string{"devices:read"},
+			Permissions: []string{"device:read"},
 		}
 
 		createResult, err := adapter.CreateRole(ctx, createOpts)
@@ -587,7 +589,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID + "-update"),
 			Name:        "Test Role Original",
 			Description: "Original description",
-			Permissions: []string{"devices:read"},
+			Permissions: []string{"device:read"},
 		}
 
 		createResult, err := adapter.CreateRole(ctx, createOpts)
@@ -601,7 +603,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			RoleID:      createResult.Role.ID,
 			Name:        "Test Role Updated",
 			Description: "Updated description",
-			Permissions: []string{"devices:read", "devices:write", "devices:delete"},
+			Permissions: []string{"device:read", "device:write", "device:delete"},
 		}
 
 		updateResult, err := adapter.UpdateRole(ctx, updateOpts)
@@ -630,7 +632,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID + "-delete"),
 			Name:        "Test Role Delete",
 			Description: "Test role for deletion",
-			Permissions: []string{"devices:read"},
+			Permissions: []string{"device:read"},
 		}
 
 		createResult, err := adapter.CreateRole(ctx, createOpts)
@@ -673,7 +675,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 				ID:          GenerateTestRoleID(testID + "-list-" + string(rune('a'+i))),
 				Name:        "Test Role List " + testID,
 				Description: "Test role for listing",
-				Permissions: []string{"devices:read"},
+				Permissions: []string{"device:read"},
 			}
 
 			_, err := adapter.CreateRole(ctx, createOpts)
@@ -715,7 +717,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 			ID:          roleID,
 			Name:        "Test Role Permission Allow",
 			Description: "Test role for permission check",
-			Permissions: []string{"devices:read", "devices:write"},
+			Permissions: []string{"device:read", "device:write"},
 		}
 
 		_, err := adapter.CreateRole(ctx, roleOpts)
@@ -741,7 +743,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 			TenantID:  tenantID,
 			SubjectID: userResult.User.ID,
 			Action:    "read",
-			Resource:  "devices",
+			Resource:  "device",
 			Roles:     []string{roleID},
 		}
 
@@ -805,7 +807,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          roleID,
 			Name:        "Test Role Assign",
 			Description: "Test role for assignment",
-			Permissions: []string{"devices:read"},
+			Permissions: []string{"device:read"},
 		}
 
 		_, err := adapter.CreateRole(ctx, roleOpts)
@@ -872,7 +874,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          roleID,
 			Name:        "Test Role Revoke",
 			Description: "Test role for revocation",
-			Permissions: []string{"devices:read"},
+			Permissions: []string{"device:read"},
 		}
 
 		_, err := adapter.CreateRole(ctx, roleOpts)
@@ -936,7 +938,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          role1ID,
 			Name:        "Test Role Multi 1",
 			Description: "Test role 1 for multiple role assignment",
-			Permissions: []string{"devices:read"},
+			Permissions: []string{"device:read"},
 		}
 
 		_, err := adapter.CreateRole(ctx, role1Opts)
@@ -950,7 +952,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          role2ID,
 			Name:        "Test Role Multi 2",
 			Description: "Test role 2 for multiple role assignment",
-			Permissions: []string{"devices:write"},
+			Permissions: []string{"device:write"},
 		}
 
 		_, err = adapter.CreateRole(ctx, role2Opts)
@@ -1124,7 +1126,7 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 					ID:          roleID,
 					Name:        "Test Role Dup 1",
 					Description: "First role",
-					Permissions: []string{"devices:read"},
+					Permissions: []string{"device:read"},
 				}
 
 				_, err := adapter.CreateRole(ctx, opts)
