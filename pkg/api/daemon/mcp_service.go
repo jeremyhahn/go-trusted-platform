@@ -155,8 +155,9 @@ type MCPServiceProvider struct {
 	kmsService            baasservice.KMSService
 	cryptoService         baasservice.CryptoService
 	secretsService        baasservice.SecretsService
-	dekService            DEKServiceInterface // the gRPC DEKManagement adapter, shared with QUIC
-	kmsBackend            *PlatformKMSBackend // shared with gRPC KeyManagementService, QUIC and REST
+	secretsPrefix         SecretsPrefixService // the gRPC SecretsManagement adapter, for secret_get_by_prefix
+	dekService            DEKServiceInterface  // the gRPC DEKManagement adapter, shared with QUIC
+	kmsBackend            *PlatformKMSBackend  // shared with gRPC KeyManagementService, QUIC and REST
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
 	bmcServer             platformv1.BMCServiceServer

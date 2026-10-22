@@ -332,8 +332,46 @@ func TestExecuteSecretsList(t *testing.T) {
 		assert.Equal(t, "p/y", data[1].(map[string]any)["name"])
 	})
 
+	// The SDK gRPC transport drops the prefix, so List can answer with every
+	// secret in the tenant; only the names under the prefix are listed and
+	// read, and secrets outside it are never fetched.
+	t.Run("include data lists and reads only names under the prefix", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"other/z", "p/x", "px", "q/p/y"}, secrets: map[string]*secretsclient.Secret{
+			"p/x": {Version: 1, Data: map[string]interface{}{"value": "dng="}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
+		})
+		assert.Equal(t, []any{"p/x"}, out["secrets"])
+		data, ok := out["data"].([]any)
+		require.True(t, ok)
+		require.Len(t, data, 1)
+		assert.Equal(t, "p/x", data[0].(map[string]any)["name"])
+		assert.Equal(t, "dng=", data[0].(map[string]any)["value"])
+	})
+
 	t.Run("errors", func(t *testing.T) {
 		requireSecretOperationFailed(t, executeSecretsList(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 0, false), "list")
+	})
+}
+
+func TestSecretPathsUnder(t *testing.T) {
+	t.Run("keeps names under the prefix in listed order", func(t *testing.T) {
+		got := secretPathsUnder([]string{"a/2", "b/1", "a/1", "ab"}, "a/")
+		assert.Equal(t, []string{"a/2", "a/1"}, got)
+	})
+
+	t.Run("empty prefix keeps every name", func(t *testing.T) {
+		assert.Equal(t, []string{"a", "b"}, secretPathsUnder([]string{"a", "b"}, ""))
+	})
+
+	t.Run("nil or unmatched paths give an empty non-nil list", func(t *testing.T) {
+		got := secretPathsUnder(nil, "a/")
+		require.NotNil(t, got)
+		assert.Empty(t, got)
+		got = secretPathsUnder([]string{"b/1"}, "a/")
+		require.NotNil(t, got)
+		assert.Empty(t, got)
 	})
 }
 

@@ -434,7 +434,7 @@ runs:
 | `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_list_key_versions`, `kms_decrypt`, `kms_batch_decrypt`, `kms_verify`, `kms_hash`, `kms_verify_hmac`, `kms_random`, `dek_list`, `dek_get`, `dek_status` |
 | `kms:write` | `kms_generate_key`, `kms_import_key`, `kms_update_key_status`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_batch_encrypt`, `kms_sign`, `kms_hmac`, `kms_rewrap`, `kms_generate_data_key`, `kms_generate_wrapped_data_key`, `dek_create`, `dek_rotate` |
 | `kms:delete` | `kms_delete_key`, `dek_delete` |
-| `secrets:read` | `secret_get`, `secret_get_rotation_policy`, `secret_get_version` |
+| `secrets:read` | `secret_get`, `secret_get_rotation_policy`, `secret_get_version`, `secret_get_by_prefix` |
 | `secrets:write` | `secret_store`, `secret_set_rotation_policy`, `secret_rotate`, `secret_rollback`, `secret_update_status` |
 | `secrets:list` | `secret_list`, `secret_list_versions` |
 | `secrets:delete` | `secret_delete` |

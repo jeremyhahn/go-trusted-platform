@@ -596,6 +596,7 @@ func toolPermissionCatalog() map[string]string {
 	permissions["secret_rotate"] = "secrets:write"
 	permissions["secret_rollback"] = "secrets:write"
 	permissions["secret_update_status"] = "secrets:write"
+	permissions["secret_get_by_prefix"] = "secrets:read"
 	permissions["dek_create"] = "kms:write"
 	permissions["dek_list"] = "kms:read"
 	permissions["dek_get"] = "kms:read"
