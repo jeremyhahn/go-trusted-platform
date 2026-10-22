@@ -210,7 +210,10 @@ func TestDaemonRESTRoutes_IssueCertTakesTheReplayedCaller(t *testing.T) {
 
 			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
 			if tt.want == http.StatusCreated {
-				assert.NotNil(t, ca.Opts, "the CA signed the CSR")
+				require.NotNil(t, ca.Opts, "the CA signed the CSR")
+				require.NotNil(t, ca.Opts.Subject)
+				assert.Equal(t, tt.userID, ca.Opts.Subject.CommonName)
+				assert.Equal(t, "system", ca.Opts.Subject.Organization, "the certificate is issued in the caller's tenant")
 			} else {
 				assert.Nil(t, ca.Opts, "a refused caller must not reach the CA")
 			}

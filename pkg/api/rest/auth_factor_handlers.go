@@ -17,8 +17,11 @@ package rest
 import (
 	"context"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -27,6 +30,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -105,6 +109,15 @@ type ErrCallerGuardNotConfigured struct{}
 
 func (e ErrCallerGuardNotConfigured) Error() string {
 	return "caller authentication is not configured for certificate issuance"
+}
+
+// ErrCallerTenantRequired is returned when the issue-cert caller belongs to no
+// tenant: the issued certificate's O names the caller's tenant, so there is
+// nothing to bind it to.
+type ErrCallerTenantRequired struct{}
+
+func (e ErrCallerTenantRequired) Error() string {
+	return "forbidden: the caller belongs to no tenant to issue the certificate in"
 }
 
 // ErrCSRNotBoundToUser is returned when an issue-cert CSR names a principal or
@@ -397,7 +410,9 @@ func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Requ
 // The handler signs the supplied CSR with the platform CA using a clientAuth
 // EKU profile. The request is accepted when the authenticated caller is the
 // user or holds the admin role (authorizeCaller), and the CSR names that user
-// alone (csrBoundToUser).
+// alone, in the caller's tenant (csrBoundToUser). The CA is also told the
+// subject to issue, CN = the user and O = the caller's tenant, so the issued
+// certificate authenticates into no other tenant.
 func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrAuthServiceNotAvailable{})
@@ -410,7 +425,8 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if status, err := h.authorizeCaller(r, userID); err != nil {
+	caller, status, err := h.authorizeCaller(r, userID)
+	if err != nil {
 		h.writeError(w, status, err)
 		return
 	}
@@ -437,17 +453,20 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// The CA signs the CSR's subject and SANs as given, so they must name
-	// this user and nobody else.
-	if err := csrBoundToUser(csr, userID, callerLeaf(r)); err != nil {
+	// this user, in the caller's tenant, and nobody else.
+	if err := csrBoundToUser(csr, userID, caller.TenantID, callerLeaf(r)); err != nil {
 		h.writeError(w, http.StatusForbidden, err)
 		return
 	}
 
 	// Sign with EKU=clientAuth profile. The platform CA's "client" profile
-	// sets x509.ExtKeyUsageClientAuth by convention.
+	// sets x509.ExtKeyUsageClientAuth by convention. Subject overrides the
+	// CSR's CN and O, so the issued O is the caller's tenant even for a CSR
+	// that names none: MTLSAdapter.ExtractTenant reads the tenant from O.
 	opts := &quicbaasca.SignOptions{
 		Profile:      "client",
 		ValidityDays: 365,
+		Subject:      &quicbaasca.CASubject{CommonName: userID, Organization: caller.TenantID},
 	}
 	cert, err := h.ca.SignCSR(r.Context(), []byte(req.CSRPEM), opts)
 	if err != nil {
@@ -479,19 +498,24 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 // one holding the admin role may issue for any user, anyone else only for
 // themselves. Nothing in the client certificate's subject grants admin: the
 // platform anchor issues the users' certificates too, so a user may hold one
-// whose CN is "admin-x". Without a guard nobody is admitted.
-func (h *AuthFactorHandlers) authorizeCaller(r *http.Request, userID string) (int, error) {
+// whose CN is "admin-x". Without a guard nobody is admitted, and a caller in
+// no tenant is refused, since the certificate is issued in the caller's
+// tenant. It returns the admitted caller.
+func (h *AuthFactorHandlers) authorizeCaller(r *http.Request, userID string) (*platformtoken.AuthorizedContext, int, error) {
 	if h.guard == nil {
-		return http.StatusServiceUnavailable, ErrCallerGuardNotConfigured{}
+		return nil, http.StatusServiceUnavailable, ErrCallerGuardNotConfigured{}
 	}
 	caller, err := h.guard.caller(r)
 	if err != nil {
-		return http.StatusUnauthorized, err
+		return nil, http.StatusUnauthorized, err
+	}
+	if caller.TenantID == "" {
+		return nil, http.StatusForbidden, ErrCallerTenantRequired{}
 	}
 	if caller.HasRole(common.ROLE_ADMIN) || caller.Subject == userID || caller.Username == userID {
-		return http.StatusOK, nil
+		return caller, http.StatusOK, nil
 	}
-	return http.StatusForbidden, ErrForbiddenUserID{}
+	return nil, http.StatusForbidden, ErrForbiddenUserID{}
 }
 
 // callerLeaf returns the caller's verified client certificate, or nil when the
@@ -509,14 +533,31 @@ func callerLeaf(r *http.Request) *x509.Certificate {
 }
 
 // csrBoundToUser refuses a CSR whose subject or SANs could name a principal or
-// tenant other than userID. The CN must be userID. Every OU must be one the
+// tenant other than userID in tenant. The subject carries only CN, O and OU,
+// with one CN and at most one O. The CN must be userID. The O, if present, must be tenant:
+// MTLSAdapter.ExtractTenant takes the tenant from O, so another tenant's O
+// would authenticate into that tenant. Every OU must be one the
 // caller's own certificate carries, and never "admin": an admin certificate is
 // issued through the CA routes, not as a user's mTLS factor. A caller without a
 // client certificate (nil) may request no OU. No SAN is allowed, since a user's
 // mTLS factor names no host, address, mailbox or URI.
-func csrBoundToUser(csr *x509.CertificateRequest, userID string, caller *x509.Certificate) error {
+func csrBoundToUser(csr *x509.CertificateRequest, userID, tenant string, caller *x509.Certificate) error {
+	if tenant == "" {
+		return ErrCallerTenantRequired{}
+	}
+	if err := csrSubjectAttributesAllowed(csr.Subject.Names); err != nil {
+		return err
+	}
 	if csr.Subject.CommonName != userID {
 		return ErrCSRNotBoundToUser{Field: "CN", Value: csr.Subject.CommonName}
+	}
+	if len(csr.Subject.Organization) > 1 {
+		return ErrCSRNotBoundToUser{Field: "O", Value: strings.Join(csr.Subject.Organization, ",")}
+	}
+	for _, o := range csr.Subject.Organization {
+		if o != tenant {
+			return ErrCSRNotBoundToUser{Field: "O", Value: o}
+		}
 	}
 	for _, ou := range csr.Subject.OrganizationalUnit {
 		if strings.EqualFold(ou, "admin") || caller == nil || !slices.Contains(caller.Subject.OrganizationalUnit, ou) {
@@ -525,6 +566,36 @@ func csrBoundToUser(csr *x509.CertificateRequest, userID string, caller *x509.Ce
 	}
 	if len(csr.DNSNames) > 0 || len(csr.EmailAddresses) > 0 || len(csr.IPAddresses) > 0 || len(csr.URIs) > 0 {
 		return ErrCSRNotBoundToUser{Field: "SAN"}
+	}
+	return nil
+}
+
+// Subject attribute types an issue-cert CSR may carry: CN, O and OU (X.520
+// attribute types, RFC 5280 §4.1.2.4).
+var (
+	oidAttributeCommonName         = asn1.ObjectIdentifier{2, 5, 4, 3}
+	oidAttributeOrganization       = asn1.ObjectIdentifier{2, 5, 4, 10}
+	oidAttributeOrganizationalUnit = asn1.ObjectIdentifier{2, 5, 4, 11}
+)
+
+// csrSubjectAttributesAllowed refuses a subject carrying an attribute other
+// than CN, O and OU, or more than one CN. The mTLS identity and tenant
+// extractors (pkg/auth/mtls.go) can be configured to read SERIALNUMBER or the
+// whole DN, and x509 keeps only the last of repeated CNs, so any other
+// attribute could name a principal the CN check never saw.
+func csrSubjectAttributesAllowed(names []pkix.AttributeTypeAndValue) error {
+	commonNames := 0
+	for _, atv := range names {
+		switch {
+		case atv.Type.Equal(oidAttributeCommonName):
+			commonNames++
+			if commonNames > 1 {
+				return ErrCSRNotBoundToUser{Field: "CN", Value: fmt.Sprint(atv.Value)}
+			}
+		case atv.Type.Equal(oidAttributeOrganization), atv.Type.Equal(oidAttributeOrganizationalUnit):
+		default:
+			return ErrCSRNotBoundToUser{Field: atv.Type.String(), Value: fmt.Sprint(atv.Value)}
+		}
 	}
 	return nil
 }

@@ -212,12 +212,21 @@ listener the caller is the platform token or client certificate its scope guard
 verifies, and a client certificate carries no role, so it issues only for its
 own CN. Without a scope guard the handler refuses every request with 503
 `ErrCallerGuardNotConfigured`. A caller that is neither the path user (subject
-or username) nor an admin is refused with 403 `ErrForbiddenUserID`. The CA
-signs an issue-cert CSR's subject and SANs as given, so the handler refuses,
-with 403 `ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which
-carries an OU the caller's own certificate does not (or `admin`), or which
-carries any SAN. A replayed caller has no certificate of its own (the
-transport's is the webservice's), so its CSR may carry no OU.
+or username) nor an admin is refused with 403 `ErrForbiddenUserID`, and a
+caller in no tenant with 403 `ErrCallerTenantRequired`. The certificate is
+issued in the caller's tenant: the mTLS authenticator takes the tenant from the
+certificate's O (`MTLSAdapter.ExtractTenant`, `pkg/auth/mtls.go`), so the
+handler tells the CA the subject to issue, CN = the path user and O = the
+caller's tenant (`SignOptions.Subject`), and a CSR without an O is still
+issued with the caller's. The CA signs the rest of the subject and the SANs as
+given, so the handler refuses, with 403 `ErrCSRNotBoundToUser`, a CSR whose CN
+is not the path user, which names an O other than the caller's tenant, which
+carries a subject attribute other than CN, O and OU (SERIALNUMBER,
+emailAddress, C and the like, which the authenticator's identity field or
+subject DN could read), a second CN or a second O, an OU the caller's own
+certificate does not (or `admin`), or any SAN. A replayed caller has no
+certificate of its own (the transport's is the webservice's), so its CSR may
+carry no OU.
 The body is `{"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----..."}`; the web
 console's add-factor wizard builds that CSR in the browser
 (`web/src/lib/csr.ts`: a WebCrypto P-256 key, subject `CN=<user id>`, no

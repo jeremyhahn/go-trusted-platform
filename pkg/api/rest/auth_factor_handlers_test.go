@@ -22,6 +22,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -59,6 +60,10 @@ type authTestCA struct {
 	signedCert  *x509.Certificate
 	rootPool    *x509.CertPool
 	rootPoolErr error
+
+	// signCalls and signOpts record what SignCSR was asked to do.
+	signCalls int
+	signOpts  *quicbaasca.SignOptions
 }
 
 // Compile-time interface check.
@@ -109,7 +114,9 @@ func newAuthTestCA(t *testing.T) *authTestCA {
 	}
 }
 
-func (a *authTestCA) SignCSR(_ context.Context, _ []byte, _ *quicbaasca.SignOptions) (*x509.Certificate, error) {
+func (a *authTestCA) SignCSR(_ context.Context, _ []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error) {
+	a.signCalls++
+	a.signOpts = opts
 	if a.signErr != nil {
 		return nil, a.signErr
 	}
@@ -136,15 +143,6 @@ func newHandlerWithCA(ca authCA) *AuthFactorHandlers {
 		cache:    make(map[string]aaguidEntry),
 		policies: make(map[string]mfaPolicy),
 	}
-}
-
-// generateAuthTestCSRPEM creates a minimal PEM-encoded CSR whose CN is cn.
-func generateAuthTestCSRPEM(t *testing.T, cn string) string {
-	t.Helper()
-	return string(pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE REQUEST",
-		Bytes: generateAuthTestCSR(t, &x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}}).Raw,
-	}))
 }
 
 // generateAuthTestCSR signs tmpl with a fresh P-256 key and parses it back.
@@ -302,9 +300,12 @@ func TestMTLSProbe_WithCert_NoCA_Returns204(t *testing.T) {
 // principal store, never from the certificate's subject.
 type certPrincipals map[string][]string
 
+// authTestTenant is the tenant every certPrincipals caller belongs to.
+const authTestTenant = "tenant-a"
+
 func (p certPrincipals) AuthenticatePeer(_ context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
 	cn := chain[0].Subject.CommonName
-	return &platformtoken.AuthorizedContext{Subject: cn, Username: cn, Roles: p[cn]}, nil
+	return &platformtoken.AuthorizedContext{Subject: cn, Username: cn, TenantID: authTestTenant, Roles: p[cn]}, nil
 }
 
 // guardedHandlerWithCA is newHandlerWithCA with a guard that authenticates
@@ -318,7 +319,18 @@ func guardedHandlerWithCA(ca authCA, principals certPrincipals) *AuthFactorHandl
 // caller is not nil.
 func issueCertRequest(t *testing.T, userID, csrCN string, caller *x509.Certificate) *http.Request {
 	t.Helper()
-	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t, csrCN)})
+	return issueCertRequestForSubject(t, userID, pkix.Name{CommonName: csrCN}, caller)
+}
+
+// issueCertRequestForSubject is issueCertRequest for a CSR with the given
+// subject.
+func issueCertRequestForSubject(t *testing.T, userID string, subject pkix.Name, caller *x509.Certificate) *http.Request {
+	t.Helper()
+	csrPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: generateAuthTestCSR(t, &x509.CertificateRequest{Subject: subject}).Raw,
+	})
+	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: string(csrPEM)})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+userID+"/factors/mtls/issue-cert", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -452,12 +464,78 @@ func TestIssueCert_ReplayedCaller(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := guardedHandlerWithCA(newAuthTestCA(t), nil)
 			req := issueCertRequest(t, "bob", "bob", selfSignedClientCert(t, "alice"))
-			req = req.WithContext(WithCaller(req.Context(), &platformtoken.AuthorizedContext{Subject: "u-ops", Username: "ops", Roles: tc.roles}))
+			req = req.WithContext(WithCaller(req.Context(), &platformtoken.AuthorizedContext{Subject: "u-ops", Username: "ops", TenantID: authTestTenant, Roles: tc.roles}))
 			rr := serveIssueCert(h, req)
 
 			assert.Equal(t, tc.want, rr.Code)
 		})
 	}
+}
+
+// MTLSAdapter.ExtractTenant takes the tenant from the certificate's O, so a
+// CSR whose O names another tenant would buy a certificate that logs into
+// that tenant. It is refused before the CA is asked to sign.
+func TestIssueCert_CSRNamesAnotherTenant_Returns403(t *testing.T) {
+	ca := newAuthTestCA(t)
+	h := guardedHandlerWithCA(ca, nil)
+	subject := pkix.Name{CommonName: "alice", Organization: []string{"tenant-b"}}
+	rr := serveIssueCert(h, issueCertRequestForSubject(t, "alice", subject, selfSignedClientCert(t, "alice")))
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrCSRNotBoundToUser{Field: "O", Value: "tenant-b"}.Error())
+	assert.Zero(t, ca.signCalls, "the CA must not be asked to sign")
+}
+
+// The CA is told the subject to issue: the user as CN and the caller's
+// tenant as O, whether or not the CSR named one.
+func TestIssueCert_IssuedSubjectNamesCallerTenant(t *testing.T) {
+	tests := []struct {
+		name    string
+		subject pkix.Name
+	}{
+		{"CSR without O", pkix.Name{CommonName: "alice"}},
+		{"CSR naming the caller's tenant", pkix.Name{CommonName: "alice", Organization: []string{authTestTenant}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ca := newAuthTestCA(t)
+			h := guardedHandlerWithCA(ca, nil)
+			rr := serveIssueCert(h, issueCertRequestForSubject(t, "alice", tt.subject, selfSignedClientCert(t, "alice")))
+
+			assert.Equal(t, http.StatusCreated, rr.Code)
+			require.NotNil(t, ca.signOpts)
+			require.NotNil(t, ca.signOpts.Subject)
+			assert.Equal(t, "alice", ca.signOpts.Subject.CommonName)
+			assert.Equal(t, authTestTenant, ca.signOpts.Subject.Organization)
+		})
+	}
+}
+
+// A subject attribute other than CN, O and OU is one an identity or tenant
+// extractor may read, so it is refused.
+func TestIssueCert_CSRExtraSubjectAttribute_Returns403(t *testing.T) {
+	ca := newAuthTestCA(t)
+	h := guardedHandlerWithCA(ca, nil)
+	subject := pkix.Name{CommonName: "alice", SerialNumber: "bob"}
+	rr := serveIssueCert(h, issueCertRequestForSubject(t, "alice", subject, selfSignedClientCert(t, "alice")))
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrCSRNotBoundToUser{Field: "2.5.4.5", Value: "bob"}.Error())
+	assert.Zero(t, ca.signCalls)
+}
+
+// A caller with no tenant has no tenant to bind the certificate to, so
+// nothing is issued.
+func TestIssueCert_CallerWithoutTenant_Returns403(t *testing.T) {
+	ca := newAuthTestCA(t)
+	h := guardedHandlerWithCA(ca, nil)
+	req := issueCertRequest(t, "alice", "alice", nil)
+	req = req.WithContext(WithCaller(req.Context(), &platformtoken.AuthorizedContext{Subject: "alice", Username: "alice"}))
+	rr := serveIssueCert(h, req)
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrCallerTenantRequired{}.Error())
+	assert.Zero(t, ca.signCalls)
 }
 
 func TestCSRBoundToUser(t *testing.T) {
@@ -466,20 +544,71 @@ func TestCSRBoundToUser(t *testing.T) {
 	subject := func(ou ...string) pkix.Name {
 		return pkix.Name{CommonName: "alice", OrganizationalUnit: ou}
 	}
+	withOrg := func(o ...string) pkix.Name {
+		return pkix.Name{CommonName: "alice", Organization: o}
+	}
+	attribute := func(oid asn1.ObjectIdentifier, value string) pkix.AttributeTypeAndValue {
+		return pkix.AttributeTypeAndValue{Type: oid, Value: value}
+	}
 
 	tests := []struct {
 		name   string
 		csr    *x509.CertificateRequest
 		caller *x509.Certificate
-		want   error
+		// noTenant makes the caller one in no tenant; otherwise it is in
+		// authTestTenant.
+		noTenant bool
+		want     error
 	}{
 		{name: "CN is the user", csr: &x509.CertificateRequest{Subject: subject()}, caller: tenantA},
 		{name: "CN is the user, no client certificate", csr: &x509.CertificateRequest{Subject: subject()}},
 		{name: "OU the caller carries", csr: &x509.CertificateRequest{Subject: subject("tenant-a")}, caller: tenantA},
+		{name: "O is the caller's tenant", csr: &x509.CertificateRequest{Subject: withOrg("tenant-a")}, caller: tenantA},
 		{
 			name: "CN names another user",
 			csr:  &x509.CertificateRequest{Subject: pkix.Name{CommonName: "bob"}}, caller: tenantA,
 			want: ErrCSRNotBoundToUser{Field: "CN", Value: "bob"},
+		},
+		{
+			name: "CN repeated",
+			csr: &x509.CertificateRequest{Subject: pkix.Name{ExtraNames: []pkix.AttributeTypeAndValue{
+				attribute(oidAttributeCommonName, "bob"), attribute(oidAttributeCommonName, "alice"),
+			}}},
+			caller: tenantA,
+			want:   ErrCSRNotBoundToUser{Field: "CN", Value: "alice"},
+		},
+		{
+			name: "O names another tenant",
+			csr:  &x509.CertificateRequest{Subject: withOrg("tenant-b")}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "O", Value: "tenant-b"},
+		},
+		{
+			name: "O repeated",
+			csr:  &x509.CertificateRequest{Subject: withOrg("tenant-a", "tenant-b")}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "O", Value: "tenant-a,tenant-b"},
+		},
+		{
+			name: "caller in no tenant",
+			csr:  &x509.CertificateRequest{Subject: subject()}, noTenant: true, caller: tenantA,
+			want: ErrCallerTenantRequired{},
+		},
+		{
+			name: "SERIALNUMBER attribute",
+			csr:  &x509.CertificateRequest{Subject: pkix.Name{CommonName: "alice", SerialNumber: "bob"}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "2.5.4.5", Value: "bob"},
+		},
+		{
+			name: "C attribute",
+			csr:  &x509.CertificateRequest{Subject: pkix.Name{CommonName: "alice", Country: []string{"US"}}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "2.5.4.6", Value: "US"},
+		},
+		{
+			name: "emailAddress attribute",
+			csr: &x509.CertificateRequest{Subject: pkix.Name{CommonName: "alice", ExtraNames: []pkix.AttributeTypeAndValue{
+				attribute(asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}, "bob@example.com"),
+			}}},
+			caller: tenantA,
+			want:   ErrCSRNotBoundToUser{Field: "1.2.840.113549.1.9.1", Value: "bob@example.com"},
 		},
 		{
 			name: "OU names another tenant",
@@ -519,7 +648,11 @@ func TestCSRBoundToUser(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := csrBoundToUser(generateAuthTestCSR(t, tt.csr), "alice", tt.caller)
+			tenant := authTestTenant
+			if tt.noTenant {
+				tenant = ""
+			}
+			err := csrBoundToUser(generateAuthTestCSR(t, tt.csr), "alice", tenant, tt.caller)
 			if tt.want == nil {
 				assert.NoError(t, err)
 				return
