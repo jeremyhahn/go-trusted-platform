@@ -642,6 +642,56 @@ unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 To run a stage locally as CI does: `make docker-build`, then
 `make docker-run CMD='make test'`.
 
+### Foreign-Failure Baseline
+
+Company Agent ruling 125: a failure in a class that ruling 104 counts as
+foreign (fixed only by an upstream release this repository pins, and named
+on an open upstream issue) does not block a merge. Such failures are listed in
+`.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
+nothing is admin-merged.
+
+CI runs `make integration-test IT_FOREIGN_BASELINE=1`. The suites' output
+still goes to the job log, and is also written to `IT_LOG`. When the suites
+pass, nothing else happens. When they fail, `scripts/foreignfailures` decides
+the step's result instead:
+
+- It passes only when every failed leaf test is a row of the baseline.
+- It fails, naming each one, on a failed leaf the baseline does not list.
+- It fails closed on anything it cannot attribute to a listed test: a build
+  or compile failure, a panic or timeout, a package that failed with no
+  failing test, a target that failed outside go test, or a log without the
+  runner's closing summary.
+
+It prints the baseline hits per upstream issue. Rows that did not fail are
+reported as a notice; they do not fail the step. `ci-gate` reads the job's
+result unchanged.
+
+A local `make integration-test` leaves `IT_FOREIGN_BASELINE` unset, so it
+exits with the suites' own status and shows every failure.
+
+The file is tab-separated, with the columns `kind`, `package`, `name`,
+`upstream` and `closing_release`:
+
+| Column | Value |
+|--------|-------|
+| `kind` | `test` (one leaf test) or `job` (one runner target in `ALL_TARGETS`) |
+| `package` | the module-relative package, e.g. `test/integration/kms` |
+| `name` | the full leaf name, e.g. `TestKMS/gRPC/HMAC`; for `job`, the target |
+| `upstream` | the open issue, `repo#number`; several are joined by `+` |
+| `closing_release` | the release whose adoption fixes it |
+
+**Adding an entry:**
+
+- Only a ruling-104 foreign class may be listed, with its open upstream issue.
+- Add one row per failing leaf, copied exactly from the job log.
+- There are no wildcards or patterns, so a new failure can never hide under
+  an existing row.
+- `go test ./scripts/foreignfailures/` refuses a malformed, incomplete or
+  duplicated row.
+
+**Removing an entry:** a row is removed in the PR that adopts its
+`closing_release`.
+
 ## Protocol Parity Assertions
 
 Integration tests must verify identical behavior across all protocols:
