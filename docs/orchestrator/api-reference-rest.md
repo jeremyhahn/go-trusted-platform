@@ -1,0 +1,58 @@
+# Orchestrator REST API Reference
+
+> **Status: REFERENCE** · Last verified: 2026-10-22
+> The `/api/v1/orchestrator` routes, their parameters and HTTP statuses.
+
+| Property | Value |
+|----------|-------|
+| Endpoint | `https://host:8443` |
+| Base path | `/api/v1/orchestrator` |
+| Handlers | `OrchestratorHandlers` (`pkg/api/rest/orchestrator_handlers.go`) |
+| SDK routes | `sdk/go/transport/rest/orchestrator.go` |
+
+Every route calls the same `OrchestratorGRPCService` the other transports
+call. Responses are the RPC response in the proto3 JSON mapping.
+
+## Routes
+
+| Method | Path | RPC | Scope |
+|--------|------|-----|-------|
+| `GET` | `/health` | `Health` | `orchestrator:read` |
+| `GET` | `/tenants/{tenant_id}/agents` | `ListAgents` | `orchestrator:read` |
+| `GET` | `/tenants/{tenant_id}/agents/{agent_id}` | `GetAgent` | `orchestrator:read` |
+| `POST` | `/tenants/{tenant_id}/agents/{agent_id}/disable` | `DisableAgent` | `orchestrator:write` |
+| `POST` | `/tenants/{tenant_id}/agents/{agent_id}/enable` | `EnableAgent` | `orchestrator:write` |
+| `GET` | `/sessions` | `ListSessions` | `orchestrator:read` |
+| `DELETE` | `/sessions/{session_id}` | `CloseSession` | `orchestrator:write` |
+| `GET` | `/tenants/{tenant_id}/jobs` | `ListJobs` | `orchestrator:read` |
+| `GET` | `/tenants/{tenant_id}/jobs/{job_id}` | `GetJob` | `orchestrator:read` |
+| `POST` | `/tenants/{tenant_id}/jobs/{job_id}/cancel` | `CancelJob` | `orchestrator:write` |
+
+## Parameters
+
+The request is built from three sources, merged in this order: an optional
+JSON body, the query string, then the path variables. Query parameters are
+the request's proto field names; a nested field is dotted and a repeated
+field repeats. A parameter that is not a field of the request is `400`.
+
+```
+GET /api/v1/orchestrator/tenants/t1/agents?status=active&page.limit=20&page.offset=40
+GET /api/v1/orchestrator/tenants/t1/jobs?statuses=running&statuses=failed
+```
+
+The SDK sends filters and paging in the JSON body and refuses an empty path
+field (`tenant_id`, `agent_id`, `session_id`, `job_id`) with
+`INVALID_ARGUMENT` before sending.
+
+## Statuses
+
+| Condition | HTTP status |
+|-----------|-------------|
+| Success | `200` |
+| `INVALID_ARGUMENT`, or a bad body or query parameter | `400` |
+| `UNAUTHENTICATED` | `401` |
+| `PERMISSION_DENIED`, or a token without the route's scope | `403` |
+| `NOT_FOUND` | `404` |
+| `FAILED_PRECONDITION` | `409` |
+| `UNAVAILABLE`, or no orchestrator service on the daemon | `503` |
+| `INTERNAL` | `500` |

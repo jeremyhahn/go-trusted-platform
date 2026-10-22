@@ -96,9 +96,12 @@ func requireRefusal(t *testing.T, cmd OrchestratorCommands, op string, err error
 	}
 }
 
-// containing returns a matcher for errors whose message carries text.
-func containing(text string) func(error) bool {
-	return func(err error) bool { return strings.Contains(err.Error(), text) }
+// invalidField returns a matcher for invalid-argument refusals that name
+// field.
+func invalidField(field string) func(error) bool {
+	return func(err error) bool {
+		return IsInvalidArgument(err) && strings.Contains(err.Error(), field)
+	}
 }
 
 // requirePage checks the page info a list answered with: the server reports
@@ -281,33 +284,34 @@ func runOrchestratorScenario(t *testing.T, ctx context.Context, cmd Orchestrator
 		}
 	})
 
-	// The platform service layer validates before the fleet is reached, and
-	// every transport carries its message unchanged.
+	// Bad input is refused before the fleet is reached, as InvalidArgument
+	// naming the offending field, on every transport. The service layer
+	// refuses it; the REST SDK refuses an empty path field before sending.
 	t.Run("InvalidInput", func(t *testing.T) {
 		calls := map[string]struct {
-			call func(context.Context) error
-			want string
+			call  func(context.Context) error
+			field string
 		}{
 			"GetAgentWithoutTenant": {
 				call: func(ctx context.Context) error {
 					_, err := cmd.GetAgent(ctx, &platformv1.GetOrchestratorAgentRequest{AgentId: missing})
 					return err
 				},
-				want: "tenant_id is required",
+				field: "tenant_id",
 			},
 			"ListJobsWithoutTenant": {
 				call: func(ctx context.Context) error {
 					_, err := cmd.ListJobs(ctx, &platformv1.ListOrchestratorJobsRequest{})
 					return err
 				},
-				want: "tenant_id is required",
+				field: "tenant_id",
 			},
 			"CloseSessionWithoutID": {
 				call: func(ctx context.Context) error {
 					_, err := cmd.CloseSession(ctx, &platformv1.CloseOrchestratorSessionRequest{})
 					return err
 				},
-				want: "session_id is required",
+				field: "session_id",
 			},
 			"ListAgentsWithNegativePage": {
 				call: func(ctx context.Context) error {
@@ -317,14 +321,14 @@ func runOrchestratorScenario(t *testing.T, ctx context.Context, cmd Orchestrator
 					})
 					return err
 				},
-				want: "must not be negative",
+				field: "limit",
 			},
 		}
 		for op, tc := range calls {
 			t.Run(op, func(t *testing.T) {
 				cctx, cancel := ShortContext(ctx)
 				defer cancel()
-				requireRefusal(t, cmd, op, tc.call(cctx), "invalid-argument", containing(tc.want))
+				requireRefusal(t, cmd, op, tc.call(cctx), "invalid-argument", invalidField(tc.field))
 			})
 		}
 	})

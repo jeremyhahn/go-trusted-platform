@@ -107,6 +107,24 @@ func IsNotFound(err error) bool {
 	return containsAny(err, notFoundMarkers)
 }
 
+// invalidArgumentMarkers are the substrings the transports carry for an
+// InvalidArgument refusal: the service layer's own messages, the REST SDK's
+// client-side refusal of an empty path field, the gRPC code name and the HTTP
+// status.
+var invalidArgumentMarkers = []string{
+	"is required",
+	"must not be negative",
+	"requires non-zero",
+	"invalidargument",
+	"invalid argument",
+	"400",
+}
+
+// IsInvalidArgument reports whether err is the invalid-argument class.
+func IsInvalidArgument(err error) bool {
+	return containsAny(err, invalidArgumentMarkers)
+}
+
 // ErrOrchestratorNotConfigured is the missing prerequisite the suite fails on
 // when platformd answers that it has no go-quicbaas orchestrator client:
 // nothing the suite asserts can be checked without one.
