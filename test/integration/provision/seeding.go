@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -65,6 +66,11 @@ type lifecycleFixture struct {
 	// delivered configs on every transport must decode back to exactly
 	// this value.
 	config map[string]any
+
+	// dbKeyID is the Secure Boot DB signing key the seeded db key-uri and
+	// cn name: a key the platform KMS holds, certified by the platform CA
+	// under the same common name (provisionDBKey).
+	dbKeyID string
 
 	// eabKeyID / eabHMAC are the EAB credential identifiers a booting
 	// device presents. eabHMAC is the base64url (unpadded) encoding of
@@ -115,17 +121,19 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 	eabClient := eabsdk.NewClientFromGRPC(platformv1.NewEABServiceClient(conn))
 
 	ekCertPEM, ekCertB64DER := newSelfSignedEKCert(t)
+	dbKeyID := provisionDBKey(t, ctx)
 	fixture := &lifecycleFixture{
 		ekSerial:     uniqueID("provision-mp-fixture-ek"),
 		macAddress:   uniqueMAC(),
 		ekCertPEM:    ekCertPEM,
 		ekCertB64DER: ekCertB64DER,
+		dbKeyID:      dbKeyID,
 		// The seeded config carries a recognizable platform section plus a
-		// secure-boot section provisioned for resign-mode "remote", so the
-		// SignDigest scenario is blocked only by the two authentication /
-		// availability gates asserted there (never by a missing secure-boot
-		// section). Values are strings/bools only so the JSON round-trip
-		// shape is stable for deep-equality assertions.
+		// secure-boot section provisioned for resign-mode "remote" whose DB
+		// key the KMS holds and the CA has certified, so a wired DB signer
+		// completes the SignDigest scenario. Values are strings/bools only
+		// so the JSON round-trip shape is stable for deep-equality
+		// assertions.
 		config: map[string]any{
 			"platform": map[string]any{
 				"hostname": uniqueID("provision-mp-node"),
@@ -134,8 +142,8 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 				"enabled":     true,
 				"resign-mode": "remote",
 				"db": map[string]any{
-					"key-uri": "kms://secure-boot/" + uniqueID("provision-mp-db"),
-					"cn":      uniqueID("provision-mp-db-cn"),
+					"key-uri": "kms://" + dbKeyID,
+					"cn":      dbKeyID,
 				},
 			},
 		},
@@ -217,6 +225,78 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 	})
 
 	return fixture
+}
+
+// provisionDBKey provisions the Secure Boot DB signing key the seeded profile
+// names, the way an operator does (docs/ca/api.md, Sign CSR): the platform
+// KMS generates the key, `kms key csr` builds its CSR and `ca sign-csr` has
+// the platform CA certify it for code signing. The CA stores the certificate
+// under the key ID, its common name, which is where the control-plane DB
+// signer looks it up. platformctl runs on the Unix socket as root, the
+// platform-admin path that holds ca:sign-csr.
+func provisionDBKey(t *testing.T, ctx context.Context) string {
+	t.Helper()
+
+	cli := NewCLIAdapter()
+	if err := cli.Setup(ctx); err != nil {
+		t.Fatalf("seeding: platformctl setup failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cli.Teardown(); err != nil {
+			t.Logf("Warning: seeding cleanup platformctl teardown error: %v", err)
+		}
+	})
+
+	keyID := uniqueID("provision-mp-db")
+	runCLI := func(step string, args ...string) {
+		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+		defer cancel()
+		if _, err := cli.runCommand(callCtx, args...); err != nil {
+			t.Fatalf("seeding: %s for DB key %q failed: %v", step, keyID, err)
+		}
+	}
+
+	runCLI("KMS key generation", "kms", "key", "generate", keyID, "--algorithm", "ECDSA-P256", "--purpose", "sign")
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), callTimeout)
+		defer cleanupCancel()
+		if _, err := cli.runCommand(cleanupCtx, "kms", "key", "delete", keyID, "--force"); err != nil {
+			t.Logf("Warning: seeding cleanup KMS key delete(%s) error: %v", keyID, err)
+		}
+	})
+
+	dir := t.TempDir()
+	csrPath := filepath.Join(dir, "db.csr")
+	runCLI("CSR creation", "kms", "key", "csr", keyID, "--out", csrPath)
+	runCLI("CA certification", "ca", "sign-csr", csrPath, "--valid-days", "1", "--out", filepath.Join(dir, "db.crt"))
+	return keyID
+}
+
+// assertDBSignature checks a SignDigest response: certPEM must be the CA's
+// certificate for the DB key dbKeyID, and signature must be that key's
+// ECDSA signature over digest, so the response is the signature of the key
+// the profile names and not merely a non-empty one.
+func assertDBSignature(t *testing.T, dbKeyID string, digest, signature, certPEM []byte) {
+	t.Helper()
+
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatalf("SignDigest succeeded but the DB certificate is not a PEM CERTIFICATE block (%d bytes)", len(certPEM))
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("SignDigest succeeded but the DB certificate does not parse: %v", err)
+	}
+	if cert.Subject.CommonName != dbKeyID {
+		t.Fatalf("SignDigest returned the certificate of %q, want the DB key %q", cert.Subject.CommonName, dbKeyID)
+	}
+	public, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("DB certificate public key is %T, want the ECDSA key the fixture generated", cert.PublicKey)
+	}
+	if !ecdsa.VerifyASN1(public, digest, signature) {
+		t.Fatalf("SignDigest signature (%d bytes) does not verify under the DB certificate of %q", len(signature), dbKeyID)
+	}
 }
 
 // newSelfSignedEKCert generates an ECDSA self-signed certificate and
