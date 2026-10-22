@@ -170,26 +170,6 @@ func (u memUsers) List(_ context.Context, tenantID string, _ *sdkiam.ListUsersRe
 	return &sdkiam.ListUsersResponse{Users: users, Pagination: sdkiam.PaginationInfo{TotalCount: len(users)}}, nil
 }
 
-func (u memUsers) Update(_ context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error) {
-	u.m.mu.Lock()
-	defer u.m.mu.Unlock()
-	user, err := memFind(u.m.users, "iam.user.update", tenantID, userID)
-	if err != nil {
-		return nil, err
-	}
-	if req.Email != "" {
-		user.Email = req.Email
-	}
-	if req.DisplayName != "" {
-		user.DisplayName = req.DisplayName
-	}
-	if req.Metadata != nil {
-		user.Metadata = req.Metadata
-	}
-	copied := *user
-	return &copied, nil
-}
-
 func (u memUsers) AssignRole(_ context.Context, tenantID, userID, roleID string) error {
 	u.m.mu.Lock()
 	defer u.m.mu.Unlock()
