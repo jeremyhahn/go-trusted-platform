@@ -1,6 +1,7 @@
 # Trusted DHT — Using It
 
-> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-22
+> Conflicts with this document are defects. Fix them here first.
 > There is nothing to use. This page says what exists instead, and where the
 > design lives.
 
