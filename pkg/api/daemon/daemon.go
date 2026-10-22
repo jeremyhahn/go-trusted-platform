@@ -2031,9 +2031,11 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			if d.kmsService.DEKServer() != nil {
 				serviceProvider.SetDEKService(d.kmsService.DEKServer())
 			}
-			// secret_get_by_prefix calls the gRPC SecretsManagement adapter.
+			// secret_get_by_prefix and secret_rollback call the gRPC
+			// SecretsManagement adapter.
 			if d.kmsService.SecretsServer() != nil {
 				serviceProvider.SetSecretsPrefixService(d.kmsService.SecretsServer())
+				serviceProvider.SetSecretsServer(d.kmsService.SecretsServer())
 			}
 		}
 	}
