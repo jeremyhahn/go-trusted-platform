@@ -348,16 +348,10 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// installed node enrolled against its own local CA forever. That
 	// false-positive bit a 2026-05-02 GW reflash where enroll-01 against
 	// the CP never fired and no DNS records got registered.
-	priorProvisioning := false
-	for _, marker := range []string{
-		filepath.Join(efiPath, "tpm2", "seal-platform.pub"),
-		filepath.Join(efiPath, strategySealPub),
-	} {
-		if _, err := os.Stat(marker); err == nil {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PRIOR-PROVISIONING DETECTED: %s exists — skipping TPM provisioning + sealing\n", marker)
-			priorProvisioning = true
-			break
-		}
+	state, marker := classifyProvisioning(efiPath)
+	priorProvisioning := state == sealPresent
+	if priorProvisioning {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PRIOR-PROVISIONING DETECTED: %s exists — skipping TPM provisioning + sealing\n", marker)
 	}
 
 	if priorProvisioning {
@@ -833,6 +827,17 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 		return &WrappedError{Msg: "SO PIN resolution failed", Err: err}
 	}
 
+	// A TPM without an EK certificate is refused, before it is touched,
+	// unless the admin relaxed the requirement
+	// (disk.encryption.tpm.allow-missing-ek-certificate). The manufacturer
+	// certificate lives in the platform hierarchy, which neither the clear
+	// nor the evictions below reach, so the answer read here holds for the
+	// rest of provisioning.
+	allowMissingEK := s.allowMissingEKCertificate()
+	if err := requireEKCertificate(tpm, allowMissingEK, os.Stderr); err != nil {
+		return err
+	}
+
 	// Factory reset to clear stale persistent handles from previous installs.
 	// TPM persistent handles survive OS reinstalls, so we must evict them
 	// before creating new EK + SSRK.
@@ -881,7 +886,8 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	// present, policy digest matching) and ADOPTS it instead of running
 	// its destructive re-provisioning (TPM2_Clear), which regenerated the
 	// storage seed and invalidated the LUKS seal written moments earlier.
-	// (IDevID creation warn-continues without an EK certificate — swtpm.)
+	// (IDevID creation warn-continues without an EK certificate only when
+	// allow-missing-ek-certificate accepted such a TPM above.)
 	//
 	// Install is passed a nil SO PIN: a non-nil one would set the owner,
 	// endorsement AND lockout auth together. Only the owner auth is
@@ -898,11 +904,13 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 			IDevID:         true,
 		},
 	); err != nil {
-		// ErrTPMEndorsementCertNotFound is expected for swtpm
-		if !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
+		// IDevID creation needs the EK certificate. Its absence was
+		// already accepted above only when the admin relaxed the EK
+		// requirement; otherwise it is a failure like any other.
+		if !allowMissingEK || !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
 			return &WrappedError{Msg: "TPM install failed", Err: err}
 		}
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: EK cert not found (expected for swtpm)\n")
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: IDevID not created: no EK certificate (%s is true)\n", ekCertificateSetting)
 	}
 
 	// Create the Platform KeyStore SRK (0x81000002) — the LUKS seal
@@ -1510,6 +1518,17 @@ func (s *FirstbootSealStrategy) shouldFactoryResetWithClear() bool {
 		return false
 	}
 	return cfg.Disk.Encryption.TPM.FactoryResetOnFirstBoot
+}
+
+// allowMissingEKCertificate reads the installer config's
+// disk.encryption.tpm.allow-missing-ek-certificate flag. Default is false:
+// a TPM without an EK certificate is refused.
+func (s *FirstbootSealStrategy) allowMissingEKCertificate() bool {
+	cfg := s.loadInstallerConfig()
+	if cfg == nil || cfg.Disk == nil || cfg.Disk.Encryption == nil || cfg.Disk.Encryption.TPM == nil {
+		return false
+	}
+	return cfg.Disk.Encryption.TPM.AllowMissingEKCertificate
 }
 
 // shouldForceClearViaPPI reports whether firstboot may escalate to a UEFI PPI

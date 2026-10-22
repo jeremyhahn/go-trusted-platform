@@ -140,6 +140,17 @@ type TPMSealConfig struct {
 	// See: docs/installer/factory-reset.md
 	FactoryResetOnFirstBoot bool `yaml:"factory-reset-on-firstboot,omitempty" json:"factory_reset_on_firstboot,omitempty" mapstructure:"factory-reset-on-firstboot"`
 
+	// AllowMissingEKCertificate, when true, lets firstboot provision a TPM
+	// that carries no EK certificate (swtpm, a vTPM, a part whose maker
+	// ships none). Without it firstboot refuses such a TPM before touching
+	// it: the EK certificate is what ties the device's identity to its TPM
+	// manufacturer (TCG EK Credential Profile). An accepted TPM is logged
+	// as a warning naming this setting.
+	//
+	// The Go default is FALSE: an EK certificate is required.
+	// See: docs/installer/architecture.md "First provision, the EK and recovery"
+	AllowMissingEKCertificate bool `yaml:"allow-missing-ek-certificate,omitempty" json:"allow_missing_ek_certificate,omitempty" mapstructure:"allow-missing-ek-certificate"`
+
 	// ForceClearViaPPI, when true, escalates to a UEFI Physical Presence
 	// Interface (PPI) ForceClear + reboot when the software TPM2_Clear
 	// (FactoryResetWithClear) cannot recover a TPM whose owner AND lockout

@@ -297,17 +297,25 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
 ```
 
 **First provision, the EK and recovery.** This is the
-contract. The SO PIN bullet is implemented ([TPM
-engineering](../tpm/engineering.md) §4 item 5); the rest is tracked by #951.
+contract, and firstboot implements it (`pkg/firstboot/firstprovision.go`; the
+SO PIN bullet is [TPM engineering](../tpm/engineering.md) §4 item 5).
 
 - **First provision.** A fresh TPM with a valid EK and no sealed object on the
-  ESP (no `seal-platform.pub`) is first provision: firstboot provisions the TPM
-  and seals, and only then does the node serve.
-- **EK certificate.** A TPM without an EK certificate is refused unless the
-  admin relaxed the EK requirement. No firstboot setting for that exists today
-  (`RequireEKMatch` in `pkg/provisioning/configdelivery` governs only the
-  control plane's match against a prestaged EK certificate, and is a Go
-  parameter with no YAML key); the setting is to be added under #951.
+  ESP (no `tpm2/seal-platform.pub`) is first provision: firstboot provisions the
+  TPM and seals, and only then does the node serve. The installer's
+  `tpm2/pcr-banks` is not a seal and never makes a boot look provisioned.
+- **EK certificate.** Before it touches the TPM, firstboot reads the EK
+  certificate through the SDK (`EKCertificate`: the NV index, the certificate
+  store, then the manufacturer's service). A TPM without one is refused with
+  `EKCertificateMissingError`, and the boot drops to the seal-retry path
+  below, unless the admin relaxed the EK requirement with
+  `disk.encryption.tpm.allow-missing-ek-certificate: true`
+  ([docs/device-templates.md](../device-templates.md)). The default is
+  `false`: the certificate is required. A relaxed TPM is provisioned without an
+  IDevID, and firstboot logs a warning that names the setting. A lookup that
+  fails for another reason is refused either way. This is separate from
+  `RequireEKMatch` in `pkg/provisioning/configdelivery`, which governs only the
+  control plane's match against a prestaged EK certificate.
 - **Recovery** means a seal that existed and broke. A TPM that never held a
   seal is first provision, never recovery.
 - **SO PIN.** firstboot sets the owner hierarchy auth to the SO PIN with

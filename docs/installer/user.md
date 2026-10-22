@@ -160,7 +160,7 @@ enable-tpm-sealing: true
 pcrs: [0, 7, 9]
 ```
 
-Three decisions worth making deliberately:
+Four decisions worth making deliberately:
 
 **`factory-reset-on-firstboot`.** `true` wipes the TPM's owner, endorsement and
 lockout hierarchies before provisioning. Set it for fresh hardware and for
@@ -168,6 +168,14 @@ retrying after a failed install. Clear it when you are re-imaging a node whose
 TPM state you want to keep, or when something else owns a hierarchy auth. The
 Go default is `false`; the reference templates set it `true`. Full detail:
 [factory-reset.md](factory-reset.md).
+
+**`allow-missing-ek-certificate`.** By default firstboot refuses a TPM that
+carries no EK certificate, before it changes anything on the TPM, and the node
+does not serve. Set it `true` only for a TPM that cannot have one (swtpm, a
+vTPM, a part shipped without one): firstboot then provisions the TPM without an
+IDevID and logs a warning that names the setting. The Go default and every
+reference template leave it `false`. Full detail:
+[architecture.md](architecture.md), "First provision, the EK and recovery".
 
 **`recovery-key-strategy`.** `escrow` (the default) keeps the recovery
 passphrase and moves it into the tenant secret store, where an ACL governs it.
