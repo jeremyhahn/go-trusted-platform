@@ -16,6 +16,7 @@ package kms
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -403,7 +404,22 @@ func TestExecuteSecretsRotate(t *testing.T) {
 		})
 		assert.Equal(t, float64(1), out["old_version"])
 		assert.Equal(t, float64(2), out["new_version"])
-		assert.Equal(t, []byte("new"), fake.rotateReq.NewData)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(fake.rotateReq.NewData, &data), "rotate sends the encoded data map")
+		value, err := common.DecodeSecretValue(data["value"])
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new"), value)
+	})
+
+	t.Run("a get after store and rotate reads the rotated value", func(t *testing.T) {
+		store := &encodingSecretsClient{}
+		require.NoError(t, executeSecretsStore(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", secretStoreOptions{Value: "old"}))
+		require.NoError(t, executeSecretsRotate(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", "new", false))
+
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsGet(ctx, store, p, cli.OutputFormatJSON, "db/password", 0)
+		})
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("new")), out["value"])
 	})
 
 	t.Run("errors", func(t *testing.T) {
@@ -621,4 +637,39 @@ func TestSecretOperationErrorKeepsOtherFailures(t *testing.T) {
 	err := secretOperationError("version", "n", errFakeSecrets)
 	requireSecretOperationFailed(t, err, "version")
 	assert.NotErrorAs(t, err, new(ErrSecretsSDKGap))
+}
+
+// encodingSecretsClient keeps each secret's data encoded the way the quicbaas
+// Secrets client's gRPC and embedded transports do: Store JSON-encodes the
+// data map, Rotate stores NewData as it is given, and Get decodes the latest
+// version back into a map.
+type encodingSecretsClient struct {
+	fakeSecretsClient
+
+	latest map[string][]byte
+}
+
+func (f *encodingSecretsClient) Store(_ context.Context, req *secretsclient.StoreSecretRequest) (*secretsclient.StoreSecretResponse, error) {
+	raw, err := json.Marshal(req.Data)
+	if err != nil {
+		return nil, err
+	}
+	if f.latest == nil {
+		f.latest = map[string][]byte{}
+	}
+	f.latest[req.Path] = raw
+	return &secretsclient.StoreSecretResponse{Version: 1}, nil
+}
+
+func (f *encodingSecretsClient) Rotate(_ context.Context, req *secretsclient.RotateSecretRequest) (*secretsclient.RotateSecretResponse, error) {
+	f.latest[req.SecretID] = req.NewData
+	return &secretsclient.RotateSecretResponse{SecretID: req.SecretID, OldVersion: 1, NewVersion: 2}, nil
+}
+
+func (f *encodingSecretsClient) Get(_ context.Context, path string, _ ...secretsclient.GetOption) (*secretsclient.Secret, error) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(f.latest[path], &data); err != nil {
+		return nil, err
+	}
+	return &secretsclient.Secret{Path: path, Version: 2, Data: data}, nil
 }

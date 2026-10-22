@@ -1307,12 +1307,22 @@ func (h *Handlers) RotateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req RotateSecretRequest
-	_ = h.decodeJSON(r, &req)
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	// The new version is the same data map StoreSecret writes, so GetSecret
+	// reads it back.
+	data, err := common.EncodeSecretData(map[string]interface{}{"value": req.Value})
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.secrets.Rotate(ctx, &secretsclient.RotateSecretRequest{
 		SecretID: h.name(r),
-		NewData:  req.Value,
+		NewData:  data,
 	})
 	if err != nil {
 		h.fail(w, r, err)

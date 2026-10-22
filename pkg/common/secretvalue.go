@@ -15,6 +15,7 @@ package common
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 )
 
@@ -34,6 +35,29 @@ func (e ErrMalformedSecretValue) Error() string {
 }
 
 func (e ErrMalformedSecretValue) Unwrap() error { return e.Err }
+
+// ErrSecretDataEncoding reports a secret data map that cannot be JSON-encoded.
+type ErrSecretDataEncoding struct {
+	Err error
+}
+
+func (e ErrSecretDataEncoding) Error() string {
+	return "secret data cannot be encoded: " + e.Err.Error()
+}
+
+func (e ErrSecretDataEncoding) Unwrap() error { return e.Err }
+
+// EncodeSecretData encodes a secret's data map the way the quicbaas Secrets
+// client encodes a Store request's data: as JSON. Rotate takes the new data
+// already encoded, so a rotation must send these bytes for a later get to
+// read the same map, and DecodeSecretValue the same "value", as after a store.
+func EncodeSecretData(data map[string]interface{}) ([]byte, error) {
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return nil, ErrSecretDataEncoding{Err: err}
+	}
+	return encoded, nil
+}
 
 // DecodeSecretValue returns the bytes stored as a secret's "value" data
 // entry. The quicbaas Secrets client JSON-encodes the data map, so a

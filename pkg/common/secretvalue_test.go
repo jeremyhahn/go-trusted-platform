@@ -76,3 +76,33 @@ func TestDecodeSecretValue_UnexpectedType(t *testing.T) {
 		t.Fatalf("message = %q", malformed.Error())
 	}
 }
+
+// TestEncodeSecretData_GetReadsTheValueBack encodes a data map for a rotation
+// and decodes it the way a get does after the client's JSON round-trip.
+func TestEncodeSecretData_GetReadsTheValueBack(t *testing.T) {
+	stored := []byte{0, 1, 2, 255, 'n', 'e', 'w'}
+	raw, err := EncodeSecretData(map[string]interface{}{"value": stored})
+	if err != nil {
+		t.Fatalf("EncodeSecretData: %v", err)
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("encoded data is not a JSON map: %v", err)
+	}
+
+	got, err := DecodeSecretValue(data["value"])
+	if err != nil {
+		t.Fatalf("DecodeSecretValue: %v", err)
+	}
+	if string(got) != string(stored) {
+		t.Fatalf("value = %q, want %q", got, stored)
+	}
+}
+
+func TestEncodeSecretData_UnencodableValueIsTyped(t *testing.T) {
+	_, err := EncodeSecretData(map[string]interface{}{"value": make(chan int)})
+	var encErr ErrSecretDataEncoding
+	if !errors.As(err, &encErr) {
+		t.Fatalf("error = %v, want ErrSecretDataEncoding", err)
+	}
+}

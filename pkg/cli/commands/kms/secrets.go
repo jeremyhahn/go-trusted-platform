@@ -591,14 +591,20 @@ func newSecretsRotateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	return cmd
 }
 
-// executeSecretsRotate stores a new version of a secret.
+// executeSecretsRotate stores a new version of a secret. The new value is sent
+// as the same encoded data map a store writes, so a get after the rotation
+// reads it back; the new version carries the value only.
 func executeSecretsRotate(ctx context.Context, client quicbaassdk.SecretsClient, printer *cli.Printer, format cli.OutputFormat, name, value string, isBase64 bool) error {
 	if name == "" {
 		return ErrSecretNameRequired{}
 	}
-	data, err := secretValueBytes(value, isBase64)
+	newValue, err := secretValueBytes(value, isBase64)
 	if err != nil {
 		return err
+	}
+	data, err := common.EncodeSecretData(map[string]interface{}{"value": newValue})
+	if err != nil {
+		return ErrSecretOperationFailed{Operation: "rotate", Name: name, Err: err}
 	}
 
 	resp, err := client.Rotate(ctx, &secretsclient.RotateSecretRequest{SecretID: name, NewData: data})
