@@ -126,6 +126,27 @@ func (u memUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User,
 	return &copied, nil
 }
 
+// Update applies the non-empty fields, as the SDK's partial update does.
+func (u memUsers) Update(_ context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error) {
+	u.m.mu.Lock()
+	defer u.m.mu.Unlock()
+	user, err := memFind(u.m.users, "iam.user.update", tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Email != "" {
+		user.Email = req.Email
+	}
+	if req.DisplayName != "" {
+		user.DisplayName = req.DisplayName
+	}
+	if req.Metadata != nil {
+		user.Metadata = req.Metadata
+	}
+	copied := *user
+	return &copied, nil
+}
+
 func (u memUsers) Delete(_ context.Context, tenantID, userID string) error {
 	u.m.mu.Lock()
 	defer u.m.mu.Unlock()
@@ -236,6 +257,24 @@ func (g memGroups) Get(_ context.Context, tenantID, groupID string) (*sdkiam.Gro
 	group, err := memFind(g.m.groups, "iam.group.get", tenantID, groupID)
 	if err != nil {
 		return nil, err
+	}
+	copied := *group
+	return &copied, nil
+}
+
+// Update applies the non-empty fields, as the SDK's partial update does.
+func (g memGroups) Update(_ context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error) {
+	g.m.mu.Lock()
+	defer g.m.mu.Unlock()
+	group, err := memFind(g.m.groups, "iam.group.update", tenantID, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != "" {
+		group.Name = req.Name
+	}
+	if req.Description != "" {
+		group.Description = req.Description
 	}
 	copied := *group
 	return &copied, nil

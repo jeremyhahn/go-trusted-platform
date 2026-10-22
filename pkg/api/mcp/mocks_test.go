@@ -146,6 +146,7 @@ type mockServiceProvider struct {
 	iamCreateUserFunc      func(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
 	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) (interface{}, error)
 	iamGetUserFunc         func(ctx context.Context, tenantID, userID string) (interface{}, error)
+	iamUpdateUserFunc      func(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error)
 	iamListUsersFunc       func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 	iamCreateRoleFunc      func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
 	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) (interface{}, error)
@@ -231,6 +232,7 @@ type mockServiceProvider struct {
 	iamCreateGroupFunc       func(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
 	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) (interface{}, error)
 	iamGetGroupFunc          func(ctx context.Context, tenantID, groupID string) (interface{}, error)
+	iamUpdateGroupFunc       func(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error)
 	iamListGroupsFunc        func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
 	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
@@ -1493,6 +1495,13 @@ func (m *mockServiceProvider) IAMGetUser(ctx context.Context, tenantID, userID s
 	return nil, nil
 }
 
+func (m *mockServiceProvider) IAMUpdateUser(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error) {
+	if m.iamUpdateUserFunc != nil {
+		return m.iamUpdateUserFunc(ctx, req)
+	}
+	return nil, nil
+}
+
 func (m *mockServiceProvider) IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 	if m.iamListUsersFunc != nil {
 		return m.iamListUsersFunc(ctx, req)
@@ -1585,6 +1594,13 @@ func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID
 		"tenant_id": tenantID,
 		"name":      "test-group",
 	}, nil
+}
+
+func (m *mockServiceProvider) IAMUpdateGroup(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error) {
+	if m.iamUpdateGroupFunc != nil {
+		return m.iamUpdateGroupFunc(ctx, req)
+	}
+	return nil, nil
 }
 
 func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {

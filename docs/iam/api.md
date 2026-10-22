@@ -80,13 +80,19 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 | Create user | `POST /api/v1/iam/users` | ✅ | `0xA9` | `iam_create_user`, `iam:write` | ✅ |
 | List users | `GET /api/v1/iam/users` | ✅ | `0xAC` | `iam_list_users`, `iam:read` | ✅ |
 | Get user | `GET /api/v1/iam/users/{id}` | ✅ | `0xAB` | `iam_get_user`, `iam:read` | ✅ |
-| Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `MISSING — docs/13 G7` | ✅ |
+| Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `iam_update_user`, `iam:write` | ✅ |
 | Delete user | `DELETE /api/v1/iam/users/{id}` | ✅ | `0xAA` | `iam_delete_user`, `iam:delete` | ✅ |
 | Assign role to user | `POST /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xB9` | `iam_assign_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Revoke role from user | `DELETE /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xBA` | `iam_revoke_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 
-`iam_update_user` does not exist — user updates are REST, gRPC, QUIC and
-embedded only.
+Update user and update group change only the fields the request sets: an
+empty email, name or description leaves the stored value as it is. Each MCP
+tool's result is the JSON of its gRPC reply message — `iam_create_user`,
+`iam_get_user` and `iam_update_user` answer `IAMUserResponse` (`{"user": ...}`),
+`iam_list_users` answers `ListIAMUsersResponse` (`{"users": [...], "total": n}`);
+the group tools likewise answer `IAMGroupResponse` and `ListIAMGroupsResponse`.
+The list tools page with `pagination.page_size`, and `iam_list_users` filters
+with `email_filter`, `role_filter` and `group_filter`.
 
 Create user takes an email and no required username. The IAM SDK refuses an
 empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it
@@ -102,7 +108,7 @@ address when it has no local part (`UsernameFromEmail` in
 | Create group | `POST /api/v1/iam/groups` | ✅ | `0xBB` | `iam_create_group`, `iam:write` | ✅ |
 | List groups | `GET /api/v1/iam/groups` | ✅ | `0xBE` | `iam_list_groups`, `iam:read` | ✅ |
 | Get group | `GET /api/v1/iam/groups/{id}` | ✅ | `0xBD` | `iam_get_group`, `iam:read` | ✅ |
-| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `iam_update_group`, `iam:write` | ✅ |
 | Delete group | `DELETE /api/v1/iam/groups/{id}` | ✅ | `0xBC` | `iam_delete_group`, `iam:delete` | ✅ |
 | Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
@@ -125,7 +131,7 @@ for them — see [SPEC](../SPEC.md#interfaces).
 | Rotate app secret | `POST /api/v1/iam/apps/{id}/rotate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 
 **Policies and applications have no MCP tools and no QUIC opcodes.**
-Twenty-five `iam_*` tools cover users, groups, roles, tenants, tokens and the
+Twenty-seven `iam_*` tools cover users, groups, roles, tenants, tokens and the
 permission check — neither the authorization policies themselves nor OAuth
 applications. QUIC has no IAM policy, application, role-update or
 group-update byte; the SDK's QUIC transport cannot reach those RPCs.
@@ -346,14 +352,14 @@ on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
 ([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,
 and the catalog could not give one byte both meanings' scopes.
 
-**Twenty-two of the 25 `iam_*` MCP tools are in the MCP authorization map
+**Twenty-four of the 27 `iam_*` MCP tools are in the MCP authorization map
 (#304)**, each with the `resource:action` of the `PlatformIAMService` method
 it answers through (`pkg/api/grpc/method_permissions.go`;
 `toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
 
 | Scope | Tools |
 |---|---|
-| `iam:write` | `iam_create_user`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
+| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_update_group`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
 | `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_group`, `iam_delete_tenant` |
 | `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_group`, `iam_list_groups`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
 
@@ -369,7 +375,7 @@ gRPC, Unix, QUIC and MCP alike.
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Every one of the 487 registered tools is in the map: 475 carry a
+Every one of the 524 registered tools is in the map: 512 carry a
 `resource:action` permission and 12 are classified open (`""`) (measured from
 `NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
 `TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).

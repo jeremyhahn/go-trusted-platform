@@ -243,6 +243,8 @@ func TestIAMToolClassification(t *testing.T) {
 		"iam_assign_role":         "iam:write",
 		"iam_revoke_role":         "iam:write",
 		"iam_create_group":        "iam:write",
+		"iam_update_user":         "iam:write",
+		"iam_update_group":        "iam:write",
 		"iam_get_group":           "iam:read",
 		"iam_list_groups":         "iam:read",
 		"iam_delete_group":        "iam:delete",

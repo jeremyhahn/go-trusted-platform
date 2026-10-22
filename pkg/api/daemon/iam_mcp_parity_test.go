@@ -81,6 +81,9 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	require.NoError(t, err)
 	got, err := c.GetUser(ctx, "acme", alice.GetId())
 	require.NoError(t, err)
+	updated, err := c.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: alice.GetId(), Name: "Alice Ops"})
+	require.NoError(t, err)
+	require.Equal(t, "Alice Ops", updated.GetName(), "the update reached the IAM client")
 	listReq := &platformv1.ListIAMUsersRequest{TenantId: "acme", Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 10}}
 	listed, total, err := c.ListUsers(ctx, listReq)
 	require.NoError(t, err)
@@ -88,7 +91,7 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	remaining, remainingTotal, err := c.ListUsers(ctx, listReq)
 	require.NoError(t, err)
 
-	answers := []proto.Message{alice, bob, got, wrapperspb.Int64(total)}
+	answers := []proto.Message{alice, bob, got, updated, wrapperspb.Int64(total)}
 	for _, user := range listed {
 		answers = append(answers, user)
 	}
@@ -154,6 +157,9 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 func iamGroupsScript(ctx context.Context, t *testing.T, c *platformiam.Client) []proto.Message {
 	ops, err := c.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{TenantId: "acme", Id: "ops", Name: "Ops", Description: "on call"})
 	require.NoError(t, err)
+	renamed, err := c.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "on call, nights"})
+	require.NoError(t, err)
+	require.Equal(t, "on call, nights", renamed.GetDescription(), "the update reached the IAM client")
 	alice, err := c.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
 	require.NoError(t, err)
 	require.NoError(t, c.AddGroupMember(ctx, "acme", "ops", alice.GetId()))
@@ -172,7 +178,7 @@ func iamGroupsScript(ctx context.Context, t *testing.T, c *platformiam.Client) [
 	_, remainingTotal, err := c.ListGroups(ctx, listReq)
 	require.NoError(t, err)
 
-	answers := []proto.Message{ops, member, withMember, removed, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
+	answers := []proto.Message{ops, renamed, member, withMember, removed, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
 	for _, group := range listed {
 		answers = append(answers, group)
 	}
@@ -279,6 +285,30 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_delete_user", args: map[string]interface{}{"tenant_id": "acme", "user_id": "nobody"},
+			want: codes.NotFound,
+		},
+		"users/update not found": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: "nobody", Name: "N"})
+				return err
+			},
+			tool: "iam_update_user", args: map[string]interface{}{"tenant_id": "acme", "user_id": "nobody", "name": "N"},
+			want: codes.NotFound,
+		},
+		"users/update no user id": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{TenantId: "acme", Name: "N"})
+				return err
+			},
+			tool: "iam_update_user", args: map[string]interface{}{"tenant_id": "acme", "name": "N"},
+			want: codes.InvalidArgument,
+		},
+		"groups/update not found": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "nobody", Name: "N"})
+				return err
+			},
+			tool: "iam_update_group", args: map[string]interface{}{"tenant_id": "acme", "group_id": "nobody", "name": "N"},
 			want: codes.NotFound,
 		},
 		"users/no tenant": {

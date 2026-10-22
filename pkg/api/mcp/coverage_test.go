@@ -16,9 +16,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1526,6 +1528,94 @@ func TestExecuteIAMGetGroup_ServiceError(t *testing.T) {
 	_, err := registry.ExecuteTool(ctx, "iam_get_group", args)
 	if err == nil {
 		t.Error("expected error from service")
+	}
+}
+
+// The update tools pass every schema field through to the service and return
+// its reply unchanged.
+func TestExecuteIAMUpdateUser_PassesFields(t *testing.T) {
+	svc := newMockServiceProvider()
+	var got *IAMUpdateUserRequest
+	svc.iamUpdateUserFunc = func(_ context.Context, req *IAMUpdateUserRequest) (interface{}, error) {
+		got = req
+		return map[string]string{"user_id": req.UserID}, nil
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	result, err := registry.ExecuteTool(context.Background(), "iam_update_user", map[string]interface{}{
+		"tenant_id":  "tenant-123",
+		"user_id":    "user-456",
+		"email":      "a@b.test",
+		"name":       "Alice",
+		"roles":      []interface{}{"admin"},
+		"groups":     []interface{}{"ops"},
+		"attributes": map[string]interface{}{"dept": "ops"},
+	})
+	if err != nil || result == nil {
+		t.Fatalf("ExecuteTool = %v, %v; want a result", result, err)
+	}
+	want := &IAMUpdateUserRequest{
+		TenantID: "tenant-123", UserID: "user-456", Email: "a@b.test", Name: "Alice",
+		Roles: []string{"admin"}, Groups: []string{"ops"}, Attributes: map[string]string{"dept": "ops"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("service got %+v, want %+v", got, want)
+	}
+}
+
+func TestExecuteIAMUpdateUser_ServiceError(t *testing.T) {
+	svc := newMockServiceProvider()
+	svc.iamUpdateUserFunc = func(context.Context, *IAMUpdateUserRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	_, err := registry.ExecuteTool(context.Background(), "iam_update_user", map[string]interface{}{
+		"tenant_id": "tenant-123",
+		"user_id":   "user-456",
+	})
+	if !errors.Is(err, ErrMockServiceError) {
+		t.Errorf("err = %v, want the service error", err)
+	}
+}
+
+func TestExecuteIAMUpdateGroup_PassesFields(t *testing.T) {
+	svc := newMockServiceProvider()
+	var got *IAMUpdateGroupRequest
+	svc.iamUpdateGroupFunc = func(_ context.Context, req *IAMUpdateGroupRequest) (interface{}, error) {
+		got = req
+		return map[string]string{"group_id": req.GroupID}, nil
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	result, err := registry.ExecuteTool(context.Background(), "iam_update_group", map[string]interface{}{
+		"tenant_id":   "tenant-123",
+		"group_id":    "group-456",
+		"name":        "Ops",
+		"description": "on call",
+	})
+	if err != nil || result == nil {
+		t.Fatalf("ExecuteTool = %v, %v; want a result", result, err)
+	}
+	want := &IAMUpdateGroupRequest{TenantID: "tenant-123", GroupID: "group-456", Name: "Ops", Description: "on call"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("service got %+v, want %+v", got, want)
+	}
+}
+
+func TestExecuteIAMUpdateGroup_ServiceError(t *testing.T) {
+	svc := newMockServiceProvider()
+	svc.iamUpdateGroupFunc = func(context.Context, *IAMUpdateGroupRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	_, err := registry.ExecuteTool(context.Background(), "iam_update_group", map[string]interface{}{
+		"tenant_id": "tenant-123",
+		"group_id":  "group-456",
+	})
+	if !errors.Is(err, ErrMockServiceError) {
+		t.Errorf("err = %v, want the service error", err)
 	}
 }
 

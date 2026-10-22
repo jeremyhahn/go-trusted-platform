@@ -324,6 +324,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/CreateUser": "iam_create_user",
 	"/platform.v1.PlatformIAMService/DeleteUser": "iam_delete_user",
 	"/platform.v1.PlatformIAMService/GetUser":    "iam_get_user",
+	"/platform.v1.PlatformIAMService/UpdateUser": "iam_update_user",
 	"/platform.v1.PlatformIAMService/ListUsers":  "iam_list_users",
 
 	// IAM Role Operations
@@ -338,6 +339,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/CreateGroup":       "iam_create_group",
 	"/platform.v1.PlatformIAMService/DeleteGroup":       "iam_delete_group",
 	"/platform.v1.PlatformIAMService/GetGroup":          "iam_get_group",
+	"/platform.v1.PlatformIAMService/UpdateGroup":       "iam_update_group",
 	"/platform.v1.PlatformIAMService/ListGroups":        "iam_list_groups",
 	"/platform.v1.PlatformIAMService/AddGroupMember":    "iam_add_group_member",
 	"/platform.v1.PlatformIAMService/RemoveGroupMember": "iam_remove_group_member",

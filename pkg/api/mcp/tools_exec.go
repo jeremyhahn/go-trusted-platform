@@ -956,6 +956,24 @@ func (r *ToolRegistry) executeIAMGetUser(ctx context.Context, args map[string]in
 	return marshalResult(user)
 }
 
+func (r *ToolRegistry) executeIAMUpdateUser(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMUpdateUserRequest{
+		TenantID:   getString(args, "tenant_id"),
+		UserID:     getString(args, "user_id"),
+		Email:      getString(args, "email"),
+		Name:       getString(args, "name"),
+		Roles:      getStringSlice(args, "roles"),
+		Groups:     getStringSlice(args, "groups"),
+		Attributes: getStringMap(args, "attributes"),
+	}
+
+	user, err := r.service.IAMUpdateUser(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(user)
+}
+
 func (r *ToolRegistry) executeIAMListUsers(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	req := &IAMListUsersRequest{
 		TenantID:    getString(args, "tenant_id"),
@@ -1116,6 +1134,21 @@ func (r *ToolRegistry) executeIAMDeleteGroup(ctx context.Context, args map[strin
 
 func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	group, err := r.service.IAMGetGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(group)
+}
+
+func (r *ToolRegistry) executeIAMUpdateGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMUpdateGroupRequest{
+		TenantID:    getString(args, "tenant_id"),
+		GroupID:     getString(args, "group_id"),
+		Name:        getString(args, "name"),
+		Description: getString(args, "description"),
+	}
+
+	group, err := r.service.IAMUpdateGroup(ctx, req)
 	if err != nil {
 		return nil, err
 	}
