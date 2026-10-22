@@ -17,6 +17,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
@@ -269,6 +270,137 @@ var privilegedDaemonMethodRoutes = map[string]string{
 	http.MethodGet + " /api/v1/sdn/overlay/tunnels":         sdnReadScope,
 	http.MethodGet + " /api/v1/sdn/overlay/macs":            sdnReadScope,
 	http.MethodDelete + " /api/v1/sdn/overlay/macs/{mac}":   sdnWriteScope,
+
+	// Gateway deletes that the MCP catalog scopes as writes: withdrawing a
+	// BGP prefix and releasing an IPAM allocation. The rest of the gateway
+	// takes the sdn group's method scopes (adminDaemonGroups).
+	http.MethodDelete + " /api/v1/sdn/gateway/bgp/prefixes/{prefix:.+}": sdnWriteScope,
+	http.MethodDelete + " /api/v1/sdn/gateway/ipam/allocations/{ip}":    sdnWriteScope,
+}
+
+// certificateOnlyDaemonMethodRoutes lists, keyed "METHOD template", the
+// replayed daemon routes the verified client certificate alone admits.
+var certificateOnlyDaemonMethodRoutes = map[string]struct{}{
+	// The CA's public material; the webservice twins are public
+	// (pkg/webservice/v1/rest/ca/router.go).
+	http.MethodGet + " /api/v1/ca/info":   {},
+	http.MethodGet + " /api/v1/ca/crl":    {},
+	http.MethodGet + " /api/v1/ca/bundle": {},
+
+	// Config delivery, machine half: the machine authenticates inside the
+	// request (nonce, EAB HMAC, EK binding), as the webservice twins
+	// (pkg/webservice/v1/router/device.go) and gRPC serve it pre-auth.
+	http.MethodGet + " /api/v1/provisioning/config/nonce":             {},
+	http.MethodGet + " /api/v1/provisioning/sessions/{sessionID}/poll": {},
+	http.MethodPost + " /api/v1/provisioning/config":                  {},
+	http.MethodPost + " /api/v1/provisioning/sign":                    {},
+
+	// Read before a session exists, with no webservice twin. The custodians
+	// follow the ceremony with its status before any of them holds a
+	// session, as gRPC serves Status pre-auth.
+	http.MethodGet + " /api/v1/ceremony/status": {},
+	// The login flow reads the tenant's MFA policy to learn which factors to
+	// ask for, before the session it issues exists.
+	http.MethodGet + " /api/v1/tenants/{id}/security/mfa-policy": {},
+	// Enrolment and login name the authenticator from its AAGUID before the
+	// session exists.
+	http.MethodGet + " /api/v1/auth/factors/aaguid-lookup": {},
+	// A client probes whether the daemon accepts its certificate before it
+	// logs in; the probe answers with no body.
+	http.MethodHead + " /api/v1/auth/mtls/probe": {},
+}
+
+// The scopes of the admin daemon groups, as the MCP catalog names them for
+// the same operations (pkg/api/mcp/authz.go).
+const (
+	proxyReadScope   = "proxy:read"
+	proxyWriteScope  = "proxy:write"
+	proxyDeleteScope = "proxy:delete"
+	vtpmReadScope    = "vtpm:read"
+	vtpmWriteScope   = "vtpm:write"
+	vtpmDeleteScope  = "vtpm:delete"
+)
+
+// adminDaemonGroups maps each admin daemon group, by its first path segment
+// under /api/v1, to the scope each method takes on top of the admin role:
+// <group>:read for GET and HEAD, <group>:write for POST, PUT and PATCH,
+// <group>:delete for DELETE. "sdn" covers the gateway (/api/v1/sdn/gateway),
+// which no webservice route shadows: the webservice gateway is /gateway.
+// A method the group does not name is unclassified, and denied.
+var adminDaemonGroups = map[string]map[string]string{
+	"proxy": groupMethodScopes(proxyReadScope, proxyWriteScope, proxyDeleteScope),
+	"sdn":   groupMethodScopes(sdnReadScope, sdnWriteScope, sdnDeleteScope),
+	"vtpm":  groupMethodScopes(vtpmReadScope, vtpmWriteScope, vtpmDeleteScope),
+}
+
+// groupMethodScopes maps each HTTP method to the read, write or delete scope
+// of an admin daemon group.
+func groupMethodScopes(read, write, del string) map[string]string {
+	return map[string]string{
+		http.MethodGet:    read,
+		http.MethodHead:   read,
+		http.MethodPost:   write,
+		http.MethodPut:    write,
+		http.MethodPatch:  write,
+		http.MethodDelete: del,
+	}
+}
+
+// daemonScopedGroups lists the daemon groups whose handlers authorize every
+// request themselves; the webservice requires an authenticated session and
+// the daemon's own check decides:
+//
+//	ntp                                          pkg/api/rest/ntp_handlers.go:83-85
+//	vpn                                          pkg/api/rest/vpn_handlers.go:108-115
+//	cache, scheduler, messaging, object-storage  pkg/api/rest/app_service_handlers.go:380
+//	compute                                      pkg/api/rest/compute_handlers.go:89
+//	tpm (outside the IAK and IDevID entries)     pkg/api/rest/tpm_handlers.go:98
+//	tenants                                      pkg/api/rest/tenant_handlers.go:449-481
+var daemonScopedGroups = map[string]struct{}{
+	"ntp":            {},
+	"vpn":            {},
+	"cache":          {},
+	"scheduler":      {},
+	"messaging":      {},
+	"object-storage": {},
+	"compute":        {},
+	"tpm":            {},
+	"tenants":        {},
+}
+
+// daemonRouteMethods are the methods a replayed route without a method
+// restriction is classified for; any other method on it is denied.
+var daemonRouteMethods = []string{
+	http.MethodGet,
+	http.MethodHead,
+	http.MethodPost,
+	http.MethodPut,
+	http.MethodPatch,
+	http.MethodDelete,
+}
+
+// daemonRouteKind is the gate a replayed daemon route method takes on the
+// webservice listener, behind the client-certificate gate.
+type daemonRouteKind int
+
+const (
+	// daemonRouteUnclassified is a method no table names: it is denied.
+	daemonRouteUnclassified daemonRouteKind = iota
+	// daemonRouteOperator takes the admin role and the route's scope.
+	daemonRouteOperator
+	// daemonRouteSession takes an authenticated session, published to the
+	// daemon handler as its caller.
+	daemonRouteSession
+	// daemonRouteCertificate takes the client certificate alone.
+	daemonRouteCertificate
+)
+
+// daemonRouteAccess is the classification of one replayed daemon route
+// method: its gate and, for an operator route, its scope (empty for the
+// admin role alone).
+type daemonRouteAccess struct {
+	kind  daemonRouteKind
+	scope string
 }
 
 // DaemonRESTRoutes is the daemon's REST route table: the route groups only
@@ -355,10 +487,26 @@ func (ErrDaemonRouteNoSession) Error() string {
 // The platform anchor also issues users' client certificates, so the
 // certificate alone does not make the caller an operator here as it does
 // on the daemon listener, whose client pool admits operator certificates
-// only. Each privileged route therefore also takes authorize: the CA routes
-// the authorization their webservice twins apply, every other state-changing
-// or inventory route the admin gate and the scope its MCP and gRPC
-// operation takes (privilegedDaemonMethodRoutes).
+// only. Every method of every replayed route is therefore classified
+// (classifyDaemonRoute): the CA routes take the authorization their
+// webservice twins apply, the other operator routes and the admin groups
+// the admin gate and the scope their MCP and gRPC operation takes, the
+// caller-checked routes and the daemon-scoped groups an authenticated
+// session (caller), and the certificate-only routes nothing more. A method
+// no table classifies is denied with ErrDaemonRouteUnclassified.
+// ErrDaemonRouteUnclassified is the 403 a replayed daemon route answers a
+// method no authorization table classifies (classifyDaemonRoute): a route
+// the daemon adds is denied on the webservice listener until it is
+// classified.
+type ErrDaemonRouteUnclassified struct {
+	Method   string
+	Template string
+}
+
+func (e ErrDaemonRouteUnclassified) Error() string {
+	return "replayed daemon route " + e.Method + " " + e.Template + " has no authorization classification"
+}
+
 func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer response.HttpWriter, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
 	roots := routes.ClientCAs()
 	if roots == nil {
@@ -375,63 +523,122 @@ func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer resp
 	if err := routes.MountRESTRoutes(group); err != nil {
 		return err
 	}
-	return guardPrivilegedDaemonRoutes(group, authorize, caller)
+	return guardPrivilegedDaemonRoutes(group, writer, authorize, caller)
 }
 
-// guardPrivilegedDaemonRoutes wraps the handler of every replayed route in
-// privilegedDaemonRoutes in authorize. The guard runs after the client
-// certificate gate, so a privileged route needs both credentials.
-func guardPrivilegedDaemonRoutes(group *mux.Router, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
+// guardPrivilegedDaemonRoutes gates every method of every replayed route by
+// its classification (classifyDaemonRoute): an operator route takes
+// authorize with its scope, a session route takes caller, a certificate-only
+// route takes nothing more, and an unclassified method answers 403
+// ErrDaemonRouteUnclassified without reaching the daemon handler. The guard
+// runs after the client-certificate gate, so a gated route needs both
+// credentials.
+func guardPrivilegedDaemonRoutes(group *mux.Router, writer response.HttpWriter, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
+	gates := map[daemonRouteKind]func(scope string) func(http.Handler) http.Handler{
+		daemonRouteOperator:    authorize,
+		daemonRouteSession:     func(string) func(http.Handler) http.Handler { return caller },
+		daemonRouteCertificate: func(string) func(http.Handler) http.Handler { return certificateOnly },
+	}
 	return group.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-		// A route without a path template matches no privileged path.
+		// A group prefix carries no handler; the routes under it are each
+		// walked, and classified, on their own.
+		handler := route.GetHandler()
+		if handler == nil {
+			return nil
+		}
+		// A handler route without a path template is classified under the
+		// empty template, which no table names, so it is denied.
 		template, err := route.GetPathTemplate()
 		if err != nil {
-			return nil
+			template = ""
 		}
-		if scope, ok := privilegedDaemonRouteScope(route, template); ok {
-			route.Handler(authorize(scope)(route.GetHandler()))
-			return nil
+		// A route without a method restriction answers every method; each
+		// is classified, and any other method is denied.
+		methods, err := route.GetMethods()
+		if err != nil {
+			methods = daemonRouteMethods
 		}
-		if callerCheckedDaemonRoute(route, template) {
-			route.Handler(caller(route.GetHandler()))
+		guarded := methodGatedDaemonRoute{gates: make(map[string]http.Handler, len(methods)), template: template, writer: writer}
+		// Methods that share a classification share one gated handler.
+		built := make(map[daemonRouteAccess]http.Handler, len(methods))
+		for _, method := range methods {
+			access := classifyDaemonRoute(method, template)
+			gate, ok := gates[access.kind]
+			if !ok {
+				continue
+			}
+			gated, ok := built[access]
+			if !ok {
+				gated = gate(access.scope)(handler)
+				built[access] = gated
+			}
+			guarded.gates[method] = gated
 		}
+		route.Handler(guarded)
 		return nil
 	})
 }
 
-// callerCheckedDaemonRoute reports whether one of route's methods names it in
-// callerCheckedDaemonMethodRoutes.
-func callerCheckedDaemonRoute(route *mux.Route, template string) bool {
-	methods, err := route.GetMethods()
-	if err != nil {
-		return false
-	}
-	for _, method := range methods {
-		if _, ok := callerCheckedDaemonMethodRoutes[method+" "+template]; ok {
-			return true
-		}
-	}
-	return false
+// certificateOnly is the gate of a certificate-only route: the client
+// certificate gate in front of it is the whole check.
+func certificateOnly(next http.Handler) http.Handler { return next }
+
+// methodGatedDaemonRoute serves each request through the gate its method
+// was classified to, and refuses a method that was classified to none.
+type methodGatedDaemonRoute struct {
+	gates    map[string]http.Handler
+	template string
+	writer   response.HttpWriter
 }
 
-// privilegedDaemonRouteScope reports whether route is privileged and the
-// scope it takes: by its template from privilegedDaemonRoutes, else by one of
-// its methods from privilegedDaemonMethodRoutes.
-func privilegedDaemonRouteScope(route *mux.Route, template string) (string, bool) {
+func (m methodGatedDaemonRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if gated, ok := m.gates[r.Method]; ok {
+		gated.ServeHTTP(w, r)
+		return
+	}
+	m.writer.Error403(w, r, ErrDaemonRouteUnclassified{Method: r.Method, Template: m.template}, nil)
+}
+
+// classifyDaemonRoute returns how the webservice gates method on a replayed
+// daemon route with template, checking in order: the CA template table
+// (privilegedDaemonRoutes), the per-method operator table
+// (privilegedDaemonMethodRoutes), the caller-checked routes, the
+// certificate-only routes, the admin groups and the daemon-scoped groups.
+// A method none of them names is unclassified, and denied.
+func classifyDaemonRoute(method, template string) daemonRouteAccess {
 	if scope, ok := privilegedDaemonRoutes[template]; ok {
-		return scope, true
+		return daemonRouteAccess{kind: daemonRouteOperator, scope: scope}
 	}
-	// A route without a method restriction matches no method entry.
-	methods, err := route.GetMethods()
-	if err != nil {
-		return "", false
+	key := method + " " + template
+	if scope, ok := privilegedDaemonMethodRoutes[key]; ok {
+		return daemonRouteAccess{kind: daemonRouteOperator, scope: scope}
 	}
-	for _, method := range methods {
-		if scope, ok := privilegedDaemonMethodRoutes[method+" "+template]; ok {
-			return scope, true
-		}
+	if _, ok := callerCheckedDaemonMethodRoutes[key]; ok {
+		return daemonRouteAccess{kind: daemonRouteSession}
 	}
-	return "", false
+	if _, ok := certificateOnlyDaemonMethodRoutes[key]; ok {
+		return daemonRouteAccess{kind: daemonRouteCertificate}
+	}
+	group := daemonRouteGroup(template)
+	if scope, ok := adminDaemonGroups[group][method]; ok {
+		return daemonRouteAccess{kind: daemonRouteOperator, scope: scope}
+	}
+	if _, ok := daemonScopedGroups[group]; ok {
+		return daemonRouteAccess{kind: daemonRouteSession}
+	}
+	return daemonRouteAccess{kind: daemonRouteUnclassified}
+}
+
+// daemonRouteGroup returns the group a replayed daemon route belongs to: the
+// first path segment under /api/v1 ("sdn" for /api/v1/sdn/gateway/mode), or
+// "" for a template outside /api/v1.
+func daemonRouteGroup(template string) string {
+	rest, ok := strings.CutPrefix(template, "/api/v1/")
+	if !ok {
+		return ""
+	}
+	group, _, _ := strings.Cut(rest, "/")
+	return group
 }
 
 // requireDaemonClientCert refuses, with 401, a request whose TLS handshake

@@ -14,8 +14,10 @@
 package v1_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"flag"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -28,10 +30,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -41,6 +45,10 @@ import (
 // daemonRouteGoldenPath holds every "METHOD /template" the webservice
 // listener mounts for the daemon-owned groups.
 const daemonRouteGoldenPath = "testdata/daemon_routes.golden"
+
+// updateDaemonRouteGolden rewrites daemonRouteGoldenPath from the routes
+// the webservice mounts, instead of only comparing against it.
+var updateDaemonRouteGolden = flag.Bool("update", false, "rewrite "+daemonRouteGoldenPath+" from the mounted daemon routes")
 
 // pathVariable matches one gorilla/mux template variable, with or without
 // a pattern ({slot}, {profileID:[0-9]+}).
@@ -61,6 +69,12 @@ type (
 	goldenOverlay struct {
 		restapi.OverlayServiceInterface
 	}
+	goldenProxy   struct{ restapi.ProxyServiceBackend }
+	goldenTenants struct {
+		restapi.TenantManagerInterface
+	}
+	goldenCA   struct{ quicbaasca.CACertificateAuthority }
+	goldenVTPM struct{ vtpm.VTPMService }
 )
 
 // goldenConfigDelivery answers every config-delivery route with 204. The
@@ -86,6 +100,26 @@ func (goldenConfigDelivery) FulfillSession(w http.ResponseWriter, _ *http.Reques
 
 func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }
 
+// errGoldenCANotInitialized is the error the golden CA answers a bundle
+// read with.
+type errGoldenCANotInitialized struct{}
+
+func (errGoldenCANotInitialized) Error() string { return "golden CA is not initialized" }
+
+// The CA's public material stays on the certificate gate, so a request from
+// a verified certificate reaches these: the golden CA is uninitialized.
+func (goldenCA) IsInitialized() bool { return false }
+
+func (goldenCA) CABundle() ([]byte, error) { return nil, errGoldenCANotInitialized{} }
+
+func (goldenCA) TrustedRootCertPool(*x509.Certificate) (*x509.CertPool, error) {
+	return nil, errGoldenCANotInitialized{}
+}
+
+func (goldenCA) GenerateCRL(context.Context) ([]byte, error) {
+	return nil, errGoldenCANotInitialized{}
+}
+
 // ownedRoutes adapts the daemon REST server's owned groups to the
 // v1.DaemonRESTRoutes table the webservice router mounts.
 type ownedRoutes struct {
@@ -106,12 +140,12 @@ func (o ownedRoutes) MountRESTRoutes(api *mux.Router) error {
 // and every privileged route passes the webservice gate.
 func daemonRoutesOnWebservice(t *testing.T) *mux.Router {
 	t.Helper()
-	return mountDaemonRoutes(t, x509.NewCertPool(), passThrough)
+	return mountDaemonRoutes(t, x509.NewCertPool(), passThrough, passCaller)
 }
 
 // mountDaemonRoutes is daemonRoutesOnWebservice over the client roots and
-// the webservice gate given.
-func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRouteAuthorizer) *mux.Router {
+// the webservice and session gates given.
+func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRouteAuthorizer, caller v1.DaemonCallerAuthenticator) *mux.Router {
 	t.Helper()
 
 	config := daemon.DefaultConfig()
@@ -132,11 +166,22 @@ func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRo
 	server.SetKMSHandlers(goldenKMS{})
 	server.SetOverlayHandlers(goldenOverlay{})
 	server.SetConfigDeliveryHandler(goldenConfigDelivery{})
+	server.SetSDNService(nil)
+	server.SetGatewayIPAMService(nil, nil)
+	server.SetProxyService(goldenProxy{})
+	server.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, nil)
+	server.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, nil)
+	server.SetAppServiceHandlers(restapi.AppServiceServers{}, nil)
+	server.SetTenantHandlers(goldenTenants{}, nil, "")
+	server.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
+	server.SetCAHandlers(goldenCA{}, nil)
+	server.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, nil)
+	server.SetVTPMService(goldenVTPM{})
 
 	root := mux.NewRouter()
 	api := root.PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logger, nil)
-	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server, roots: roots}, writer, authorize, passCaller))
+	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server, roots: roots}, writer, authorize, caller))
 	return root
 }
 
@@ -153,9 +198,18 @@ func passCaller(next http.Handler) http.Handler { return next }
 // daemon-owned groups the webservice listener mounts against the checked-in
 // golden. A setter that stops registering a group, or a group that moves out
 // of the owned set, removes lines here, which the router's own walk cannot
-// see (docs/daemon/architecture.md). Regenerate the golden by hand.
+// see (docs/daemon/architecture.md). Regenerate the golden with
+//
+//	go test -tags "$(make -s print-build-tags)" \
+//	    -run TestMountDaemonRESTRoutes_EveryDaemonRouteStillExists ./pkg/webservice/v1/ -update
+//
+// (-update follows the package: go test hands it and every later argument
+// to the test binary, so it cannot ride in TESTFLAGS) and review the diff: every added line is a route the guard must classify.
 func TestMountDaemonRESTRoutes_EveryDaemonRouteStillExists(t *testing.T) {
 	built := testutil.WalkRoutes(t, daemonRoutesOnWebservice(t))
+	if *updateDaemonRouteGolden {
+		require.NoError(t, os.WriteFile(daemonRouteGoldenPath, []byte(strings.Join(built, "\n")+"\n"), 0o600))
+	}
 
 	data, err := os.ReadFile(daemonRouteGoldenPath)
 	require.NoError(t, err, "missing %s -- it is the assertion, not a cache", daemonRouteGoldenPath)
@@ -193,14 +247,22 @@ func TestMountDaemonRESTRoutes_EveryDaemonRouteRequiresClientCert(t *testing.T) 
 }
 
 // publicDaemonEndpoints are the replayed daemon endpoints that keep the
-// client-certificate gate alone (docs/daemon/architecture.md): the ceremony
-// status the custodians follow, and the machine half of config delivery,
-// which authenticates inside the request. Every other endpoint takes the
-// webservice admin gate and its scope (#983).
+// client-certificate gate alone (docs/daemon/architecture.md): the CA's
+// public material, the machine half of config delivery, which authenticates
+// inside the request, and the four reads made before a session exists
+// (ceremony status, tenant MFA policy, AAGUID lookup, mTLS probe). Every
+// other endpoint takes the admin gate and its scope or an authenticated
+// session (#983); adding one here is a reviewed change.
 var publicDaemonEndpoints = []string{
+	"GET /api/v1/auth/factors/aaguid-lookup",
+	"GET /api/v1/ca/bundle",
+	"GET /api/v1/ca/crl",
+	"GET /api/v1/ca/info",
 	"GET /api/v1/ceremony/status",
 	"GET /api/v1/provisioning/config/nonce",
 	"GET /api/v1/provisioning/sessions/{sessionID}/poll",
+	"GET /api/v1/tenants/{id}/security/mfa-policy",
+	"HEAD /api/v1/auth/mtls/probe",
 	"POST /api/v1/provisioning/config",
 	"POST /api/v1/provisioning/sign",
 }
@@ -220,40 +282,63 @@ func refuseWithScope(scope string) func(http.Handler) http.Handler {
 	}
 }
 
+// refusedSessionHeader is the response header refuseSession marks its
+// refusal with.
+const refusedSessionHeader = "X-Refused-Session"
+
+// refuseSession is a session gate that refuses every session-gated route
+// with 401 and marks the refusal.
+func refuseSession(http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(refusedSessionHeader, "session")
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+}
+
 // TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic sends every
-// replayed daemon endpoint a request from a verified client certificate.
-// An endpoint in the per-method gate table must stop at the webservice gate
-// with its scope; any other must be one of the public endpoints and reach
-// its handler. A daemon route added without a gate entry fails here.
+// replayed daemon endpoint a request from a verified client certificate and
+// checks it against the production classification (classifyDaemonRoute):
+// an operator endpoint must stop at the webservice gate with its scope, a
+// session endpoint at the session gate, and a certificate-only endpoint
+// must be one of publicDaemonEndpoints and reach its handler. A daemon
+// route added without a classification fails here.
 func TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic(t *testing.T) {
 	platform := testutil.GenerateTestTLSBundle(t)
-	root := mountDaemonRoutes(t, platform.CAPool, refuseWithScope)
+	root := mountDaemonRoutes(t, platform.CAPool, refuseWithScope, refuseSession)
 	state := verifiedState(t, platform)
 
 	endpoints := endpointRoutes(t, root)
+	public := make([]string, 0)
 	for _, route := range endpoints {
+		method, template, _ := strings.Cut(route, " ")
+		gate, scope := v1.ClassifyDaemonRoute(method, template)
+		if gate == v1.DaemonRouteCertificate {
+			public = append(public, route)
+		}
 		t.Run(route, func(t *testing.T) {
-			method, template, _ := strings.Cut(route, " ")
 			req := httptest.NewRequest(method, pathVariable.ReplaceAllString(template, "1"), nil)
 			req.TLS = state
 			rec := httptest.NewRecorder()
 			root.ServeHTTP(rec, req)
 
-			scope, gated := v1.PrivilegedDaemonMethodRoutes[route]
-			if !gated {
-				assert.Contains(t, publicDaemonEndpoints, route, "the endpoint has no gate entry and is not public")
+			switch gate {
+			case v1.DaemonRouteOperator:
+				assert.Equal(t, http.StatusForbidden, rec.Code, "the endpoint passed the webservice gate")
+				assert.Equal(t, []string{scope}, rec.Header().Values(refusedScopeHeader), "the endpoint took the wrong scope")
+			case v1.DaemonRouteSession:
+				assert.Equal(t, http.StatusUnauthorized, rec.Code, "the endpoint passed the session gate")
+				assert.Equal(t, []string{"session"}, rec.Header().Values(refusedSessionHeader), "the endpoint did not take the session gate")
+			case v1.DaemonRouteCertificate:
 				assert.NotEqual(t, http.StatusForbidden, rec.Code, "a public endpoint reached the webservice gate")
 				assert.Empty(t, rec.Header().Values(refusedScopeHeader), "a public endpoint reached the webservice gate")
-				return
+				assert.Empty(t, rec.Header().Values(refusedSessionHeader), "a public endpoint reached the session gate")
+			default:
+				assert.Failf(t, "unclassified daemon endpoint", "%s has no authorization classification and is denied", route)
 			}
-			assert.Equal(t, http.StatusForbidden, rec.Code, "the endpoint passed the webservice gate")
-			assert.Equal(t, []string{scope}, rec.Header().Values(refusedScopeHeader), "the endpoint took the wrong scope")
 		})
 	}
 
-	for _, route := range publicDaemonEndpoints {
-		assert.Contains(t, endpoints, route, "public endpoint %s is not a daemon route", route)
-	}
+	assert.ElementsMatch(t, publicDaemonEndpoints, public, "the certificate-only daemon endpoints changed")
 }
 
 // TestPrivilegedDaemonMethodRoutes_NameDaemonRoutes keeps the gate table

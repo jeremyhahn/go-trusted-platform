@@ -422,6 +422,92 @@ func serveMethodEntry(t *testing.T, auth jwt.TokenHandler, key string, platform 
 	return serveWithTLS(root, method, path, verifiedClientState(t, platform)), daemon.served
 }
 
+// TestMountDaemonRESTRoutes_AdminGroupRoutesTakeAdminAndScope proves the
+// codex P1 on #983: an admin-group write replayed onto the webservice is
+// refused before the daemon handler without an admin session holding the
+// group's scope, and reaches the handler with one.
+func TestMountDaemonRESTRoutes_AdminGroupRoutesTakeAdminAndScope(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	session := func(role string, scopes ...string) jwt.TokenHandler {
+		return &scopedSessionAuth{sessionAuth: sessionAuth{roles: []string{role}, tenantID: "system"}, scopes: scopes}
+	}
+	routes := map[string]string{
+		http.MethodPost + " /api/v1/proxy/routes":    proxyWriteScope,
+		http.MethodPut + " /api/v1/sdn/gateway/mode": sdnWriteScope,
+	}
+	for key, scope := range routes {
+		t.Run(key, func(t *testing.T) {
+			tests := []gateCase{
+				{"no session", &anonymousAuth{}, http.StatusUnauthorized, 0},
+				{"user role holding the scope", session("user", scope), http.StatusForbidden, 0},
+				{"admin without the scope", session(common.ROLE_ADMIN, "other:scope"), http.StatusForbidden, 0},
+				{"admin holding the scope", session(common.ROLE_ADMIN, scope), http.StatusOK, 1},
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					code, served := serveMethodEntry(t, tt.auth, key, platform)
+					assert.Equal(t, tt.want, code)
+					assert.Equal(t, tt.served, served, "times the daemon handler ran")
+				})
+			}
+		})
+	}
+}
+
+// TestMountDaemonRESTRoutes_DaemonScopedGroupTakesAnySession proves a
+// daemon-scoped group needs a session but not the admin role: the daemon
+// handler enforces its own tenant and scope checks.
+func TestMountDaemonRESTRoutes_DaemonScopedGroupTakesAnySession(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	key := http.MethodGet + " /api/v1/compute/vms"
+	tests := []gateCase{
+		{"no session", &anonymousAuth{}, http.StatusUnauthorized, 0},
+		{"non-admin session", &sessionAuth{roles: []string{"user"}, tenantID: "tenant-a"}, http.StatusOK, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, served := serveMethodEntry(t, tt.auth, key, platform)
+			assert.Equal(t, tt.want, code)
+			assert.Equal(t, tt.served, served, "times the daemon handler ran")
+		})
+	}
+}
+
+// TestMountDaemonRESTRoutes_UnclassifiedRouteIsDenied proves the default
+// deny: a replayed route no table classifies answers 403 with
+// ErrDaemonRouteUnclassified, even for an admin, and its handler never runs.
+func TestMountDaemonRESTRoutes_UnclassifiedRouteIsDenied(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	admin := &scopedSessionAuth{sessionAuth: sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}, scopes: []string{"unknown:read"}}
+	v1Router := newGatedV1Router(t, &testHandlerRegistry{tokenHandler: admin})
+	daemon := &methodEntryDaemonRoute{roots: platform.CAPool, key: http.MethodGet + " /api/v1/unknown/thing"}
+	root := mux.NewRouter()
+	api := root.PathPrefix("/api/v1").Subrouter()
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/unknown/thing", nil)
+	req.TLS = verifiedClientState(t, platform)
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), ErrDaemonRouteUnclassified{Method: http.MethodGet, Template: "/api/v1/unknown/thing"}.Error())
+	assert.Zero(t, daemon.served, "times the daemon handler ran")
+}
+
+// TestClassifyDaemonRoute_UnknownGroupIsUnclassified covers the classifier
+// directly: a template outside every table, including one with no group
+// segment, is unclassified.
+func TestClassifyDaemonRoute_UnknownGroupIsUnclassified(t *testing.T) {
+	for _, template := range []string{"/api/v1/unknown/thing", "/api/v1", "", "/other/prefix"} {
+		assert.Equal(t, daemonRouteAccess{kind: daemonRouteUnclassified}, classifyDaemonRoute(http.MethodGet, template), template)
+	}
+	assert.Equal(t, daemonRouteAccess{kind: daemonRouteOperator, scope: proxyDeleteScope}, classifyDaemonRoute(http.MethodDelete, "/api/v1/proxy/routes/{id}"))
+	assert.Equal(t, daemonRouteAccess{kind: daemonRouteSession}, classifyDaemonRoute(http.MethodPost, "/api/v1/compute/vms"))
+	assert.Equal(t, daemonRouteAccess{kind: daemonRouteCertificate}, classifyDaemonRoute(http.MethodGet, "/api/v1/ca/info"))
+	assert.Equal(t, daemonRouteAccess{kind: daemonRouteUnclassified}, classifyDaemonRoute("TRACE", "/api/v1/proxy/routes"), "a method no group maps is unclassified")
+}
+
 // issueCertCA is the platform CA behind the replayed issue-cert handler: it
 // really certifies the CSR and returns its root as the chain.
 type issueCertCA struct{ *issuancetest.CA }

@@ -21,3 +21,24 @@ var PrivilegedDaemonMethodRoutes = privilegedDaemonMethodRoutes
 // CallerCheckedDaemonMethodRoutes exposes the login-checked route table to
 // the external route tests.
 var CallerCheckedDaemonMethodRoutes = callerCheckedDaemonMethodRoutes
+
+// The gates ClassifyDaemonRoute names; an unclassified method is "".
+const (
+	DaemonRouteOperator    = "operator"
+	DaemonRouteSession     = "session"
+	DaemonRouteCertificate = "certificate"
+)
+
+var daemonRouteKindNames = map[daemonRouteKind]string{
+	daemonRouteOperator:    DaemonRouteOperator,
+	daemonRouteSession:     DaemonRouteSession,
+	daemonRouteCertificate: DaemonRouteCertificate,
+}
+
+// ClassifyDaemonRoute exposes the production classification of a replayed
+// daemon route method to the external route tests: the gate it takes and,
+// for an operator route, its scope.
+func ClassifyDaemonRoute(method, template string) (gate, scope string) {
+	access := classifyDaemonRoute(method, template)
+	return daemonRouteKindNames[access.kind], access.scope
+}

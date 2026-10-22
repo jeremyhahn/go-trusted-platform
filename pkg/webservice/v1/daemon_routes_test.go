@@ -28,7 +28,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
-const fakeDaemonPath = "/api/v1/fake-daemon"
+// fakeDaemonPath is a certificate-only daemon route, so the client
+// certificate is the only gate these tests exercise; a template the
+// guard does not classify would be denied before the handler.
+const fakeDaemonPath = "/api/v1/ceremony/status"
 
 // fakeDaemonRoutes stands in for the daemon's route table: one route, or
 // the error MountRESTRoutes returns.
@@ -43,7 +46,7 @@ func (f *fakeDaemonRoutes) MountRESTRoutes(api *mux.Router) error {
 	if f.err != nil {
 		return f.err
 	}
-	api.HandleFunc("/fake-daemon", func(w http.ResponseWriter, _ *http.Request) {
+	api.HandleFunc("/ceremony/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
 	return nil

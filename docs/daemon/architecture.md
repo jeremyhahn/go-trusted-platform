@@ -105,8 +105,9 @@ admit, and `MountDaemonRESTRoutes` refuses to mount its routes
 A certificate that chains to those roots is not, by itself, authority to change
 the CA or the node: the platform anchor also issues user certificates. The
 privileged daemon CA routes therefore also take the authorization of their
-webservice twin, and every other state-changing or inventory route takes the
-admin role and the scope its MCP and gRPC operation takes, through the
+webservice twin, and every other state-changing or inventory route of a group
+whose handlers check nothing themselves takes the admin role and the scope its
+MCP and gRPC operation takes, through the
 webservice's own admin gate and scope check (`privilegedDaemonRoutes`,
 `privilegedDaemonMethodRoutes`, `Router.daemonRouteAuthorizer`). A caller without a session is refused with 401,
 and a caller without the admin role or the scope is refused with 403, before the
@@ -156,10 +157,30 @@ daemon handler runs:
 | `GET /sdn/overlay/status`, `/vteps`, `/vteps/{node_id}`, `/vnis`, `/tunnels`, `/macs` | admin + `sdn:read` |
 | `POST /sdn/overlay/vnis`; `DELETE /sdn/overlay/macs/{mac}` | admin + `sdn:write` |
 | `DELETE /sdn/overlay/vnis/{vni}` | admin + `sdn:delete` |
+| `DELETE /sdn/gateway/bgp/prefixes/{prefix}`, `/sdn/gateway/ipam/allocations/{ip}` | admin + `sdn:write` (as MCP `gateway_bgp_withdraw`, `gateway_ipam_release`) |
+| every other `/proxy/...` route | admin + `proxy:read` (`GET`, `HEAD`), `proxy:write` (`POST`, `PUT`, `PATCH`) or `proxy:delete` (`DELETE`) |
+| every other `/sdn/...` route, `/sdn/gateway/...` included | admin + `sdn:read`, `sdn:write` or `sdn:delete`, by method as above |
+| every `/vtpm/...` route | admin + `vtpm:read`, `vtpm:write` or `vtpm:delete`, by method as above |
+| every `/ntp`, `/vpn`, `/cache`, `/scheduler`, `/messaging`, `/object-storage`, `/compute`, `/tpm` and `/tenants` route not named above | a webservice session, any role (the daemon handler checks the tenant and scope itself) |
+| any other method or route | refused: 403 `ErrDaemonRouteUnclassified` |
+
+`guardPrivilegedDaemonRoutes` classifies each method of each replayed route
+(`classifyDaemonRoute`), in this order: the template table
+(`privilegedDaemonRoutes`), the method table (`privilegedDaemonMethodRoutes`),
+issue-cert (`callerCheckedDaemonMethodRoutes`), the client-certificate-only
+routes (`certificateOnlyDaemonMethodRoutes`), the admin groups `proxy`, `sdn`
+and `vtpm` (`adminDaemonGroups`, scope by method), and the daemon-scoped groups
+(`daemonScopedGroups`). A method or route none of them names is denied: the
+webservice answers 403 `ErrDaemonRouteUnclassified` and the daemon handler never
+runs, so a group the daemon gains is closed until it is classified.
 
 The scope of each non-CA route is the scope its MCP and gRPC operation takes
-(`pkg/api/mcp/authz.go`). None of these daemon handlers checks authorization
-itself, so the replay gate is the only check on the webservice.
+(`pkg/api/mcp/authz.go`). The admin-group and table daemon handlers check no
+authorization themselves, so the replay gate is the only check on the
+webservice. The daemon-scoped groups take a session only, as their handlers
+check the tenant and scope themselves (`ntp_handlers.go`, `vpn_handlers.go`,
+`app_service_handlers.go`, `compute_handlers.go`, `tpm_handlers.go`,
+`tenant_handlers.go`), and an admin gate there would lock tenant users out.
 With the webservice CA configured, its own handlers shadow every CA route
 except `POST .../{serial}/revoke`, which only the daemon serves.
 `TestPrivilegedDaemonRoutes_CoverTheDaemonCATable` fails if the daemon gains a CA
@@ -200,7 +221,11 @@ webservice mounts for these groups, and `daemon_routes_golden_test.go` sends eac
 endpoint a request without a client certificate and expects that 401.
 `TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic` sends each
 endpoint a verified client certificate and fails unless the endpoint reaches the
-gate with its table scope or is one of the client-certificate-only routes above. The daemon's `/api/v1/status` stays off
+gate `classifyDaemonRoute` names for it (the admin gate with its scope, the
+session check, or none for the client-certificate-only routes above); an
+unclassified endpoint fails it. `TestMountDaemonRESTRoutes_UnclassifiedRouteIsDenied`
+replays an unknown route and expects the 403. The golden regenerates with
+`-update` (see the test's comment). The daemon's `/api/v1/status` stays off
 that set because the webservice serves its own. Only groups registered inside
 `daemon.New` are mounted: the webservice is built after it, and a group
 registered later would not be replayed.
