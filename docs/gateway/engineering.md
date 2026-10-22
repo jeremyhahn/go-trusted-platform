@@ -1665,6 +1665,15 @@ with register 1 bit 0 set. The reply divert matches only packets with that bit
 clear, so the packet then meets the firewall and NAT gates exactly as if the
 load balancer were not installed. The NAT service owns register 0.
 
+The one exception is a direct connection that has the same 4-tuple at the
+backend as a VIP connection. That happens when one address is both a VIP
+client and a direct peer of the backend, and reuses a source port: the
+backend's reply to the direct connection is then `+est+rpl` in the VIP zone,
+and it is reverse-translated as the VIP connection's reply. The backend sees
+both connections as the same 4-tuple, so no flow can tell them apart. The
+prober is such a direct peer: if the gateway's own address is also a client of
+the VIP, a probe can fail this way.
+
 **One backend endpoint, one VIP.** Because the reply divert is keyed on the
 backend's address:port alone, that endpoint's replies can be steered into one
 VIP zone only. A backend `address:port` that already serves another VIP of the
@@ -1819,7 +1828,11 @@ that failed to reverse-translate replies would fail the test. It asserts a TCP
 exchange through a VIP, that a backend stays reachable directly on its service
 port, a hairpin handshake in which the backend sees the VIP as its peer, and
 distribution, stickiness, prober-driven failover and fail-closed behaviour.
-After the prober rebuilds the group, the test runs `ovs-appctl revalidator/wait`
+The test dials the VIP from a second address on the root namespace's port, not
+from the address the prober dials from, so that no probe shares a 4-tuple with
+a VIP connection (see the exception above). The test backends count a
+connection only when it sends a request: a probe connects and closes without
+sending one. After the prober rebuilds the group, the test runs `ovs-appctl revalidator/wait`
 before it dials: the kernel keeps the megaflows that selected the old backend
 until a revalidator pass drops them, and an OpenFlow barrier does not wait for
 that.
