@@ -278,7 +278,7 @@ failed precondition, as `PrepareMigration` and `FinalizeMigration` do on gRPC.
 
 | Tool | Required | Optional (default) |
 |------|----------|--------------------|
-| `container_create` | `name`, `image` | `command`, `args` (string arrays), `env`, `labels` (objects), `working_dir`, `user`, `privileged` (false), `mounts` (`[{"source", "target", "read_only", "type"}]`), `ports` (`[{"container_port", "host_port", "host_ip", "protocol"}]`), `resources` (`{"cpu_limit", "memory_limit", "pids_limit"}`) |
+| `container_create` | `name`, `image` | `command`, `args` (string arrays), `env`, `labels` (objects), `working_dir`, `user`, `privileged` (false), `mounts` (`[{"source", "target", "read_only", "type"}]`), `ports` (`[{"container_port", "host_port", "host_ip", "protocol"}]`), `resources` (`{"cpu_limit", "memory_limit", "pids_limit"}`), `attest_on_create` (false) |
 | `container_start` | `id` | — |
 | `container_stop` | `id` | `timeout` (10) |
 | `container_remove` | `id` | `force` (false) |
@@ -288,6 +288,8 @@ failed precondition, as `PrepareMigration` and `FinalizeMigration` do on gRPC.
 | `container_exec` | `id`, `command` | `env` (object), `working_dir`, `tty` (false) |
 | `container_metrics` | `id` | — |
 | `container_attest` | `id` | — |
+
+`container_create` returns the container fields plus `status` (`{"success", "message"}`), the same status gRPC `CreateContainerResponse` carries. With `attest_on_create` true the daemon attests the container right after creating it: an orchestrator that cannot attest refuses the create (nothing is created), and a failed attestation still answers the created container with `status.success` false and the cause in `status.message`.
 
 ## Error Handling
 
