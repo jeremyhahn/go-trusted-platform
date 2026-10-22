@@ -76,6 +76,12 @@ refused with InvalidArgument.
 SDK `RotateKeyResponse` carries only the new version, and a rotation adds
 exactly one version, so `old_version` is `new_version - 1`.
 
+**`SetKeyPolicy`** on gRPC, QUIC and Unix answers the `policy_version` the KMS
+stored: the KMS stamps each set with the request's version plus one. The SDK
+`SetKeyPolicy` returns only an error, so the daemon reads the policy back after
+the set; a read-back failure fails the request with its class, and the new
+policy is already in force.
+
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.
