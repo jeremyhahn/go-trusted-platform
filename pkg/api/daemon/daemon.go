@@ -2027,8 +2027,14 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	if d.kmsService != nil {
 		if initErr := d.kmsService.initializeServers(); initErr != nil {
 			d.logger.Warn("KMS service MCP initialization failed", "error", initErr)
-		} else if d.kmsService.DEKServer() != nil {
-			serviceProvider.SetDEKService(d.kmsService.DEKServer())
+		} else {
+			if d.kmsService.DEKServer() != nil {
+				serviceProvider.SetDEKService(d.kmsService.DEKServer())
+			}
+			// secret_get_by_prefix calls the gRPC SecretsManagement adapter.
+			if d.kmsService.SecretsServer() != nil {
+				serviceProvider.SetSecretsPrefixService(d.kmsService.SecretsServer())
+			}
 		}
 	}
 

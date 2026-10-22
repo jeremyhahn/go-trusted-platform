@@ -197,6 +197,7 @@ unknown key fails it whole. Each answer has the layout of the platform.v1 reply
 |---|---|---|---|---|---|
 | Store secret | `POST /api/v1/kms/secrets` | `SecretsManagement.StoreSecret` | secrets category `0xCE`, sub `0x01` | `secret_store` (`secrets:write`) | — |
 | List secrets | `GET /api/v1/kms/secrets` | `SecretsManagement.ListSecrets` | sub `0x03` | `secret_list` (`secrets:list`) | — |
+| Get secrets by prefix | `GET /api/v1/kms/secrets?prefix=` (paths only) | `SecretsManagement.GetSecretsByPrefix` | — (list, then filter) | `secret_get_by_prefix` (`secrets:read`) | — |
 | Get secret | `GET /api/v1/kms/secrets/{name}` | `SecretsManagement.GetSecret` | sub `0x02` | `secret_get` (`secrets:read`) | — |
 | Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `SecretsManagement.DeleteSecret` | sub `0x04` | `secret_delete` (`secrets:delete`) | — |
 | Get secret version | `GET /api/v1/kms/secrets/{name}/versions/{version}` | `SecretsManagement.GetSecretVersion` | sub `0x07` | `secret_get_version` (`secrets:read`) | — |
@@ -213,6 +214,14 @@ transport is read, rotated and deleted on the other. The gRPC secret version,
 rotate, rollback and status RPCs call the SDK secrets client the secret routes
 call; the matching MCP tools call the daemon's secrets service
 (`Security().Secrets()`), the one `secret_get` and `secret_store` use.
+
+**`secret_get_by_prefix` answers what `GetSecretsByPrefix` answers.** The tool
+calls the gRPC `SecretsServerAdapter` method, so both return the same
+`GetSecretsByPrefixResponse`: a `secrets` map keyed by secret path, each
+entry's bytes under data key `data` (base64 in the MCP JSON) when
+`include_data` is set, plus `total_count`, `has_more` and `next_cursor`. It
+takes `prefix` (required), `include_data`, `limit` and `cursor`; an empty
+prefix is refused with `ErrSecretPrefixRequired`.
 
 **`GET /api/v1/kms/secrets/{name}` returns the stored bytes.** The SDK
 secrets client JSON-encodes the data map, so the `value` a store wrote comes

@@ -81,6 +81,7 @@ var kmsToolDispatch = map[string]kmsToolHandler{
 	"secret_rotate":              (*ToolRegistry).executeSecretRotate,
 	"secret_rollback":            (*ToolRegistry).executeSecretRollback,
 	"secret_update_status":       (*ToolRegistry).executeSecretUpdateStatus,
+	"secret_get_by_prefix":       (*ToolRegistry).executeSecretGetByPrefix,
 	"dek_create":                 (*ToolRegistry).executeDEKCreate,
 	"dek_list":                   (*ToolRegistry).executeDEKList,
 	"dek_get":                    (*ToolRegistry).executeDEKGet,
@@ -708,6 +709,19 @@ func (r *ToolRegistry) executeSecretUpdateStatus(ctx context.Context, args map[s
 	}
 
 	result, err := r.service.SecretUpdateStatus(ctx, secretID, status)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeSecretGetByPrefix(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	prefix := getString(args, "prefix")
+	if prefix == "" {
+		return nil, ErrSecretPrefixRequired
+	}
+
+	result, err := r.service.SecretGetByPrefix(ctx, prefix, getBool(args, "include_data"), getInt(args, "limit"), getString(args, "cursor"))
 	if err != nil {
 		return nil, err
 	}

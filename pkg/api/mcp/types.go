@@ -878,6 +878,9 @@ type ServiceProvider interface {
 	SecretRotate(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
 	SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
 	SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error)
+	// SecretGetByPrefix answers what the gRPC SecretsManagement
+	// GetSecretsByPrefix answers for the same request.
+	SecretGetByPrefix(ctx context.Context, prefix string, includeData bool, limit int, cursor string) (interface{}, error)
 
 	// DEK operations
 	DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error)

@@ -199,6 +199,7 @@ type mockServiceProvider struct {
 	secretRotateFunc            func(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
 	secretRollbackFunc          func(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
 	secretUpdateStatusFunc      func(ctx context.Context, secretID, status string) (interface{}, error)
+	secretGetByPrefixFunc       func(ctx context.Context, prefix string, includeData bool, limit int, cursor string) (interface{}, error)
 
 	// DEK
 	dekCreateFunc func(ctx context.Context, req *DEKCreateRequest) (interface{}, error)
@@ -1955,6 +1956,13 @@ func (m *mockServiceProvider) SecretUpdateStatus(ctx context.Context, secretID, 
 		return m.secretUpdateStatusFunc(ctx, secretID, status)
 	}
 	return map[string]interface{}{"secret_id": secretID, "status": status}, nil
+}
+
+func (m *mockServiceProvider) SecretGetByPrefix(ctx context.Context, prefix string, includeData bool, limit int, cursor string) (interface{}, error) {
+	if m.secretGetByPrefixFunc != nil {
+		return m.secretGetByPrefixFunc(ctx, prefix, includeData, limit, cursor)
+	}
+	return map[string]interface{}{"secrets": map[string]interface{}{}}, nil
 }
 
 func (m *mockServiceProvider) DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error) {

@@ -1114,6 +1114,57 @@ func TestExecuteSecretVersionTools(t *testing.T) {
 	})
 }
 
+func TestExecuteSecretGetByPrefix(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.secretGetByPrefixFunc = func(ctx context.Context, prefix string, includeData bool, limit int, cursor string) (interface{}, error) {
+			assert.Equal(t, "app/", prefix)
+			assert.True(t, includeData)
+			assert.Equal(t, 10, limit)
+			assert.Equal(t, "2", cursor)
+			return map[string]interface{}{
+				"secrets": map[string]interface{}{"app/a": map[string]interface{}{"version": 1}},
+			}, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		result, err := executeKMSToolViaDispatch(t, registry, "secret_get_by_prefix", map[string]interface{}{
+			"prefix":       "app/",
+			"include_data": true,
+			"limit":        float64(10),
+			"cursor":       "2",
+		})
+		require.NoError(t, err)
+		resultMap, ok := result.(map[string]interface{})
+		require.True(t, ok, "result is %T", result)
+		assert.Contains(t, resultMap["secrets"], "app/a")
+	})
+
+	t.Run("MissingPrefix", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.secretGetByPrefixFunc = func(context.Context, string, bool, int, string) (interface{}, error) {
+			t.Fatal("service must not be called without a prefix")
+			return nil, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		_, err := executeKMSToolViaDispatch(t, registry, "secret_get_by_prefix", map[string]interface{}{})
+		assert.ErrorIs(t, err, ErrSecretPrefixRequired)
+	})
+
+	t.Run("ServiceError", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		upstream := errors.New("secrets backend down")
+		svc.secretGetByPrefixFunc = func(context.Context, string, bool, int, string) (interface{}, error) {
+			return nil, upstream
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		_, err := executeKMSToolViaDispatch(t, registry, "secret_get_by_prefix", map[string]interface{}{"prefix": "app/"})
+		assert.ErrorIs(t, err, upstream)
+	})
+}
+
 // =============================================================================
 // Tool registration
 // =============================================================================
@@ -1144,6 +1195,7 @@ func TestKMSLifecycleAndSecretToolsRegistered(t *testing.T) {
 		"secret_rotate",
 		"secret_rollback",
 		"secret_update_status",
+		"secret_get_by_prefix",
 	}
 	for _, name := range expected {
 		assert.True(t, registered[name], "tool %s must be registered", name)
