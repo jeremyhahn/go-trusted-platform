@@ -47,11 +47,16 @@ func webserviceModeDaemonConfig(t *testing.T) *daemon.Config {
 	return cfg
 }
 
-// refusingAuthorizer answers 403 on every privileged CA route, standing in
-// for the webservice admin gate the replay puts in front of them.
+// refusedByGateHeader marks a 403 written by refusingAuthorizer, so a test
+// can tell the webservice gate's refusal from the certificate gate's.
+const refusedByGateHeader = "X-Webservice-Gate"
+
+// refusingAuthorizer answers 403 on every privileged daemon route, standing
+// in for the webservice admin gate the replay puts in front of them.
 func refusingAuthorizer(string) func(http.Handler) http.Handler {
 	return func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set(refusedByGateHeader, "refused")
 			w.WriteHeader(http.StatusForbidden)
 		})
 	}
@@ -97,14 +102,18 @@ func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
 			VerifiedChains:   [][]*x509.Certificate{{leaf, bundle.CACert}},
 		}
 	}
+	// GET /version takes the webservice gate (#983): a certificate from the
+	// daemon's roots gets past the certificate gate and stops there, any
+	// other caller stops at the certificate gate.
 	tests := []struct {
-		name  string
-		state *tls.ConnectionState
-		want  int
+		name        string
+		state       *tls.ConnectionState
+		want        int
+		reachedGate bool
 	}{
-		{"client certificate from the daemon's client roots", verified(platform), http.StatusOK},
-		{"client certificate from another anchor", verified(callerOnly), http.StatusForbidden},
-		{"no client certificate", &tls.ConnectionState{}, http.StatusUnauthorized},
+		{"client certificate from the daemon's client roots", verified(platform), http.StatusForbidden, true},
+		{"client certificate from another anchor", verified(callerOnly), http.StatusForbidden, false},
+		{"no client certificate", &tls.ConnectionState{}, http.StatusUnauthorized, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,6 +122,7 @@ func TestDaemonRESTRoutes_WebserviceMountsDaemonGroups(t *testing.T) {
 			rec := httptest.NewRecorder()
 			root.ServeHTTP(rec, req)
 			assert.Equal(t, tt.want, rec.Code)
+			assert.Equal(t, tt.reachedGate, rec.Header().Get(refusedByGateHeader) != "", "reached the webservice gate")
 		})
 	}
 }

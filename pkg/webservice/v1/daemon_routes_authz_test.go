@@ -20,6 +20,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -310,24 +311,85 @@ func TestMountDaemonRESTRoutes_MethodEntryGuardsOnlyItsMethod(t *testing.T) {
 
 // Every method entry names a route the daemon's auth-factor table really
 // registers, so a renamed daemon route cannot silently drop its gate.
-func TestPrivilegedDaemonMethodRoutes_NameDaemonAuthFactorRoutes(t *testing.T) {
-	daemon := mux.NewRouter()
-	restapi.NewAuthFactorHandlers(nil, slog.Default()).RegisterRoutes(daemon)
+// gateCase is one caller sent to a gated daemon route: the status the gate
+// answers and how many times the daemon handler runs.
+type gateCase struct {
+	name   string
+	auth   jwt.TokenHandler
+	want   int
+	served int
+}
 
-	registered := map[string]bool{}
-	require.NoError(t, daemon.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-		template, err := route.GetPathTemplate()
-		require.NoError(t, err)
-		methods, err := route.GetMethods()
-		require.NoError(t, err)
-		for _, method := range methods {
-			registered[method+" "+template] = true
-		}
-		return nil
-	}))
+// TestRegisterRoutes_DaemonMethodEntriesTakeAdminAndScope sends every
+// per-method entry, behind the real webservice gate, a caller without a
+// session, a user holding the entry's scope, an admin without it and an
+// admin holding it. Only the last reaches the daemon handler (#983).
+func TestRegisterRoutes_DaemonMethodEntriesTakeAdminAndScope(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	session := func(role string, scopes ...string) jwt.TokenHandler {
+		return &scopedSessionAuth{sessionAuth: sessionAuth{roles: []string{role}, tenantID: "system"}, scopes: scopes}
+	}
 
 	require.NotEmpty(t, privilegedDaemonMethodRoutes)
-	for key := range privilegedDaemonMethodRoutes {
-		assert.Truef(t, registered[key], "privileged method entry %s is not a daemon auth-factor route", key)
+	for key, scope := range privilegedDaemonMethodRoutes {
+		t.Run(key, func(t *testing.T) {
+			tests := []gateCase{
+				{"no session", &anonymousAuth{}, http.StatusUnauthorized, 0},
+				{"user role holding the scope", session("user", scope), http.StatusForbidden, 0},
+				{"admin holding the scope", session(common.ROLE_ADMIN, scope), http.StatusOK, 1},
+			}
+			if scope != "" {
+				tests = append(tests, gateCase{"admin without the scope", session(common.ROLE_ADMIN, "other:scope"), http.StatusForbidden, 0})
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					code, served := serveMethodEntry(t, tt.auth, key, platform)
+					assert.Equal(t, tt.want, code)
+					assert.Equal(t, tt.served, served, "times the daemon handler ran")
+				})
+			}
+		})
 	}
+}
+
+// methodEntryDaemonRoute is a daemon that registers the one "METHOD template"
+// route key names, counting the requests its handler serves.
+type methodEntryDaemonRoute struct {
+	roots  *x509.CertPool
+	key    string
+	served int
+}
+
+func (d *methodEntryDaemonRoute) ClientCAs() *x509.CertPool { return d.roots }
+
+func (d *methodEntryDaemonRoute) MountRESTRoutes(api *mux.Router) error {
+	method, template, _ := strings.Cut(d.key, " ")
+	api.HandleFunc(strings.TrimPrefix(template, "/api/v1"), func(w http.ResponseWriter, _ *http.Request) {
+		d.served++
+		w.WriteHeader(http.StatusOK)
+	}).Methods(method)
+	return nil
+}
+
+// daemonPathVariable matches one gorilla/mux template variable, with or
+// without a pattern ({slot}, {profileID:[0-9]+}).
+var daemonPathVariable = regexp.MustCompile(`\{[^}]+\}`)
+
+// serveMethodEntry mounts the route key names behind the webservice's own
+// daemon-route gate and sends it one request from a verified client
+// certificate holding auth's session. It returns the status and how many
+// times the daemon handler ran. The route is mounted alone, so no
+// webservice route of the same path can answer for it.
+func serveMethodEntry(t *testing.T, auth jwt.TokenHandler, key string, platform *testutil.TestTLSBundle) (int, int) {
+	t.Helper()
+
+	v1Router := newGatedV1Router(t, &testHandlerRegistry{tokenHandler: auth})
+	daemon := &methodEntryDaemonRoute{roots: platform.CAPool, key: key}
+	root := mux.NewRouter()
+	api := root.PathPrefix("/api/v1").Subrouter()
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer()))
+
+	method, template, _ := strings.Cut(key, " ")
+	path := daemonPathVariable.ReplaceAllString(template, "1")
+	return serveWithTLS(root, method, path, verifiedClientState(t, platform)), daemon.served
 }

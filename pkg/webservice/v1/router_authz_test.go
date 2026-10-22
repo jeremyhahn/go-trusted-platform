@@ -298,6 +298,21 @@ func adminClaimFixture(t *testing.T, logger *logging.Logger, respWriter response
 func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router {
 	t.Helper()
 
+	v1Router := newGatedV1Router(t, registry)
+
+	// Both halves, as webserver_v1.go mounts them: the root carries the
+	// health probes the SDK's PlatformDaemon claims resolve to.
+	root := mux.NewRouter()
+	require.NoError(t, v1Router.RegisterRootRoutes(root))
+	v1Router.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+	return root
+}
+
+// newGatedV1Router builds the v1 Router over registry with every service
+// stubbed, before any route is registered.
+func newGatedV1Router(t *testing.T, registry *testHandlerRegistry) *Router {
+	t.Helper()
+
 	logger := testLogger()
 	respWriter := response.NewResponseWriter(logger, nil)
 	registry.responseWriter = respWriter
@@ -350,14 +365,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.adminClaim = adminClaimFixture(t, logger, respWriter)
 	registry.tenantID = "system"
 
-	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
-
-	// Both halves, as webserver_v1.go mounts them: the root carries the
-	// health probes the SDK's PlatformDaemon claims resolve to.
-	root := mux.NewRouter()
-	require.NoError(t, v1Router.RegisterRootRoutes(root))
-	v1Router.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
-	return root
+	v1Router, ok := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter).(*Router)
+	require.True(t, ok, "NewRouter must build a *Router")
+	return v1Router
 }
 
 // probe issues one credential-free request against a route template and

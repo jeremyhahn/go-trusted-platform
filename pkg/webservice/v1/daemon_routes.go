@@ -51,15 +51,207 @@ var privilegedDaemonRoutes = map[string]string{
 	"/api/v1/ca/sign-csr":                     restca.SignCSRScope,
 }
 
-// privilegedDaemonMethodRoutes is privilegedDaemonRoutes for a replayed
-// daemon route whose path template also serves a method any certificate
-// holder may call, so only the named method takes the gate. Keys are
-// "METHOD template". The webservice serves no twin for these, and no scope
-// names them, so they take the admin role alone.
+// The per-operation scopes the replayed daemon routes take, as the MCP and
+// gRPC catalogs name them for the same operations (pkg/api/mcp/authz.go,
+// pkg/api/mcp/bmc_tools.go).
+const (
+	bmcReadScope           = "bmc:read"
+	bmcWriteScope          = "bmc:write"
+	bmcPowerScope          = "bmc:power"
+	bmcMediaScope          = "bmc:media"
+	bmcAdminScope          = "bmc:admin"
+	platformReadScope      = "platform:read"
+	platformWriteScope     = "platform:write"
+	clusterReadScope       = "cluster:read"
+	clusterWriteScope      = "cluster:write"
+	ceremonyWriteScope     = "ceremony:write"
+	pivReadScope           = "piv:read"
+	pivWriteScope          = "piv:write"
+	luksReadScope          = "luks:read"
+	luksWriteScope         = "luks:write"
+	luksDeleteScope        = "luks:delete"
+	fido2ReadScope         = "fido2:read"
+	fido2WriteScope        = "fido2:write"
+	idevidReadScope        = "idevid:read"
+	idevidWriteScope       = "idevid:write"
+	idevidDeleteScope      = "idevid:delete"
+	provisioningReadScope  = "provisioning:read"
+	provisioningWriteScope = "provisioning:write"
+	deviceReadScope        = "device:read"
+	deviceWriteScope       = "device:write"
+	deviceDeleteScope      = "device:delete"
+	kmsReadScope           = "kms:read"
+	kmsWriteScope          = "kms:write"
+	kmsDeleteScope         = "kms:delete"
+	sdnReadScope           = "sdn:read"
+	sdnWriteScope          = "sdn:write"
+	sdnDeleteScope         = "sdn:delete"
+)
+
+// privilegedDaemonMethodRoutes is privilegedDaemonRoutes keyed by
+// "METHOD template", for replayed daemon routes whose methods on one path
+// template need different scopes, or of which one method stays open to any
+// certificate holder. Each value is the scope the operation takes on the
+// MCP and gRPC transports; an empty scope means the admin role alone.
 var privilegedDaemonMethodRoutes = map[string]string{
 	// Changing a tenant's MFA policy is a tenant-administration act; reading
-	// it stays on the certificate gate, as the login flow does.
+	// it stays on the certificate gate, as the login flow does. No scope
+	// names it.
 	http.MethodPut + " /api/v1/tenants/{id}/security/mfa-policy": "",
+
+	// Daemon core. The health report names every component with its failure
+	// message, the reconnaissance the platform:read scope gates on gRPC.
+	http.MethodGet + " /api/v1/health":                      platformReadScope,
+	http.MethodGet + " /api/v1/version":                     platformReadScope,
+	http.MethodGet + " /api/v1/protocols":                   platformReadScope,
+	http.MethodGet + " /api/v1/services":                    platformReadScope,
+	http.MethodGet + " /api/v1/services/{service}":          platformReadScope,
+	http.MethodPost + " /api/v1/services/{service}/start":   platformWriteScope,
+	http.MethodPost + " /api/v1/services/{service}/stop":    platformWriteScope,
+	http.MethodPost + " /api/v1/services/{service}/restart": platformWriteScope,
+
+	// BMC. A power action may switch the host off, so the route takes the
+	// power scope the off, reset and cycle tools take.
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/power":                        bmcPowerScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/power":                         bmcReadScope,
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/boot-device":                  bmcWriteScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/boot-device":                   bmcReadScope,
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/virtual-media":                bmcMediaScope,
+	http.MethodDelete + " /api/v1/bmc/{profileID:[0-9]+}/virtual-media":              bmcMediaScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/virtual-media":                 bmcReadScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/sensors":                       bmcReadScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/system-info":                   bmcReadScope,
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/provision":                    bmcAdminScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/provision":                     bmcReadScope,
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/enroll":                       bmcAdminScope,
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/cert/restore":                 bmcAdminScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/cert":                          bmcReadScope,
+	http.MethodPut + " /api/v1/bmc/{profileID:[0-9]+}/cert":                          bmcAdminScope,
+	http.MethodGet + " /api/v1/bmc/{profileID:[0-9]+}/users":                         bmcReadScope,
+	http.MethodPost + " /api/v1/bmc/{profileID:[0-9]+}/users":                        bmcAdminScope,
+	http.MethodDelete + " /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}":        bmcAdminScope,
+	http.MethodPut + " /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password":  bmcAdminScope,
+	http.MethodPut + " /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege": bmcAdminScope,
+
+	// Cluster membership.
+	http.MethodGet + " /api/v1/cluster/status":     clusterReadScope,
+	http.MethodGet + " /api/v1/cluster/nodes":      clusterReadScope,
+	http.MethodPost + " /api/v1/cluster/bootstrap": clusterWriteScope,
+	http.MethodPost + " /api/v1/cluster/join":      clusterWriteScope,
+	http.MethodPost + " /api/v1/cluster/leave":     clusterWriteScope,
+
+	// Ceremony. GET /ceremony/status stays on the certificate gate: the
+	// custodians follow the ceremony with it, as gRPC serves Status pre-auth.
+	http.MethodPost + " /api/v1/ceremony/init":                 ceremonyWriteScope,
+	http.MethodPost + " /api/v1/ceremony/claim-cert/begin":     ceremonyWriteScope,
+	http.MethodPost + " /api/v1/ceremony/claim-cert/complete":  ceremonyWriteScope,
+	http.MethodPost + " /api/v1/ceremony/claim-share/begin":    ceremonyWriteScope,
+	http.MethodPost + " /api/v1/ceremony/claim-share/complete": ceremonyWriteScope,
+	http.MethodPost + " /api/v1/ceremony/sign-csr":             ceremonyWriteScope,
+
+	// PIV.
+	http.MethodGet + " /api/v1/piv/devices":                 pivReadScope,
+	http.MethodGet + " /api/v1/piv/devices/{device}/slots":  pivReadScope,
+	http.MethodGet + " /api/v1/piv/slots/{slot}":            pivReadScope,
+	http.MethodPost + " /api/v1/piv/slots/{slot}/attest":    pivReadScope,
+	http.MethodPost + " /api/v1/piv/slots/{slot}/generate":  pivWriteScope,
+	http.MethodPost + " /api/v1/piv/slots/{slot}/import":    pivWriteScope,
+	http.MethodPost + " /api/v1/piv/slots/{slot}/sign":      pivWriteScope,
+	http.MethodPost + " /api/v1/piv/devices/{device}/reset": pivWriteScope,
+
+	// LUKS.
+	http.MethodGet + " /api/v1/luks/status":             luksReadScope,
+	http.MethodGet + " /api/v1/luks/info":               luksReadScope,
+	http.MethodGet + " /api/v1/luks/slots":              luksReadScope,
+	http.MethodPost + " /api/v1/luks/keys/test-unlock":  luksReadScope,
+	http.MethodPost + " /api/v1/luks/enroll/passphrase": luksWriteScope,
+	http.MethodPost + " /api/v1/luks/enroll/fido2":      luksWriteScope,
+	http.MethodPost + " /api/v1/luks/enroll/tpm":        luksWriteScope,
+	http.MethodPost + " /api/v1/luks/enroll/recovery":   luksWriteScope,
+	http.MethodPost + " /api/v1/luks/passphrase/change": luksWriteScope,
+	http.MethodPost + " /api/v1/luks/keys/remove":       luksDeleteScope,
+
+	// FIDO2.
+	http.MethodGet + " /api/v1/fido2/devices":          fido2ReadScope,
+	http.MethodGet + " /api/v1/fido2/devices/wait":     fido2ReadScope,
+	http.MethodGet + " /api/v1/fido2/devices/{device}": fido2ReadScope,
+	http.MethodPost + " /api/v1/fido2/register":        fido2WriteScope,
+	http.MethodPost + " /api/v1/fido2/authenticate":    fido2WriteScope,
+
+	// TPM IAK and IDevID, and the LDevID issued from them.
+	http.MethodGet + " /api/v1/tpm/device/attributes": idevidReadScope,
+	http.MethodGet + " /api/v1/tpm/iak":               idevidReadScope,
+	http.MethodGet + " /api/v1/tpm/iak/exists":        idevidReadScope,
+	http.MethodGet + " /api/v1/tpm/iak/cert":          idevidReadScope,
+	http.MethodPost + " /api/v1/tpm/iak/generate":     idevidWriteScope,
+	http.MethodPost + " /api/v1/tpm/iak/csr":          idevidWriteScope,
+	http.MethodPost + " /api/v1/tpm/iak/install":      idevidWriteScope,
+	http.MethodDelete + " /api/v1/tpm/iak":            idevidDeleteScope,
+	http.MethodDelete + " /api/v1/tpm/iak/cert":       idevidDeleteScope,
+	http.MethodGet + " /api/v1/tpm/idevid":            idevidReadScope,
+	http.MethodGet + " /api/v1/tpm/idevid/exists":     idevidReadScope,
+	http.MethodGet + " /api/v1/tpm/idevid/cert":       idevidReadScope,
+	http.MethodPost + " /api/v1/tpm/idevid/generate":  idevidWriteScope,
+	http.MethodPost + " /api/v1/tpm/idevid/csr":       idevidWriteScope,
+	http.MethodPost + " /api/v1/tpm/idevid/install":   idevidWriteScope,
+	http.MethodDelete + " /api/v1/tpm/idevid":         idevidDeleteScope,
+	http.MethodDelete + " /api/v1/tpm/idevid/cert":    idevidDeleteScope,
+	http.MethodPost + " /api/v1/idevid/ldevid":        idevidWriteScope,
+
+	// Config delivery, operator half. The machine half (config, nonce, sign,
+	// poll) stays on the certificate gate: the machine authenticates inside
+	// the request (nonce, EAB HMAC, EK binding), as gRPC serves it pre-auth.
+	http.MethodGet + " /api/v1/provisioning/sessions":                      provisioningReadScope,
+	http.MethodGet + " /api/v1/provisioning/sessions/{sessionID}":          provisioningReadScope,
+	http.MethodPost + " /api/v1/provisioning/sessions/{sessionID}/fulfill": provisioningWriteScope,
+
+	// Devices and device profiles.
+	http.MethodPost + " /api/v1/devices/profiles":        deviceWriteScope,
+	http.MethodGet + " /api/v1/devices/profiles":         deviceReadScope,
+	http.MethodGet + " /api/v1/devices/profiles/{id}":    deviceReadScope,
+	http.MethodPut + " /api/v1/devices/profiles/{id}":    deviceWriteScope,
+	http.MethodDelete + " /api/v1/devices/profiles/{id}": deviceDeleteScope,
+	http.MethodGet + " /api/v1/devices/serial/{serial}":  deviceReadScope,
+	http.MethodPost + " /api/v1/devices":                 deviceWriteScope,
+	http.MethodGet + " /api/v1/devices":                  deviceReadScope,
+	http.MethodGet + " /api/v1/devices/{id}":             deviceReadScope,
+	http.MethodPut + " /api/v1/devices/{id}":             deviceWriteScope,
+	http.MethodDelete + " /api/v1/devices/{id}":          deviceDeleteScope,
+	http.MethodPost + " /api/v1/devices/{id}/activate":   deviceWriteScope,
+	http.MethodGet + " /api/v1/devices/{id}/state":       deviceReadScope,
+	http.MethodPost + " /api/v1/devices/{id}/attest":     deviceWriteScope,
+
+	// KMS.
+	http.MethodPost + " /api/v1/kms/keys":              kmsWriteScope,
+	http.MethodGet + " /api/v1/kms/keys":               kmsReadScope,
+	http.MethodPost + " /api/v1/kms/keys/import":       kmsWriteScope,
+	http.MethodGet + " /api/v1/kms/keys/{id}":          kmsReadScope,
+	http.MethodDelete + " /api/v1/kms/keys/{id}":       kmsDeleteScope,
+	http.MethodPost + " /api/v1/kms/keys/{id}/rotate":  kmsWriteScope,
+	http.MethodGet + " /api/v1/kms/keys/{id}/export":   kmsReadScope,
+	http.MethodGet + " /api/v1/kms/keys/{id}/versions": kmsReadScope,
+	http.MethodPost + " /api/v1/kms/encrypt":           kmsWriteScope,
+	http.MethodPost + " /api/v1/kms/decrypt":           kmsReadScope,
+	http.MethodPost + " /api/v1/kms/batch-encrypt":     kmsWriteScope,
+	http.MethodPost + " /api/v1/kms/batch-decrypt":     kmsReadScope,
+	http.MethodPost + " /api/v1/kms/rewrap":            kmsWriteScope,
+	http.MethodPost + " /api/v1/kms/sign":              kmsWriteScope,
+	http.MethodPost + " /api/v1/kms/verify":            kmsReadScope,
+	http.MethodPost + " /api/v1/kms/hash":              kmsReadScope,
+	http.MethodPost + " /api/v1/kms/hmac":              kmsWriteScope,
+	http.MethodPost + " /api/v1/kms/random":            kmsReadScope,
+	http.MethodGet + " /api/v1/kms/status":             kmsReadScope,
+
+	// SDN overlay.
+	http.MethodGet + " /api/v1/sdn/overlay/status":          sdnReadScope,
+	http.MethodGet + " /api/v1/sdn/overlay/vteps":           sdnReadScope,
+	http.MethodGet + " /api/v1/sdn/overlay/vteps/{node_id}": sdnReadScope,
+	http.MethodGet + " /api/v1/sdn/overlay/vnis":            sdnReadScope,
+	http.MethodPost + " /api/v1/sdn/overlay/vnis":           sdnWriteScope,
+	http.MethodDelete + " /api/v1/sdn/overlay/vnis/{vni}":   sdnDeleteScope,
+	http.MethodGet + " /api/v1/sdn/overlay/tunnels":         sdnReadScope,
+	http.MethodGet + " /api/v1/sdn/overlay/macs":            sdnReadScope,
+	http.MethodDelete + " /api/v1/sdn/overlay/macs/{mac}":   sdnWriteScope,
 }
 
 // DaemonRESTRoutes is the daemon's REST route table: the route groups only
@@ -109,12 +301,12 @@ func (ErrDaemonRouteNoClientRoots) Error() string {
 }
 
 // ErrDaemonRouteNoAuthorizer is returned by MountDaemonRESTRoutes when no
-// authorizer is given: the privileged CA routes would sit behind the
+// authorizer is given: the privileged daemon routes would sit behind the
 // client-certificate gate alone, so no route is mounted.
 type ErrDaemonRouteNoAuthorizer struct{}
 
 func (ErrDaemonRouteNoAuthorizer) Error() string {
-	return "daemon routes not mounted: no authorizer for the privileged CA routes"
+	return "daemon routes not mounted: no authorizer for the privileged daemon routes"
 }
 
 // MountDaemonRESTRoutes mounts the daemon-owned route groups on api behind
@@ -128,8 +320,10 @@ func (ErrDaemonRouteNoAuthorizer) Error() string {
 // The platform anchor also issues users' client certificates, so the
 // certificate alone does not make the caller an operator here as it does
 // on the daemon listener, whose client pool admits operator certificates
-// only. Each privileged CA route therefore also takes authorize: the
-// authorization its webservice twin applies.
+// only. Each privileged route therefore also takes authorize: the CA routes
+// the authorization their webservice twins apply, every other state-changing
+// or inventory route the admin gate and the scope its MCP and gRPC
+// operation takes (privilegedDaemonMethodRoutes).
 func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer response.HttpWriter, authorize DaemonRouteAuthorizer) error {
 	roots := routes.ClientCAs()
 	if roots == nil {

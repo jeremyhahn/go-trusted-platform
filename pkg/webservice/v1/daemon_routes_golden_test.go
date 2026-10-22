@@ -14,6 +14,7 @@
 package v1_test
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
@@ -48,12 +50,50 @@ var pathVariable = regexp.MustCompile(`\{[^}]+\}`)
 // only takes their method values, and every request below stops at the gate.
 type goldenBMC struct{ bmcwebsvc.RestHandler }
 
+// goldenDevices, goldenProfiles, goldenKMS and goldenOverlay are services
+// whose methods are never called, for the same reason.
+type (
+	goldenDevices  struct{ restapi.DeviceServiceInterface }
+	goldenProfiles struct {
+		restapi.ProfileServiceInterface
+	}
+	goldenKMS     struct{ restapi.KMSService }
+	goldenOverlay struct {
+		restapi.OverlayServiceInterface
+	}
+)
+
+// goldenConfigDelivery answers every config-delivery route with 204. The
+// machine half of the group stays on the certificate gate, so a request
+// from a verified certificate reaches these handlers.
+type goldenConfigDelivery struct{}
+
+func (goldenConfigDelivery) GetNonce(w http.ResponseWriter, _ *http.Request) { noContent(w) }
+func (goldenConfigDelivery) FetchConfig(w http.ResponseWriter, _ *http.Request) {
+	noContent(w)
+}
+func (goldenConfigDelivery) SignDigest(w http.ResponseWriter, _ *http.Request) { noContent(w) }
+func (goldenConfigDelivery) ListSessions(w http.ResponseWriter, _ *http.Request) {
+	noContent(w)
+}
+func (goldenConfigDelivery) GetSession(w http.ResponseWriter, _ *http.Request) { noContent(w) }
+func (goldenConfigDelivery) PollSession(w http.ResponseWriter, _ *http.Request) {
+	noContent(w)
+}
+func (goldenConfigDelivery) FulfillSession(w http.ResponseWriter, _ *http.Request) {
+	noContent(w)
+}
+
+func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }
+
 // ownedRoutes adapts the daemon REST server's owned groups to the
 // v1.DaemonRESTRoutes table the webservice router mounts.
-type ownedRoutes struct{ server *daemon.RESTServer }
+type ownedRoutes struct {
+	server *daemon.RESTServer
+	roots  *x509.CertPool
+}
 
-// ClientCAs is an empty pool: these tests send no client certificate.
-func (o ownedRoutes) ClientCAs() *x509.CertPool { return x509.NewCertPool() }
+func (o ownedRoutes) ClientCAs() *x509.CertPool { return o.roots }
 
 func (o ownedRoutes) MountRESTRoutes(api *mux.Router) error {
 	return o.server.MountOwnedRoutes(api)
@@ -62,7 +102,16 @@ func (o ownedRoutes) MountRESTRoutes(api *mux.Router) error {
 // daemonRoutesOnWebservice builds the daemon REST server with every
 // daemon-owned group registered through its setters and mounts the groups
 // the way the webservice router does: v1.MountDaemonRESTRoutes on /api/v1.
+// Its client pool is empty, so no request gets past the certificate gate,
+// and every privileged route passes the webservice gate.
 func daemonRoutesOnWebservice(t *testing.T) *mux.Router {
+	t.Helper()
+	return mountDaemonRoutes(t, x509.NewCertPool(), passThrough)
+}
+
+// mountDaemonRoutes is daemonRoutesOnWebservice over the client roots and
+// the webservice gate given.
+func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRouteAuthorizer) *mux.Router {
 	t.Helper()
 
 	config := daemon.DefaultConfig()
@@ -79,11 +128,15 @@ func daemonRoutesOnWebservice(t *testing.T) *mux.Router {
 	server.SetLUKSService(daemon.NewLUKSService(logger, nil, nil))
 	server.SetFIDO2Service(daemon.NewFIDO2Service(logger, nil))
 	server.SetClusterService(platformv1.UnimplementedClusterServiceServer{})
+	server.SetDeviceHandlers(goldenDevices{}, goldenProfiles{}, platformv1.UnimplementedDeviceServiceServer{})
+	server.SetKMSHandlers(goldenKMS{})
+	server.SetOverlayHandlers(goldenOverlay{})
+	server.SetConfigDeliveryHandler(goldenConfigDelivery{})
 
 	root := mux.NewRouter()
 	api := root.PathPrefix("/api/v1").Subrouter()
 	writer := response.NewResponseWriter(logger, nil)
-	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server}, writer, passThrough))
+	require.NoError(t, v1.MountDaemonRESTRoutes(api, ownedRoutes{server: server, roots: roots}, writer, authorize))
 	return root
 }
 
@@ -133,6 +186,102 @@ func TestMountDaemonRESTRoutes_EveryDaemonRouteRequiresClientCert(t *testing.T) 
 		rec := httptest.NewRecorder()
 		root.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
 		assert.Equal(t, http.StatusUnauthorized, rec.Code, "%s %s without a client certificate", method, path)
+	}
+}
+
+// publicDaemonEndpoints are the replayed daemon endpoints that keep the
+// client-certificate gate alone (docs/daemon/architecture.md): the ceremony
+// status the custodians follow, and the machine half of config delivery,
+// which authenticates inside the request. Every other endpoint takes the
+// webservice admin gate and its scope (#983).
+var publicDaemonEndpoints = []string{
+	"GET /api/v1/ceremony/status",
+	"GET /api/v1/provisioning/config/nonce",
+	"GET /api/v1/provisioning/sessions/{sessionID}/poll",
+	"POST /api/v1/provisioning/config",
+	"POST /api/v1/provisioning/sign",
+}
+
+// refusedScopeHeader is the response header refuseWithScope names the
+// guarding scope in.
+const refusedScopeHeader = "X-Refused-Scope"
+
+// refuseWithScope is a webservice gate that refuses every privileged route
+// with 403 and names the scope the route was guarded with.
+func refuseWithScope(scope string) func(http.Handler) http.Handler {
+	return func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set(refusedScopeHeader, scope)
+			w.WriteHeader(http.StatusForbidden)
+		})
+	}
+}
+
+// TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic sends every
+// replayed daemon endpoint a request from a verified client certificate.
+// An endpoint in the per-method gate table must stop at the webservice gate
+// with its scope; any other must be one of the public endpoints and reach
+// its handler. A daemon route added without a gate entry fails here.
+func TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	root := mountDaemonRoutes(t, platform.CAPool, refuseWithScope)
+	state := verifiedState(t, platform)
+
+	endpoints := endpointRoutes(t, root)
+	for _, route := range endpoints {
+		t.Run(route, func(t *testing.T) {
+			method, template, _ := strings.Cut(route, " ")
+			req := httptest.NewRequest(method, pathVariable.ReplaceAllString(template, "1"), nil)
+			req.TLS = state
+			rec := httptest.NewRecorder()
+			root.ServeHTTP(rec, req)
+
+			scope, gated := v1.PrivilegedDaemonMethodRoutes[route]
+			if !gated {
+				assert.Contains(t, publicDaemonEndpoints, route, "the endpoint has no gate entry and is not public")
+				assert.NotEqual(t, http.StatusForbidden, rec.Code, "a public endpoint reached the webservice gate")
+				assert.Empty(t, rec.Header().Values(refusedScopeHeader), "a public endpoint reached the webservice gate")
+				return
+			}
+			assert.Equal(t, http.StatusForbidden, rec.Code, "the endpoint passed the webservice gate")
+			assert.Equal(t, []string{scope}, rec.Header().Values(refusedScopeHeader), "the endpoint took the wrong scope")
+		})
+	}
+
+	for _, route := range publicDaemonEndpoints {
+		assert.Contains(t, endpoints, route, "public endpoint %s is not a daemon route", route)
+	}
+}
+
+// TestPrivilegedDaemonMethodRoutes_NameDaemonRoutes keeps the gate table
+// free of entries that guard nothing: each one is a replayed daemon
+// endpoint or a daemon auth-factor route.
+func TestPrivilegedDaemonMethodRoutes_NameDaemonRoutes(t *testing.T) {
+	registered := map[string]bool{}
+	for _, route := range endpointRoutes(t, daemonRoutesOnWebservice(t)) {
+		registered[route] = true
+	}
+	authFactors := mux.NewRouter()
+	restapi.NewAuthFactorHandlers(nil, slog.Default()).RegisterRoutes(authFactors)
+	for _, route := range endpointRoutes(t, authFactors) {
+		registered[route] = true
+	}
+
+	require.NotEmpty(t, v1.PrivilegedDaemonMethodRoutes)
+	for key := range v1.PrivilegedDaemonMethodRoutes {
+		assert.Truef(t, registered[key], "gate entry %s names no daemon route", key)
+	}
+}
+
+// verifiedState is the TLS state of a connection whose client certificate
+// chained to bundle's CA.
+func verifiedState(t *testing.T, bundle *testutil.TestTLSBundle) *tls.ConnectionState {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
+	require.NoError(t, err)
+	return &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{leaf},
+		VerifiedChains:   [][]*x509.Certificate{{leaf, bundle.CACert}},
 	}
 }
 

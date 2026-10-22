@@ -103,10 +103,12 @@ admin trust pool `applyDaemonTLSIdentity` provisions from the platform anchor
 admit, and `MountDaemonRESTRoutes` refuses to mount its routes
 (`ErrDaemonRouteNoClientRoots`).
 A certificate that chains to those roots is not, by itself, authority to change
-the CA: the platform anchor also issues user certificates. The privileged daemon
-CA routes therefore also take the authorization of their webservice twin, through
-the webservice's own admin gate and scope check (`privilegedDaemonRoutes`,
-`Router.daemonRouteAuthorizer`). A caller without a session is refused with 401,
+the CA or the node: the platform anchor also issues user certificates. The
+privileged daemon CA routes therefore also take the authorization of their
+webservice twin, and every other state-changing or inventory route takes the
+admin role and the scope its MCP and gRPC operation takes, through the
+webservice's own admin gate and scope check (`privilegedDaemonRoutes`,
+`privilegedDaemonMethodRoutes`, `Router.daemonRouteAuthorizer`). A caller without a session is refused with 401,
 and a caller without the admin role or the scope is refused with 403, before the
 daemon handler runs:
 
@@ -121,22 +123,64 @@ daemon handler runs:
 | `PUT /tenants/{id}/security/mfa-policy` | admin (no scope names it) |
 | `GET /tenants/{id}/security/mfa-policy` | client certificate only (the login flow reads it) |
 | `POST /users/{id}/factors/mtls/issue-cert` | client certificate, then the handler: the caller is the user or an admin, and the CSR is bound to the user (below) |
+| `GET /health`, `/version`, `/protocols`, `/services`, `/services/{service}` | admin + `platform:read` |
+| `POST /services/{service}/start`, `/stop`, `/restart` | admin + `platform:write` |
+| `GET /bmc/{profileID}/power`, `/boot-device`, `/virtual-media`, `/sensors`, `/system-info`, `/provision`, `/cert`, `/users` | admin + `bmc:read` |
+| `POST /bmc/{profileID}/power` | admin + `bmc:power` |
+| `POST /bmc/{profileID}/boot-device` | admin + `bmc:write` |
+| `POST`/`DELETE /bmc/{profileID}/virtual-media` | admin + `bmc:media` |
+| `POST /bmc/{profileID}/provision`, `/enroll`, `/cert/restore`, `/users`; `PUT /bmc/{profileID}/cert`; `DELETE /bmc/{profileID}/users/{slot}`; `PUT .../users/{slot}/password`, `/privilege` | admin + `bmc:admin` |
+| `GET /cluster/status`, `/cluster/nodes` | admin + `cluster:read` |
+| `POST /cluster/bootstrap`, `/join`, `/leave` | admin + `cluster:write` |
+| `POST /ceremony/init`, `/claim-cert/begin`, `/claim-cert/complete`, `/claim-share/begin`, `/claim-share/complete`, `/sign-csr` | admin + `ceremony:write` |
+| `GET /ceremony/status` | client certificate only (custodians follow the ceremony; gRPC serves it pre-auth) |
+| `GET /piv/devices`, `/piv/devices/{device}/slots`, `/piv/slots/{slot}`; `POST /piv/slots/{slot}/attest` | admin + `piv:read` |
+| `POST /piv/slots/{slot}/generate`, `/import`, `/sign`; `POST /piv/devices/{device}/reset` | admin + `piv:write` |
+| `GET /luks/status`, `/info`, `/slots`; `POST /luks/keys/test-unlock` | admin + `luks:read` |
+| `POST /luks/enroll/passphrase`, `/fido2`, `/tpm`, `/recovery`; `POST /luks/passphrase/change` | admin + `luks:write` |
+| `POST /luks/keys/remove` | admin + `luks:delete` |
+| `GET /fido2/devices`, `/fido2/devices/wait`, `/fido2/devices/{device}` | admin + `fido2:read` |
+| `POST /fido2/register`, `/authenticate` | admin + `fido2:write` |
+| `GET /tpm/device/attributes`, `/tpm/iak`, `/tpm/iak/exists`, `/tpm/iak/cert`, `/tpm/idevid`, `/tpm/idevid/exists`, `/tpm/idevid/cert` | admin + `idevid:read` |
+| `POST /tpm/iak/generate`, `/csr`, `/install`; `POST /tpm/idevid/generate`, `/csr`, `/install`; `POST /idevid/ldevid` | admin + `idevid:write` |
+| `DELETE /tpm/iak`, `/tpm/iak/cert`, `/tpm/idevid`, `/tpm/idevid/cert` | admin + `idevid:delete` |
+| `GET /provisioning/sessions`, `/provisioning/sessions/{sessionID}` | admin + `provisioning:read` |
+| `POST /provisioning/sessions/{sessionID}/fulfill` | admin + `provisioning:write` |
+| `POST /provisioning/config`, `/provisioning/sign`; `GET /provisioning/config/nonce`, `/provisioning/sessions/{sessionID}/poll` | client certificate only (the machine authenticates in the request: nonce, EAB HMAC, EK binding) |
+| `GET /devices`, `/devices/{id}`, `/devices/{id}/state`, `/devices/serial/{serial}`, `/devices/profiles`, `/devices/profiles/{id}` | admin + `device:read` |
+| `POST /devices`, `/devices/profiles`, `/devices/{id}/activate`, `/devices/{id}/attest`; `PUT /devices/{id}`, `/devices/profiles/{id}` | admin + `device:write` |
+| `DELETE /devices/{id}`, `/devices/profiles/{id}` | admin + `device:delete` |
+| `GET /kms/keys`, `/kms/keys/{id}`, `/kms/keys/{id}/export`, `/kms/keys/{id}/versions`, `/kms/status`; `POST /kms/decrypt`, `/batch-decrypt`, `/verify`, `/hash`, `/random` | admin + `kms:read` |
+| `POST /kms/keys`, `/kms/keys/import`, `/kms/keys/{id}/rotate`, `/kms/encrypt`, `/batch-encrypt`, `/rewrap`, `/sign`, `/hmac` | admin + `kms:write` |
+| `DELETE /kms/keys/{id}` | admin + `kms:delete` |
+| `GET /sdn/overlay/status`, `/vteps`, `/vteps/{node_id}`, `/vnis`, `/tunnels`, `/macs` | admin + `sdn:read` |
+| `POST /sdn/overlay/vnis`; `DELETE /sdn/overlay/macs/{mac}` | admin + `sdn:write` |
+| `DELETE /sdn/overlay/vnis/{vni}` | admin + `sdn:delete` |
 
-With the webservice CA configured, its own handlers shadow every one of these
+The scope of each non-CA route is the scope its MCP and gRPC operation takes
+(`pkg/api/mcp/authz.go`). None of these daemon handlers checks authorization
+itself, so the replay gate is the only check on the webservice.
+With the webservice CA configured, its own handlers shadow every CA route
 except `POST .../{serial}/revoke`, which only the daemon serves.
 `TestPrivilegedDaemonRoutes_CoverTheDaemonCATable` fails if the daemon gains a CA
-route that is in neither set. A template that also serves an open method is
-gated per method (`privilegedDaemonMethodRoutes`, keyed `METHOD template`), and
-`TestPrivilegedDaemonMethodRoutes_NameDaemonAuthFactorRoutes` fails if an entry
-stops naming a daemon auth-factor route. The CA signs an issue-cert CSR's
-subject and SANs as given, so the handler refuses, with 403
-`ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which carries an OU
-the caller's own certificate does not (or `admin`), or which carries any SAN.
-Without an authorizer, `MountDaemonRESTRoutes`
+route that is in neither set. Every other gated route is gated per method
+(`privilegedDaemonMethodRoutes`, keyed `METHOD template`).
+`TestPrivilegedDaemonMethodRoutes_NameDaemonRoutes` fails if an entry stops
+naming a replayed daemon route or an auth-factor route, and
+`TestRegisterRoutes_DaemonMethodEntriesTakeAdminAndScope` sends each entry a
+request without a session (401), from a non-admin holding the scope (403), from
+an admin without the scope (403) and from an admin holding it (served). The CA
+signs an issue-cert CSR's subject and SANs as given, so the handler refuses,
+with 403 `ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which
+carries an OU the caller's own certificate does not (or `admin`), or which
+carries any SAN. Without an authorizer, `MountDaemonRESTRoutes`
 refuses to mount (`ErrDaemonRouteNoAuthorizer`).
 `pkg/webservice/v1/testdata/daemon_routes.golden` lists every route the
 webservice mounts for these groups, and `daemon_routes_golden_test.go` sends each
-endpoint a request without a client certificate and expects that 401. The daemon's `/api/v1/status` stays off
+endpoint a request without a client certificate and expects that 401.
+`TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic` sends each
+endpoint a verified client certificate and fails unless the endpoint reaches the
+gate with its table scope or is one of the client-certificate-only routes above. The daemon's `/api/v1/status` stays off
 that set because the webservice serves its own. Only groups registered inside
 `daemon.New` are mounted: the webservice is built after it, and a group
 registered later would not be replayed.
