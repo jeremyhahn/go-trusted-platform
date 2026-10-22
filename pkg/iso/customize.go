@@ -3053,11 +3053,20 @@ set -e
 
 INSTALL_LOG="/tmp/autoinstall-debug.log"
 log() {
-    echo "[autoinstall] $1"
+    echo "[autoinstall] $1" 2>/dev/null || true
     echo "[autoinstall] $1" >> "$INSTALL_LOG" 2>/dev/null || true
     echo "[autoinstall] $1" > /dev/kmsg 2>/dev/null || true
     sync
 }
+
+# The console run-autoinstall.sh hands this script can refuse writes: the
+# ISO test install's guest refused the first one, and set -e ended the
+# install right after its script-start checkpoint. log() keeps every line in
+# $INSTALL_LOG and the kernel log, so a console that refuses writes gets
+# none: a failed console write must never stop the install.
+if ! echo "[autoinstall] autoinstall.sh started" 2>/dev/null; then
+    exec >/dev/null 2>&1
+fi
 
 # Log kernel cmdline immediately for debugging
 echo "=== KERNEL CMDLINE ===" >> "$INSTALL_LOG"
@@ -3068,7 +3077,7 @@ echo "=== ISO BUILD TIMESTAMP ===" >> "$INSTALL_LOG"
 date >> "$INSTALL_LOG" 2>/dev/null
 
 error() {
-    echo "[autoinstall] ERROR: $1" >&2
+    echo "[autoinstall] ERROR: $1" >&2 || true
     echo "[autoinstall] ERROR: $1" > /dev/kmsg 2>/dev/null || true
     sync
     exit 1
@@ -3508,7 +3517,12 @@ upload_checkpoint() {
 # failure as "successful install" — every checkpoint says success because
 # the original install error was overwritten before the trap reached the
 # upload step.
-trap 'TRAP_RC=$?; upload_checkpoint exit-trap; upload_install_log_with_code "$TRAP_RC"; echo "[autoinstall] script exiting with status $TRAP_RC" > /dev/kmsg 2>/dev/null' EXIT INT TERM
+#
+# set -e is live inside the trap, and a command that fails there replaces
+# the script's exit status: an install that succeeded would exit non-zero,
+# and a failed one would exit with the wrong code. Every command in the trap
+# therefore ends in || true, so the script exits with $TRAP_RC.
+trap 'TRAP_RC=$?; upload_checkpoint exit-trap || true; upload_install_log_with_code "$TRAP_RC" || true; echo "[autoinstall] script exiting with status $TRAP_RC" > /dev/kmsg 2>/dev/null || true' EXIT INT TERM
 
 # CHECKPOINT 1: script started. If this never lands on the bootstrap host,
 # the autoinstall.sh isn't running at all (init/inittab problem).
