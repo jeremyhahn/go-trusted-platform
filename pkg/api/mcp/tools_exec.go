@@ -1417,6 +1417,9 @@ func (r *ToolRegistry) executeContainerCreate(ctx context.Context, args map[stri
 	if resources := args["resources"]; resources != nil {
 		config["resources"] = resources
 	}
+	if getBool(args, "attest_on_create") {
+		config["attest_on_create"] = true
+	}
 
 	result, err := r.service.ContainerCreate(ctx, name, image, config)
 	if err != nil {

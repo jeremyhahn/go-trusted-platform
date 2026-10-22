@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2529,20 +2530,28 @@ func (m *MCPServiceProvider) ContainerCreate(ctx context.Context, name string, i
 		return nil, ErrContainerInvalidParameter{Parameter: "image", Reason: "container image is required"}
 	}
 
-	// Build device profile from request config
-	profile := &deviceentities.DeviceProfile{
-		Name:  name,
-		Model: "container:image=" + image,
+	attestOnCreate, _ := config["attest_on_create"].(bool)
+	creation, err := createContainer(ctx, m.computeOrchestrator, name, image, attestOnCreate)
+	if errors.As(err, new(ErrContainerAttestNotSupported)) {
+		return nil, err
 	}
-
-	// Create the instance using orchestrator
-	instance, err := m.computeOrchestrator.Create(ctx, profile)
 	if err != nil {
 		m.logger.Error("failed to create container", "name", name, "error", err)
 		return nil, ErrContainerOperationFailed{Operation: "create", Cause: err}
 	}
+	if creation.AttestErr != nil {
+		m.logger.Error("container created but attestation failed", "container_id", creation.Instance.ID, "error", creation.AttestErr)
+	}
 
-	return m.instanceToContainerResponse(instance), nil
+	// The tool answers the container's fields with the create status beside
+	// them, as CreateContainerResponse.status carries it on gRPC.
+	response := m.instanceToContainerResponse(creation.Instance)
+	createStatus := creation.status()
+	response["status"] = map[string]interface{}{
+		"success": createStatus.GetSuccess(),
+		"message": createStatus.GetMessage(),
+	}
+	return response, nil
 }
 
 // ContainerStart starts a container.

@@ -267,3 +267,29 @@ func TestPrintContainerDetails_MinimalConfig(t *testing.T) {
 	// Should not panic
 	printContainerDetails(printer, container)
 }
+
+// A daemon that answers no container must yield a typed error, not a panic in
+// the table output (the MCP create path once answered a nil container).
+func TestPrintCreatedContainer(t *testing.T) {
+	created := &computesvc.Container{
+		ID:     "test-container-id",
+		State:  computesvc.ContainerStateCreated,
+		Config: &computesvc.ContainerConfig{Name: "web", Image: "nginx"},
+	}
+	printer := cli.NewPrinter(cli.OutputFormatTable, true)
+
+	err := printCreatedContainer(printer, cli.OutputFormatTable, "web", nil)
+	var missing ErrContainerMissingFromResponse
+	if !errors.As(err, &missing) || missing.Operation != "create" || missing.ID != "web" {
+		t.Fatalf("nil container: got %v, want ErrContainerMissingFromResponse{create, web}", err)
+	}
+
+	if err := printCreatedContainer(printer, cli.OutputFormatTable, "web", created); err != nil {
+		t.Fatalf("table output: unexpected error: %v", err)
+	}
+
+	err = printCreatedContainer(printer, cli.OutputFormat("xml"), "web", created)
+	if !errors.As(err, new(cli.ErrInvalidOutputFormat)) {
+		t.Fatalf("unknown format: got %v, want cli.ErrInvalidOutputFormat", err)
+	}
+}

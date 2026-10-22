@@ -202,6 +202,11 @@ func (r *ToolRegistry) registerContainerTools() {
 					},
 					"description": "Resource limits",
 				},
+				"attest_on_create": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Attest the container with the TPM once it is created; a failed attestation answers status.success false",
+					"default":     false,
+				},
 			},
 			"required": []string{"name", "image"},
 		},

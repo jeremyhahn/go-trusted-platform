@@ -209,9 +209,17 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		return ErrContainerOperationFailed{Operation: "create", ID: opts.name, Err: err}
 	}
 
-	printer := base.Printer()
+	return printCreatedContainer(base.Printer(), flags.OutputFormat, opts.name, container)
+}
 
-	switch flags.OutputFormat {
+// printCreatedContainer prints the container the daemon created. A create
+// answered without a container is refused, not printed.
+func printCreatedContainer(printer *cli.Printer, format cli.OutputFormat, name string, container *computesvc.Container) error {
+	if container == nil {
+		return ErrContainerMissingFromResponse{Operation: "create", ID: name}
+	}
+
+	switch format {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(container)
 
@@ -222,7 +230,7 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		return nil
 
 	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
+		return cli.ErrInvalidOutputFormat{Format: string(format)}
 	}
 }
 
