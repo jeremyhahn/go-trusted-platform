@@ -40,11 +40,7 @@ type RESTAdapter struct {
 func NewRESTAdapter() *RESTAdapter {
 	return &RESTAdapter{
 		endpoint: GetRESTEndpoint(),
-		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
-			},
-		},
+		client:   helpers.NewAdminHTTPClient(0),
 	}
 }
 

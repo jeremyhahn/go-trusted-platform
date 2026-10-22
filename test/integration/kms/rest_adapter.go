@@ -62,7 +62,7 @@ func NewRESTAdapter() *RESTAdapter {
 func NewRESTAdapterWithConfig(baseURL string, timeout time.Duration) *RESTAdapter {
 	return &RESTAdapter{
 		baseURL:    baseURL,
-		httpClient: helpers.NewHTTPClient(timeout),
+		httpClient: helpers.NewAdminHTTPClient(timeout),
 	}
 }
 
@@ -82,7 +82,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	}
 
 	// The REST listener is mTLS: present the runner's client certificate.
-	r.httpClient = helpers.NewHTTPClient(30 * time.Second)
+	r.httpClient = helpers.NewAdminHTTPClient(30 * time.Second)
 
 	// Verify connectivity by checking backend status
 	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)

@@ -44,7 +44,7 @@ func (r *RESTAdapter) Name() string { return "REST" }
 // Setup constructs the HTTPS client targeting the harness REST port.
 func (r *RESTAdapter) Setup(ctx context.Context, h *Harness) error {
 	r.baseURL = GetServiceEndpoints(h.Config()).REST
-	r.client = helpers.NewHTTPClient(15 * time.Second)
+	r.client = helpers.NewAdminHTTPClient(15 * time.Second)
 	return nil
 }
 

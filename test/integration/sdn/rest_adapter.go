@@ -103,13 +103,8 @@ func NewRESTAdapter() *RESTAdapter {
 	}
 
 	return &RESTAdapter{
-		baseURL: endpoint,
-		client: &http.Client{
-			Timeout: 60 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
-			},
-		},
+		baseURL:    endpoint,
+		client:     helpers.NewAdminHTTPClient(60 * time.Second),
 		bridgeMTUs: make(map[string]int32),
 	}
 }

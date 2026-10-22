@@ -97,7 +97,7 @@ func NewOverlayRESTAdapter() *OverlayRESTAdapter {
 
 	return &OverlayRESTAdapter{
 		baseURL: endpoint,
-		client:  helpers.NewHTTPClient(60 * time.Second),
+		client:  helpers.NewAdminHTTPClient(60 * time.Second),
 	}
 }
 
