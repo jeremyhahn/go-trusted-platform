@@ -1215,7 +1215,10 @@ func TestBoost_PbUsagesToSDK_AllMappings(t *testing.T) {
 		pb.KeyUsage_KEY_USAGE_WRAP_KEY,
 	}
 
-	result := pbUsagesToSDK(usages)
+	result, err := pbUsagesToSDK(usages)
+	if err != nil {
+		t.Fatalf("usages refused: %v", err)
+	}
 	if len(result) != 5 {
 		t.Fatalf("expected 5 usages, got %d", len(result))
 	}
@@ -1234,7 +1237,10 @@ func TestBoost_PbUsagesToSDK_AllMappings(t *testing.T) {
 }
 
 func TestBoost_PbUsagesToSDK_EmptySlice(t *testing.T) {
-	result := pbUsagesToSDK(nil)
+	result, err := pbUsagesToSDK(nil)
+	if err != nil {
+		t.Fatalf("empty usages refused: %v", err)
+	}
 	if len(result) != 0 {
 		t.Fatalf("expected empty slice, got %d items", len(result))
 	}

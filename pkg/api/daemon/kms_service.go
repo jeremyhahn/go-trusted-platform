@@ -206,10 +206,14 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 
 	// The generate request's name is the key ID (docs/kms/api.md §2).
 	spec := req.GetKeySpec()
+	usage, err := pbUsagesToSDK(spec.GetUsage())
+	if err != nil {
+		return nil, err
+	}
 	sdkReq := &kms.GenerateKeyRequest{
 		Name:               req.GetName(),
 		Algorithm:          pbAlgorithmToSDK(spec.GetAlgorithm()),
-		Usage:              pbUsagesToSDK(spec.GetUsage()),
+		Usage:              usage,
 		Exportable:         spec.GetExportable(),
 		DeletionProtection: spec.GetDeletionProtection(),
 	}
@@ -429,7 +433,11 @@ func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyReque
 	}
 	if req.GetKeySpec() != nil {
 		sdkReq.Algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
-		sdkReq.Usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
+		usage, err := pbUsagesToSDK(req.GetKeySpec().GetUsage())
+		if err != nil {
+			return nil, err
+		}
+		sdkReq.Usage = usage
 	}
 
 	resp, err := a.client.ImportKey(ctx, sdkReq)
@@ -1257,29 +1265,40 @@ func sdkAlgorithmToPb(alg kms.KeyAlgorithm) pb.KeyAlgorithm {
 }
 
 // pbUsagesToSDK converts protobuf KeyUsage slice to SDK KeyUsage slice.
-func pbUsagesToSDK(usages []pb.KeyUsage) []kms.KeyUsage {
-	result := make([]kms.KeyUsage, 0, len(usages))
+func pbUsagesToSDK(usages []pb.KeyUsage) ([]kms.KeyUsage, error) {
+	return convertKeyUsages(usages, pbKeyUsageToSDK)
+}
+
+// pbKeyUsageToSDK maps each go-quicbaas wire usage to the SDK usages it
+// grants. The SDK KeyUsage has no MAC usage, so an HMAC key is generated
+// with sign and verify, as the REST surface does. It has no derive usage
+// either (go-quicbaas #1778): DERIVE_KEY is absent and therefore refused,
+// not dropped. The proto zero value carries no usage and grants nothing.
+var pbKeyUsageToSDK = map[pb.KeyUsage][]kms.KeyUsage{
+	pb.KeyUsage_KEY_USAGE_UNSPECIFIED:  nil,
+	pb.KeyUsage_KEY_USAGE_ENCRYPT:      {kms.KeyUsageEncrypt},
+	pb.KeyUsage_KEY_USAGE_DECRYPT:      {kms.KeyUsageDecrypt},
+	pb.KeyUsage_KEY_USAGE_SIGN:         {kms.KeyUsageSign},
+	pb.KeyUsage_KEY_USAGE_VERIFY:       {kms.KeyUsageVerify},
+	pb.KeyUsage_KEY_USAGE_WRAP_KEY:     {kms.KeyUsageWrap},
+	pb.KeyUsage_KEY_USAGE_GENERATE_MAC: {kms.KeyUsageSign},
+	pb.KeyUsage_KEY_USAGE_VERIFY_MAC:   {kms.KeyUsageVerify},
+}
+
+// convertKeyUsages converts wire key usages through a usage table. A usage
+// the table does not carry is refused with ErrKMSUnsupportedValue
+// (InvalidArgument), so a key is never created without a usage its caller
+// asked for.
+func convertKeyUsages[In ~int32, Key ~int32, Out any](usages []In, table map[Key][]Out) ([]Out, error) {
+	result := make([]Out, 0, len(usages))
 	for _, u := range usages {
-		switch u {
-		case pb.KeyUsage_KEY_USAGE_ENCRYPT:
-			result = append(result, kms.KeyUsageEncrypt)
-		case pb.KeyUsage_KEY_USAGE_DECRYPT:
-			result = append(result, kms.KeyUsageDecrypt)
-		case pb.KeyUsage_KEY_USAGE_SIGN:
-			result = append(result, kms.KeyUsageSign)
-		case pb.KeyUsage_KEY_USAGE_VERIFY:
-			result = append(result, kms.KeyUsageVerify)
-		case pb.KeyUsage_KEY_USAGE_WRAP_KEY:
-			result = append(result, kms.KeyUsageWrap)
-		// The SDK KeyUsage has no MAC usage; an HMAC key is generated with
-		// sign and verify, as the REST surface does.
-		case pb.KeyUsage_KEY_USAGE_GENERATE_MAC:
-			result = append(result, kms.KeyUsageSign)
-		case pb.KeyUsage_KEY_USAGE_VERIFY_MAC:
-			result = append(result, kms.KeyUsageVerify)
+		granted, ok := table[Key(u)]
+		if !ok {
+			return nil, ErrKMSUnsupportedValue{Kind: "key usage", Value: int32(u)}
 		}
+		result = append(result, granted...)
 	}
-	return result
+	return result, nil
 }
 
 // pbHashAlgorithmToSDK converts a protobuf HashAlgorithm to SDK HashAlgorithm.

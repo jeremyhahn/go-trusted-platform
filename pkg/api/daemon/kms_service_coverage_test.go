@@ -1409,11 +1409,20 @@ func TestPbUsagesToSDK(t *testing.T) {
 			[]pb.KeyUsage{pb.KeyUsage_KEY_USAGE_GENERATE_MAC, pb.KeyUsage_KEY_USAGE_VERIFY_MAC},
 			[]quicbaas.KeyUsage{quicbaas.KeyUsageSign, quicbaas.KeyUsageVerify},
 		},
+		{
+			// The proto zero value carries no usage and grants nothing.
+			"unspecified grants nothing",
+			[]pb.KeyUsage{pb.KeyUsage_KEY_USAGE_UNSPECIFIED, pb.KeyUsage_KEY_USAGE_SIGN},
+			[]quicbaas.KeyUsage{quicbaas.KeyUsageSign},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := pbUsagesToSDK(tc.input)
+			result, err := pbUsagesToSDK(tc.input)
+			if err != nil {
+				t.Fatalf("usages refused: %v", err)
+			}
 			if len(result) != len(tc.expected) {
 				t.Errorf("expected length %d, got %d", len(tc.expected), len(result))
 				return
@@ -1424,6 +1433,40 @@ func TestPbUsagesToSDK(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPbUsagesToSDKRefusesUnmappedUsages pins the refusal of a usage the
+// SDK cannot express. DERIVE_KEY used to be dropped silently, which
+// generated a key without the usage the caller asked for; it is refused
+// as InvalidArgument now, as the REST surface refuses an unknown usage.
+func TestPbUsagesToSDKRefusesUnmappedUsages(t *testing.T) {
+	t.Parallel()
+
+	for _, usage := range []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_DERIVE_KEY, pb.KeyUsage(99)} {
+		_, err := pbUsagesToSDK([]pb.KeyUsage{pb.KeyUsage_KEY_USAGE_ENCRYPT, usage})
+		var unsupported ErrKMSUnsupportedValue
+		if !errors.As(err, &unsupported) {
+			t.Fatalf("usage %v: expected ErrKMSUnsupportedValue, got %T: %v", usage, err, err)
+		}
+		if code := status.Code(err); code != codes.InvalidArgument {
+			t.Fatalf("usage %v: gRPC code %v, want InvalidArgument", usage, code)
+		}
+	}
+}
+
+// TestKMSServerAdapterGenerateKeyRefusesDerive checks the refusal reaches
+// the gRPC caller before the SDK is called.
+func TestKMSServerAdapterGenerateKeyRefusesDerive(t *testing.T) {
+	t.Parallel()
+
+	adapter := &KMSServerAdapter{client: &platformMockKMSClient{}}
+	_, err := adapter.GenerateKey(context.Background(), &pb.GenerateKeyRequest{
+		Name:    "derive-key",
+		KeySpec: &pb.KeySpec{Usage: []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_DERIVE_KEY}},
+	})
+	if code := status.Code(err); code != codes.InvalidArgument {
+		t.Fatalf("gRPC code %v, want InvalidArgument (err %v)", code, err)
 	}
 }
 

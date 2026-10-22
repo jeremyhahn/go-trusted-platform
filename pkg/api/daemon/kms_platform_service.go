@@ -1156,26 +1156,20 @@ func sdkAlgorithmToPlatformKMS(alg kms.KeyAlgorithm) int32 {
 // platformKMSUsagesToSDK converts platform.v1 KeyUsage values to SDK KeyUsage
 // values. Usages with no SDK equivalent return a typed error.
 func platformKMSUsagesToSDK(usages []int32) ([]kms.KeyUsage, error) {
-	result := make([]kms.KeyUsage, 0, len(usages))
-	for _, u := range usages {
-		switch platformv1.KeyUsage(u) {
-		case platformv1.KeyUsage_KEY_USAGE_ENCRYPT:
-			result = append(result, kms.KeyUsageEncrypt)
-		case platformv1.KeyUsage_KEY_USAGE_DECRYPT:
-			result = append(result, kms.KeyUsageDecrypt)
-		case platformv1.KeyUsage_KEY_USAGE_SIGN:
-			result = append(result, kms.KeyUsageSign)
-		case platformv1.KeyUsage_KEY_USAGE_VERIFY:
-			result = append(result, kms.KeyUsageVerify)
-		case platformv1.KeyUsage_KEY_USAGE_WRAP:
-			result = append(result, kms.KeyUsageWrap)
-		case platformv1.KeyUsage_KEY_USAGE_UNWRAP:
-			result = append(result, kms.KeyUsageUnwrap)
-		default:
-			return nil, ErrKMSUnsupportedValue{Kind: "key usage", Value: u}
-		}
-	}
-	return result, nil
+	return convertKeyUsages(usages, platformKMSUsageToSDK)
+}
+
+// platformKMSUsageToSDK maps each platform wire usage to the SDK usages it
+// grants. HMAC maps to sign and verify, as pbKeyUsageToSDK maps the MAC
+// usages; DERIVE and UNSPECIFIED are absent and therefore refused.
+var platformKMSUsageToSDK = map[platformv1.KeyUsage][]kms.KeyUsage{
+	platformv1.KeyUsage_KEY_USAGE_ENCRYPT: {kms.KeyUsageEncrypt},
+	platformv1.KeyUsage_KEY_USAGE_DECRYPT: {kms.KeyUsageDecrypt},
+	platformv1.KeyUsage_KEY_USAGE_SIGN:    {kms.KeyUsageSign},
+	platformv1.KeyUsage_KEY_USAGE_VERIFY:  {kms.KeyUsageVerify},
+	platformv1.KeyUsage_KEY_USAGE_WRAP:    {kms.KeyUsageWrap},
+	platformv1.KeyUsage_KEY_USAGE_UNWRAP:  {kms.KeyUsageUnwrap},
+	platformv1.KeyUsage_KEY_USAGE_HMAC:    {kms.KeyUsageSign, kms.KeyUsageVerify},
 }
 
 // sdkUsagesToPlatformKMS converts SDK KeyUsage values to platform.v1 KeyUsage

@@ -1633,6 +1633,66 @@ func TestPlatformKMSEnumConversions(t *testing.T) {
 	})
 }
 
+// TestPlatformKMSUsagesToSDK pins the platform wire usages to the SDK
+// usages they grant. The SDK has no MAC usage, so an HMAC key is generated
+// with sign and verify on this path as on gRPC, QUIC, Unix and REST; it has
+// no derive usage either, so DERIVE is refused rather than dropped.
+func TestPlatformKMSUsagesToSDK(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hmac maps to sign and verify", func(t *testing.T) {
+		t.Parallel()
+		got, err := platformKMSUsagesToSDK([]int32{int32(platformv1.KeyUsage_KEY_USAGE_HMAC)})
+		if err != nil {
+			t.Fatalf("HMAC usage refused: %v", err)
+		}
+		want := []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify}
+		if !slices.Equal(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("supported usages", func(t *testing.T) {
+		t.Parallel()
+		got, err := platformKMSUsagesToSDK([]int32{
+			int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+			int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+			int32(platformv1.KeyUsage_KEY_USAGE_SIGN),
+			int32(platformv1.KeyUsage_KEY_USAGE_VERIFY),
+			int32(platformv1.KeyUsage_KEY_USAGE_WRAP),
+			int32(platformv1.KeyUsage_KEY_USAGE_UNWRAP),
+		})
+		if err != nil {
+			t.Fatalf("supported usages refused: %v", err)
+		}
+		want := []kms.KeyUsage{
+			kms.KeyUsageEncrypt, kms.KeyUsageDecrypt, kms.KeyUsageSign,
+			kms.KeyUsageVerify, kms.KeyUsageWrap, kms.KeyUsageUnwrap,
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("derive and unknown usages are refused as InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		for _, usage := range []int32{
+			int32(platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED),
+			int32(platformv1.KeyUsage_KEY_USAGE_DERIVE),
+			99,
+		} {
+			_, err := platformKMSUsagesToSDK([]int32{usage})
+			var unsupported ErrKMSUnsupportedValue
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("usage %d: expected ErrKMSUnsupportedValue, got %T: %v", usage, err, err)
+			}
+			if code := status.Code(err); code != codes.InvalidArgument {
+				t.Fatalf("usage %d: gRPC code %v, want InvalidArgument", usage, code)
+			}
+		}
+	})
+}
+
 func TestPaginateKMSOffset(t *testing.T) {
 	t.Parallel()
 

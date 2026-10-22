@@ -380,7 +380,10 @@ func TestCoverageFinal2PbUsagesToSDK(t *testing.T) {
 		pb.KeyUsage_KEY_USAGE_UNSPECIFIED, // should be skipped
 	}
 
-	result := pbUsagesToSDK(usages)
+	result, err := pbUsagesToSDK(usages)
+	if err != nil {
+		t.Fatalf("usages refused: %v", err)
+	}
 	if len(result) != 5 {
 		t.Errorf("expected 5 SDK usages, got %d", len(result))
 	}

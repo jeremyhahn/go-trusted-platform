@@ -123,7 +123,10 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 		return nil, status.Error(codes.InvalidArgument, "policy is required")
 	}
 
-	policy := pbKeyPolicyToSDK(req.GetPolicy())
+	policy, err := pbKeyPolicyToSDK(req.GetPolicy())
+	if err != nil {
+		return nil, err
+	}
 	policy.KeyID = req.GetKeyId()
 
 	if err := a.client.SetKeyPolicy(ctx, &kms.SetKeyPolicyRequest{
@@ -363,15 +366,17 @@ func sdkKeyMetadataToPb(meta *kms.KeyMetadataResponse) *pb.KeyMetadata {
 }
 
 // pbKeyPolicyToSDK converts a protobuf KeyPolicy to the SDK KeyPolicy.
-// A nil input yields a nil output.
-func pbKeyPolicyToSDK(p *pb.KeyPolicy) *kms.KeyPolicy {
-	if p == nil {
-		return nil
+// An allowed operation the SDK has no usage for is refused with
+// ErrKMSUnsupportedValue. The caller rejects a nil policy first.
+func pbKeyPolicyToSDK(p *pb.KeyPolicy) (*kms.KeyPolicy, error) {
+	allowed, err := pbUsagesToSDK(p.GetAllowedOperations())
+	if err != nil {
+		return nil, err
 	}
 	policy := &kms.KeyPolicy{
 		KeyID:             p.GetKeyId(),
 		Version:           int(p.GetVersion()),
-		AllowedOperations: pbUsagesToSDK(p.GetAllowedOperations()),
+		AllowedOperations: allowed,
 		AllowedPrincipals: p.GetAllowedPrincipals(),
 		DeniedPrincipals:  p.GetDeniedPrincipals(),
 		RotationRequired:  p.GetRotationRequired(),
@@ -381,7 +386,7 @@ func pbKeyPolicyToSDK(p *pb.KeyPolicy) *kms.KeyPolicy {
 	if p.GetExpiresAt() > 0 {
 		policy.ExpiresAt = time.Unix(p.GetExpiresAt(), 0)
 	}
-	return policy
+	return policy, nil
 }
 
 // sdkKeyPolicyToPb converts an SDK KeyPolicy to the protobuf KeyPolicy.

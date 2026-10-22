@@ -647,24 +647,20 @@ func pbKeyAlgorithmToPlatformKMS(alg pb.KeyAlgorithm) int32 {
 // KeyUsage values. Usages the QuicBaaS pb cannot express (UNWRAP, DERIVE,
 // HMAC) return a typed error.
 func platformKMSUsagesToPb(usages []int32) ([]pb.KeyUsage, error) {
-	result := make([]pb.KeyUsage, 0, len(usages))
-	for _, u := range usages {
-		switch platformv1.KeyUsage(u) {
-		case platformv1.KeyUsage_KEY_USAGE_ENCRYPT:
-			result = append(result, pb.KeyUsage_KEY_USAGE_ENCRYPT)
-		case platformv1.KeyUsage_KEY_USAGE_DECRYPT:
-			result = append(result, pb.KeyUsage_KEY_USAGE_DECRYPT)
-		case platformv1.KeyUsage_KEY_USAGE_SIGN:
-			result = append(result, pb.KeyUsage_KEY_USAGE_SIGN)
-		case platformv1.KeyUsage_KEY_USAGE_VERIFY:
-			result = append(result, pb.KeyUsage_KEY_USAGE_VERIFY)
-		case platformv1.KeyUsage_KEY_USAGE_WRAP:
-			result = append(result, pb.KeyUsage_KEY_USAGE_WRAP_KEY)
-		default:
-			return nil, ErrKMSUnsupportedValue{Kind: "key usage", Value: u}
-		}
-	}
-	return result, nil
+	return convertKeyUsages(usages, platformKMSUsageToPb)
+}
+
+// platformKMSUsageToPb maps each platform wire usage to the go-quicbaas
+// wire usages QUIC forwards to the KMS adapter. HMAC maps to the MAC
+// usages, which pbKeyUsageToSDK grants as sign and verify; UNWRAP, DERIVE
+// and UNSPECIFIED are absent and therefore refused.
+var platformKMSUsageToPb = map[platformv1.KeyUsage][]pb.KeyUsage{
+	platformv1.KeyUsage_KEY_USAGE_ENCRYPT: {pb.KeyUsage_KEY_USAGE_ENCRYPT},
+	platformv1.KeyUsage_KEY_USAGE_DECRYPT: {pb.KeyUsage_KEY_USAGE_DECRYPT},
+	platformv1.KeyUsage_KEY_USAGE_SIGN:    {pb.KeyUsage_KEY_USAGE_SIGN},
+	platformv1.KeyUsage_KEY_USAGE_VERIFY:  {pb.KeyUsage_KEY_USAGE_VERIFY},
+	platformv1.KeyUsage_KEY_USAGE_WRAP:    {pb.KeyUsage_KEY_USAGE_WRAP_KEY},
+	platformv1.KeyUsage_KEY_USAGE_HMAC:    {pb.KeyUsage_KEY_USAGE_GENERATE_MAC, pb.KeyUsage_KEY_USAGE_VERIFY_MAC},
 }
 
 // pbKeyUsagesToPlatformKMS converts QuicBaaS pb KeyUsage values to platform.v1
