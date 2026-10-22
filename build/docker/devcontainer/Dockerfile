@@ -111,10 +111,17 @@ ENV GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly \
     GOMODCACHE=/gomodcache \
     GOCACHE=/gocache
+# APT_REFRESH keys the apt layer to the Debian archive: the Makefile passes the
+# UTC day, so a cached layer is reused for at most that day and the upgrade
+# picks up Debian's fixes before `trivy image` scans for them. Changing it
+# rebuilds this layer and, through FROM base, every apt layer of toolchain and
+# integration; tools and modules do not depend on it.
+ARG APT_REFRESH
 # cpio: pkg/diskimage/netboot repacks its installer initramfs with it.
 # libssl-dev: go-tpm-tools' simulator compiles the reference TPM against
 # OpenSSL (#149).
 RUN set -eu; \
+    echo "==> apt refresh key: ${APT_REFRESH:-none}"; \
     apt-get update; \
     apt-get upgrade -y; \
     apt-get install -y --no-install-recommends \
