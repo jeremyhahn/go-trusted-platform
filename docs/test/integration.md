@@ -601,7 +601,10 @@ Its suppressions are `build/docker/devcontainer/trivyignore-image.yaml`, not
 the root `.trivyignore`: each entry is scoped by path to one package copy and
 carries its reason and an `expired_at` date, after which the finding fails the
 gate again. Today it holds only advisories in the dependencies npm itself
-bundles, which no Node or npm release fixes yet.
+bundles, which no Node or npm release fixes yet. A Debian package finding
+that the mirror has already fixed is not suppressed: bump the dated
+`APT_REFRESH` build argument in the `base` stage, which rebuilds the cached apt
+layer so its `apt-get upgrade` takes the fix.
 
 A fixed Debian package is never suppressed; the image picks it up instead. The
 `base` stage's `apt-get upgrade` layer reads the `APT_REFRESH` build argument,
