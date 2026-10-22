@@ -47,7 +47,7 @@ type provisioningServer struct {
 	URL      string
 }
 
-func createProvisioningClient(t *testing.T, env *testEnvironment) *provisioning.Client {
+func createProvisioningClient(t *testing.T, env *testEnvironment, device *testDevice) *provisioning.Client {
 	t.Helper()
 
 	// Create CA cert pool
@@ -58,8 +58,8 @@ func createProvisioningClient(t *testing.T, env *testEnvironment) *provisioning.
 
 	config := &provisioning.ClientConfig{
 		ServerURL:   server.URL,
-		Certificate: env.deviceCertificate,
-		PrivateKey:  env.devicePrivateKey,
+		Certificate: device.certificate,
+		PrivateKey:  device.privateKey,
 		CACertPool:  caCertPool,
 		Timeout:     30 * time.Second,
 	}
