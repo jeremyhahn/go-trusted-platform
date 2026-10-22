@@ -101,3 +101,38 @@ func TestRequireCLIRefusalFailsOnTheWrongRefusal(t *testing.T) {
 	RequireCLIRefusal(success, "CLI", nil, ErrCLINoFlag{})
 	assert.True(t, success.failed, "a CLI success where a refusal is expected fails the leaf")
 }
+
+func TestErrCLINoCommandGroupMatchesByType(t *testing.T) {
+	err := ErrCLINoCommandGroup{Group: "dns", Operation: "CreateZone", Issue: "#954"}
+
+	require.ErrorIs(t, err, ErrCLINoCommandGroup{})
+	assert.False(t, errors.Is(err, ErrCLINoFlag{}), "a missing group is not a missing flag")
+	assert.False(t, errors.Is(err, ErrCLIUpstreamGap{}), "a missing group is not an SDK gap")
+	assert.Equal(t, "platformctl has no dns command group, so CreateZone has no CLI (#954)", err.Error())
+}
+
+const platformctlHelp = `platformctl drives platformd.
+
+Usage:
+  platformctl [command]
+
+Available Commands:
+  ca          Certificate authority operations
+  dnsx        Not the dns group
+  tenant      Tenant management
+
+Flags:
+  -h, --help   help for platformctl
+      --dns    a flag, not a command
+`
+
+func TestCLIHasCommandGroupFindsAListedGroup(t *testing.T) {
+	assert.True(t, CLIHasCommandGroup(platformctlHelp, "tenant"))
+	assert.True(t, CLIHasCommandGroup(platformctlHelp, "ca"))
+}
+
+func TestCLIHasCommandGroupRejectsAbsentGroups(t *testing.T) {
+	assert.False(t, CLIHasCommandGroup(platformctlHelp, "dns"), "a prefix or a flag is not the group")
+	assert.False(t, CLIHasCommandGroup("", "dns"), "empty help lists nothing")
+	assert.False(t, CLIHasCommandGroup("Usage:\n  dns\n", "dns"), "only Available Commands counts")
+}
