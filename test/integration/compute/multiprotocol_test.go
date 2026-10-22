@@ -141,16 +141,7 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	}
 	vmID := createResult.VMID
 
-	t.Cleanup(func() {
-		ctx, cancel := cleanupContext()
-		defer cancel()
-		if _, stopErr := adapter.StopVM(ctx, StopVMOptions{VMID: vmID, Force: true}); stopErr != nil {
-			t.Logf("Cleanup: failed to stop VM %s: %v", vmID, stopErr)
-		}
-		if _, deleteErr := adapter.DeleteVM(ctx, DeleteVMOptions{VMID: vmID, DeleteDisks: true}); deleteErr != nil {
-			t.Logf("Cleanup: failed to delete VM %s: %v", vmID, deleteErr)
-		}
-	})
+	t.Cleanup(func() { removeVM(t, adapter, vmID) })
 
 	if _, err := adapter.StartVM(ctx, StartVMOptions{VMID: vmID}); err != nil {
 		t.Fatalf("StartVM failed: %v", err)
@@ -868,16 +859,7 @@ func testVMSuspendResumeReboot(t *testing.T, ctx context.Context, adapter Comput
 	}
 	vmID := createResult.VMID
 
-	t.Cleanup(func() {
-		ctx, cancel := cleanupContext()
-		defer cancel()
-		if _, stopErr := fixture.StopVM(ctx, StopVMOptions{VMID: vmID, Force: true}); stopErr != nil {
-			t.Logf("Cleanup: failed to stop VM %s: %v", vmID, stopErr)
-		}
-		if _, deleteErr := fixture.DeleteVM(ctx, DeleteVMOptions{VMID: vmID, DeleteDisks: true}); deleteErr != nil {
-			t.Logf("Cleanup: failed to delete VM %s: %v", vmID, deleteErr)
-		}
-	})
+	t.Cleanup(func() { removeVM(t, fixture, vmID) })
 
 	if _, err := fixture.StartVM(ctx, StartVMOptions{VMID: vmID}); err != nil {
 		t.Fatalf("fixture StartVM failed: %v", err)
@@ -942,4 +924,24 @@ const cleanupTimeout = 30 * time.Second
 // left behind.
 func cleanupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), cleanupTimeout)
+}
+
+// removeVM stops and deletes a VM a case created, in whatever state the case
+// left it. A forced stop of a VM that is already down, such as one a failed
+// reboot left stopped after its stop half, answers the transport's
+// wrong-state class: the VM is stopped, so that is not a cleanup failure and
+// the delete goes ahead.
+func removeVM(t *testing.T, adapter ComputeCommands, vmID string) {
+	t.Helper()
+	ctx, cancel := cleanupContext()
+	defer cancel()
+	if _, err := adapter.StopVM(ctx, StopVMOptions{VMID: vmID, Force: true}); err != nil {
+		isWrongState, ok := wrongStateClasses[adapter.Name()]
+		if !ok || !isWrongState(err) {
+			t.Logf("Cleanup: failed to stop VM %s: %v", vmID, err)
+		}
+	}
+	if _, err := adapter.DeleteVM(ctx, DeleteVMOptions{VMID: vmID, DeleteDisks: true}); err != nil {
+		t.Logf("Cleanup: failed to delete VM %s: %v", vmID, err)
+	}
 }
