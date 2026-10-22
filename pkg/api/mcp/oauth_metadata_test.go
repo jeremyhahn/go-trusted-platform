@@ -324,6 +324,7 @@ func TestOAuthMetadataHandler_getSupportedScopes_Issue315(t *testing.T) {
 		"invitation:read", "invitation:write", "invitation:delete",
 		"kms:read", "kms:write", "kms:delete",
 		"ntp:read", "ntp:write",
+		"orchestrator:read", "orchestrator:write",
 		"proxy:read", "proxy:write", "proxy:delete",
 		// the IAM tools backed by the gRPC IAM service (#304)
 		"iam:read", "iam:write", "iam:delete",

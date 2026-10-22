@@ -184,11 +184,14 @@ type MCPServiceProvider struct {
 	gatewayIPAMTools
 	// overlayTools serves the overlay_* tools (#709).
 	overlayTools
-	ntpService    platformv1.NTPServiceServer
-	vpnService    platformv1.VPNServiceServer
-	tenantService platformv1.TenantServiceServer
-	logger        *slog.Logger
-	idevidService *IDevIDGRPCService
+	ntpService platformv1.NTPServiceServer
+	// orchestratorService answers the orchestrator_* tools; it is the same
+	// OrchestratorGRPCService instance the other transports use.
+	orchestratorService platformv1.OrchestratorServiceServer
+	vpnService          platformv1.VPNServiceServer
+	tenantService       platformv1.TenantServiceServer
+	logger              *slog.Logger
+	idevidService       *IDevIDGRPCService
 	// appServices serves the cache_*, scheduler_* and messaging_* tools.
 	appServices mcp.AppServiceServers
 }

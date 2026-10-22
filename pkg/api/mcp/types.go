@@ -30,6 +30,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // AuthErrorType categorizes authorization errors.
@@ -779,6 +780,20 @@ type ServiceProvider interface {
 	VPNPosturePolicySet(ctx context.Context, tenantID, name, module string) (interface{}, error)
 	VPNPosturePolicyDelete(ctx context.Context, tenantID, name string) (interface{}, error)
 	VPNPosturePolicyList(ctx context.Context, tenantID string) (interface{}, error)
+
+	// Orchestrator (go-quicbaas agent fleet) operations. Each takes the
+	// platform.v1 request its OrchestratorService RPC takes and answers
+	// what that RPC answers, the same response message and error class.
+	OrchestratorHealth(ctx context.Context) (interface{}, error)
+	OrchestratorListAgents(ctx context.Context, req *platformv1.ListOrchestratorAgentsRequest) (interface{}, error)
+	OrchestratorGetAgent(ctx context.Context, req *platformv1.GetOrchestratorAgentRequest) (interface{}, error)
+	OrchestratorDisableAgent(ctx context.Context, req *platformv1.DisableOrchestratorAgentRequest) (interface{}, error)
+	OrchestratorEnableAgent(ctx context.Context, req *platformv1.EnableOrchestratorAgentRequest) (interface{}, error)
+	OrchestratorListSessions(ctx context.Context, req *platformv1.ListOrchestratorSessionsRequest) (interface{}, error)
+	OrchestratorCloseSession(ctx context.Context, req *platformv1.CloseOrchestratorSessionRequest) (interface{}, error)
+	OrchestratorListJobs(ctx context.Context, req *platformv1.ListOrchestratorJobsRequest) (interface{}, error)
+	OrchestratorGetJob(ctx context.Context, req *platformv1.GetOrchestratorJobRequest) (interface{}, error)
+	OrchestratorCancelJob(ctx context.Context, req *platformv1.CancelOrchestratorJobRequest) (interface{}, error)
 
 	// Health operations
 	Health(ctx context.Context) (interface{}, error)

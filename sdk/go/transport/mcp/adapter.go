@@ -447,6 +447,18 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.NTPService/ListSources": "ntp_sources",
 	"/platform.v1.NTPService/Step":        "ntp_step",
 
+	// Orchestrator (go-quicbaas agent fleet)
+	"/platform.v1.OrchestratorService/Health":       "orchestrator_health",
+	"/platform.v1.OrchestratorService/ListAgents":   "orchestrator_agent_list",
+	"/platform.v1.OrchestratorService/GetAgent":     "orchestrator_agent_get",
+	"/platform.v1.OrchestratorService/DisableAgent": "orchestrator_agent_disable",
+	"/platform.v1.OrchestratorService/EnableAgent":  "orchestrator_agent_enable",
+	"/platform.v1.OrchestratorService/ListSessions": "orchestrator_session_list",
+	"/platform.v1.OrchestratorService/CloseSession": "orchestrator_session_close",
+	"/platform.v1.OrchestratorService/ListJobs":     "orchestrator_job_list",
+	"/platform.v1.OrchestratorService/GetJob":       "orchestrator_job_get",
+	"/platform.v1.OrchestratorService/CancelJob":    "orchestrator_job_cancel",
+
 	// Config Delivery (provisioning) — proto: pkg/api/grpc/proto/configdelivery.proto
 	// Server registrations live in pkg/api/mcp/provision_tools.go.
 	"/platform.v1.ConfigDeliveryService/GetNonce":       "provision_get_nonce",

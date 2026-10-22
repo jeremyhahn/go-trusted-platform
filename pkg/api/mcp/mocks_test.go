@@ -23,6 +23,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // ErrMockServiceError is a standard mock service error for testing.
@@ -261,14 +262,18 @@ type mockServiceProvider struct {
 	kmsGenerateWrappedDataKeyFunc func(ctx context.Context, req *KMSGenerateWrappedDataKeyRequest) (interface{}, error)
 
 	// Gateway perf
-	mu                 sync.Mutex
-	perfErr            error
-	ntpErr             error
-	ntpStepCalls       int
-	vpnErr             error
-	vpnCalls           []mockVPNCall
-	perfFlowsCalls     []perfFlowsCall
-	perfConntrackZones []int
+	mu           sync.Mutex
+	perfErr      error
+	ntpErr       error
+	ntpStepCalls int
+	// orchestratorErr fails every Orchestrator* call; orchestratorRequest
+	// records the platform.v1 request the last call received.
+	orchestratorErr     error
+	orchestratorRequest interface{}
+	vpnErr              error
+	vpnCalls            []mockVPNCall
+	perfFlowsCalls      []perfFlowsCall
+	perfConntrackZones  []int
 }
 
 // perfFlowsCall records one GatewayPerfFlows invocation.
@@ -2400,6 +2405,72 @@ func (m *mockServiceProvider) NTPStep(ctx context.Context) (interface{}, error) 
 		return nil, m.ntpErr
 	}
 	return map[string]interface{}{"synced": true, "stratum": 3}, nil
+}
+
+// Orchestrator operations. Each records its request and answers with the
+// response message its OrchestratorService RPC answers.
+
+// orchestratorCall records req and returns resp, or orchestratorErr.
+func (m *mockServiceProvider) orchestratorCall(req, resp interface{}) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.orchestratorRequest = req
+	if m.orchestratorErr != nil {
+		return nil, m.orchestratorErr
+	}
+	return resp, nil
+}
+
+func (m *mockServiceProvider) OrchestratorHealth(ctx context.Context) (interface{}, error) {
+	return m.orchestratorCall(&platformv1.OrchestratorHealthRequest{},
+		&platformv1.OrchestratorHealthResponse{Healthy: true, Status: "ok", Components: map[string]string{"scheduler": "ok"}})
+}
+
+func (m *mockServiceProvider) OrchestratorListAgents(ctx context.Context, req *platformv1.ListOrchestratorAgentsRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.ListOrchestratorAgentsResponse{
+		Agents: []*platformv1.OrchestratorAgent{{Id: "a1", TenantId: req.GetTenantId(), Status: "active"}},
+		Page:   &platformv1.OrchestratorPageInfo{Total: 1, Limit: req.GetPage().GetLimit(), Offset: req.GetPage().GetOffset()},
+	})
+}
+
+func (m *mockServiceProvider) OrchestratorGetAgent(ctx context.Context, req *platformv1.GetOrchestratorAgentRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.GetOrchestratorAgentResponse{
+		Agent: &platformv1.OrchestratorAgent{Id: req.GetAgentId(), TenantId: req.GetTenantId()},
+	})
+}
+
+func (m *mockServiceProvider) OrchestratorDisableAgent(ctx context.Context, req *platformv1.DisableOrchestratorAgentRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.DisableOrchestratorAgentResponse{AgentId: req.GetAgentId(), Disabled: true})
+}
+
+func (m *mockServiceProvider) OrchestratorEnableAgent(ctx context.Context, req *platformv1.EnableOrchestratorAgentRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.EnableOrchestratorAgentResponse{AgentId: req.GetAgentId(), Enabled: true})
+}
+
+func (m *mockServiceProvider) OrchestratorListSessions(ctx context.Context, req *platformv1.ListOrchestratorSessionsRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.ListOrchestratorSessionsResponse{
+		Sessions: []*platformv1.OrchestratorSession{{SessionId: "s1", AgentId: req.GetAgentId()}},
+	})
+}
+
+func (m *mockServiceProvider) OrchestratorCloseSession(ctx context.Context, req *platformv1.CloseOrchestratorSessionRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.CloseOrchestratorSessionResponse{SessionId: req.GetSessionId(), Closed: true})
+}
+
+func (m *mockServiceProvider) OrchestratorListJobs(ctx context.Context, req *platformv1.ListOrchestratorJobsRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.ListOrchestratorJobsResponse{
+		Jobs: []*platformv1.OrchestratorJob{{JobId: "j1", State: "running"}},
+	})
+}
+
+func (m *mockServiceProvider) OrchestratorGetJob(ctx context.Context, req *platformv1.GetOrchestratorJobRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.GetOrchestratorJobResponse{
+		Job: &platformv1.OrchestratorJob{JobId: req.GetJobId(), State: "running"},
+	})
+}
+
+func (m *mockServiceProvider) OrchestratorCancelJob(ctx context.Context, req *platformv1.CancelOrchestratorJobRequest) (interface{}, error) {
+	return m.orchestratorCall(req, &platformv1.CancelOrchestratorJobResponse{JobId: req.GetJobId(), Cancelled: true})
 }
 
 // mockVPNCall records one VPN provider call for the dispatch tests.

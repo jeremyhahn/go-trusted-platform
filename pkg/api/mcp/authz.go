@@ -373,6 +373,20 @@ func toolPermissionCatalog() map[string]string {
 	permissions["ntp_sources"] = "ntp:read"
 	permissions["ntp_step"] = "ntp:write"
 
+	// Orchestrator tools. Disabling or enabling an agent, closing a session
+	// and cancelling a job change fleet state, so they require
+	// orchestrator:write; the readings are orchestrator:read.
+	permissions["orchestrator_health"] = "orchestrator:read"
+	permissions["orchestrator_agent_list"] = "orchestrator:read"
+	permissions["orchestrator_agent_get"] = "orchestrator:read"
+	permissions["orchestrator_agent_disable"] = "orchestrator:write"
+	permissions["orchestrator_agent_enable"] = "orchestrator:write"
+	permissions["orchestrator_session_list"] = "orchestrator:read"
+	permissions["orchestrator_session_close"] = "orchestrator:write"
+	permissions["orchestrator_job_list"] = "orchestrator:read"
+	permissions["orchestrator_job_get"] = "orchestrator:read"
+	permissions["orchestrator_job_cancel"] = "orchestrator:write"
+
 	// VPN control-plane tools. Enrolment changes are vpn:write and the
 	// readings vpn:read; posture policies decide who is admitted, so every
 	// posture-policy tool is vpn:admin (docs/vpn/api.md).

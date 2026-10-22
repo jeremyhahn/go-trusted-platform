@@ -2017,6 +2017,12 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.SetNTPService(d.ntpGRPCService)
 	}
 
+	// Wire the orchestrator so the orchestrator_* tools delegate to the same
+	// OrchestratorGRPCService instance REST, gRPC, QUIC and Unix use.
+	if d.orchestratorGRPCService != nil {
+		serviceProvider.SetOrchestratorService(d.orchestratorGRPCService)
+	}
+
 	// Wire the VPN control plane so the vpn_* tools delegate to the same
 	// VPNGRPCService instance that backs REST, gRPC, QUIC, and Unix.
 	if d.vpnGRPCService != nil {
