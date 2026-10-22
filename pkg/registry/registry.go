@@ -222,9 +222,9 @@ func WithEncryptor(e *ImageEncryptor) RegistryOption {
 	}
 }
 
-// WithSigner wires the KMS that signs manifests (LocalKMSClient in the
-// daemon, the same client that holds the encryption keys). Without one, a
-// push that asks for signing is refused with ErrSigningNotConfigured.
+// WithSigner wires the KMS that signs manifests (SDKSigner in the daemon:
+// the key a push names is the SDK KMS key of that ID). Without one, a push
+// that asks for signing is refused with ErrSigningNotConfigured.
 func WithSigner(s SigningKMSClient) RegistryOption {
 	return func(r *Registry) {
 		r.signer = s

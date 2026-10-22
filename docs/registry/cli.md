@@ -71,7 +71,7 @@ Push an image to the registry. Reads the image from `--input` or stdin.
 | `--encrypt` | `-e` | bool | `false` | Encrypt image layers before storage |
 | `--key-id` | `-k` | string | `""` | Encryption key ID — **required with `--encrypt`** |
 | `--sign` | `-s` | bool | `false` | Sign the image manifest |
-| `--signing-key-id` | | string | `""` | Key used for manifest signing; defaults to `registry-default` |
+| `--signing-key-id` | | string | `""` | SDK KMS key used for manifest signing; defaults to `registry-default`. The key must already exist (ECDSA P-256 or P-384); the registry never creates it |
 | `--overwrite` | | bool | `false` | Replace an existing tag with the same name |
 | `--input` | `-i` | string | `""` | Input file path; reads stdin when unset |
 
