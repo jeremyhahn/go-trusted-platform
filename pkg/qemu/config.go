@@ -552,11 +552,17 @@ func (c *Config) nvramFormat() string {
 // GetNVRAMPath returns the path to the NVRAM file. A qcow2 NVRAM has its own
 // name, so a raw file left by an earlier run is never opened as qcow2.
 func (c *Config) GetNVRAMPath() string {
-	nvramDir := filepath.Join(c.WorkDir, "nvram")
 	if c.nvramFormat() == DiskFormatQCOW2 {
-		return filepath.Join(nvramDir, "OVMF_VARS.qcow2")
+		return filepath.Join(c.WorkDir, "nvram", "OVMF_VARS.qcow2")
 	}
-	return filepath.Join(nvramDir, "OVMF_VARS.fd")
+	return c.rawNVRAMPath()
+}
+
+// rawNVRAMPath is where a raw per-VM NVRAM lives. A VM created before its
+// NVRAM format became qcow2 has its persisted variables (boot entries,
+// enrolled Secure Boot keys) here.
+func (c *Config) rawNVRAMPath() string {
+	return filepath.Join(c.WorkDir, "nvram", "OVMF_VARS.fd")
 }
 
 // GetOVMFCodePath returns the appropriate OVMF code path based on Secure Boot setting

@@ -164,19 +164,27 @@ func (vm *VM) initializeNVRAM() error {
 		return nil
 	}
 
-	vm.logger.Infof("Initializing NVRAM from template: %s -> %s", vm.config.OVMFVars, nvramPath)
-
 	if format := vm.config.nvramFormat(); format != DiskFormatRaw {
-		if output, err := vm.convertImage(vm.config.OVMFVars, format, nvramPath); err != nil {
+		// An existing VM's raw NVRAM holds its boot entries and enrolled
+		// Secure Boot keys: convert it, never the pristine template. The
+		// raw file is left in place.
+		src, what := vm.config.OVMFVars, "the OVMF_VARS template"
+		if _, err := os.Stat(vm.config.rawNVRAMPath()); err == nil {
+			src, what = vm.config.rawNVRAMPath(), "the existing raw NVRAM"
+		}
+		vm.logger.Infof("Initializing NVRAM from %s: %s -> %s", what, src, nvramPath)
+		if output, err := vm.convertImage(src, format, nvramPath); err != nil {
 			// A half-written file would pass for an existing NVRAM next time.
 			if rmErr := os.Remove(nvramPath); rmErr != nil && !os.IsNotExist(rmErr) {
 				vm.logger.Warnf("cannot remove the partial NVRAM %s: %v", nvramPath, rmErr)
 			}
-			return &CommandOutputError{Msg: "failed to convert the OVMF_VARS template", Err: err, Detail: ": " + string(output)}
+			return &CommandOutputError{Msg: "failed to convert " + what, Err: err, Detail: ": " + string(output)}
 		}
 		vm.logger.Infof("NVRAM initialized: %s", nvramPath)
 		return nil
 	}
+
+	vm.logger.Infof("Initializing NVRAM from template: %s -> %s", vm.config.OVMFVars, nvramPath)
 
 	// Copy OVMF_VARS template to NVRAM location
 	input, err := os.ReadFile(vm.config.OVMFVars)
