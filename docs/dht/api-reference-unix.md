@@ -2,6 +2,7 @@
 
 > **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
+
 ## Overview
 
 The Unix socket interface provides high-performance local IPC (Inter-Process Communication) for the DHT service. This transport is optimized for:

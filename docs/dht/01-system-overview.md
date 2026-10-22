@@ -2,6 +2,7 @@
 
 > **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
+
 This document shows how all components of the Trusted DHT system fit together.
 
 > **Note**: For canonical reputation thresholds and role eligibility requirements, see [09-defense-reputation.md](09-defense-reputation.md) Section "Role Eligibility Thresholds (CANONICAL)".

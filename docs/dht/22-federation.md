@@ -2,6 +2,7 @@
 
 > **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
+
 ## 1. Overview
 
 Federation is an enhancement for P2P mode that enables organizations to maintain sovereignty over their local infrastructure while participating in the global P2P network. This hybrid approach allows nodes to run their own Certificate Authority (CA), Identity and Access Management (IAM), Domain Name System (DNS), and Key Management Service (KMS) while still benefiting from the decentralized trust, routing, and coordination provided by the DHT network.

@@ -1,4 +1,5 @@
 # DHT Component Roadmap
+
 > **Status: ARCHIVE — historical record. Do NOT build from this document.** · Last verified: 2026-10-21
 
 ---

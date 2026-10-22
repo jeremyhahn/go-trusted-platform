@@ -2,6 +2,7 @@
 
 > **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
+
 ## Overview
 
 Platformd P2P mode enables nodes to participate in the trusted DHT network for decentralized coordination, service discovery, and content distribution. The `--p2p` flag is a **modifier** that can be combined with any existing operating mode (standalone, raft, node) to add P2P network capabilities.

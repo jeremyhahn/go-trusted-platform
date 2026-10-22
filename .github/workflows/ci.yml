@@ -1,7 +1,8 @@
 # ci-template: v1.15 (customized)
 #
-# Every job starts at once (ci-template v1.14, automatethethings#207/#209), so a
-# run takes as long as its slowest job; ci-gate, the one required check, needs
+# Every job starts at once (ci-template v1.14, automatethethings#207/#209), the
+# docs tier just after the seconds-long `changes` job (v1.24), so a run takes
+# as long as its slowest job; ci-gate, the one required check, needs
 # every gated job and fails closed on any result but success. push runs on main
 # only: automerge.yml's merge trains are PRs from merge-train/* and get their CI
 # from pull_request (v1.15).
@@ -20,9 +21,15 @@
 #
 # Two tiers (#852; handbook sdlc.md §5a, devops.md §1/§5):
 #
-#   PR tier    every run. lint, sdkjs, security, image, build, test.
+#   PR tier    every run. lint, changes, sdkjs, security, image, build, test.
 #   Full tier  push to main, workflow_dispatch, or a pull_request carrying
 #              the label `ci:full`. race, web, integration.
+#
+# Docs-only PRs (ci-template v1.24, handbook ci-standard.md §10 (a)): a PR
+# whose every changed file is markdown or under docs/ runs lint and CI Gate
+# only. sdkjs, security, image, build and test are the docs tier: they need
+# `changes` and skip when its docs_only output reads `true`. `ci:full`
+# overrides it.
 #
 # fips is the one main-only job (#853): push to main and workflow_dispatch,
 # never a pull_request, and never gated (see its comment).
@@ -64,14 +71,59 @@ env:
   # An exact patch release, never "stable", so an upstream release cannot change
   # the toolchain under a running pipeline. The `go` directive in every go.mod
   # must not exceed this, and nested modules must match the root's.
-  GO_VERSION: "1.27.2"
+  GO_VERSION: "1.27.3"
   # Modules resolve from tags, never from a workspace. A stray go.work in the
   # tree would silently change what every job compiles (the Makefile and
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # ci-template v1.24 (CA m749, m751 (a)): the files a docs-only PR may touch.
+  DOCS_ONLY_PATTERN: '(\.md$|^docs/)'
+  # The docs/ pages unit tests read: a PR that changes one runs every PR-tier
+  # job. They are the doc-contract tests in pkg/config (docs/daemon/*.md), cmd/platformd
+  # (docs/daemon/cli.md) and pkg/webservice (docs/web/user.md). No go:embed
+  # reads docs/ or markdown.
+  DOCS_TESTED_PATTERN: '^docs/(daemon|web)/'
 
 jobs:
+  # ci-template v1.24 (CA m749, m751 (a)): a PR whose every changed file
+  # matches DOCS_ONLY_PATTERN, and none DOCS_TESTED_PATTERN, runs lint only:
+  # the docs-tier jobs (`needs: [changes]` and an `if:` on docs_only) skip,
+  # and ci-gate passes their skip only when docs_only reads exactly `true`.
+  # Off pull_request, or on a ci:full PR, docs_only is always false. Any doubt
+  # (a failed diff, an empty list) reads as false, so the tier fails toward
+  # running the tests.
+  changes:
+    name: Changed files
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        with:
+          fetch-depth: 0
+      - name: Is every changed file docs or markdown?
+        id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT: ${{ github.event_name }}
+          FULL_TIER: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          docs_only=false
+          if [ "$EVENT" = pull_request ] && [ "$FULL_TIER" = false ]; then
+            if files=$(git diff --name-only --no-renames "$BASE...$HEAD") && [ -n "$files" ]; then
+              if ! printf '%s\n' "$files" | grep -qvE "$DOCS_ONLY_PATTERN" \
+                && ! printf '%s\n' "$files" | grep -qE "$DOCS_TESTED_PATTERN"; then
+                docs_only=true
+              fi
+              printf '%s\n' "$files"
+            fi
+          fi
+          echo "docs only: $docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   # CUSTOMIZE (lint job): this project's lint is its make targets, so CI and a
   # developer machine run the same thing (devops.md §4). golangci-lint and
   # actionlint are built from their tools modules under build/tools-src, the
@@ -122,6 +174,8 @@ jobs:
   sdkjs:
     name: SDK JavaScript
     runs-on: ubuntu-latest
+    if: needs.changes.outputs.docs_only != 'true'
+    needs: [changes]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -152,7 +206,10 @@ jobs:
   security:
     name: Security
     runs-on: ubuntu-latest
-    # No `needs` (v1.14): starts with lint and build, not after them.
+    if: needs.changes.outputs.docs_only != 'true'
+    # Needs only `changes` (v1.14, v1.24): starts with lint and build, not
+    # after them.
+    needs: [changes]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -210,6 +267,8 @@ jobs:
   image:
     name: Devcontainer image [build, test, security, deps-check, trivy image]
     runs-on: bigdisk
+    if: needs.changes.outputs.docs_only != 'true'
+    needs: [changes]
     timeout-minutes: 120
     env:
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-image
@@ -283,6 +342,8 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    if: needs.changes.outputs.docs_only != 'true'
+    needs: [changes]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -326,7 +387,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    # No `needs` (v1.14): every job starts at once.
+    if: needs.changes.outputs.docs_only != 'true'
+    # Needs only `changes` (v1.14, v1.24): starts with the other PR-tier jobs.
+    needs: [changes]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -511,12 +574,14 @@ jobs:
     # behind ubuntu-latest jobs: never add a checkout or a `uses:` step here.
     runs-on: ci-gate
     if: always()
-    needs: [lint, sdkjs, security, image, build, test, race, web, integration]
+    needs: [lint, changes, sdkjs, security, image, build, test, race, web, integration]
     steps:
       - name: Verify every job succeeded
         env:
           FULL_TIER: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           RESULT_LINT: ${{ needs.lint.result }}
+          RESULT_CHANGES: ${{ needs.changes.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
           RESULT_SECURITY: ${{ needs.security.result }}
           RESULT_IMAGE: ${{ needs.image.result }}
@@ -527,16 +592,18 @@ jobs:
           RESULT_INTEGRATION: ${{ needs.integration.result }}
         run: |
           # skipped != failed, and a skipped job fails the gate: it means the
-          # job did not run (go-qrdb#42). The ONE exception (#852): a `full`
-          # job skipped on a run that did not select the full tier. FULL_TIER
-          # must read exactly `false` for that; anything else fails closed.
+          # job did not run (go-qrdb#42). Two exceptions: a `full` job skipped
+          # on a run that did not select the full tier (#852), FULL_TIER
+          # reading exactly `false`; and a `docs` job skipped on a docs-only
+          # PR (ci-template v1.24), DOCS_ONLY reading exactly `true` and
+          # FULL_TIER exactly `false`. Anything else fails closed.
           status=0
           check() {
             tier="$1"
             name="$2"
             result="$3"
             case "$tier" in
-              pr|full) ;;
+              pr|docs|full) ;;
               *) echo "FAIL $name (unknown tier '$tier' - failing closed)"; status=1; return ;;
             esac
             case "$result" in
@@ -545,6 +612,8 @@ jobs:
               skipped)
                 if [ "$tier" = full ] && [ "$FULL_TIER" = false ]; then
                   echo "SKIP $name (full tier not selected - passes)"
+                elif [ "$tier" = docs ] && [ "$DOCS_ONLY" = true ] && [ "$FULL_TIER" = false ]; then
+                  echo "SKIP $name (docs-only PR - passes)"
                 else
                   echo "FAIL $name (skipped in the $tier tier - see its job)"; status=1
                 fi
@@ -553,11 +622,12 @@ jobs:
             esac
           }
           check pr lint "$RESULT_LINT"
-          check pr sdkjs "$RESULT_SDK_JS"
-          check pr security "$RESULT_SECURITY"
-          check pr image "$RESULT_IMAGE"
-          check pr build "$RESULT_BUILD"
-          check pr test "$RESULT_TEST"
+          check pr changes "$RESULT_CHANGES"
+          check docs sdkjs "$RESULT_SDK_JS"
+          check docs security "$RESULT_SECURITY"
+          check docs image "$RESULT_IMAGE"
+          check docs build "$RESULT_BUILD"
+          check docs test "$RESULT_TEST"
           check full race "$RESULT_RACE"
           check full web "$RESULT_WEB"
           check full integration "$RESULT_INTEGRATION"
