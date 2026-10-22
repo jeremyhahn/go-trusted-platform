@@ -26,8 +26,10 @@ import (
 	"encoding/pem"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -132,27 +134,41 @@ func newHandlerWithCA(ca authCA) *AuthFactorHandlers {
 	}
 }
 
-// generateTestCSRPEM creates a minimal PEM-encoded CSR for testing.
-func generateAuthTestCSRPEM(t *testing.T) string {
+// generateAuthTestCSRPEM creates a minimal PEM-encoded CSR whose CN is cn.
+func generateAuthTestCSRPEM(t *testing.T, cn string) string {
+	t.Helper()
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: generateAuthTestCSR(t, &x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}}).Raw,
+	}))
+}
+
+// generateAuthTestCSR signs tmpl with a fresh P-256 key and parses it back.
+func generateAuthTestCSR(t *testing.T, tmpl *x509.CertificateRequest) *x509.CertificateRequest {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	tmpl := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "test-client"},
-	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
 	require.NoError(t, err)
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	require.NoError(t, err)
+	return csr
 }
 
 // selfSignedClientCert creates a self-signed cert with the given CN.
 func selfSignedClientCert(t *testing.T, cn string) *x509.Certificate {
 	t.Helper()
+	return selfSignedClientCertWithSubject(t, pkix.Name{CommonName: cn})
+}
+
+// selfSignedClientCertWithSubject creates a self-signed cert with subject.
+func selfSignedClientCertWithSubject(t *testing.T, subject pkix.Name) *x509.Certificate {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: cn},
+		Subject:      subject,
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 	}
@@ -281,7 +297,7 @@ func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
 	testCA := newAuthTestCA(t)
 	router := registerRoutes(newHandlerWithCA(testCA))
 
-	csrPEM := generateAuthTestCSRPEM(t)
+	csrPEM := generateAuthTestCSRPEM(t, "user-abc")
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/users/user-abc/factors/mtls/issue-cert",
@@ -330,7 +346,7 @@ func TestIssueCert_MissingCSRPEM_Returns400(t *testing.T) {
 func TestIssueCert_NoCAService_Returns503(t *testing.T) {
 	router := registerRoutes(NewAuthFactorHandlers(nil, nil))
 
-	csrPEM := generateAuthTestCSRPEM(t)
+	csrPEM := generateAuthTestCSRPEM(t, "user-abc")
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/users/user-abc/factors/mtls/issue-cert",
@@ -346,7 +362,7 @@ func TestIssueCert_NonAdminOtherUser_Returns403(t *testing.T) {
 	testCA := newAuthTestCA(t)
 	router := registerRoutes(newHandlerWithCA(testCA))
 
-	csrPEM := generateAuthTestCSRPEM(t)
+	csrPEM := generateAuthTestCSRPEM(t, "other-user")
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/users/other-user/factors/mtls/issue-cert",
@@ -366,7 +382,7 @@ func TestIssueCert_SameUserAsCaller_Succeeds(t *testing.T) {
 	testCA := newAuthTestCA(t)
 	router := registerRoutes(newHandlerWithCA(testCA))
 
-	csrPEM := generateAuthTestCSRPEM(t)
+	csrPEM := generateAuthTestCSRPEM(t, "alice")
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/users/alice/factors/mtls/issue-cert",
@@ -380,6 +396,114 @@ func TestIssueCert_SameUserAsCaller_Succeeds(t *testing.T) {
 	router.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
+}
+
+// A caller may not have the platform CA sign a CSR that names someone else:
+// alice asking for a certificate whose CN is bob is refused before signing.
+func TestIssueCert_CSRNamesAnotherUser_Returns403(t *testing.T) {
+	testCA := newAuthTestCA(t)
+	router := registerRoutes(newHandlerWithCA(testCA))
+
+	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t, "bob")})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/users/alice/factors/mtls/issue-cert",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{selfSignedClientCert(t, "alice")}}
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrCSRNotBoundToUser{Field: "CN", Value: "bob"}.Error())
+}
+
+// An admin caller issues a user's certificate when the CSR names that user.
+func TestIssueCert_AdminForBoundUser_Succeeds(t *testing.T) {
+	testCA := newAuthTestCA(t)
+	router := registerRoutes(newHandlerWithCA(testCA))
+
+	body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t, "bob")})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/users/bob/factors/mtls/issue-cert",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	admin := selfSignedClientCertWithSubject(t, pkix.Name{CommonName: "ops", OrganizationalUnit: []string{"admin"}})
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{admin}}
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusCreated, rr.Code)
+}
+
+func TestCSRBoundToUser(t *testing.T) {
+	tenantA := selfSignedClientCertWithSubject(t, pkix.Name{CommonName: "alice", OrganizationalUnit: []string{"tenant-a"}})
+	admin := selfSignedClientCertWithSubject(t, pkix.Name{CommonName: "ops", OrganizationalUnit: []string{"admin"}})
+	subject := func(ou ...string) pkix.Name {
+		return pkix.Name{CommonName: "alice", OrganizationalUnit: ou}
+	}
+
+	tests := []struct {
+		name   string
+		csr    *x509.CertificateRequest
+		caller *x509.Certificate
+		want   error
+	}{
+		{name: "CN is the user", csr: &x509.CertificateRequest{Subject: subject()}, caller: tenantA},
+		{name: "CN is the user, no client certificate", csr: &x509.CertificateRequest{Subject: subject()}},
+		{name: "OU the caller carries", csr: &x509.CertificateRequest{Subject: subject("tenant-a")}, caller: tenantA},
+		{
+			name: "CN names another user",
+			csr:  &x509.CertificateRequest{Subject: pkix.Name{CommonName: "bob"}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "CN", Value: "bob"},
+		},
+		{
+			name: "OU names another tenant",
+			csr:  &x509.CertificateRequest{Subject: subject("tenant-b")}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "OU", Value: "tenant-b"},
+		},
+		{
+			name: "OU claims admin from an admin caller",
+			csr:  &x509.CertificateRequest{Subject: subject("admin")}, caller: admin,
+			want: ErrCSRNotBoundToUser{Field: "OU", Value: "admin"},
+		},
+		{
+			name: "OU without a client certificate",
+			csr:  &x509.CertificateRequest{Subject: subject("tenant-a")},
+			want: ErrCSRNotBoundToUser{Field: "OU", Value: "tenant-a"},
+		},
+		{
+			name: "DNS SAN",
+			csr:  &x509.CertificateRequest{Subject: subject(), DNSNames: []string{"bob.example"}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "SAN"},
+		},
+		{
+			name: "email SAN",
+			csr:  &x509.CertificateRequest{Subject: subject(), EmailAddresses: []string{"bob@example.com"}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "SAN"},
+		},
+		{
+			name: "IP SAN",
+			csr:  &x509.CertificateRequest{Subject: subject(), IPAddresses: []net.IP{net.ParseIP("192.0.2.1")}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "SAN"},
+		},
+		{
+			name: "URI SAN",
+			csr:  &x509.CertificateRequest{Subject: subject(), URIs: []*url.URL{{Scheme: "spiffe", Host: "platform", Path: "/user/bob"}}}, caller: tenantA,
+			want: ErrCSRNotBoundToUser{Field: "SAN"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := csrBoundToUser(generateAuthTestCSR(t, tt.csr), "alice", tt.caller)
+			if tt.want == nil {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorIs(t, err, tt.want)
+		})
+	}
 }
 
 // =============================================================================

@@ -21,6 +21,7 @@ import (
 	"encoding/pem"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,19 @@ type ErrForbiddenUserID struct{}
 
 func (e ErrForbiddenUserID) Error() string {
 	return "forbidden: caller may not act on behalf of this user"
+}
+
+// ErrCSRNotBoundToUser is returned when an issue-cert CSR names a principal or
+// tenant other than the user it is issued for: its CN is not the user, it
+// carries an OU the caller's own certificate does not, or it carries a SAN.
+// Field is "CN", "OU" or "SAN"; Value is the refused CN or OU.
+type ErrCSRNotBoundToUser struct {
+	Field string
+	Value string
+}
+
+func (e ErrCSRNotBoundToUser) Error() string {
+	return "forbidden: csr " + e.Field + " " + e.Value + " does not name the user the certificate is issued to"
 }
 
 // ErrMFAPolicyInvalid is returned when the MFA policy payload is invalid.
@@ -397,6 +411,17 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		h.writeError(w, http.StatusBadRequest, ErrInvalidCSRPEM{Reason: "PEM block not found or not a CERTIFICATE REQUEST"})
 		return
 	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidCSRPEM{Reason: err.Error()})
+		return
+	}
+	// The CA signs the CSR's subject and SANs as given, so they must name
+	// this user and nobody else.
+	if err := csrBoundToUser(csr, userID, callerLeaf(r)); err != nil {
+		h.writeError(w, http.StatusForbidden, err)
+		return
+	}
 
 	// Sign with EKU=clientAuth profile. The platform CA's "client" profile
 	// sets x509.ExtKeyUsageClientAuth by convention.
@@ -434,11 +459,11 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 //   - the client cert CN matches userID, OR
 //   - the client cert has the "admin" OID in its SubjectAltName or CN prefix.
 func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bool {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+	leaf := callerLeaf(r)
+	if leaf == nil {
 		// No mTLS — IAM/JWT layer is authoritative; permit.
 		return true
 	}
-	leaf := r.TLS.PeerCertificates[0]
 	cn := leaf.Subject.CommonName
 
 	// Admin prefix or org unit.
@@ -453,6 +478,36 @@ func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bo
 
 	// Caller is the user themselves.
 	return cn == userID
+}
+
+// callerLeaf returns the caller's verified client certificate, or nil when the
+// request carries none.
+func callerLeaf(r *http.Request) *x509.Certificate {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return nil
+	}
+	return r.TLS.PeerCertificates[0]
+}
+
+// csrBoundToUser refuses a CSR whose subject or SANs could name a principal or
+// tenant other than userID. The CN must be userID. Every OU must be one the
+// caller's own certificate carries, and never "admin": an admin certificate is
+// issued through the CA routes, not as a user's mTLS factor. A caller without a
+// client certificate (nil) may request no OU. No SAN is allowed, since a user's
+// mTLS factor names no host, address, mailbox or URI.
+func csrBoundToUser(csr *x509.CertificateRequest, userID string, caller *x509.Certificate) error {
+	if csr.Subject.CommonName != userID {
+		return ErrCSRNotBoundToUser{Field: "CN", Value: csr.Subject.CommonName}
+	}
+	for _, ou := range csr.Subject.OrganizationalUnit {
+		if strings.EqualFold(ou, "admin") || caller == nil || !slices.Contains(caller.Subject.OrganizationalUnit, ou) {
+			return ErrCSRNotBoundToUser{Field: "OU", Value: ou}
+		}
+	}
+	if len(csr.DNSNames) > 0 || len(csr.EmailAddresses) > 0 || len(csr.IPAddresses) > 0 || len(csr.URIs) > 0 {
+		return ErrCSRNotBoundToUser{Field: "SAN"}
+	}
+	return nil
 }
 
 // =============================================================================
