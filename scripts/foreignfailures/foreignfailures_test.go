@@ -78,7 +78,7 @@ func check(t *testing.T, baselineText, logText string) *verdict {
 	t.Helper()
 	b, err := parseBaseline("foreign-failures.tsv", strings.NewReader(baselineText))
 	require.NoError(t, err)
-	log, err := parseSuiteLog("suite.log", strings.NewReader(logText))
+	log, err := parseSuiteLog("suite.log", defaultModule, strings.NewReader(logText))
 	require.NoError(t, err)
 	return decide(log, b)
 }
@@ -164,6 +164,66 @@ func TestATestBinaryThatDidNotFinishGates(t *testing.T) {
 	assert.Contains(t, v.Unattributable[0], "did not run to the end")
 }
 
+func TestAMultiPackageTargetAttributesEachPackage(t *testing.T) {
+	// A ./test/integration/<dir>/... target runs several packages; each
+	// failure belongs to the package whose result line follows it.
+	multi := target{name: "kms", pkg: "test/integration/kms/...", failed: true, body: []string{
+		"?   \t" + module + "test/integration/kms/helpers\t[no test files]",
+		"=== RUN   TestOK",
+		"--- PASS: TestOK (0.00s)",
+		"PASS",
+		"ok  \t" + module + "test/integration/kms/ok\t0.5s",
+		"        --- FAIL: TestKMS/gRPC/HMAC (0.01s)",
+		"    --- FAIL: TestKMS/gRPC (0.01s)",
+		"--- FAIL: TestKMS (0.02s)",
+		"FAIL",
+		"FAIL\t" + module + "test/integration/kms\t1.0s",
+		"    --- FAIL: TestIAMCLI/CreateRole (0.01s)",
+		"FAIL",
+		"FAIL\t" + module + "test/integration/kms/sub\t1.0s",
+	}}
+	v := check(t, testBaseline, suiteOutput(multi))
+	assert.True(t, v.gating())
+	assert.Empty(t, v.Unattributable)
+	assert.Equal(t, []failure{{Package: "test/integration/kms/sub", Name: "TestIAMCLI/CreateRole"}}, v.Unlisted)
+	require.Len(t, v.Hits, 1)
+	assert.Equal(t, "TestKMS/gRPC/HMAC", v.Hits[0].Name)
+}
+
+func TestFailuresBeforeAPassingPackageGate(t *testing.T) {
+	odd := target{name: "kms", pkg: "test/integration/kms/...", failed: true, body: []string{
+		"        --- FAIL: TestKMS/gRPC/HMAC (0.01s)",
+		"ok  \t" + module + "test/integration/kms\t1.0s",
+		"    --- FAIL: TestIAMCLI/CreateRole (0.01s)",
+		"FAIL",
+		"FAIL\t" + module + "test/integration/iam\t1.0s",
+	}}
+	v := check(t, testBaseline, suiteOutput(odd))
+	assert.True(t, v.gating())
+	assert.Contains(t, v.Unattributable[0], "before a passing package's result")
+}
+
+func TestFailuresWithNoPackageResultGate(t *testing.T) {
+	cut := target{name: "iam", pkg: "test/integration/iam", failed: true, body: []string{
+		"    --- FAIL: TestIAMCLI/CreateRole (0.01s)",
+		"FAIL",
+	}}
+	v := check(t, testBaseline, suiteOutput(cut))
+	assert.True(t, v.gating())
+	assert.Contains(t, v.Unattributable[0], "no package FAIL line")
+}
+
+func TestAPackageOutsideTheModuleGates(t *testing.T) {
+	foreign := target{name: "iam", pkg: "test/integration/iam", failed: true, body: []string{
+		"    --- FAIL: TestIAMCLI/CreateRole (0.01s)",
+		"FAIL",
+		"FAIL\texample.com/other/test/integration/iam\t1.0s",
+	}}
+	v := check(t, testBaseline, suiteOutput(foreign))
+	assert.True(t, v.gating())
+	assert.Contains(t, v.Unattributable[0], "outside module")
+}
+
 func TestATargetFailingOutsideGoTestGates(t *testing.T) {
 	logText := suiteOutput(target{name: "dns", pkg: "test/integration/dns", body: []string{"PASS"}})
 	logText = strings.Replace(logText, "  PASS  dns\n", "  PASS  dns\n  FAIL  compute\n", 1)
@@ -198,13 +258,13 @@ func TestASectionCutOffGates(t *testing.T) {
 	logText := "--- Testing ./test/integration/iam (iam) ---\n--- FAIL: TestIAMCLI/CreateRole (0.01s)\n"
 	v := check(t, testBaseline, logText)
 	assert.True(t, v.gating())
-	log, err := parseSuiteLog("suite.log", strings.NewReader(logText))
+	log, err := parseSuiteLog("suite.log", defaultModule, strings.NewReader(logText))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"the log ended inside the section"}, log.sections["iam"].Problems)
+	assert.Contains(t, log.sections["iam"].Problems, "the log ended inside the section")
 }
 
 func TestEmptyLogIsRefused(t *testing.T) {
-	_, err := parseSuiteLog("suite.log", strings.NewReader(""))
+	_, err := parseSuiteLog("suite.log", defaultModule, strings.NewReader(""))
 	require.ErrorIs(t, err, ErrEmptyLog)
 }
 

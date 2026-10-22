@@ -11,17 +11,20 @@ import (
 // and summary lines are printed by build/docker/devcontainer/
 // run-integration-tests.sh; the rest by go test -v.
 var (
-	// sectionStartRe opens one target's section (run_test).
+	// sectionStartRe opens one target's section (run_test). The package is
+	// the target's pattern, often ./test/integration/<dir>/...
 	sectionStartRe = regexp.MustCompile(`^--- Testing (\S+) \((\S+)\) ---$`)
 	// sectionEndRe closes it with the target's go test outcome (run_test).
 	sectionEndRe = regexp.MustCompile(`^--- (PASS|FAIL): (\S+) ---$`)
 	// testFailRe is one failed test or subtest, at any depth.
 	testFailRe = regexp.MustCompile(`^\s*--- FAIL: (\S+) \(\d+(\.\d+)?s\)$`)
-	// packageFailRe is go test's line for a package whose test binary ran to
-	// the end and failed.
+	// packageFailRe is go test's result line for a package whose test binary
+	// exited non-zero. It follows that package's output.
 	packageFailRe = regexp.MustCompile(`^FAIL\t(\S+)\t\d+(\.\d+)?s$`)
-	// packageBrokenRe is go test's line for a package that did not build or
-	// set up, so no test ran.
+	// packageOKRe is go test's result line for a package that passed.
+	packageOKRe = regexp.MustCompile(`^ok  \t\S+`)
+	// packageBrokenRe is go test's result line for a package that did not
+	// build or set up, so no test ran.
 	packageBrokenRe = regexp.MustCompile(`^FAIL\t\S+ \[[^]]+\]$`)
 	// compileErrorRe is the runner's compile_check refusal.
 	compileErrorRe = regexp.MustCompile(`^ERROR: \S+ \(\S+\) does not compile`)
@@ -38,21 +41,30 @@ const (
 	summaryPassed = "  ALL INTEGRATION TESTS PASSED"
 )
 
+// packageResult is one Go package go test reported FAIL inside a section.
+type packageResult struct {
+	Package string // module-relative import path
+	// BinaryFailed is the test binary's own closing "FAIL" line: without it
+	// the binary did not run to the end (an os.Exit, a crash).
+	BinaryFailed bool
+	FailedTests  []string
+}
+
 // section is one target's output, from the runner's "--- Testing" line to its
-// "--- PASS/FAIL" line.
+// "--- PASS/FAIL" line. One target may cover several Go packages.
 type section struct {
 	Target  string
-	Package string // module-relative, without the leading "./"
+	Pattern string // the target's package pattern, without the leading "./"
 	Ended   bool
-	// BinaryFailed is the test binary's own closing "FAIL" line and
-	// PackageFailed go test's "FAIL\t<package>\t<duration>" line: both
-	// present means the binary ran to the end.
-	BinaryFailed  bool
-	PackageFailed bool
-	FailedTests   []string
+	// Failed are the packages go test reported FAIL, in output order.
+	Failed []*packageResult
 	// Problems are lines that show a failure no test name carries: a panic,
-	// a timeout, a build or compile failure.
+	// a timeout, a build or compile failure, failed tests with no result line.
 	Problems []string
+
+	// pending gathers the current package's output until its result line.
+	pending packageResult
+	module  string
 }
 
 // suiteLog is what the checker reads from one run of the suite.
@@ -65,8 +77,9 @@ type suiteLog struct {
 	summarySeen bool
 }
 
-// parseSuiteLog reads the suite's combined output.
-func parseSuiteLog(name string, r io.Reader) (*suiteLog, error) {
+// parseSuiteLog reads the suite's combined output. module is the module path
+// go test prints in front of each module-relative package.
+func parseSuiteLog(name, module string, r io.Reader) (*suiteLog, error) {
 	log := &suiteLog{sections: map[string]*section{}}
 	var open *section
 	inSummary := false
@@ -79,15 +92,16 @@ func parseSuiteLog(name string, r io.Reader) (*suiteLog, error) {
 
 		if m := sectionStartRe.FindStringSubmatch(line); m != nil {
 			if open != nil {
-				open.Problems = append(open.Problems, "the section ended without the runner's PASS/FAIL line")
+				open.close("the section ended without the runner's PASS/FAIL line")
 			}
-			open = &section{Target: m[2], Package: strings.TrimPrefix(m[1], "./")}
+			open = &section{Target: m[2], Pattern: strings.TrimPrefix(m[1], "./"), module: module}
 			log.sections[open.Target] = open
 			continue
 		}
 		if open != nil {
-			if m := sectionEndRe.FindStringSubmatch(line); m != nil && strings.TrimPrefix(m[2], "./") == open.Package {
+			if m := sectionEndRe.FindStringSubmatch(line); m != nil && strings.TrimPrefix(m[2], "./") == open.Pattern {
 				open.Ended = true
+				open.close("")
 				open = nil
 				continue
 			}
@@ -102,7 +116,6 @@ func parseSuiteLog(name string, r io.Reader) (*suiteLog, error) {
 			inSummary = true
 			log.summary = map[string]string{}
 			log.summaryRows = nil
-			log.summarySeen = false
 		case inSummary && line == summaryClose:
 			inSummary = false
 		case inSummary:
@@ -121,7 +134,7 @@ func parseSuiteLog(name string, r io.Reader) (*suiteLog, error) {
 		return nil, ErrEmptyLog
 	}
 	if open != nil {
-		open.Problems = append(open.Problems, "the log ended inside the section")
+		open.close("the log ended inside the section")
 	}
 	return log, nil
 }
@@ -129,23 +142,50 @@ func parseSuiteLog(name string, r io.Reader) (*suiteLog, error) {
 // read records one line of a target's go test output.
 func (s *section) read(line string) {
 	if m := testFailRe.FindStringSubmatch(line); m != nil {
-		s.FailedTests = append(s.FailedTests, m[1])
+		s.pending.FailedTests = append(s.pending.FailedTests, m[1])
+		return
+	}
+	if m := packageFailRe.FindStringSubmatch(line); m != nil {
+		rel, ok := strings.CutPrefix(m[1], s.module+"/")
+		if !ok {
+			s.Problems = append(s.Problems, "a package outside module "+s.module+" failed: "+line)
+		}
+		result := s.pending
+		result.Package = rel
+		s.Failed = append(s.Failed, &result)
+		s.pending = packageResult{}
 		return
 	}
 	switch {
 	case line == "FAIL":
-		s.BinaryFailed = true
-	case packageFailRe.MatchString(line):
-		path := packageFailRe.FindStringSubmatch(line)[1]
-		if path == s.Package || strings.HasSuffix(path, "/"+s.Package) {
-			s.PackageFailed = true
+		s.pending.BinaryFailed = true
+	case packageOKRe.MatchString(line):
+		if s.pending.failed() {
+			s.Problems = append(s.Problems, "failed tests were printed before a passing package's result: "+line)
 		}
+		s.pending = packageResult{}
 	case packageBrokenRe.MatchString(line),
 		compileErrorRe.MatchString(line),
 		strings.HasPrefix(line, "panic: "),
 		strings.HasPrefix(line, "*** Test killed"):
 		s.Problems = append(s.Problems, line)
 	}
+}
+
+// close ends the section; problem, when set, says why it ended early.
+func (s *section) close(problem string) {
+	if problem != "" {
+		s.Problems = append(s.Problems, problem)
+	}
+	if s.pending.failed() {
+		s.Problems = append(s.Problems, "failed tests with no package FAIL line: the test binary did not run to the end")
+	}
+	s.pending = packageResult{}
+}
+
+// failed reports whether the package output read so far shows a failure.
+func (p *packageResult) failed() bool {
+	return p.BinaryFailed || len(p.FailedTests) > 0
 }
 
 // leaves returns the failed tests that have no failed subtest. A parent test

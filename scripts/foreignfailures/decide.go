@@ -77,21 +77,32 @@ func decideTarget(v *verdict, hit map[*entry]bool, target string, s *section, b 
 		v.Unattributable = append(v.Unattributable, fmt.Sprintf("%s: the section has no closing PASS/FAIL line", target))
 		return
 	}
-	if !s.BinaryFailed || !s.PackageFailed {
-		v.Unattributable = append(v.Unattributable, fmt.Sprintf("%s: no package FAIL result: the test binary did not run to the end", target))
+	if len(s.Failed) == 0 {
+		v.Unattributable = append(v.Unattributable, fmt.Sprintf("%s: no package FAIL result: the target failed outside its tests", target))
 		return
 	}
-	failed := leaves(s.FailedTests)
+	for _, p := range s.Failed {
+		decidePackage(v, hit, target, p, b)
+	}
+}
+
+// decidePackage attributes one failed package's leaves.
+func decidePackage(v *verdict, hit map[*entry]bool, target string, p *packageResult, b *baseline) {
+	if !p.BinaryFailed {
+		v.Unattributable = append(v.Unattributable, fmt.Sprintf("%s: %s: the test binary did not run to the end", target, p.Package))
+		return
+	}
+	failed := leaves(p.FailedTests)
 	if len(failed) == 0 {
-		v.Unattributable = append(v.Unattributable, fmt.Sprintf("%s: the package failed with no failing test", target))
+		v.Unattributable = append(v.Unattributable, fmt.Sprintf("%s: %s: the package failed with no failing test", target, p.Package))
 		return
 	}
 	for _, name := range failed {
-		if e, ok := b.tests[testKey{Package: s.Package, Name: name}]; ok {
+		if e, ok := b.tests[testKey{Package: p.Package, Name: name}]; ok {
 			hit[e] = true
 			continue
 		}
-		v.Unlisted = append(v.Unlisted, failure{Package: s.Package, Name: name})
+		v.Unlisted = append(v.Unlisted, failure{Package: p.Package, Name: name})
 	}
 }
 

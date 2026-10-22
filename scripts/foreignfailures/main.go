@@ -26,6 +26,10 @@ const (
 	exitUsage  = 2 // the arguments, the baseline or the log cannot be read
 )
 
+// defaultModule is this repository's module path; baseline packages are
+// relative to it.
+const defaultModule = "github.com/jeremyhahn/go-trusted-platform"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -35,6 +39,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("foreignfailures", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	baselinePath := flags.String("baseline", ".github/foreign-failures.tsv", "the foreign-failure baseline")
+	module := flags.String("module", defaultModule, "the module path go test prints in front of each package")
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -47,7 +52,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	log, err := readSuiteLog(flags.Arg(0))
+	log, err := readSuiteLog(flags.Arg(0), *module)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
@@ -56,13 +61,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // readSuiteLog opens and parses the suite log at path.
-func readSuiteLog(path string) (*suiteLog, error) {
+func readSuiteLog(path, module string) (*suiteLog, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, &ReadError{Path: path, Err: err}
 	}
 	defer f.Close()
-	return parseSuiteLog(path, f)
+	return parseSuiteLog(path, module, f)
 }
 
 // report prints the verdict and returns the exit code.
