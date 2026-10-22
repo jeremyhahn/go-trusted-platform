@@ -181,6 +181,15 @@ webservice. The daemon-scoped groups take a session only, as their handlers
 check the tenant and scope themselves (`ntp_handlers.go`, `vpn_handlers.go`,
 `app_service_handlers.go`, `compute_handlers.go`, `tpm_handlers.go`,
 `tenant_handlers.go`), and an admin gate there would lock tenant users out.
+Those checks read the session, never the webservice's operator certificate the
+replay rides on: the session reaches the handler as its caller
+(`restapi.WithCaller`), and when a caller is present the daemon's scope guard
+checks scope and tenant against it alone, with no fallback to the client
+certificate (`ScopeGuard.authorize`). The caller's scopes are those of the
+platform token that authenticated the session (`iammw.AuthorizedContextFromContext`);
+a session from a legacy JWT carries none, so every scoped daemon handler
+refuses it with 403. `TestMountDaemonRESTRoutes_ScopedRouteChecksTheSessionNotTheTransport`
+replays the real tenant handlers over an operator certificate.
 With the webservice CA configured, its own handlers shadow every CA route
 except `POST .../{serial}/revoke`, which only the daemon serves.
 `TestPrivilegedDaemonRoutes_CoverTheDaemonCATable` fails if the daemon gains a CA
@@ -195,8 +204,8 @@ an admin without the scope (403) and from an admin holding it (served).
 Issue-cert is not in the admin gate, as a user issues for themselves. It takes
 the webservice login check instead (`callerCheckedDaemonMethodRoutes`,
 `Router.daemonCallerAuthenticator`): a caller without a session is refused with
-401 `ErrDaemonRouteNoSession`, and the session's user ID, username, tenant and
-roles reach the daemon handler as its caller (`restapi.WithCaller`). The handler
+401 `ErrDaemonRouteNoSession`, and the session's user ID, username, tenant,
+roles and token scopes reach the daemon handler as its caller (`restapi.WithCaller`). The handler
 decides admin from that caller's `admin` role, never from the certificate: a
 certificate whose CN or OU says `admin` is no admin. On the daemon's own
 listener the caller is the platform token or client certificate its scope guard
@@ -207,7 +216,8 @@ or username) nor an admin is refused with 403 `ErrForbiddenUserID`. The CA
 signs an issue-cert CSR's subject and SANs as given, so the handler refuses,
 with 403 `ErrCSRNotBoundToUser`, a CSR whose CN is not the path user, which
 carries an OU the caller's own certificate does not (or `admin`), or which
-carries any SAN.
+carries any SAN. A replayed caller has no certificate of its own (the
+transport's is the webservice's), so its CSR may carry no OU.
 The body is `{"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----..."}`; the web
 console's add-factor wizard builds that CSR in the browser
 (`web/src/lib/csr.ts`: a WebCrypto P-256 key, subject `CN=<user id>`, no

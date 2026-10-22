@@ -36,6 +36,7 @@ import (
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -1914,6 +1915,18 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 type scopedSessionAuth struct {
 	sessionAuth
 	scopes []string
+}
+
+// Verify publishes the session and, as PlatformTokenMiddleware.Verify does
+// for a platform token, the AuthorizedContext carrying the token's scopes.
+func (s *scopedSessionAuth) Verify(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	ctx := iammw.SetAuthorizedContext(r.Context(), &platformtoken.AuthorizedContext{
+		Subject:  "probe-user",
+		TenantID: s.tenantID,
+		Roles:    s.roles,
+		Scopes:   s.scopes,
+	})
+	s.sessionAuth.Verify(w, r.WithContext(ctx), next)
 }
 
 func (s *scopedSessionAuth) RequireScope(scope string) func(http.Handler) http.Handler {

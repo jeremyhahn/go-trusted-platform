@@ -349,6 +349,53 @@ func TestScopeGuard_CertificateWithoutTheScopeIsForbidden(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "ntp:write")
 }
 
+// A caller a replaying front end put in the context is the only principal:
+// its scopes decide, and the operator certificate the request arrived on is
+// never consulted, even when the caller lacks the scope (#983).
+func TestScopeGuard_ReplayedCallerIsTheOnlyPrincipal(t *testing.T) {
+	guard := NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)
+	var got *platformtoken.AuthorizedContext
+	handler := func(w http.ResponseWriter, _ *http.Request, caller *platformtoken.AuthorizedContext) {
+		got = caller
+		w.WriteHeader(http.StatusNoContent)
+	}
+	replayed := func(scopes ...string) *http.Request {
+		req := certificateRequest(http.MethodGet, "/x", "operator")
+		return req.WithContext(WithCaller(req.Context(), &platformtoken.AuthorizedContext{Subject: "u-session", TenantID: "tenant-a", Scopes: scopes}))
+	}
+
+	t.Run("a replayed caller without the scope is 403 over an operator certificate", func(t *testing.T) {
+		got = nil
+		rr := httptest.NewRecorder()
+		guard.RequireCaller("tenant:read", handler)(rr, replayed())
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		assert.Contains(t, rr.Body.String(), "tenant:read")
+		assert.Nil(t, got)
+	})
+
+	t.Run("a replayed caller with the scope is passed on, not the certificate", func(t *testing.T) {
+		got = nil
+		rr := httptest.NewRecorder()
+		guard.RequireCaller("tenant:read", handler)(rr, replayed("tenant:read"))
+		assert.Equal(t, http.StatusNoContent, rr.Code)
+		require.NotNil(t, got)
+		assert.Equal(t, "u-session", got.Subject)
+		assert.Equal(t, "tenant-a", got.TenantID)
+	})
+
+	t.Run("a token-only route takes a replayed caller holding the scope", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		guard.RequireToken("ca:sign-csr", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })(rr, replayed("ca:sign-csr"))
+		assert.Equal(t, http.StatusNoContent, rr.Code)
+	})
+
+	t.Run("a token-only route refuses a replayed caller without the scope", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		guard.RequireToken("ca:sign-csr", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })(rr, replayed())
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+	})
+}
+
 func TestScopeGuardErrors(t *testing.T) {
 	assert.Equal(t, "authentication required: no token", ErrRouteUnauthenticated{Reason: "no token"}.Error())
 	assert.Equal(t, "scope vpn:admin required: missing", ErrRouteForbidden{Scope: "vpn:admin", Reason: "missing"}.Error())

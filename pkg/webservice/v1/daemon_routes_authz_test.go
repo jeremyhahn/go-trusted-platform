@@ -15,6 +15,7 @@ package v1
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -32,9 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -580,6 +583,98 @@ func TestRegisterRoutes_DaemonIssueCertTakesTheSessionCaller(t *testing.T) {
 			} else {
 				assert.Nil(t, ca.Opts, "a refused caller must not reach the CA")
 			}
+		})
+	}
+}
+
+// operatorPeer authenticates every verified chain as the daemon's mTLS
+// operator: the system tenant holding every scope, as transport_auth does.
+type operatorPeer struct{}
+
+func (operatorPeer) AuthenticatePeer(context.Context, []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	return &platformtoken.AuthorizedContext{Subject: "operator", TenantID: "system", Roles: []string{common.ROLE_ADMIN}, Scopes: []string{"*:*"}}, nil
+}
+
+// oneTenantManager knows a single tenant; every other manager call is
+// outside the routes these tests replay.
+type oneTenantManager struct {
+	restapi.TenantManagerInterface
+	tenant *tenant.TenantEntity
+}
+
+func (m oneTenantManager) GetTenant(_ context.Context, id string) (*tenant.TenantEntity, error) {
+	if id != m.tenant.ID {
+		return nil, tenant.ErrTenantNotFound{ID: id}
+	}
+	return m.tenant, nil
+}
+
+func (m oneTenantManager) GetTenantByName(_ context.Context, name string) (*tenant.TenantEntity, error) {
+	if name != m.tenant.Name {
+		return nil, tenant.ErrTenantNotFound{Name: name}
+	}
+	return m.tenant, nil
+}
+
+// tenantDaemonRoutes replays the daemon's real tenant handlers, guarded by
+// a ScopeGuard that would grant the operator certificate everything.
+type tenantDaemonRoutes struct {
+	roots    *x509.CertPool
+	handlers *restapi.TenantHandlers
+}
+
+func (d *tenantDaemonRoutes) ClientCAs() *x509.CertPool { return d.roots }
+
+func (d *tenantDaemonRoutes) MountRESTRoutes(api *mux.Router) error {
+	daemon := mux.NewRouter()
+	d.handlers.RegisterRoutes(daemon)
+	api.Handle("/tenants/name/{name}", daemon).Methods(http.MethodGet)
+	api.Handle("/tenants/{id}", daemon).Methods(http.MethodGet)
+	return nil
+}
+
+// A replayed scoped route checks scope and tenant against the webservice
+// session, never the operator certificate the request arrived on: a session
+// without the scope, or reaching for another tenant, is refused (#983).
+func TestMountDaemonRESTRoutes_ScopedRouteChecksTheSessionNotTheTransport(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	unscoped := &sessionAuth{roles: []string{"user"}, tenantID: "tenant-a"}
+	scoped := &scopedSessionAuth{sessionAuth: sessionAuth{roles: []string{"user"}, tenantID: "tenant-a"}, scopes: []string{"tenant:read"}}
+
+	tests := []struct {
+		name string
+		auth jwt.TokenHandler
+		path string
+		want int
+	}{
+		{"session without the scope", unscoped, "/api/v1/tenants/tenant-a", http.StatusForbidden},
+		{"session without the scope by name", unscoped, "/api/v1/tenants/name/alpha", http.StatusForbidden},
+		{"scoped session for another tenant", scoped, "/api/v1/tenants/tenant-b", http.StatusForbidden},
+		{"scoped session for its own tenant", scoped, "/api/v1/tenants/tenant-a", http.StatusOK},
+		{"scoped session for its own tenant by name", scoped, "/api/v1/tenants/name/alpha", http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			guard := restapi.NewScopeGuard(nil, operatorPeer{}, slog.Default())
+			daemon := &tenantDaemonRoutes{
+				roots: platform.CAPool,
+				handlers: restapi.NewTenantHandlers(
+					restapi.WithTenantGuard(guard),
+					restapi.WithTenantSystemTenant("system"),
+					restapi.WithTenantManager(oneTenantManager{tenant: &tenant.TenantEntity{ID: "tenant-a", Name: "alpha"}}),
+				),
+			}
+			v1Router := newGatedV1Router(t, &testHandlerRegistry{tokenHandler: tt.auth})
+			root := mux.NewRouter()
+			api := root.PathPrefix("/api/v1").Subrouter()
+			require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()))
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.TLS = verifiedClientState(t, platform)
+			rec := httptest.NewRecorder()
+			root.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
 		})
 	}
 }

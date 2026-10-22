@@ -497,6 +497,11 @@ func (h *AuthFactorHandlers) authorizeCaller(r *http.Request, userID string) (in
 // callerLeaf returns the caller's verified client certificate, or nil when the
 // request carries none.
 func callerLeaf(r *http.Request) *x509.Certificate {
+	// A replayed request's client certificate is the front end's, not the
+	// caller's, so a replayed caller has no OU to lend.
+	if _, replayed := replayedCaller(r); replayed {
+		return nil
+	}
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return nil
 	}

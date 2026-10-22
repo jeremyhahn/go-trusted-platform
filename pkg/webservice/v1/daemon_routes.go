@@ -734,6 +734,13 @@ func (v1Router *Router) daemonCallerAuthenticator() DaemonCallerAuthenticator {
 			if user := session.User(); user != nil {
 				caller.Username = user.Username
 			}
+			// Scopes come only from the platform token that authenticated
+			// the session. A session without one holds none, so a scoped
+			// daemon handler refuses it; it never borrows the operator
+			// scope of the transport's client certificate.
+			if authCtx, scoped := iammw.AuthorizedContextFromContext(r.Context()); scoped && authCtx != nil {
+				caller.Scopes = authCtx.Scopes
+			}
 			next.ServeHTTP(w, r.WithContext(restapi.WithCaller(r.Context(), caller)))
 		}))
 	}
