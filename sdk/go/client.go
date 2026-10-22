@@ -52,6 +52,7 @@ type Client interface {
 	PXE() platformv1.PXEServiceClient
 	DNS() platformv1.DNSServiceClient
 	NTP() platformv1.NTPServiceClient
+	Orchestrator() platformv1.OrchestratorServiceClient
 	VPN() platformv1.VPNServiceClient
 	Gateway() platformv1.GatewayServiceClient
 	Proxy() platformv1.ProxyServiceClient
@@ -104,34 +105,35 @@ type Client interface {
 // ServiceClients holds all the gRPC service client interfaces.
 // This is used internally by client implementations to initialize service clients.
 type ServiceClients struct {
-	Daemon      platformv1.PlatformDaemonClient
-	TPM         platformv1.TPMServiceClient
-	CA          platformv1.CAServiceClient
-	Device      platformv1.DeviceServiceClient
-	VTPM        platformv1.VTPMServiceClient
-	IAM         platformv1.PlatformIAMServiceClient
-	KMS         platformv1.KeyManagementServiceClient
-	Barrier     platformv1.BarrierServiceClient
-	SDN         platformv1.SDNServiceClient
-	Compute     platformv1.ComputeServiceClient
-	BMC         platformv1.BMCServiceClient
-	IDevID      platformv1.IDevIDServiceClient
-	Attestation platformv1.AttestationServiceClient
-	Tenant      platformv1.TenantServiceClient
-	PXE         platformv1.PXEServiceClient
-	DNS         platformv1.DNSServiceClient
-	NTP         platformv1.NTPServiceClient
-	VPN         platformv1.VPNServiceClient
-	Gateway     platformv1.GatewayServiceClient
-	Proxy       platformv1.ProxyServiceClient
-	Overlay     platformv1.OverlayServiceClient
-	Registry    platformv1.RegistryServiceClient
-	Cluster     platformv1.ClusterServiceClient
-	PIV         platformv1.PIVServiceClient
-	FIDO2       platformv1.FIDO2ServiceClient
-	Ceremony    platformv1.CeremonyServiceClient
-	LUKS        platformv1.LUKSServiceClient
-	Switch      platformv1.SwitchServiceClient
+	Daemon       platformv1.PlatformDaemonClient
+	TPM          platformv1.TPMServiceClient
+	CA           platformv1.CAServiceClient
+	Device       platformv1.DeviceServiceClient
+	VTPM         platformv1.VTPMServiceClient
+	IAM          platformv1.PlatformIAMServiceClient
+	KMS          platformv1.KeyManagementServiceClient
+	Barrier      platformv1.BarrierServiceClient
+	SDN          platformv1.SDNServiceClient
+	Compute      platformv1.ComputeServiceClient
+	BMC          platformv1.BMCServiceClient
+	IDevID       platformv1.IDevIDServiceClient
+	Attestation  platformv1.AttestationServiceClient
+	Tenant       platformv1.TenantServiceClient
+	PXE          platformv1.PXEServiceClient
+	DNS          platformv1.DNSServiceClient
+	NTP          platformv1.NTPServiceClient
+	Orchestrator platformv1.OrchestratorServiceClient
+	VPN          platformv1.VPNServiceClient
+	Gateway      platformv1.GatewayServiceClient
+	Proxy        platformv1.ProxyServiceClient
+	Overlay      platformv1.OverlayServiceClient
+	Registry     platformv1.RegistryServiceClient
+	Cluster      platformv1.ClusterServiceClient
+	PIV          platformv1.PIVServiceClient
+	FIDO2        platformv1.FIDO2ServiceClient
+	Ceremony     platformv1.CeremonyServiceClient
+	LUKS         platformv1.LUKSServiceClient
+	Switch       platformv1.SwitchServiceClient
 
 	// ConfigDelivery is the config-delivery provisioning service client.
 	ConfigDelivery platformv1.ConfigDeliveryServiceClient
@@ -351,34 +353,35 @@ func (c *platformClient) initServiceClients() {
 	}
 
 	c.services = &ServiceClients{
-		Daemon:      platformv1.NewPlatformDaemonClient(conn),
-		TPM:         platformv1.NewTPMServiceClient(conn),
-		CA:          platformv1.NewCAServiceClient(conn),
-		Device:      platformv1.NewDeviceServiceClient(conn),
-		VTPM:        platformv1.NewVTPMServiceClient(conn),
-		IAM:         platformv1.NewPlatformIAMServiceClient(conn),
-		KMS:         platformv1.NewKeyManagementServiceClient(conn),
-		Barrier:     platformv1.NewBarrierServiceClient(conn),
-		SDN:         platformv1.NewSDNServiceClient(conn),
-		Compute:     platformv1.NewComputeServiceClient(conn),
-		BMC:         platformv1.NewBMCServiceClient(conn),
-		IDevID:      platformv1.NewIDevIDServiceClient(conn),
-		Attestation: platformv1.NewAttestationServiceClient(conn),
-		Tenant:      platformv1.NewTenantServiceClient(conn),
-		PXE:         platformv1.NewPXEServiceClient(conn),
-		DNS:         platformv1.NewDNSServiceClient(conn),
-		NTP:         platformv1.NewNTPServiceClient(conn),
-		VPN:         platformv1.NewVPNServiceClient(conn),
-		Gateway:     platformv1.NewGatewayServiceClient(conn),
-		Proxy:       platformv1.NewProxyServiceClient(conn),
-		Overlay:     platformv1.NewOverlayServiceClient(conn),
-		Registry:    platformv1.NewRegistryServiceClient(conn),
-		Cluster:     platformv1.NewClusterServiceClient(conn),
-		PIV:         platformv1.NewPIVServiceClient(conn),
-		FIDO2:       platformv1.NewFIDO2ServiceClient(conn),
-		Ceremony:    platformv1.NewCeremonyServiceClient(conn),
-		LUKS:        platformv1.NewLUKSServiceClient(conn),
-		Switch:      platformv1.NewSwitchServiceClient(conn),
+		Daemon:       platformv1.NewPlatformDaemonClient(conn),
+		TPM:          platformv1.NewTPMServiceClient(conn),
+		CA:           platformv1.NewCAServiceClient(conn),
+		Device:       platformv1.NewDeviceServiceClient(conn),
+		VTPM:         platformv1.NewVTPMServiceClient(conn),
+		IAM:          platformv1.NewPlatformIAMServiceClient(conn),
+		KMS:          platformv1.NewKeyManagementServiceClient(conn),
+		Barrier:      platformv1.NewBarrierServiceClient(conn),
+		SDN:          platformv1.NewSDNServiceClient(conn),
+		Compute:      platformv1.NewComputeServiceClient(conn),
+		BMC:          platformv1.NewBMCServiceClient(conn),
+		IDevID:       platformv1.NewIDevIDServiceClient(conn),
+		Attestation:  platformv1.NewAttestationServiceClient(conn),
+		Tenant:       platformv1.NewTenantServiceClient(conn),
+		PXE:          platformv1.NewPXEServiceClient(conn),
+		DNS:          platformv1.NewDNSServiceClient(conn),
+		NTP:          platformv1.NewNTPServiceClient(conn),
+		Orchestrator: platformv1.NewOrchestratorServiceClient(conn),
+		VPN:          platformv1.NewVPNServiceClient(conn),
+		Gateway:      platformv1.NewGatewayServiceClient(conn),
+		Proxy:        platformv1.NewProxyServiceClient(conn),
+		Overlay:      platformv1.NewOverlayServiceClient(conn),
+		Registry:     platformv1.NewRegistryServiceClient(conn),
+		Cluster:      platformv1.NewClusterServiceClient(conn),
+		PIV:          platformv1.NewPIVServiceClient(conn),
+		FIDO2:        platformv1.NewFIDO2ServiceClient(conn),
+		Ceremony:     platformv1.NewCeremonyServiceClient(conn),
+		LUKS:         platformv1.NewLUKSServiceClient(conn),
+		Switch:       platformv1.NewSwitchServiceClient(conn),
 
 		ConfigDelivery: platformv1.NewConfigDeliveryServiceClient(conn),
 
@@ -589,6 +592,15 @@ func (c *platformClient) NTP() platformv1.NTPServiceClient {
 		return nil
 	}
 	return c.services.NTP
+}
+
+// Orchestrator returns the go-quicbaas agent-fleet service client (health,
+// agents, sessions and jobs).
+func (c *platformClient) Orchestrator() platformv1.OrchestratorServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Orchestrator
 }
 
 // VPN returns the management-VPN control-plane service client.

@@ -579,6 +579,22 @@ func TestPlatformClient_InvitationCallsTheInvitationService(t *testing.T) {
 	}
 }
 
+func TestPlatformClient_OrchestratorCallsTheOrchestratorService(t *testing.T) {
+	conn := &recordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolGRPC, nil)
+
+	if _, err := c.Orchestrator().Health(context.Background(), &platformv1.OrchestratorHealthRequest{}); err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if conn.method != platformv1.OrchestratorService_Health_FullMethodName {
+		t.Errorf("Orchestrator() called %q, want %q", conn.method, platformv1.OrchestratorService_Health_FullMethodName)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil); c.Orchestrator() != nil {
+		t.Error("Orchestrator() must be nil without a connection")
+	}
+}
+
 func TestPlatformClient_EABCallsTheEABService(t *testing.T) {
 	conn := &recordingConn{}
 	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolGRPC, nil)

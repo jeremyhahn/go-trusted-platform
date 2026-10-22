@@ -44,6 +44,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/luks"
 	ntpcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/ntp"
+	orchestratorcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/orchestrator"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/piv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/profile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/provision"
@@ -194,6 +195,7 @@ func init() {
 	rootCmd.AddCommand(appsvc.NewMessagingCommand(getCommonFlags))
 	rootCmd.AddCommand(appsvc.NewObjectStorageCommand(getCommonFlags))
 	rootCmd.AddCommand(ntpcmd.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(orchestratorcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(piv.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(profile.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(provision.NewCommand(getCommonFlags))

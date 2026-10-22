@@ -1882,6 +1882,39 @@ bench-vpn:
 integration-test-vpn: build-devcontainer
 	$(call run-integration-suite,vpn)
 
+# Orchestrator (go-quicbaas agent fleet) Tests
+#
+# These use the fully assembled $(BUILD_TAGS), never a literal list.
+
+## test-orchestrator: Run orchestrator unit tests across every transport
+.PHONY: test-orchestrator
+test-orchestrator:
+	@echo "Running orchestrator unit tests..."
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' \
+		./pkg/orchestrator/... \
+		./pkg/cli/commands/orchestrator/...
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' -run 'Orchestrator' \
+		./pkg/api/daemon/... \
+		./pkg/api/rest/... \
+		./pkg/api/mcp/...
+	cd sdk/go && go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' -run 'Orchestrator' . ./transport/...
+
+## coverage-orchestrator: Orchestrator coverage report
+.PHONY: coverage-orchestrator
+coverage-orchestrator:
+	@mkdir -p build/coverage
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' \
+		-coverprofile=/tmp/orchestrator.cover \
+		./pkg/orchestrator/... ./pkg/cli/commands/orchestrator/...
+	go tool cover -func=/tmp/orchestrator.cover | tail -1
+	@go tool cover -html=/tmp/orchestrator.cover -o build/coverage/orchestrator.html
+	@echo "Coverage report: build/coverage/orchestrator.html"
+
+## integration-test-orchestrator: Run orchestrator multi-protocol integration tests in devcontainer
+.PHONY: integration-test-orchestrator
+integration-test-orchestrator: build-devcontainer
+	$(call run-integration-suite,orchestrator)
+
 ## integration-test-installer: Run the installer suite (real dnsmasq forwards the internal zone) in devcontainer
 .PHONY: integration-test-installer
 integration-test-installer: build-devcontainer
