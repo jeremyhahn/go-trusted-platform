@@ -869,6 +869,7 @@ func (s *UnixAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusRes
 // SecretsStore stores a secret.
 func (s *UnixAdapter) SecretsStore(ctx context.Context, opts SecretsStoreOptions) (*SecretsStoreResult, error) {
 	req := &pb.StoreSecretRequest{
+		SecretId:    opts.Name,
 		Name:        opts.Name,
 		Data:        opts.Data,
 		Description: opts.Description,
