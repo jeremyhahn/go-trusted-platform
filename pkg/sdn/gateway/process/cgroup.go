@@ -14,10 +14,13 @@
 package process
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // DefaultCgroupRoot is the cgroup v2 mount point on Alpine and every other
@@ -144,16 +147,175 @@ func (m *CgroupManager) write(path, attribute, value string) error {
 	return nil
 }
 
-// Remove deletes a process's leaf. An already absent leaf is not an error;
-// a leaf with live processes in it is, and the supervisor logs it rather
-// than retrying, because that means a child outlived its own teardown.
-func (m *CgroupManager) Remove(process string) error {
+// Remove deletes a process's leaf once the kernel reports it empty. An
+// already absent leaf is not an error.
+//
+// A reaped child is not yet gone from its leaf: the kernel unlinks an
+// exiting task from its cgroup after the task's last context switch, which
+// can come after the parent's wait returns, and until then rmdir fails with
+// EBUSY. Remove therefore waits for "populated 0" in the leaf's cgroup.events
+// — the kernel raises a modify event on that file when the value changes —
+// and only then removes the directory. A leaf still populated when ctx ends
+// is an error, and the supervisor logs it rather than retrying, because that
+// means a child outlived its own teardown.
+func (m *CgroupManager) Remove(ctx context.Context, process string) error {
 	if !m.Enabled() {
 		return nil
 	}
 	path := m.leafPath(process)
+	if err := awaitEmpty(ctx, path); err != nil {
+		return err
+	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return &ErrCgroup{Path: path, Op: "remove", Cause: err}
 	}
 	return nil
+}
+
+// awaitEmpty returns once the leaf at path holds no process. A leaf, or a
+// cgroup.events file, that does not exist holds nothing to wait for.
+func awaitEmpty(ctx context.Context, path string) (err error) {
+	events := filepath.Join(path, "cgroup.events")
+	if _, statErr := os.Stat(events); os.IsNotExist(statErr) {
+		return nil
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return &ErrCgroup{Path: events, Op: "watch", Cause: err}
+	}
+	defer func() {
+		if closeErr := watcher.Close(); closeErr != nil && err == nil {
+			err = &ErrCgroup{Path: events, Op: "watch", Cause: closeErr}
+		}
+	}()
+	// The watch is in place before the first read, so a change between the
+	// read and the select is not missed.
+	if err := watcher.Add(events); err != nil {
+		if os.IsNotExist(err) {
+			return nil // the leaf was removed meanwhile
+		}
+		return &ErrCgroup{Path: events, Op: "watch", Cause: err}
+	}
+	for {
+		counters, err := readKeyed(events)
+		if err != nil {
+			return err
+		}
+		populated, err := counters.value(events, "populated")
+		if err != nil {
+			return err
+		}
+		if populated == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return &ErrCgroup{Path: events, Op: "await empty", Cause: ctx.Err()}
+		case _, ok := <-watcher.Events:
+			if !ok {
+				return &ErrCgroup{Path: events, Op: "watch", Cause: fsnotify.ErrClosed}
+			}
+		case watchErr, ok := <-watcher.Errors:
+			if !ok {
+				watchErr = fsnotify.ErrClosed
+			}
+			return &ErrCgroup{Path: events, Op: "watch", Cause: watchErr}
+		}
+	}
+}
+
+// MemoryUsage is a leaf's memory accounting as the kernel reports it. The
+// counters belong to the leaf, not to one child: Peak and the event counts
+// carry over a relaunch into the same leaf.
+type MemoryUsage struct {
+	// Current is memory.current, the bytes charged to the leaf now.
+	Current int64
+	// Peak is memory.peak, the most bytes ever charged to the leaf.
+	Peak int64
+	// Max counts memory.events "max": allocations that hit memory.max.
+	Max int64
+	// OOM counts memory.events "oom": allocations that failed at the limit.
+	OOM int64
+	// OOMKill counts memory.events "oom_kill": processes the kernel's OOM
+	// killer ended inside the leaf.
+	OOMKill int64
+}
+
+// Memory reads a process's leaf accounting: memory.current, memory.peak and
+// the memory.events counters. A disabled manager accounts nothing and
+// returns the zero value.
+func (m *CgroupManager) Memory(process string) (MemoryUsage, error) {
+	if !m.Enabled() {
+		return MemoryUsage{}, nil
+	}
+	path := m.leafPath(process)
+	current, err := readCounter(filepath.Join(path, "memory.current"))
+	if err != nil {
+		return MemoryUsage{}, err
+	}
+	peak, err := readCounter(filepath.Join(path, "memory.peak"))
+	if err != nil {
+		return MemoryUsage{}, err
+	}
+	file := filepath.Join(path, "memory.events")
+	counters, err := readKeyed(file)
+	if err != nil {
+		return MemoryUsage{}, err
+	}
+	usage := MemoryUsage{Current: current, Peak: peak}
+	for key, field := range map[string]*int64{"max": &usage.Max, "oom": &usage.OOM, "oom_kill": &usage.OOMKill} {
+		if *field, err = counters.value(file, key); err != nil {
+			return MemoryUsage{}, err
+		}
+	}
+	return usage, nil
+}
+
+// readCounter reads a single-value interface file such as memory.current.
+func readCounter(file string) (int64, error) {
+	content, err := os.ReadFile(file) // #nosec G304 -- a leaf interface file under the configured cgroup tree
+	if err != nil {
+		return 0, &ErrCgroup{Path: file, Op: "read", Cause: err}
+	}
+	text := strings.TrimSpace(string(content))
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, &ErrCgroupFormat{Path: file, Line: text}
+	}
+	return value, nil
+}
+
+// keyedCounters is a flat-keyed interface file ("key value" per line), such
+// as cgroup.events or memory.events.
+type keyedCounters map[string]int64
+
+// readKeyed parses a flat-keyed interface file.
+func readKeyed(file string) (keyedCounters, error) {
+	content, err := os.ReadFile(file) // #nosec G304 -- a leaf interface file under the configured cgroup tree
+	if err != nil {
+		return nil, &ErrCgroup{Path: file, Op: "read", Cause: err}
+	}
+	counters := keyedCounters{}
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, &ErrCgroupFormat{Path: file, Line: line}
+		}
+		value, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return nil, &ErrCgroupFormat{Path: file, Line: line}
+		}
+		counters[fields[0]] = value
+	}
+	return counters, nil
+}
+
+// value is one key's count; a key the file does not carry is a format
+// error, because every kernel that has the file writes the keys read here.
+func (c keyedCounters) value(file, key string) (int64, error) {
+	value, ok := c[key]
+	if !ok {
+		return 0, &ErrCgroupFormat{Path: file, Line: key + " missing"}
+	}
+	return value, nil
 }

@@ -340,7 +340,7 @@ func (s *Supervisor) abandonLaunch(ctx context.Context, proc *supervised, child 
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
 	cancel()
-	s.removeCgroup(proc)
+	s.removeCgroup(context.WithoutCancel(ctx), proc)
 }
 
 // runtimeDirMode is the control-socket directory's mode: the service
@@ -624,7 +624,8 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		s.cfg.Logger.Warn("gatewayd supervisor: process down, restarting",
 			slog.String("process", proc.def.Name),
 			slog.Duration("backoff", backoff),
-			slog.Any("error", cause))
+			slog.Any("error", cause),
+			s.memoryAttr(proc.def.Name))
 
 		select {
 		case <-ctx.Done():
@@ -923,7 +924,7 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 		// and a failure left over from the crash would otherwise be
 		// reported for a process nobody is running any more.
 		s.clearProcessState(proc)
-		s.removeCgroup(proc)
+		s.removeCgroup(ctx, proc)
 		return nil
 	}
 	if err := s.terminate(ctx, proc.def.Name, child, done); err != nil {
@@ -934,7 +935,7 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 	}
 
 	s.clearProcessState(proc)
-	s.removeCgroup(proc)
+	s.removeCgroup(ctx, proc)
 	s.cfg.Logger.Info("gatewayd supervisor: process stopped", slog.String("process", proc.def.Name))
 	return nil
 }
@@ -983,12 +984,40 @@ func (s *Supervisor) clearProcessState(proc *supervised) {
 // removeCgroup deletes the process's cgroup leaf. A leaf that cannot be
 // removed is logged rather than retried: it means something is still in it,
 // which the stop above was supposed to have ended.
-func (s *Supervisor) removeCgroup(proc *supervised) {
-	// Nil-safe for the same reason as Prepare in launch.
-	if err := s.cfg.Cgroups.Remove(proc.def.Name); err != nil {
+func (s *Supervisor) removeCgroup(ctx context.Context, proc *supervised) {
+	// Nil-safe for the same reason as Prepare in launch. The leaf's
+	// accounting is read before the leaf goes: it is the class's measured
+	// peak for the whole time the process was up.
+	if s.cfg.Cgroups.Enabled() {
+		s.cfg.Logger.Info("gatewayd supervisor: process memory",
+			slog.String("process", proc.def.Name), s.memoryAttr(proc.def.Name))
+	}
+	// The kernel empties the leaf moments after the child is reaped; a
+	// leaf still populated after StopTimeout has a process in it that
+	// outlived the child.
+	removeCtx, cancel := context.WithTimeout(ctx, s.cfg.StopTimeout)
+	defer cancel()
+	if err := s.cfg.Cgroups.Remove(removeCtx, proc.def.Name); err != nil {
 		s.cfg.Logger.Warn("gatewayd supervisor: removing cgroup leaf",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
+}
+
+// memoryAttr is a process's leaf memory accounting as one log attribute, so
+// the gatewayd log carries the measured peak of every class and the OOM
+// kills behind a restart. It is empty when cgroup placement is off.
+func (s *Supervisor) memoryAttr(name string) slog.Attr {
+	if !s.cfg.Cgroups.Enabled() {
+		return slog.Attr{}
+	}
+	usage, err := s.cfg.Cgroups.Memory(name)
+	if err != nil {
+		return slog.Any("memory_error", err)
+	}
+	return slog.Group("memory",
+		slog.Int64("current", usage.Current),
+		slog.Int64("peak", usage.Peak),
+		slog.Int64("oom_kill", usage.OOMKill))
 }
 
 // ServiceActive implements gateway.ServiceSupervisor. It is the child's own

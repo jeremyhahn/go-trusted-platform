@@ -1815,10 +1815,10 @@ func TestCgroupManager_WritesTheClassLimitsIntoALeaf(t *testing.T) {
 	// before exercising the removal.
 	require.NoError(t, os.Remove(filepath.Join(path, "memory.max")))
 	require.NoError(t, os.Remove(filepath.Join(path, "cpu.max")))
-	require.NoError(t, manager.Remove("proxy"))
+	require.NoError(t, manager.Remove(context.Background(), "proxy"))
 	_, err = os.Stat(path)
 	assert.True(t, os.IsNotExist(err))
-	require.NoError(t, manager.Remove("proxy"), "removing an absent leaf is not an error")
+	require.NoError(t, manager.Remove(context.Background(), "proxy"), "removing an absent leaf is not an error")
 }
 
 func TestCgroupManager_DisabledDoesNothing(t *testing.T) {
@@ -1827,7 +1827,7 @@ func TestCgroupManager_DisabledDoesNothing(t *testing.T) {
 	leaf, err := manager.Prepare(Definition{Name: "datapath"})
 	require.NoError(t, err)
 	assert.Nil(t, leaf)
-	require.NoError(t, manager.Remove("datapath"))
+	require.NoError(t, manager.Remove(context.Background(), "datapath"))
 }
 
 func TestCgroupManager_ReportsAnUnwritableTree(t *testing.T) {
@@ -1885,6 +1885,126 @@ func TestCgroupManager_ReportsAControllerItCannotDelegate(t *testing.T) {
 	assert.Equal(t, control, cgroupErr.Path)
 	_, err = os.Stat(filepath.Join(root, "gatewayd", "routing", "memory.max"))
 	assert.True(t, os.IsNotExist(err), "no limit is written below a parent that refused the controller")
+}
+
+// writeLeafFile replaces a fixture interface file in one rename, the way a
+// kernel read sees it: never truncated, never half written.
+func writeLeafFile(t *testing.T, leaf, name, content string) {
+	t.Helper()
+	staged := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(staged, []byte(content), 0o600))
+	require.NoError(t, os.Rename(staged, filepath.Join(leaf, name)))
+}
+
+func TestCgroupManager_RemoveWaitsForTheKernelToEmptyTheLeaf(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	writeLeafFile(t, leaf, "cgroup.events", "populated 1\nfrozen 0\n")
+
+	done := make(chan error, 1)
+	go func() { done <- awaitEmpty(context.Background(), leaf) }()
+	select {
+	case err := <-done:
+		t.Fatalf("awaitEmpty returned %v while the leaf was still populated", err)
+	default:
+	}
+
+	writeLeafFile(t, leaf, "cgroup.events", "populated 0\nfrozen 0\n")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("awaitEmpty did not return after cgroup.events reported populated 0")
+	}
+
+	// An empty leaf needs no wait at all.
+	require.NoError(t, awaitEmpty(context.Background(), leaf))
+}
+
+func TestCgroupManager_RemoveRefusesALeafThatStaysPopulated(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	writeLeafFile(t, leaf, "cgroup.events", "populated 1\nfrozen 0\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := manager.Remove(ctx, "routing")
+	var cgroupErr *ErrCgroup
+	require.ErrorAs(t, err, &cgroupErr)
+	assert.Equal(t, "await empty", cgroupErr.Op)
+	assert.ErrorIs(t, err, context.Canceled)
+	_, err = os.Stat(leaf)
+	assert.NoError(t, err, "a populated leaf is never removed")
+}
+
+func TestCgroupManager_RemoveReportsAnUnreadableEventsFile(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+
+	writeLeafFile(t, leaf, "cgroup.events", "populated yes\n")
+	var format *ErrCgroupFormat
+	require.ErrorAs(t, manager.Remove(context.Background(), "routing"), &format)
+	assert.Equal(t, "populated yes", format.Line)
+
+	writeLeafFile(t, leaf, "cgroup.events", "frozen 0\n")
+	require.ErrorAs(t, manager.Remove(context.Background(), "routing"), &format)
+	assert.Contains(t, format.Error(), "populated missing")
+}
+
+func TestCgroupManager_MemoryReadsTheLeafAccounting(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	writeLeafFile(t, leaf, "memory.current", "1048576\n")
+	writeLeafFile(t, leaf, "memory.peak", "41943040\n")
+	writeLeafFile(t, leaf, "memory.events", "low 0\nhigh 0\nmax 12\noom 3\noom_kill 1\noom_group_kill 0\n")
+
+	usage, err := manager.Memory("routing")
+	require.NoError(t, err)
+	assert.Equal(t, MemoryUsage{Current: 1 << 20, Peak: 40 << 20, Max: 12, OOM: 3, OOMKill: 1}, usage)
+
+	var disabled *CgroupManager
+	usage, err = disabled.Memory("routing")
+	require.NoError(t, err)
+	assert.Zero(t, usage, "a disabled manager accounts nothing")
+}
+
+func TestCgroupManager_MemoryReportsMissingAndMalformedFiles(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+
+	var cgroupErr *ErrCgroup
+	_, err := manager.Memory("routing")
+	require.ErrorAs(t, err, &cgroupErr)
+	assert.Equal(t, "read", cgroupErr.Op)
+	assert.Equal(t, filepath.Join(leaf, "memory.current"), cgroupErr.Path)
+
+	writeLeafFile(t, leaf, "memory.current", "lots\n")
+	var format *ErrCgroupFormat
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, "lots", format.Line)
+
+	writeLeafFile(t, leaf, "memory.current", "4096\n")
+	writeLeafFile(t, leaf, "memory.peak", "8192\n")
+	writeLeafFile(t, leaf, "memory.events", "max 0\noom 0\n")
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, filepath.Join(leaf, "memory.events"), format.Path)
+	assert.Equal(t, "oom_kill missing", format.Line)
+
+	writeLeafFile(t, leaf, "memory.events", "max 0 0\n")
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, "max 0 0", format.Line)
 }
 
 func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
@@ -2550,6 +2670,72 @@ func TestStopService_CleansUpAProcessThatAlreadyExited(t *testing.T) {
 	// budget the previous run exhausted.
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
 	assert.NoError(t, supervisor.ServiceHealth(gateway.ServiceTransit))
+}
+
+// lockedLog is a log sink the supervisor's goroutines can share.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func TestSupervisor_LogsTheLeafMemoryAtARestartAndAStop(t *testing.T) {
+	// The leaf's accounting is the only record of how much memory a class
+	// really uses and of an OOM kill behind a restart (#955), so it is in
+	// the log at both points, read before the leaf is removed.
+	root := t.TempDir()
+	logs := &lockedLog{}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.Cgroups = &CgroupManager{Root: root, Parent: "gatewayd"}
+		c.Logger = slog.New(slog.NewTextHandler(logs, nil))
+		c.RestartBackoff = time.Millisecond
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	writeLeafFile(t, leaf, "memory.current", "1048576\n")
+	writeLeafFile(t, leaf, "memory.peak", "41943040\n")
+	writeLeafFile(t, leaf, "memory.events", "max 9\noom 1\noom_kill 1\n")
+
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	assert.Contains(t, logs.String(),
+		`msg="gatewayd supervisor: process down, restarting" process=routing`)
+	assert.Contains(t, logs.String(), "memory.current=1048576 memory.peak=41943040 memory.oom_kill=1")
+
+	writeLeafFile(t, leaf, "memory.peak", "52428800\n")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
+	assert.Contains(t, logs.String(),
+		`msg="gatewayd supervisor: process memory" process=routing memory.current=1048576 memory.peak=52428800 memory.oom_kill=1`)
+}
+
+func TestSupervisor_LogsAMemoryReadFailureInsteadOfTheAccounting(t *testing.T) {
+	root := t.TempDir()
+	logs := &lockedLog{}
+	supervisor, _, _ := newSupervisor(t, func(c *Config) {
+		c.Cgroups = &CgroupManager{Root: root, Parent: "gatewayd"}
+		c.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	// The fixture leaf has no memory.current: the stop still happens and
+	// the log says why the accounting is missing.
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
+	assert.Contains(t, logs.String(), `msg="gatewayd supervisor: process memory" process=routing memory_error=`)
+	assert.NotContains(t, logs.String(), "memory.peak=")
 }
 
 func TestServiceHealth_ANeverStartedProcessIsNotAStoppedSupervisor(t *testing.T) {
