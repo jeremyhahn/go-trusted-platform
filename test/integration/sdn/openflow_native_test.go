@@ -60,15 +60,13 @@ func setupTestBridge(t *testing.T, bridgeName string) *testBridge {
 	// Delete bridge if it already exists (cleanup from previous failed test)
 	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
-	// Create the bridge
-	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
+	// Create the bridge with OpenFlow 1.3 in one transaction: ovs-vsctl
+	// waits for ovs-vswitchd to apply each transaction, so a separate
+	// "set protocols" would pay that reconfiguration wait a second time.
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName,
+		"--", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "Failed to create bridge %s: %s", bridgeName, string(output))
-
-	// Set OpenFlow version to 1.3
-	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "Failed to set OpenFlow version: %s", string(output))
+	require.NoError(t, err, "Failed to create bridge %s with OpenFlow 1.3: %s", bridgeName, string(output))
 
 	// OVS creates .mgmt sockets for each bridge for OpenFlow management
 	socketPath := filepath.Join(ofSocketDir, bridgeName+".mgmt")
