@@ -201,6 +201,33 @@ func TestCLIKeyAlgorithm_PassesOtherNamesThrough(t *testing.T) {
 		"an unknown name reaches the CLI unchanged, so the CLI's own error reports it")
 }
 
+func TestCLIAdapter_HashReportsTheSuiteAlgorithmName(t *testing.T) {
+	adapter := scriptedPlatformCTL(t, `cat >/dev/null; printf '{"algorithm":"SHA-256","hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","timestamp":"1700000000"}'`)
+
+	result, err := adapter.CryptoHash(context.Background(), []byte("data"), "SHA256")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256", result.Algorithm, "the gRPC and QUIC adapters report SHA256")
+	assert.Len(t, result.Hash, 32)
+}
+
+func TestCLIHashAlgorithmName_MapsWhatTheCLIPrints(t *testing.T) {
+	printed := map[kmssvc.HashAlgorithm]string{
+		kmssvc.HashAlgorithmSHA1:   "SHA1",
+		kmssvc.HashAlgorithmSHA256: "SHA256",
+		kmssvc.HashAlgorithmSHA384: "SHA384",
+		kmssvc.HashAlgorithmSHA512: "SHA512",
+	}
+	for algorithm, want := range printed {
+		assert.Equal(t, want, cliHashAlgorithmName(string(algorithm)), "%s", algorithm)
+	}
+}
+
+func TestCLIHashAlgorithmName_PassesOtherNamesThrough(t *testing.T) {
+	assert.Equal(t, "SHA3-256", cliHashAlgorithmName(string(kmssvc.HashAlgorithmSHA3256)))
+	assert.Equal(t, "not-a-hash", cliHashAlgorithmName("not-a-hash"),
+		"an unknown name is reported as printed, so the assertion names it")
+}
+
 func TestCLIAdapter_RunCommandInputSelectsJSONAndPipesStdin(t *testing.T) {
 	adapter := scriptedPlatformCTL(t, `printf '%s|%s|%s' "$PLATFORMCTL_OUTPUT" "$*" "$(cat)"`)
 

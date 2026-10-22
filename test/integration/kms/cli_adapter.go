@@ -1596,6 +1596,26 @@ type cliCryptoHashResponse struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
+// cliHashAlgorithmNames maps the SHA-2 spellings platformctl prints (the
+// SDK's kms.HashAlgorithm values, "SHA-256") to the suite's protocol-neutral
+// names, the ones every wire adapter reports ("SHA256"). The SHA-3 names are
+// spelled the same on both sides.
+var cliHashAlgorithmNames = map[string]string{
+	"SHA-1":   "SHA1",
+	"SHA-256": "SHA256",
+	"SHA-384": "SHA384",
+	"SHA-512": "SHA512",
+}
+
+// cliHashAlgorithmName returns the suite name of a hash algorithm platformctl
+// printed.
+func cliHashAlgorithmName(algorithm string) string {
+	if name, ok := cliHashAlgorithmNames[algorithm]; ok {
+		return name
+	}
+	return algorithm
+}
+
 func (r *cliCryptoHashResponse) toResult() (*CryptoHashResult, error) {
 	const operation = "CryptoHash"
 	hash, err := decodeCLIBase64(operation, "hash", r.Hash)
@@ -1607,7 +1627,7 @@ func (r *cliCryptoHashResponse) toResult() (*CryptoHashResult, error) {
 		return nil, err
 	}
 	return &CryptoHashResult{
-		Algorithm: r.Algorithm,
+		Algorithm: cliHashAlgorithmName(r.Algorithm),
 		Hash:      hash,
 		Timestamp: timestamp,
 	}, nil
