@@ -21,6 +21,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
@@ -64,7 +66,7 @@ Encryption:
 
 Signing:
   Use --sign to sign the image manifest. Combine with --signing-key-id
-  to select an explicit signing key (defaults to the tenant signer).
+  to select an explicit signing key (defaults to registry-default).
 
 Overwrite:
   Use --overwrite to replace an existing tag of the same name.`,
@@ -85,10 +87,52 @@ Overwrite:
 	return cmd
 }
 
-// runPush executes the push command. signingKeyID overrides the default
-// tenant signer when sign=true; overwrite=true replaces an existing tag.
+// applyPushAnnotations records the encryption and signing requests as
+// push-metadata annotations, the keys the registry's gRPC adapter reads
+// (pkg/registry PushOptions). They travel the way overwrite does, with
+// no proto field.
+func applyPushAnnotations(annotations map[string]string, encrypt bool, keyID string, sign bool, signingKeyID string) map[string]string {
+	if encrypt {
+		if annotations == nil {
+			annotations = make(map[string]string, 4)
+		}
+		annotations[registry.PushAnnotationEncrypt] = "true"
+		annotations[registry.PushAnnotationKeyID] = keyID
+	}
+	if sign {
+		if annotations == nil {
+			annotations = make(map[string]string, 4)
+		}
+		annotations[registry.PushAnnotationSign] = "true"
+		annotations[registry.PushAnnotationSigningKeyID] = signingKeyID
+	}
+	return annotations
+}
+
+// PushResultFromResponse builds the push result from the registry's
+// reply. Encrypted and Signed reflect the returned manifest's
+// annotations, not the request flags, so a push the registry did not
+// really sign is reported as not signed.
+func PushResultFromResponse(ref string, resp *platformv1.PushResponse, keyID string) *PushResult {
+	annotations := resp.GetArtifact().GetAnnotations()
+	result := &PushResult{
+		Reference: ref,
+		Digest:    resp.GetArtifact().GetDigest(),
+		Size:      resp.GetBytesReceived(),
+		Encrypted: annotations[registry.ManifestAnnotationEncrypted] == "true",
+		KeyID:     keyID,
+		Signed:    annotations[registry.ManifestAnnotationSigned] == "true",
+	}
+	if resp.GetTimestamp() != nil {
+		result.Timestamp = resp.GetTimestamp().GetSeconds()
+	}
+	return result
+}
+
+// runPush executes the push command. signingKeyID overrides the registry's
+// default signing key when sign=true; overwrite=true replaces an existing
+// tag.
 func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sign bool, signingKeyID string, overwrite bool, inputFile string) error {
-	_ = signingKeyID
 	if err := validateImageRef(ref); err != nil {
 		return err
 	}
@@ -134,11 +178,15 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 		return ErrPushFailed{Reference: ref, Err: err}
 	}
 
-	// Send metadata first using SDK helpers
+	// Send metadata first using SDK helpers. The encryption and signing
+	// requests travel as annotations, the same way overwrite does
+	// (the same keys the registry's gRPC adapter sends, pkg/registry).
 	metadata := regsvc.NewPushMetadata(repository, tag, fileSize)
 	if overwrite {
 		metadata = regsvc.WithOverwrite(metadata)
 	}
+	metadata.Annotations = applyPushAnnotations(
+		metadata.Annotations, encrypt, keyID, sign, signingKeyID)
 	metadataReq := regsvc.NewPushMetadataRequest(metadata)
 	if err := stream.Send(metadataReq); err != nil {
 		return ErrPushFailed{Reference: ref, Err: err}
@@ -177,19 +225,8 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 		return ErrPushFailed{Reference: ref, Err: &MessageError{Msg: resp.GetStatus().GetMessage()}}
 	}
 
-	// Build result from response
-	result := &PushResult{
-		Reference: ref,
-		Digest:    resp.GetArtifact().GetDigest(),
-		Size:      resp.GetBytesReceived(),
-		Encrypted: encrypt,
-		KeyID:     keyID,
-		Signed:    sign,
-	}
-
-	if resp.GetTimestamp() != nil {
-		result.Timestamp = resp.GetTimestamp().GetSeconds()
-	}
+	// Build result from response.
+	result := PushResultFromResponse(ref, resp, keyID)
 
 	printer := base.Printer()
 

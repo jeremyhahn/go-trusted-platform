@@ -17,7 +17,135 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+func TestApplyPushAnnotations(t *testing.T) {
+	tests := []struct {
+		name       string
+		existing   map[string]string
+		encrypt    bool
+		keyID      string
+		sign       bool
+		signingKey string
+		want       map[string]string
+	}{
+		{
+			name: "no options leaves no annotations",
+			want: map[string]string{},
+		},
+		{
+			name:       "sign and encrypt both",
+			encrypt:    true,
+			keyID:      "dek-1",
+			sign:       true,
+			signingKey: "signer-1",
+			want: map[string]string{
+				registry.PushAnnotationEncrypt:      "true",
+				registry.PushAnnotationKeyID:        "dek-1",
+				registry.PushAnnotationSign:         "true",
+				registry.PushAnnotationSigningKeyID: "signer-1",
+			},
+		},
+		{
+			name: "sign only omits encryption keys",
+			sign: true,
+			want: map[string]string{
+				// The key is sent even when empty: the registry treats an
+				// unset signing key as the registry default.
+				registry.PushAnnotationSign:         "true",
+				registry.PushAnnotationSigningKeyID: "",
+			},
+		},
+		{
+			name:    "encrypt only omits signing keys",
+			encrypt: true,
+			keyID:   "dek-2",
+			want: map[string]string{
+				registry.PushAnnotationEncrypt: "true",
+				registry.PushAnnotationKeyID:   "dek-2",
+			},
+		},
+		{
+			name:     "existing overwrite annotation is preserved",
+			existing: map[string]string{"overwrite": "true"},
+			sign:     true,
+			want: map[string]string{
+				"overwrite":                         "true",
+				registry.PushAnnotationSign:         "true",
+				registry.PushAnnotationSigningKeyID: "",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := applyPushAnnotations(tt.existing, tt.encrypt, tt.keyID, tt.sign, tt.signingKey)
+
+			want := tt.want
+			if want == nil {
+				want = map[string]string{}
+			}
+			if len(got) != len(want) {
+				t.Fatalf("annotations = %#v, want %#v", got, want)
+			}
+			for k, v := range want {
+				if got[k] != v {
+					t.Errorf("annotation %q = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestPushResultFromResponse_SignedReply(t *testing.T) {
+	resp := &platformv1.PushResponse{
+		Artifact: &platformv1.Artifact{
+			Digest: "sha256:abc",
+			Annotations: map[string]string{
+				registry.ManifestAnnotationSigned:    "true",
+				registry.ManifestAnnotationEncrypted: "true",
+			},
+		},
+	}
+
+	result := PushResultFromResponse("myrepo/myimage:v1.0", resp, "")
+
+	if !result.Signed {
+		t.Error("expected a signed reply to be reported as signed")
+	}
+	if !result.Encrypted {
+		t.Error("expected an encrypted reply to be reported as encrypted")
+	}
+	if result.Digest != "sha256:abc" {
+		t.Errorf("unexpected digest: %q", result.Digest)
+	}
+	if result.Reference != "myrepo/myimage:v1.0" {
+		t.Errorf("unexpected reference: %q", result.Reference)
+	}
+}
+
+func TestPushResultFromResponse_UnsignedReply(t *testing.T) {
+	// A reply without the signed annotation is reported as not signed.
+	resp := &platformv1.PushResponse{
+		Artifact: &platformv1.Artifact{
+			Digest: "sha256:def",
+			Annotations: map[string]string{
+				"org.letstrust.registry.other": "kept",
+			},
+		},
+	}
+
+	result := PushResultFromResponse("myrepo/myimage:v1.0", resp, "")
+
+	if result.Signed {
+		t.Error("expected a reply without the signed annotation to be reported as not signed")
+	}
+	if result.Encrypted {
+		t.Error("expected a reply without the encrypted annotation to be reported as not encrypted")
+	}
+}
 
 func TestNewPushCommand(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
