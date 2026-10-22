@@ -41,7 +41,12 @@ func TestForeignTenant_IAM(t *testing.T) {
 
 	unix := NewUnixAdapter()
 	require.NoError(t, unix.Setup(ctx), "Unix setup")
-	defer unix.Teardown(ctx)
+	// A cleanup, not a defer: ensureIAMTenant deletes the tenant in a cleanup
+	// over this connection, and cleanups run after defers, last in first out,
+	// so the connection closes only after that delete.
+	t.Cleanup(func() {
+		require.NoError(t, unix.Teardown(context.Background()), "Unix teardown")
+	})
 	operatorIAM := platformv1.NewPlatformIAMServiceClient(unix.conn)
 
 	ensureIAMTenant(t, ctx, operatorIAM, helpers.ForeignTenantID)
