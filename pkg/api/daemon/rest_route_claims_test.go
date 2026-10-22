@@ -70,6 +70,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	s.SetConfigDeliveryHandler(routeTableConfigDelivery{})
 	s.SetBMCHandler(routeTableBMC{})
 	s.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, nil)
+	s.SetOrchestratorHandlers(platformv1.UnimplementedOrchestratorServiceServer{}, nil)
 	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, nil)
 	s.SetAppServiceHandlers(restapi.AppServiceServers{}, nil)
 	s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{})

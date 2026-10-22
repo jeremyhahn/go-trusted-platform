@@ -208,6 +208,7 @@ var protoParamParsers = map[protoreflect.Kind]protoParamParser{
 	protoreflect.StringKind: parseStringParam,
 	protoreflect.EnumKind:   parseEnumParam,
 	protoreflect.Uint32Kind: parseUint32Param,
+	protoreflect.Int32Kind:  parseInt32Param,
 }
 
 func parseBoolParam(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
@@ -240,6 +241,15 @@ func parseUint32Param(_ protoreflect.FieldDescriptor, raw string) (protoreflect.
 		return protoreflect.Value{}, false
 	}
 	return protoreflect.ValueOfUint32(uint32(n)), true
+}
+
+// parseInt32Param parses a decimal int32, such as ?page.limit=50.
+func parseInt32Param(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
+	n, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return protoreflect.Value{}, false
+	}
+	return protoreflect.ValueOfInt32(int32(n)), true
 }
 
 // =============================================================================

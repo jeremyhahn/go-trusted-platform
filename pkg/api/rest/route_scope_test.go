@@ -161,6 +161,21 @@ var appServiceRouteScopes = []guardedRoute{
 	{http.MethodGet, "/api/v1/messaging/dedup-stats", "messaging:read"},
 }
 
+// orchestratorRouteScopes is every orchestrator route with the scope of its
+// gRPC twin.
+var orchestratorRouteScopes = []guardedRoute{
+	{http.MethodGet, "/api/v1/orchestrator/health", "orchestrator:read"},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/t1/agents", "orchestrator:read"},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/t1/agents/a1", "orchestrator:read"},
+	{http.MethodPost, "/api/v1/orchestrator/tenants/t1/agents/a1/disable", "orchestrator:write"},
+	{http.MethodPost, "/api/v1/orchestrator/tenants/t1/agents/a1/enable", "orchestrator:write"},
+	{http.MethodGet, "/api/v1/orchestrator/sessions", "orchestrator:read"},
+	{http.MethodDelete, "/api/v1/orchestrator/sessions/s1", "orchestrator:write"},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/t1/jobs", "orchestrator:read"},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/t1/jobs/j1", "orchestrator:read"},
+	{http.MethodPost, "/api/v1/orchestrator/tenants/t1/jobs/j1/cancel", "orchestrator:write"},
+}
+
 // computeRouteScopes is every compute route with the scope of its gRPC twin.
 var computeRouteScopes = []guardedRoute{
 	{http.MethodPost, "/api/v1/compute/vms", "vm:write"},
@@ -205,6 +220,7 @@ func guardedRouter(guard *ScopeGuard) *mux.Router {
 	NewNTPHandlers(nil, guard, nil).RegisterRoutes(router)
 	NewAppServiceHandlers(AppServiceServers{}, guard, nil).RegisterRoutes(router)
 	NewComputeHandlers(nil, guard, nil).RegisterRoutes(router)
+	NewOrchestratorHandlers(nil, guard, nil).RegisterRoutes(router)
 	return router
 }
 
@@ -228,6 +244,7 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 		{"ntp", ntpRouteScopes, "vpn:read"},
 		{"app services", appServiceRouteScopes, "vpn:read"},
 		{"compute", computeRouteScopes, "ntp:read"},
+		{"orchestrator", orchestratorRouteScopes, "vm:read"},
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			for _, route := range group.routes {
@@ -255,9 +272,9 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 
 func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
 	router := guardedRouter(NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{
-		"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read"},
+		"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read", "orchestrator:read"},
 	}}, nil, nil))
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
 		recorder := serveWithToken(router, route, "reader")
 		if strings.HasSuffix(route.scope, ":read") {
 			assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)
@@ -269,7 +286,7 @@ func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
 
 func TestScopeGuard_NilGuardRefusesEveryRoute(t *testing.T) {
 	router := guardedRouter(nil)
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
 		recorder := serveWithToken(router, route, operatorToken)
 		assert.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
 
@@ -313,7 +330,7 @@ func certificateRequest(method, target, cn string) *http.Request {
 
 func TestScopeGuard_VerifiedClientCertificateIsTheCredential(t *testing.T) {
 	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil))
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, certificateRequest(route.method, route.path, "operator"))
 		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)

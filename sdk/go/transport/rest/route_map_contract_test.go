@@ -58,6 +58,7 @@ func serviceClientContracts() map[string]reflect.Type {
 		"MessagingService":      reflect.TypeOf((*platformv1.MessagingServiceClient)(nil)).Elem(),
 		"NTPService":            reflect.TypeOf((*platformv1.NTPServiceClient)(nil)).Elem(),
 		"ObjectStorageService":  reflect.TypeOf((*platformv1.ObjectStorageServiceClient)(nil)).Elem(),
+		"OrchestratorService":   reflect.TypeOf((*platformv1.OrchestratorServiceClient)(nil)).Elem(),
 		"OverlayService":        reflect.TypeOf((*platformv1.OverlayServiceClient)(nil)).Elem(),
 		"PIVService":            reflect.TypeOf((*platformv1.PIVServiceClient)(nil)).Elem(),
 		"PXEService":            reflect.TypeOf((*platformv1.PXEServiceClient)(nil)).Elem(),

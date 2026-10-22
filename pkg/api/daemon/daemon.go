@@ -1519,6 +1519,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if ntpGRPCService != nil {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
+		daemon.concreteRestServer.SetOrchestratorHandlers(orchestratorGRPCService, restGuard)
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
 		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
 		if computeService != nil {
