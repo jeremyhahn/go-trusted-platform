@@ -453,10 +453,14 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		t.Errorf("Expected VM state 'running' after start, got %q", getResult.State)
 	}
 
-	// Stop VM
+	// Stop VM. The test VM's disk is blank, so no guest OS answers the
+	// power button: the stop always runs to the end of its power-down window
+	// and then sends SIGTERM. A one-second window drives that same graceful
+	// path over every transport without spending 30 seconds of the suite's
+	// deadline on each.
 	stopResult, err := adapter.StopVM(ctx, StopVMOptions{
 		VMID:           vmID,
-		TimeoutSeconds: 30,
+		TimeoutSeconds: 1,
 	})
 	if err != nil {
 		surface.RequireImplemented(t, err)
