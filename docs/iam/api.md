@@ -108,7 +108,7 @@ address when it has no local part (`UsernameFromEmail` in
 | Create group | `POST /api/v1/iam/groups` | ✅ | `0xBB` | `iam_create_group`, `iam:write` | ✅ |
 | List groups | `GET /api/v1/iam/groups` | ✅ | `0xBE` | `iam_list_groups`, `iam:read` | ✅ |
 | Get group | `GET /api/v1/iam/groups/{id}` | ✅ | `0xBD` | `iam_get_group`, `iam:read` | ✅ |
-| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `iam_update_group`, `iam:write` | ✅ |
+| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `0x51` sub `0x06` | `iam_update_group`, `iam:write` | ✅ |
 | Delete group | `DELETE /api/v1/iam/groups/{id}` | ✅ | `0xBC` | `iam_delete_group`, `iam:delete` | ✅ |
 | Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
@@ -133,8 +133,10 @@ for them — see [SPEC](../SPEC.md#interfaces).
 **Policies and applications have no MCP tools and no QUIC opcodes.**
 Twenty-seven `iam_*` tools cover users, groups, roles, tenants, tokens and the
 permission check — neither the authorization policies themselves nor OAuth
-applications. QUIC has no IAM policy, application, role-update or
-group-update byte; the SDK's QUIC transport cannot reach those RPCs.
+applications. QUIC has no IAM policy, application or role-update
+byte; the SDK's QUIC transport cannot reach those RPCs. Group update rides the
+`OpIAMCategory` (`0x51`) as sub-opcode `0x06`, because the group bytes
+`0xBB`–`0xBF` left no room for it.
 
 `/policies/validate` and `/policies/test` are registered **before**
 `/policies/{id}`, so `validate` and `test` are not swallowed as policy ids.
@@ -170,7 +172,7 @@ Every IAM byte the daemon dispatches (`handleIAMOperation`,
 | `0xF9` | `OpIAMTokenCreate` | Create token — refused, `StatusNotImplemented` |
 | `0xFA` | `OpIAMTokenRevoke` | Revoke token — refused, `StatusNotImplemented` |
 | `0xFB` | `OpIAMTokenVerify` | Verify token |
-| `0x51` | `OpIAMCategory` | Tenant records; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
+| `0x51` | `OpIAMCategory` | Tenant records and group update; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete tenant; `0x06` update group. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
 
 The bytes between the IAM ranges belong to other services: `0xB0`–`0xB4` are
 SDN and `0xF0`–`0xF5` are reserved `OpDEK*` bytes the daemon does not serve
@@ -346,7 +348,7 @@ mapped** — the largest entry in the catalog, resource `iam`, actions
 their own category, `OpIAMCategory` (`0x51`): sub-opcodes `IAMSubTenantCreate`
 `0x01` and `IAMSubTenantUpdate` `0x04` need `iam:write`, `IAMSubTenantGet`
 `0x02` and `IAMSubTenantList` `0x03` need `iam:read`, `IAMSubTenantDelete`
-`0x05` needs `iam:delete`. The daemon delegates them to `IAMGRPCService`
+`0x05` needs `iam:delete`, and `IAMSubGroupUpdate` `0x06` needs `iam:write`. The daemon delegates them to `IAMGRPCService`
 (`pkg/api/daemon/quic_iam_category.go`). Before #767 the SDK sent these calls
 on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
 ([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,

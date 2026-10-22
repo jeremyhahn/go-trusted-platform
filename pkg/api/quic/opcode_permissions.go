@@ -698,6 +698,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.IAMSubTenantList:   iamRead,
 		quicwire.IAMSubTenantUpdate: iamWrite,
 		quicwire.IAMSubTenantDelete: iamDelete,
+		quicwire.IAMSubGroupUpdate:  iamWrite,
 
 		// Invitations. GetByToken and Accept are preAuthSubOpcodes.
 		quicwire.InvitationSubCreate: invitationWrite,

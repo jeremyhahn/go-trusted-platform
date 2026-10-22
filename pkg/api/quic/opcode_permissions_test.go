@@ -74,6 +74,7 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"iam tenant create", quicwire.OpIAMCategory, quicwire.IAMSubTenantCreate, OpcodePermission{Resource: "iam", Action: "write"}},
 		{"iam tenant list", quicwire.OpIAMCategory, quicwire.IAMSubTenantList, OpcodePermission{Resource: "iam", Action: "read"}},
 		{"iam tenant delete", quicwire.OpIAMCategory, quicwire.IAMSubTenantDelete, OpcodePermission{Resource: "iam", Action: "delete"}},
+		{"iam group update", quicwire.OpIAMCategory, quicwire.IAMSubGroupUpdate, OpcodePermission{Resource: "iam", Action: "write"}},
 		{"invitation create", quicwire.OpIAMCategory, quicwire.InvitationSubCreate, OpcodePermission{Resource: "invitation", Action: "write"}},
 		{"invitation get", quicwire.OpIAMCategory, quicwire.InvitationSubGet, OpcodePermission{Resource: "invitation", Action: "read"}},
 		{"invitation list", quicwire.OpIAMCategory, quicwire.InvitationSubList, OpcodePermission{Resource: "invitation", Action: "read"}},

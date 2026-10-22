@@ -380,7 +380,7 @@ REST gates the operator half on the `admin` role; gRPC, QUIC and MCP require
 the scope in the table.
 
 **QUIC shares `OpIAMCategory` (`0x51`) with the IAM tenant records** (`0x01`–
-`0x05`, [`docs/iam/api.md`](../iam/api.md) §5a): no free opcode byte remained,
+`0x05`, and IAM group update `0x06`, [`docs/iam/api.md`](../iam/api.md) §5a): no free opcode byte remained,
 so the invitation sub-opcodes start at `0x10` (`InvitationSub*`,
 `sdk/go/wire/quicwire/invitation_opcodes.go`). The daemon dispatches them
 through a map to the servicer (`pkg/api/daemon/quic_invitation.go`).

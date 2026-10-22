@@ -24,7 +24,8 @@ import (
 // OpIAMCategory (0x51) with the sub-opcode in payload[0] and the generated
 // platform.v1 request in payload[1:]. They manage IAM tenant records and
 // delegate to the shared *IAMGRPCService, never to the platform
-// TenantService behind the OpTenant* opcodes (#767).
+// TenantService behind the OpTenant* opcodes (#767). UpdateGroup rides the
+// same category: the group bytes 0xBB-0xBF had no room for it.
 
 // iamCategoryQUICHandler is one IAM category sub-operation handler. body is
 // the request with the sub-opcode stripped.
@@ -37,6 +38,7 @@ var iamCategoryQUICHandlers = map[byte]iamCategoryQUICHandler{
 	quicwire.IAMSubTenantList:   (*QUICServiceHandler).handleIAMTenantList,
 	quicwire.IAMSubTenantUpdate: (*QUICServiceHandler).handleIAMTenantUpdate,
 	quicwire.IAMSubTenantDelete: (*QUICServiceHandler).handleIAMTenantDelete,
+	quicwire.IAMSubGroupUpdate:  (*QUICServiceHandler).handleIAMGroupUpdate,
 }
 
 // handleIAMCategory dispatches the IAM category opcode. payload[0] selects
@@ -122,6 +124,20 @@ func (h *QUICServiceHandler) handleIAMTenantDelete(ctx context.Context, body []b
 	resp, err := h.iamGRPC.DeleteTenant(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("IAMTenantDelete", err)
+	}
+	return h.encodeGRPCDelegateResponse(resp)
+}
+
+// handleIAMGroupUpdate updates an IAM group, as gRPC UpdateGroup.
+func (h *QUICServiceHandler) handleIAMGroupUpdate(ctx context.Context, body []byte) *quicwire.Response {
+	var pbReq platformv1.UpdateIAMGroupRequest
+	if err := quicwire.DecodePayload(body, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.iamGRPC.UpdateGroup(ctx, &pbReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("IAMGroupUpdate", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }

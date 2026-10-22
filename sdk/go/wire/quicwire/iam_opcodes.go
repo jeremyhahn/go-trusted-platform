@@ -27,7 +27,8 @@ package quicwire
 // The opcode space is otherwise fully allocated, so this reclaims 0x51 from
 // the block reserved after OpNTPCategory.
 const (
-	// OpIAMCategory multiplexes the IAM tenant-record sub-operations.
+	// OpIAMCategory multiplexes the IAM tenant-record sub-operations and
+	// group update.
 	OpIAMCategory byte = 0x51
 )
 
@@ -49,4 +50,9 @@ const (
 
 	// IAMSubTenantDelete deletes an IAM tenant record.
 	IAMSubTenantDelete byte = 0x05
+
+	// IAMSubGroupUpdate updates an IAM group. The group bytes 0xBB-0xBF hold
+	// create, delete, get, list and add-member, and no byte was left for
+	// update, so it travels in this category.
+	IAMSubGroupUpdate byte = 0x06
 )

@@ -28,6 +28,7 @@ var iamTenantMethodSubs = map[string]byte{
 	platformv1.PlatformIAMService_ListTenants_FullMethodName:  quicwire.IAMSubTenantList,
 	platformv1.PlatformIAMService_UpdateTenant_FullMethodName: quicwire.IAMSubTenantUpdate,
 	platformv1.PlatformIAMService_DeleteTenant_FullMethodName: quicwire.IAMSubTenantDelete,
+	platformv1.PlatformIAMService_UpdateGroup_FullMethodName:  quicwire.IAMSubGroupUpdate,
 }
 
 // TestIAMTenantMethodsAvoidPlatformTenancyOpcodes guards #767: the OpTenant*
