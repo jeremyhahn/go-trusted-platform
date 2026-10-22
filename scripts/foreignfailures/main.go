@@ -44,17 +44,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if flags.NArg() != 1 {
-		fmt.Fprintln(stderr, ErrUsage)
+		fmt.Fprintf(stderr, "%v\n", ErrUsage)
 		return exitUsage
 	}
 	b, err := loadBaseline(*baselinePath)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		fmt.Fprintf(stderr, "%v\n", err)
 		return exitUsage
 	}
 	log, err := readSuiteLog(flags.Arg(0), *module)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		fmt.Fprintf(stderr, "%v\n", err)
 		return exitUsage
 	}
 	return report(decide(log, b), stdout, stderr)
@@ -91,9 +91,9 @@ func report(v *verdict, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "FAIL cannot be attributed to a listed test: %s\n", reason)
 	}
 	if v.gating() {
-		fmt.Fprintln(stderr, "the integration suite failed outside the foreign-failure baseline")
+		fmt.Fprintf(stderr, "%v\n", "the integration suite failed outside the foreign-failure baseline")
 		return exitGating
 	}
-	fmt.Fprintln(stdout, "every integration failure is in the foreign-failure baseline")
+	fmt.Fprintf(stdout, "%v\n", "every integration failure is in the foreign-failure baseline")
 	return exitOK
 }

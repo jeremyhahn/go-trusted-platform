@@ -242,7 +242,8 @@ func TestAJobEntryCoversItsTarget(t *testing.T) {
 
 func TestALogWithoutTheSummaryGates(t *testing.T) {
 	logText := suiteOutput(failedTarget("iam", "test/integration/iam", "--- FAIL: TestIAMCLI/CreateRole (0.01s)"))
-	logText = logText[:strings.Index(logText, summaryOpen)]
+	logText, _, found := strings.Cut(logText, summaryOpen)
+	require.True(t, found)
 	v := check(t, testBaseline, logText)
 	assert.True(t, v.gating())
 	assert.Contains(t, v.Unattributable[0], "summary is missing")

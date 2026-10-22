@@ -99,7 +99,7 @@ func parseSuiteLog(name, module string, r io.Reader) (*suiteLog, error) {
 			continue
 		}
 		if open != nil {
-			if m := sectionEndRe.FindStringSubmatch(line); m != nil && strings.TrimPrefix(m[2], "./") == open.Pattern {
+			if m := sectionEndRe.FindStringSubmatch(line); len(m) == 3 && strings.TrimPrefix(m[2], "./") == open.Pattern {
 				open.Ended = true
 				open.close("")
 				open = nil
