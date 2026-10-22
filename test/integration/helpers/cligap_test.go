@@ -37,6 +37,8 @@ func TestCLIUpstreamGapClassifiesUnservedMethods(t *testing.T) {
 	for _, stderr := range []string{
 		"Error: rotate secret db: unknown method: quicbaas.Secrets/Rotate",
 		"Error: status secret db: invalid request type for quicbaas.Secrets/UpdateStatus",
+		"Error: kms secrets version: the go-quicbaas SDK does not serve SecretsClient.GetVersion: UNIMPLEMENTED: " +
+			"secretsHandler.handleRequest: method not exposed by SecretsManagement gRPC proto: GetVersion",
 	} {
 		cause := errTestCLIFailed{stderr: stderr}
 		err := CLIUpstreamGap("kms secrets rotate", SecretsSDKGapIssue, cause)

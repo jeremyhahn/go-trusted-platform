@@ -25,6 +25,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -83,16 +84,52 @@ func (e ErrSecretOperationFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrSecretsSDKGap is returned by a verb the go-quicbaas SDK secrets client
-// has no call for. It names the missing SDK method; the gap is closed
-// upstream, never worked around here.
+// ErrSecretsSDKGap is returned by a verb the go-quicbaas SDK does not serve:
+// the SDK secrets client has no call for it (Err is nil), or the transport
+// the CLI reached platformd over refused the call as unimplemented (Err is
+// that refusal). It names the SDK method; the gap is closed upstream, never
+// worked around here.
 type ErrSecretsSDKGap struct {
 	Verb   string
 	Method string
+	Err    error
 }
 
 func (e ErrSecretsSDKGap) Error() string {
-	return fmt.Sprintf("kms secrets %s: the go-quicbaas SDK secrets client has no %s", e.Verb, e.Method)
+	if e.Err == nil {
+		return fmt.Sprintf("kms secrets %s: the go-quicbaas SDK does not serve %s", e.Verb, e.Method)
+	}
+	return fmt.Sprintf("kms secrets %s: the go-quicbaas SDK does not serve %s: %v", e.Verb, e.Method, e.Err)
+}
+
+func (e ErrSecretsSDKGap) Unwrap() error {
+	return e.Err
+}
+
+// secretsSDKMethods names the SDK secrets client method behind each verb
+// that reaches platformd, for ErrSecretsSDKGap.
+var secretsSDKMethods = map[string]string{
+	"store":      "SecretsClient.Store",
+	"get":        "SecretsClient.Get",
+	"list":       "SecretsClient.List",
+	"delete":     "SecretsClient.Delete",
+	"rotate":     "SecretsClient.Rotate",
+	"version":    "SecretsClient.GetVersion",
+	"versions":   "SecretsClient.ListVersions",
+	"rollback":   "SecretsClient.Rollback",
+	"status":     "SecretsClient.UpdateStatus",
+	"policy get": "SecretsClient.GetRotationPolicy",
+	"policy set": "SecretsClient.SetRotationPolicy",
+}
+
+// secretOperationError maps a secrets client failure for operation on name.
+// A call the transport refused as unimplemented is the SDK gap
+// ErrSecretsSDKGap; any other failure is ErrSecretOperationFailed.
+func secretOperationError(operation, name string, err error) error {
+	if sdkerrors.IsUnimplemented(err) {
+		return ErrSecretsSDKGap{Verb: operation, Method: secretsSDKMethods[operation], Err: err}
+	}
+	return ErrSecretOperationFailed{Operation: operation, Name: name, Err: err}
 }
 
 // secretsRunFunc runs one `kms secrets` verb against an open SDK client.
@@ -355,7 +392,7 @@ func executeSecretsStore(ctx context.Context, client quicbaassdk.SecretsClient, 
 
 	resp, err := client.Store(ctx, &secretsclient.StoreSecretRequest{Path: name, Data: data, Metadata: tags})
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "store", Name: name, Err: err}
+		return secretOperationError("store", name, err)
 	}
 
 	out := secretStoreOutput{Name: name, Version: resp.Version}
@@ -398,7 +435,7 @@ func executeSecretsGet(ctx context.Context, client quicbaassdk.SecretsClient, pr
 
 	secret, err := client.Get(ctx, name, opts...)
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
+		return secretOperationError("get", name, err)
 	}
 
 	out, err := secretOutputFrom(name, secret)
@@ -456,7 +493,7 @@ and has_more reports that more exist.`,
 func executeSecretsList(ctx context.Context, client quicbaassdk.SecretsClient, printer *cli.Printer, format cli.OutputFormat, prefix string, limit int, includeData bool) error {
 	resp, err := client.List(ctx, prefix)
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "list", Name: prefix, Err: err}
+		return secretOperationError("list", prefix, err)
 	}
 
 	out := secretListOutput{Prefix: prefix, Secrets: resp.Paths}
@@ -471,7 +508,7 @@ func executeSecretsList(ctx context.Context, client quicbaassdk.SecretsClient, p
 		for _, name := range out.Secrets {
 			secret, err := client.Get(ctx, name)
 			if err != nil {
-				return ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
+				return secretOperationError("get", name, err)
 			}
 			data, err := secretOutputFrom(name, secret)
 			if err != nil {
@@ -514,7 +551,7 @@ func executeSecretsDelete(ctx context.Context, client quicbaassdk.SecretsClient,
 		return ErrSecretNameRequired{}
 	}
 	if err := client.Delete(ctx, name); err != nil {
-		return ErrSecretOperationFailed{Operation: "delete", Name: name, Err: err}
+		return secretOperationError("delete", name, err)
 	}
 
 	out := secretDeleteOutput{Name: name, Deleted: true}
@@ -555,7 +592,7 @@ func executeSecretsRotate(ctx context.Context, client quicbaassdk.SecretsClient,
 
 	resp, err := client.Rotate(ctx, &secretsclient.RotateSecretRequest{SecretID: name, NewData: data})
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "rotate", Name: name, Err: err}
+		return secretOperationError("rotate", name, err)
 	}
 
 	out := secretRotateOutput{Name: name, OldVersion: resp.OldVersion, NewVersion: resp.NewVersion}
@@ -588,7 +625,7 @@ func executeSecretsVersion(ctx context.Context, client quicbaassdk.SecretsClient
 	}
 	info, err := client.GetVersion(ctx, &secretsclient.GetSecretVersionRequest{SecretID: name, Version: version})
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "version", Name: name, Err: err}
+		return secretOperationError("version", name, err)
 	}
 
 	out := secretOutput{
@@ -626,7 +663,7 @@ func executeSecretsVersions(ctx context.Context, client quicbaassdk.SecretsClien
 	}
 	resp, err := client.ListVersions(ctx, name)
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "versions", Name: name, Err: err}
+		return secretOperationError("versions", name, err)
 	}
 
 	out := secretVersionsOutput{Name: name, Versions: make([]secretVersionOutput, 0, len(resp.Versions))}
@@ -669,7 +706,7 @@ func executeSecretsRollback(ctx context.Context, client quicbaassdk.SecretsClien
 	}
 	resp, err := client.Rollback(ctx, &secretsclient.RollbackSecretRequest{SecretID: name, TargetVersion: targetVersion})
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "rollback", Name: name, Err: err}
+		return secretOperationError("rollback", name, err)
 	}
 
 	out := secretRollbackOutput{Name: name, NewVersion: resp.NewVersion}
@@ -707,7 +744,7 @@ func executeSecretsStatus(ctx context.Context, client quicbaassdk.SecretsClient,
 		return ErrSecretNameRequired{}
 	}
 	if err := client.UpdateStatus(ctx, &secretsclient.UpdateSecretStatusRequest{SecretID: name, Status: status}); err != nil {
-		return ErrSecretOperationFailed{Operation: "status", Name: name, Err: err}
+		return secretOperationError("status", name, err)
 	}
 
 	out := secretStatusOutput{Name: name, Status: string(status)}
@@ -783,7 +820,7 @@ func executeSecretsPolicyGet(ctx context.Context, client quicbaassdk.SecretsClie
 	}
 	policy, err := client.GetRotationPolicy(ctx, name)
 	if err != nil {
-		return ErrSecretOperationFailed{Operation: "policy get", Name: name, Err: err}
+		return secretOperationError("policy get", name, err)
 	}
 
 	out := policyOutputFrom(name, policy)
@@ -802,7 +839,7 @@ func executeSecretsPolicySet(ctx context.Context, client quicbaassdk.SecretsClie
 		RotationLambda: opts.RotationLambda,
 	}
 	if err := client.SetRotationPolicy(ctx, &secretsclient.SetRotationPolicyRequest{SecretID: name, Policy: policy}); err != nil {
-		return ErrSecretOperationFailed{Operation: "policy set", Name: name, Err: err}
+		return secretOperationError("policy set", name, err)
 	}
 
 	out := policyOutputFrom(name, policy)
