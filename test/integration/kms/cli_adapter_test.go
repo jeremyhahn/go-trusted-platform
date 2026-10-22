@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // failingPlatformCTL returns an adapter whose platformctl exits 1 without
@@ -167,6 +168,124 @@ esac`)
 	require.NoError(t, err)
 	assert.Equal(t, "k", result.KeyID)
 	assert.Equal(t, int32(2), result.PolicyVersion)
+}
+
+func TestCLIAdapter_SecretsStoreSendsTheDocumentedFlags(t *testing.T) {
+	adapter := failingPlatformCTL(t)
+	ctx := context.Background()
+
+	_, err := adapter.SecretsStore(ctx, SecretsStoreOptions{Name: "n", Data: []byte("pw"), Description: "d"})
+	assert.Equal(t, "kms secrets store n --value cHc= --base64 --description d", commandLine(t, err))
+}
+
+func TestCLIAdapter_SecretsStoreRefusesAFlagItHasNoFlagFor(t *testing.T) {
+	adapter := failingPlatformCTL(t)
+	ctx := context.Background()
+
+	for _, opts := range []SecretsStoreOptions{
+		{Name: "n", TenantID: "t"},
+		{Name: "n", KeyID: "k"},
+		{Name: "n", Algorithm: "aes-256"},
+	} {
+		_, err := adapter.SecretsStore(ctx, opts)
+		var noFlag helpers.ErrCLINoFlag
+		require.True(t, errors.As(err, &noFlag), "want ErrCLINoFlag, got %v", err)
+	}
+}
+
+func TestCLIAdapter_SecretsSendsTheDocumentedVerbs(t *testing.T) {
+	adapter := failingPlatformCTL(t)
+	ctx := context.Background()
+
+	_, err := adapter.SecretsRotate(ctx, SecretsRotateOptions{Name: "n", NewData: []byte("pw")})
+	assert.Equal(t, "kms secrets rotate n --value cHc= --base64", commandLine(t, err))
+
+	_, err = adapter.SecretsVersion(ctx, "n", 3)
+	assert.Equal(t, "kms secrets version n 3", commandLine(t, err))
+
+	_, err = adapter.SecretsVersions(ctx, "n", SecretsVersionsOptions{Limit: 10})
+	assert.Equal(t, "kms secrets versions n", commandLine(t, err))
+
+	_, err = adapter.SecretsRollback(ctx, "n", 1)
+	assert.Equal(t, "kms secrets rollback n 1", commandLine(t, err))
+
+	_, err = adapter.SecretsStatus(ctx, "n", true)
+	assert.Equal(t, "kms secrets status enable n", commandLine(t, err))
+
+	_, err = adapter.SecretsStatus(ctx, "n", false)
+	assert.Equal(t, "kms secrets status disable n", commandLine(t, err))
+
+	_, err = adapter.SecretsDelete(ctx, "n", true)
+	assert.Equal(t, "kms secrets delete n", commandLine(t, err))
+
+	_, err = adapter.SecretsList(ctx, SecretsListOptions{Limit: 5})
+	assert.Equal(t, "kms secrets list --limit 5", commandLine(t, err))
+}
+
+func TestCLIAdapter_SecretsListRefusesCursor(t *testing.T) {
+	adapter := failingPlatformCTL(t)
+	ctx := context.Background()
+
+	_, err := adapter.SecretsList(ctx, SecretsListOptions{Cursor: "c"})
+	var noFlag helpers.ErrCLINoFlag
+	require.True(t, errors.As(err, &noFlag), "want ErrCLINoFlag, got %v", err)
+	assert.Equal(t, "--cursor", noFlag.Flag)
+
+	_, err = adapter.SecretsVersions(ctx, "n", SecretsVersionsOptions{Cursor: "c"})
+	require.True(t, errors.As(err, &noFlag), "want ErrCLINoFlag, got %v", err)
+}
+
+func TestCLIAdapter_SecretsGetReadsTheStoredBytes(t *testing.T) {
+	adapter := scriptedPlatformCTL(t, `printf '{"name":"n","version":2,"value":"dGVzdA==","description":"d","created_at":"2026-10-21T12:00:00Z"}'`)
+
+	result, err := adapter.SecretsGet(context.Background(), "n")
+	require.NoError(t, err)
+	assert.Equal(t, "n", result.SecretID)
+	assert.Equal(t, uint64(2), result.Version)
+	assert.Equal(t, []byte("test"), result.Data)
+	assert.Equal(t, time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), result.CreatedAt.UTC())
+}
+
+func TestCLIAdapter_SecretsGetFailsWhenTheVerbPrintsNoJSON(t *testing.T) {
+	adapter := scriptedPlatformCTL(t, `echo "not json"`)
+
+	_, err := adapter.SecretsGet(context.Background(), "n")
+	var malformed helpers.ErrSecretsCLIOutput
+	require.True(t, errors.As(err, &malformed), "want ErrSecretsCLIOutput, got %v", err)
+	assert.Equal(t, "get", malformed.Operation)
+}
+
+func TestCLIAdapter_SecretsRotateReportsTheEmbeddedTransportGap(t *testing.T) {
+	adapter := scriptedPlatformCTL(t, `echo "embedded: unknown method: quicbaas.Secrets.Rotate" >&2; exit 1`)
+
+	_, err := adapter.SecretsRotate(context.Background(), SecretsRotateOptions{Name: "n", NewData: []byte("pw")})
+	var gap helpers.ErrCLIUpstreamGap
+	require.True(t, errors.As(err, &gap), "want ErrCLIUpstreamGap, got %v", err)
+	assert.Equal(t, helpers.SecretsSDKGapIssue, gap.Issue)
+}
+
+func TestCLIAdapter_SecretsListReadsNamesAndVersionsDecode(t *testing.T) {
+	lister := scriptedPlatformCTL(t, `case "$*" in
+*"secrets list"*) printf '{"secrets":["a","b"],"has_more":true}' ;;
+*"secrets versions"*) printf '{"name":"n","versions":[{"version":1,"created_by":"b","created_at":"2026-10-21T12:00:00Z"}]}' ;;
+*) exit 1 ;;
+esac`)
+
+	ctx := context.Background()
+
+	list, err := lister.SecretsList(ctx, SecretsListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, []string{list.Secrets[0].Name, list.Secrets[1].Name})
+	assert.Equal(t, int32(2), list.TotalCount)
+	assert.True(t, list.HasMore)
+
+	versions, err := lister.SecretsVersions(ctx, "n", SecretsVersionsOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "n", versions.SecretID)
+	require.Len(t, versions.Versions, 1)
+	assert.Equal(t, uint64(1), versions.Versions[0].Version)
+	assert.Equal(t, "b", versions.Versions[0].CreatedBy)
+	assert.Equal(t, time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), versions.Versions[0].CreatedAt.UTC())
 }
 
 func TestDecodeCLIBase64(t *testing.T) {

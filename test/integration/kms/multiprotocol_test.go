@@ -1167,6 +1167,9 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 		}
 
 		result, err := cmd.SecretsRotate(testCtx, rotateOpts)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsRotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
@@ -1177,6 +1180,18 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 		result, err := cmd.SecretsGet(testCtx, secretName)
 		require.NoError(t, err, "SecretsGet should succeed")
 		assert.True(t, bytes.Equal([]byte("new-rotated-secret-data"), result.Data), "Secret data should be rotated")
+	})
+
+	t.Run("RotateNonexistentSecretFails", func(t *testing.T) {
+		rotateOpts := SecretsRotateOptions{
+			Name:    prefix + "-nonexistent-rotate",
+			NewData: []byte("data"),
+		}
+		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
+		require.Error(t, err, "SecretsRotate should fail for nonexistent secret")
 	})
 }
 
@@ -1200,11 +1215,16 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		require.NoError(t, err, "Setup: SecretsRotate should succeed")
+		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			require.NoError(t, err, "Setup: SecretsRotate should succeed")
+		}
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.SecretsVersions(testCtx, secretName, SecretsVersionsOptions{Limit: 10})
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsVersions should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Versions), 3, "Should have at least 3 versions")
@@ -1212,6 +1232,9 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 
 	t.Run("GetSpecificSecretVersion", func(t *testing.T) {
 		result, err := cmd.SecretsVersion(testCtx, secretName, 1)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsVersion should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(1), result.Version, "Version should be 1")
@@ -1239,10 +1262,15 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 		NewData: []byte("rotated-data"),
 	}
 	_, err = cmd.SecretsRotate(testCtx, rotateOpts)
-	require.NoError(t, err, "Setup: SecretsRotate should succeed")
+	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		require.NoError(t, err, "Setup: SecretsRotate should succeed")
+	}
 
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.SecretsRollback(testCtx, secretName, 1)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsRollback should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Greater(t, result.NewVersion, uint64(2), "NewVersion should be > 2 (creates new version)")
@@ -1302,6 +1330,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, false)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -1310,6 +1341,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, true)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
@@ -1317,6 +1351,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("StatusNonexistentSecretFails", func(t *testing.T) {
 		_, err := cmd.SecretsStatus(testCtx, prefix+"-nonexistent-status", true)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.Error(t, err, "SecretsStatus should fail for nonexistent secret")
 	})
 }
