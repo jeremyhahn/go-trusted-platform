@@ -114,7 +114,13 @@ ENV GOTOOLCHAIN=local \
 # cpio: pkg/diskimage/netboot repacks its installer initramfs with it.
 # libssl-dev: go-tpm-tools' simulator compiles the reference TPM against
 # OpenSSL (#149).
+# APT_REFRESH is a dated cache key: the runner's BuildKit cache otherwise keeps
+# this layer forever. Bumping it rebuilds the layer so `apt-get upgrade` takes
+# new Debian security fixes; bump it when trivy reports a HIGH that Debian has
+# fixed (libexpat CVE-2025-59375 / CVE-2026-77214, PR #991).
+ARG APT_REFRESH=2026-10-22
 RUN set -eu; \
+    echo "apt refresh: ${APT_REFRESH}"; \
     apt-get update; \
     apt-get upgrade -y; \
     apt-get install -y --no-install-recommends \
