@@ -59,6 +59,29 @@ func EncodeSecretData(data map[string]interface{}) ([]byte, error) {
 	return encoded, nil
 }
 
+// ErrSecretDataDecoding reports stored secret data that is not an encoded
+// data map.
+type ErrSecretDataDecoding struct {
+	Err error
+}
+
+func (e ErrSecretDataDecoding) Error() string {
+	return "secret data cannot be decoded: " + e.Err.Error()
+}
+
+func (e ErrSecretDataDecoding) Unwrap() error { return e.Err }
+
+// DecodeSecretData is the inverse of EncodeSecretData: it decodes a stored
+// version's raw data (a GetVersion response) back into its data map, as the
+// quicbaas Secrets client's Get does for the latest version.
+func DecodeSecretData(raw []byte) (map[string]interface{}, error) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, ErrSecretDataDecoding{Err: err}
+	}
+	return data, nil
+}
+
 // DecodeSecretValue returns the bytes stored as a secret's "value" data
 // entry. The quicbaas Secrets client JSON-encodes the data map, so a
 // []byte stored by the platform comes back from a get as its base64 text;

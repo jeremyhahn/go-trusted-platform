@@ -106,3 +106,29 @@ func TestEncodeSecretData_UnencodableValueIsTyped(t *testing.T) {
 		t.Fatalf("error = %v, want ErrSecretDataEncoding", err)
 	}
 }
+
+func TestDecodeSecretData_InvertsEncodeSecretData(t *testing.T) {
+	raw, err := EncodeSecretData(map[string]interface{}{"value": []byte("s3cret"), "description": "db"})
+	if err != nil {
+		t.Fatalf("EncodeSecretData: %v", err)
+	}
+	data, err := DecodeSecretData(raw)
+	if err != nil {
+		t.Fatalf("DecodeSecretData: %v", err)
+	}
+	value, err := DecodeSecretValue(data["value"])
+	if err != nil {
+		t.Fatalf("DecodeSecretValue: %v", err)
+	}
+	if string(value) != "s3cret" || data["description"] != "db" {
+		t.Fatalf("decoded value %q, description %v; want s3cret, db", value, data["description"])
+	}
+}
+
+func TestDecodeSecretData_MalformedDataIsTyped(t *testing.T) {
+	_, err := DecodeSecretData([]byte("s3cret"))
+	var decErr ErrSecretDataDecoding
+	if !errors.As(err, &decErr) {
+		t.Fatalf("error = %v, want ErrSecretDataDecoding", err)
+	}
+}

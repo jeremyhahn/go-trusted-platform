@@ -328,10 +328,10 @@ func parseSecretVersion(arg string) (int, error) {
 // the secret's data map under the keys the REST surface writes them to. The
 // output is named by the name the caller asked for: the gRPC transport fills
 // Path with the server's secret ID, which need not be that name.
-func secretOutputFrom(name string, s *secretsclient.Secret) (secretOutput, error) {
+func secretOutputFrom(operation, name string, s *secretsclient.Secret) (secretOutput, error) {
 	value, err := common.DecodeSecretValue(s.Data["value"])
 	if err != nil {
-		return secretOutput{}, ErrSecretOperationFailed{Operation: "get", Name: name, Err: err}
+		return secretOutput{}, ErrSecretOperationFailed{Operation: operation, Name: name, Err: err}
 	}
 	out := secretOutput{
 		Name:      name,
@@ -438,7 +438,7 @@ func executeSecretsGet(ctx context.Context, client quicbaassdk.SecretsClient, pr
 		return secretOperationError("get", name, err)
 	}
 
-	out, err := secretOutputFrom(name, secret)
+	out, err := secretOutputFrom("get", name, secret)
 	if err != nil {
 		return err
 	}
@@ -521,7 +521,7 @@ func executeSecretsList(ctx context.Context, client quicbaassdk.SecretsClient, p
 			if err != nil {
 				return secretOperationError("get", name, err)
 			}
-			data, err := secretOutputFrom(name, secret)
+			data, err := secretOutputFrom("get", name, secret)
 			if err != nil {
 				return err
 			}
@@ -645,14 +645,22 @@ func executeSecretsVersion(ctx context.Context, client quicbaassdk.SecretsClient
 		return secretOperationError("version", name, err)
 	}
 
-	out := secretOutput{
-		Name:      name,
+	// GetVersion returns the stored data map still encoded; decode it so a
+	// version prints its value as `secrets get --version` does.
+	data, err := common.DecodeSecretData(info.Data)
+	if err != nil {
+		return ErrSecretOperationFailed{Operation: "version", Name: name, Err: err}
+	}
+	out, err := secretOutputFrom("version", name, &secretsclient.Secret{
+		Data:      data,
 		Version:   info.Version,
-		Value:     info.Data,
 		Metadata:  info.Metadata,
 		CreatedAt: info.CreatedAt,
-		CreatedBy: info.CreatedBy,
+	})
+	if err != nil {
+		return err
 	}
+	out.CreatedBy = info.CreatedBy
 	return printSecrets(printer, format, out, func() { printSecretTable(printer, out) })
 }
 

@@ -95,7 +95,7 @@ func (f *fakeSecretsClient) GetVersion(_ context.Context, req *secretsclient.Get
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &secretsclient.SecretVersionInfo{SecretID: req.SecretID, Version: req.Version, Data: []byte("v"), CreatedBy: "op"}, nil
+	return &secretsclient.SecretVersionInfo{SecretID: req.SecretID, Version: req.Version, Data: []byte(`{"value":"dg==","description":"d"}`), CreatedBy: "op"}, nil
 }
 
 func (f *fakeSecretsClient) ListVersions(_ context.Context, secretID string) (*secretsclient.ListSecretVersionsResponse, error) {
@@ -440,13 +440,39 @@ func TestExecuteSecretsVersion(t *testing.T) {
 		})
 		assert.Equal(t, float64(4), out["version"])
 		assert.Equal(t, "dg==", out["value"])
+		assert.Equal(t, "d", out["description"])
 		assert.Equal(t, "op", out["created_by"])
 		assert.Equal(t, &secretsclient.GetSecretVersionRequest{SecretID: "n", Version: 4}, fake.versionReq)
+	})
+
+	t.Run("a version written by store and rotate prints the plain value", func(t *testing.T) {
+		store := &encodingSecretsClient{}
+		require.NoError(t, executeSecretsStore(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", secretStoreOptions{Value: "old"}))
+		require.NoError(t, executeSecretsRotate(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", "s3cret", false))
+
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsVersion(ctx, store, p, cli.OutputFormatJSON, "db/password", 2)
+		})
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("s3cret")), out["value"])
+
+		var table bytes.Buffer
+		require.NoError(t, executeSecretsVersion(ctx, store, cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &table), cli.OutputFormatTable, "db/password", 2))
+		assert.Contains(t, table.String(), "s3cret")
+		assert.NotContains(t, table.String(), `{"value"`, "the encoded data map is never printed")
 	})
 
 	t.Run("errors", func(t *testing.T) {
 		assert.ErrorIs(t, executeSecretsVersion(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 1), ErrSecretNameRequired{})
 		requireSecretOperationFailed(t, executeSecretsVersion(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 1), "version")
+	})
+
+	t.Run("a malformed stored data map is a typed error", func(t *testing.T) {
+		store := &encodingSecretsClient{latest: map[string][]byte{"n": []byte("not a map")}}
+		err := executeSecretsVersion(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 1)
+		var opErr ErrSecretOperationFailed
+		require.ErrorAs(t, err, &opErr)
+		assert.Equal(t, "version", opErr.Operation)
+		assert.ErrorAs(t, err, &common.ErrSecretDataDecoding{})
 	})
 }
 
@@ -672,4 +698,10 @@ func (f *encodingSecretsClient) Get(_ context.Context, path string, _ ...secrets
 		return nil, err
 	}
 	return &secretsclient.Secret{Path: path, Version: 2, Data: data}, nil
+}
+
+// GetVersion returns the stored data still encoded, as the quicbaas client's
+// GetVersion does. The fake keeps only the latest version.
+func (f *encodingSecretsClient) GetVersion(_ context.Context, req *secretsclient.GetSecretVersionRequest) (*secretsclient.SecretVersionInfo, error) {
+	return &secretsclient.SecretVersionInfo{SecretID: req.SecretID, Version: req.Version, Data: f.latest[req.SecretID]}, nil
 }
