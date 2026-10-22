@@ -39,9 +39,15 @@ import (
 const (
 	lbBridge = "tp-grouplb"
 
-	// The root namespace attaches through an OVS internal port and acts
-	// as both the LB client and the prober's vantage point.
+	// The root namespace attaches through an OVS internal port. The
+	// prober dials the backends from its primary address, lbHostIP; the
+	// test dials the VIP from a second address, lbClientIP. Sharing one
+	// address would let a probe and a VIP connection meet the backend
+	// with the same 4-tuple: the reply divert then reverse-translates the
+	// probe's replies as the VIP connection's, the probe fails and the
+	// prober demotes a healthy backend.
 	lbHostIP    = "10.240.0.1"
+	lbClientIP  = "10.240.0.2"
 	lbBackend1  = "10.240.0.11"
 	lbBackend2  = "10.240.0.12"
 	lbSubnet    = "10.240.0.0/24"
@@ -72,13 +78,18 @@ const (
 )
 
 // lbBackendServer is a TCP server that identifies itself on every line.
+//
+// The load balancer's prober connects to every backend and closes without
+// sending anything, so the server counts a connection, and records its
+// source, only when the connection's first request line arrives. Counting
+// accepts would count the probes as client connections.
 type lbBackendServer struct {
 	id       string
 	listener net.Listener
 	wg       sync.WaitGroup
 
 	mu         sync.Mutex
-	accepted   int
+	served     int
 	lastRemote string
 }
 
@@ -98,16 +109,17 @@ func startLBBackend(t *testing.T, ns, addr, id string) *lbBackendServer {
 			if acceptErr != nil {
 				return
 			}
-			srv.mu.Lock()
-			srv.accepted++
-			srv.lastRemote = conn.RemoteAddr().(*net.TCPAddr).IP.String()
-			srv.mu.Unlock()
 			srv.wg.Add(1)
 			go func(c net.Conn) {
 				defer srv.wg.Done()
 				defer c.Close()
 				scanner := bufio.NewScanner(c)
+				first := true
 				for scanner.Scan() {
+					if first {
+						srv.recordRequest(c)
+						first = false
+					}
 					fmt.Fprintf(c, "%s\n", srv.id)
 				}
 			}(conn)
@@ -124,14 +136,24 @@ func (s *lbBackendServer) Stop() {
 	s.wg.Wait()
 }
 
-// Accepted returns the number of accepted connections.
-func (s *lbBackendServer) Accepted() int {
+// recordRequest counts a connection that sent a request and records its
+// source address.
+func (s *lbBackendServer) recordRequest(c net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.accepted
+	s.served++
+	s.lastRemote = c.RemoteAddr().(*net.TCPAddr).IP.String()
 }
 
-// LastRemote returns the source address of the last accepted connection.
+// Served returns the number of connections that sent a request.
+func (s *lbBackendServer) Served() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.served
+}
+
+// LastRemote returns the source address of the last connection that sent
+// a request.
 func (s *lbBackendServer) LastRemote() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,8 +161,8 @@ func (s *lbBackendServer) LastRemote() string {
 }
 
 // setupLBHostPort attaches the root namespace to the bridge via an OVS
-// internal port carrying lbHostIP and a static neighbor entry for the
-// VIP.
+// internal port carrying lbHostIP and lbClientIP, and a static neighbor
+// entry for the VIP.
 func setupLBHostPort(t *testing.T, bridge string) {
 	t.Helper()
 
@@ -151,6 +173,9 @@ func setupLBHostPort(t *testing.T, bridge string) {
 		runCmdQuiet("ovs-vsctl", "--if-exists", "del-port", bridge, hostIf)
 	})
 	runCmd(t, "ip", "addr", "add", lbHostIP+"/24", "dev", hostIf)
+	// A /32 adds no route, so the subnet route keeps lbHostIP as its
+	// source and the prober never dials from lbClientIP.
+	runCmd(t, "ip", "addr", "add", lbClientIP+"/32", "dev", hostIf)
 	runCmd(t, "ip", "link", "set", hostIf, "up")
 	// The VIP is virtual: nothing answers ARP for it, so pin a
 	// locally-administered MAC. The table 30 harness rules rewrite it to
@@ -270,12 +295,22 @@ func requireOVSRunning(t *testing.T) {
 	require.NoError(t, err, "Open vSwitch must be running: %s", out)
 }
 
-// dialVIPAndIdentify connects to the VIP from the root namespace and
-// returns the backend ID that answered, closing the connection.
+// dialVIP connects to the VIP from lbClientIP, never from the prober's
+// address.
+func dialVIP(timeout time.Duration) (net.Conn, error) {
+	dialer := net.Dialer{
+		Timeout:   timeout,
+		LocalAddr: &net.TCPAddr{IP: net.ParseIP(lbClientIP)},
+	}
+	return dialer.Dial("tcp", netip.AddrPortFrom(netip.MustParseAddr(lbVIPAddr), lbVIPPort).String())
+}
+
+// dialVIPAndIdentify connects to the VIP from lbClientIP and returns the
+// backend ID that answered, closing the connection.
 func dialVIPAndIdentify(t *testing.T, timeout time.Duration) (string, error) {
 	t.Helper()
 
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", lbVIPAddr, lbVIPPort), timeout)
+	conn, err := dialVIP(timeout)
 	if err != nil {
 		return "", err
 	}
@@ -458,7 +493,7 @@ func TestGroupLoadBalancer(t *testing.T) {
 
 	t.Run("DistributionAcrossBackends", func(t *testing.T) {
 		hits := map[string]int{}
-		before := srv1.Accepted() + srv2.Accepted()
+		before := srv1.Served() + srv2.Served()
 		for i := 0; i < 24; i++ {
 			id, dialErr := dialVIPAndIdentify(t, 5*time.Second)
 			require.NoError(t, dialErr, "VIP connection %d", i)
@@ -466,11 +501,11 @@ func TestGroupLoadBalancer(t *testing.T) {
 		}
 		require.Greater(t, hits["backend-1"], 0, "backend-1 must receive connections: %v", hits)
 		require.Greater(t, hits["backend-2"], 0, "backend-2 must receive connections: %v", hits)
-		require.Equal(t, 24, srv1.Accepted()+srv2.Accepted()-before, "every connection lands on a real backend")
+		require.Equal(t, 24, srv1.Served()+srv2.Served()-before, "every connection lands on a real backend")
 	})
 
 	t.Run("PerConnectionStickiness", func(t *testing.T) {
-		conn, dialErr := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", lbVIPAddr, lbVIPPort), 5*time.Second)
+		conn, dialErr := dialVIP(5 * time.Second)
 		require.NoError(t, dialErr, "VIP connection")
 		defer conn.Close()
 
