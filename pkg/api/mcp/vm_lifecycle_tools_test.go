@@ -18,6 +18,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -339,6 +340,53 @@ func TestVMLifecycleToolsPassServerErrorsOn(t *testing.T) {
 				t.Errorf("err = %v, want the servicer's error", err)
 			}
 		})
+	}
+}
+
+// vmRebootContextStub keeps the context vm_reboot reaches the servicer with.
+type vmRebootContextStub struct {
+	vmComputeStub
+	ctx context.Context
+}
+
+func (s *vmRebootContextStub) RebootVM(ctx context.Context, req *platformv1.RebootVMRequest) (*platformv1.RebootVMResponse, error) {
+	s.ctx = ctx
+	return s.vmComputeStub.RebootVM(ctx, req)
+}
+
+func newVMRebootContextRegistry() (*ToolRegistry, *vmRebootContextStub) {
+	stub := &vmRebootContextStub{}
+	provider := &vmComputeProvider{mockServiceProvider: newMockServiceProvider(), server: stub}
+	return NewToolRegistry(provider, newTestLogger()), stub
+}
+
+// A reboot is a stop window plus a start, so the tool gets no deadline of its
+// own: over MCP it runs as long as the request, as RebootVM does over gRPC.
+func TestVMRebootToolRunsForTheCallersLifetime(t *testing.T) {
+	registry, stub := newVMRebootContextRegistry()
+	if _, err := registry.ExecuteTool(context.Background(), "vm_reboot", map[string]interface{}{"id": "vm-1"}); err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if deadline, ok := stub.ctx.Deadline(); ok {
+		t.Errorf("vm_reboot reached the servicer with a deadline %s away, want the caller's lifetime", time.Until(deadline))
+	}
+}
+
+// The caller still bounds the tool: its deadline and its cancellation reach
+// the servicer.
+func TestVMRebootToolKeepsTheCallersDeadline(t *testing.T) {
+	registry, stub := newVMRebootContextRegistry()
+	want := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(context.Background(), want)
+	if _, err := registry.ExecuteTool(ctx, "vm_reboot", map[string]interface{}{"id": "vm-1"}); err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if got, ok := stub.ctx.Deadline(); !ok || !got.Equal(want) {
+		t.Errorf("deadline = %v (set %v), want the caller's %v", got, ok, want)
+	}
+	cancel()
+	if !errors.Is(stub.ctx.Err(), context.Canceled) {
+		t.Errorf("after the caller cancels, ctx.Err() = %v, want context.Canceled", stub.ctx.Err())
 	}
 }
 

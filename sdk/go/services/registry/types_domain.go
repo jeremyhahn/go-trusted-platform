@@ -34,8 +34,9 @@ type StorageStats struct {
 
 // ComponentStatus represents the status of a registry component.
 type ComponentStatus struct {
-	Name   string       `json:"name" yaml:"name"`
-	Status HealthStatus `json:"status" yaml:"status"`
+	Name    string            `json:"name" yaml:"name"`
+	Status  HealthStatus      `json:"status" yaml:"status"`
+	Details map[string]string `json:"details,omitempty" yaml:"details,omitempty"`
 }
 
 // Artifact represents a registry artifact.

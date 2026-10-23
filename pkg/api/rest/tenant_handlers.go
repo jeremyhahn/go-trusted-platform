@@ -1039,6 +1039,12 @@ func (h *TenantHandlers) handleCheckQuota(w http.ResponseWriter, r *http.Request
 	}
 
 	err := h.manager.CheckQuota(ctx, tenantID, resourceType, req.Amount)
+	// Only a quota refusal is an answer; any other failure, such as an
+	// unknown tenant, is an error the caller must see.
+	if err != nil && !tenant.IsQuotaExceeded(err) {
+		h.writeTenantError(w, "check_quota", err)
+		return
+	}
 
 	resp := CheckQuotaResponse{
 		TenantID:  tenantID,

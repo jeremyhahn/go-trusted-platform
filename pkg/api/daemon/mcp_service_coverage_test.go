@@ -18,6 +18,9 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -463,9 +466,8 @@ func TestMCPServiceProvider_DeviceFindBySerial_Errors(t *testing.T) {
 			DeviceService: newMCPMockDeviceService(),
 		})
 		_, err := provider.DeviceFindBySerial(ctx, "SN-missing")
-		var notFound ErrDeviceNotFound
-		if !errors.As(err, &notFound) {
-			t.Fatalf("error = %v, want ErrDeviceNotFound", err)
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("error = %v, want NotFound", err)
 		}
 	})
 }

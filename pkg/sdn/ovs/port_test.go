@@ -99,6 +99,33 @@ func TestClient_AddPort(t *testing.T) {
 	})
 }
 
+func TestClient_AddPortWithType(t *testing.T) {
+	client, server := setupPortTest(t)
+	defer server.Close()
+	defer client.Close()
+
+	ctx := context.Background()
+
+	t.Run("writes the interface type in the insert", func(t *testing.T) {
+		_, err := client.AddPortWithType(ctx, "br-port-test", "int0", "internal")
+		require.NoError(t, err)
+
+		iface, err := client.GetInterface(ctx, "int0")
+		require.NoError(t, err)
+		assert.Equal(t, "internal", iface.Type)
+	})
+
+	t.Run("refuses a type Open vSwitch does not implement", func(t *testing.T) {
+		_, err := client.AddPortWithType(ctx, "br-port-test", "bad0", "bogus")
+		var invalid *ErrInvalidPortType
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, "bogus", invalid.Type)
+
+		_, err = client.GetPort(ctx, "bad0")
+		assert.ErrorIs(t, err, ErrPortNotFound)
+	})
+}
+
 func TestClient_DeletePort(t *testing.T) {
 	client, server := setupPortTest(t)
 	defer server.Close()

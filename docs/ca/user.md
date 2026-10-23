@@ -74,10 +74,7 @@ ACME is how devices and services should get certificates, because it renews
 without anyone deciding to.
 
 ```bash
-platformctl acme register \
-    --directory https://ca.example.com/api/v1/acme/directory \
-    --ca-cert ./ca-bundle.pem \
-    --email ops@example.com
+platformctl acme register --email ops@example.com
 
 platformctl acme renew \
     --directory https://ca.example.com/api/v1/acme/directory \
@@ -87,6 +84,10 @@ platformctl acme renew \
 
 **Always pass `--directory` explicitly.** Its built-in default points at a local
 development address, which is the wrong server in every real deployment.
+
+**Today these verbs check their input and then refuse.** platformd has no ACME
+call yet (an SDK gap), so each verb ends with `ErrACMEDaemonCallMissing` naming
+the RFC 8555 section it would carry; see [cli.md §3](cli.md#3-platformctl-acme).
 
 ### The challenge type is the interesting choice
 
@@ -123,8 +124,13 @@ long-lived credential.
 platformctl ca renew 0A1B2C3D --days 90
 ```
 
+Renewal revokes the old certificate, rotates its key to new material under the
+same key name, and issues the new certificate on that key. Renewing the same
+certificate again works the same way.
+
 `--force` renews even when the certificate is not near expiry. That is the flag
-to use after a suspected key exposure — renew first, then revoke the old one.
+to use after a suspected key exposure: the old key is replaced and the old
+certificate is revoked in the same step.
 
 **Renewal has no REST route.** Use the CLI, gRPC, QUIC or MCP.
 
@@ -192,9 +198,9 @@ becomes unverifiable**. This is not a retry flag.
 **Renew or verify is not available over REST.**
 Correct — neither has a REST route. Use the CLI, gRPC, QUIC or MCP.
 
-**`ca issue` and `acme register` disagree about SAN flags.**
+**`ca issue` and `acme renew` disagree about SAN flags.**
 They do. `ca issue` takes `--sans-dns` / `--sans-ips` / `--sans-email` as
-comma-separated strings; `acme register` takes `--sans-dns` / `--sans-ip` /
+comma-separated strings; `acme renew` takes `--sans-dns` / `--sans-ip` /
 `--sans-email` as repeatable arrays. Singular versus plural, and different
 types.
 

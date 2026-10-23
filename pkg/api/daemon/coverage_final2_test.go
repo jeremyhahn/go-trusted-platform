@@ -126,13 +126,13 @@ func TestCoverageFinal2CryptoServerAdapterNilClient(t *testing.T) {
 
 	t.Run("BatchEncrypt", func(t *testing.T) {
 		t.Parallel()
-		_, err := adapter.BatchEncrypt(ctx, &pb.EncryptBatchRequest{KeyId: "k1"})
+		_, err := adapter.EncryptBatch(ctx, &pb.EncryptBatchRequest{KeyId: "k1"})
 		assertGRPCStatusCode(t, err, codes.Unavailable)
 	})
 
 	t.Run("BatchDecrypt", func(t *testing.T) {
 		t.Parallel()
-		_, err := adapter.BatchDecrypt(ctx, &pb.DecryptBatchRequest{KeyId: "k1"})
+		_, err := adapter.DecryptBatch(ctx, &pb.DecryptBatchRequest{KeyId: "k1"})
 		assertGRPCStatusCode(t, err, codes.Unavailable)
 	})
 
@@ -380,7 +380,10 @@ func TestCoverageFinal2PbUsagesToSDK(t *testing.T) {
 		pb.KeyUsage_KEY_USAGE_UNSPECIFIED, // should be skipped
 	}
 
-	result := pbUsagesToSDK(usages)
+	result, err := pbUsagesToSDK(usages)
+	if err != nil {
+		t.Fatalf("usages refused: %v", err)
+	}
 	if len(result) != 5 {
 		t.Errorf("expected 5 SDK usages, got %d", len(result))
 	}

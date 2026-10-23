@@ -891,6 +891,27 @@ func TestHandleStartBundle(t *testing.T) {
 		assert.True(t, actionResp.Success)
 	})
 
+	t.Run("reply carries the running state and the TPM socket path", func(t *testing.T) {
+		svc := newMockVTPMService()
+		svc.addTestBundle("test-bundle", "test-host", false)
+		_, router := setupVTPMTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/vtpm/bundles/test-bundle/start", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var body map[string]any
+		decodeVTPMResponse(t, resp.Body, &body)
+		assert.Equal(t, true, body["running"])
+		assert.Equal(t, svc.GetTPMSocketPath("test-bundle"), body["socket_path"])
+	})
+
 	t.Run("returns error when already running", func(t *testing.T) {
 		svc := newMockVTPMService()
 		svc.addTestBundle("test-bundle", "test-host", true)

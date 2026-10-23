@@ -1035,6 +1035,16 @@ func TestVTPMServiceServer_mapError(t *testing.T) {
 			err:          errors.New("something went wrong"),
 			expectedCode: codes.Internal,
 		},
+		{
+			name:         "quote on a vTPM that is not running",
+			err:          vtpm.ErrVTPMNotRunning{BundleID: "b-1"},
+			expectedCode: codes.FailedPrecondition,
+		},
+		{
+			name:         "start of a vTPM that is already running",
+			err:          vtpm.ErrVTPMAlreadyRunning{BundleID: "b-1"},
+			expectedCode: codes.FailedPrecondition,
+		},
 	}
 
 	for _, tt := range tests {

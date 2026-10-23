@@ -248,6 +248,12 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
 		t.Fatalf("%s memory.max = %s, want the class value %d", victim, limit, def.MemoryMax)
 	}
+	// An oom_score_adj of -1000 makes a task unkillable even inside its own
+	// memory cgroup: the limit below would then stall the child instead of
+	// killing it, and the wait for a relaunch would time out with no cause.
+	if adj := readTrimmed(t, fmt.Sprintf("/proc/%d/oom_score_adj", before[victim])); adj == "-1000" {
+		t.Fatalf("%s child oom_score_adj = %s: the OOM killer cannot kill it", victim, adj)
+	}
 	oomBefore := memoryEvent(t, leaf, "oom_kill")
 	failedBefore := load.failed.Load()
 
@@ -260,10 +266,15 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	}
 	writeCgroupFile(t, filepath.Join(leaf, "memory.max"), strconv.Itoa(1<<20))
 
-	after := gw.awaitRelaunch(t, victim, before, probes[victim])
+	// The write returns only once the leaf's usage is under the new limit or
+	// it holds no task, and the kernel counts an OOM kill before the victim's
+	// memory is freed. So the count has risen by now, or the child was never
+	// killed and no relaunch can follow.
 	if oom := memoryEvent(t, leaf, "oom_kill"); oom <= oomBefore {
-		t.Errorf("%s memory.events oom_kill = %d, want more than %d", victim, oom, oomBefore)
+		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, oom, oomBefore)
 	}
+
+	after := gw.awaitRelaunch(t, victim, before, probes[victim])
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
 		t.Errorf("relaunched %s memory.max = %s, want the class value %d restored", victim, limit, def.MemoryMax)
 	}
@@ -605,7 +616,8 @@ func (g *supervisedGatewayd) bridge(t *testing.T) bridgeState {
 // bridgeState is the suite bridge's flows and groups, sorted, each flow's
 // counters dropped and its gateway cookie cut to the owner id, so two dumps
 // of the same programming compare equal whichever generation stamped it.
-// generations is the set of full gateway cookies the flows carried.
+// generations is the set of full gateway cookies the flows carried that hold
+// a drawn generation; an owner's fixed cookie (low 32 bits zero) is not one.
 type bridgeState struct {
 	rules       []string
 	generations map[uint64]bool
@@ -666,7 +678,13 @@ func (s bridgeState) addFlow(line string) (string, error) {
 				return "", &bridgeDumpError{Line: line, Cause: err}
 			}
 			if owner := cookie & ovs.OwnerCookieMask; owner != 0 {
-				s.generations[cookie] = true
+				// ovs.NewGenerationCookie never draws generation 0, so a
+				// cookie with empty low bits is an owner's fixed cookie
+				// (the base pipeline, the ND punts): the same on every
+				// start, and no generation of the killed child's.
+				if cookie&^ovs.OwnerCookieMask != 0 {
+					s.generations[cookie] = true
+				}
 				field = fmt.Sprintf("owner=0x%x", owner)
 			}
 		}
@@ -768,6 +786,33 @@ func TestParseBridgeComparesProgrammingNotGenerations(t *testing.T) {
 	}
 }
 
+// TestParseBridgeLeavesFixedCookiesOutOfTheGenerations pins what a
+// generation is: an owner's cookie with a generation drawn in its low 32
+// bits. The base pipeline (gateway.CookiePipeline) and the overlay's ND
+// punts (modes.OverlayNDCookie) stamp one fixed cookie on every start, so
+// a relaunched datapath re-installs the very cookie its predecessor left.
+// Counted as a generation, that cookie would read as the predecessor's
+// forever and datapathReconciled could never turn true.
+func TestParseBridgeLeavesFixedCookiesOutOfTheGenerations(t *testing.T) {
+	const header = "OFPST_FLOW reply (OF1.3) (xid=0x2):\n"
+	state, err := parseBridge(header+
+		" cookie=0xf1be000000000000, duration=1.5s, table=0, n_packets=4, n_bytes=240, priority=0 actions=resubmit(,10)\n"+
+		" cookie=0xf1be000600000000, duration=1.5s, table=0, n_packets=0, n_bytes=0, priority=200,icmp6,icmp_type=135 actions=CONTROLLER:65535\n"+
+		" cookie=0xf1be000300000007, duration=1.5s, table=0, n_packets=0, n_bytes=0, priority=100,tcp,nw_dst=10.100.0.20,tp_dst=80 actions=group:1\n",
+		"")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := map[uint64]bool{0xf1be000300000007: true}; !maps.Equal(state.generations, want) {
+		t.Errorf("generations = %v, want %v: a fixed cookie carries no generation", state.generations, want)
+	}
+	for _, rule := range state.rules {
+		if strings.Contains(rule, "cookie=") {
+			t.Errorf("rule %q keeps a raw gateway cookie, want it cut to the owner", rule)
+		}
+	}
+}
+
 func TestParseBridgeRefusesAnUnparsableCookie(t *testing.T) {
 	_, err := parseBridge(" cookie=0xzz, table=0, priority=0 actions=NORMAL\n", "")
 	var dumpErr *bridgeDumpError
@@ -826,9 +871,30 @@ func (g *supervisedGatewayd) log(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(g.logPath)
 	if err != nil {
-		return "(log unreadable: " + err.Error() + ")"
+		return "(log unreadable: " + err.Error() + ")" + vswitchdLogTail()
 	}
-	return string(data)
+	return string(data) + vswitchdLogTail()
+}
+
+// vswitchdLogPath is where the devcontainer runner has ovs-vswitchd log.
+const vswitchdLogPath = "/var/log/openvswitch/ovs-vswitchd.log"
+
+// vswitchdLogTailLines bounds how much of the vswitchd log a failure shows.
+const vswitchdLogTailLines = 40
+
+// vswitchdLogTail returns the end of the ovs-vswitchd log. A datapath child
+// that reports ErrConfigNotApplied waited its full bound for vswitchd to
+// advance cur_cfg; only vswitchd's own log says why it did not (run 58285).
+func vswitchdLogTail() string {
+	data, err := os.ReadFile(vswitchdLogPath)
+	if err != nil {
+		return "\n(ovs-vswitchd log unreadable: " + err.Error() + ")"
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > vswitchdLogTailLines {
+		lines = lines[len(lines)-vswitchdLogTailLines:]
+	}
+	return "\n--- " + vswitchdLogPath + " (tail) ---\n" + strings.Join(lines, "\n")
 }
 
 // trafficLoad is a set of clients requesting through the proxy without
@@ -959,8 +1025,26 @@ func readTrimmed(t *testing.T, path string) string {
 
 func writeCgroupFile(t *testing.T, path, value string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+	// os.OpenFile registers a kernfs file with the poller, which leaves the
+	// descriptor O_NONBLOCK, and since Linux 6.16 a non-blocking memory.max
+	// write sets the limit and returns without reclaim or the OOM kill. A raw
+	// descriptor stays blocking, so the write returns only once the kernel
+	// has enforced the limit.
+	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() {
+		if err := syscall.Close(fd); err != nil {
+			t.Errorf("close %s: %v", path, err)
+		}
+	}()
+	n, err := syscall.Write(fd, []byte(value))
+	if err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+	if n != len(value) {
+		t.Fatalf("write %s: wrote %d of %d bytes", path, n, len(value))
 	}
 }
 

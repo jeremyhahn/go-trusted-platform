@@ -15,6 +15,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 )
@@ -425,6 +426,29 @@ type ErrInvalidArtifactDigest struct {
 
 func (e ErrInvalidArtifactDigest) Error() string {
 	return "invalid artifact digest: " + e.Digest
+}
+
+// ErrInvalidArtifactReference is returned when a repository[:tag] reference
+// does not satisfy the OCI distribution-spec name grammar (lowercase
+// repository components, a valid tag). It is the client's error.
+type ErrInvalidArtifactReference struct {
+	Reference string
+	Reason    string
+}
+
+func (e ErrInvalidArtifactReference) Error() string {
+	return fmt.Sprintf("registry: invalid image reference %q: %s", e.Reference, e.Reason)
+}
+
+// ErrRegistryNotConfigured is returned when the registry refuses an
+// operation because a capability it needs (image signing, image
+// encryption) is not configured. It maps to codes.FailedPrecondition.
+type ErrRegistryNotConfigured struct {
+	Reason string
+}
+
+func (e ErrRegistryNotConfigured) Error() string {
+	return e.Reason
 }
 
 // ErrStreamClosed is returned when a stream is unexpectedly closed.

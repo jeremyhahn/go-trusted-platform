@@ -31,6 +31,14 @@ func testGetFlags() *cli.CommonFlags {
 	}
 }
 
+// The SDK-gap refusal each verb returns once its input is valid.
+var (
+	registerGap  = ErrACMEDaemonCallMissing{Command: "register", Section: "§7.3 newAccount"}
+	renewGap     = ErrACMEDaemonCallMissing{Command: "renew", Section: "§7.4 order and finalize"}
+	downloadGap  = ErrACMEDaemonCallMissing{Command: "download", Section: "§7.4.2 certificate download"}
+	rotateKeyGap = ErrACMEDaemonCallMissing{Command: "rotate-key", Section: "§7.3.5 key change"}
+)
+
 // TestNewCommand verifies the ACME root command is properly configured
 func TestNewCommand(t *testing.T) {
 	cmd := NewCommand(testGetFlags)
@@ -105,15 +113,12 @@ func TestNewDownloadCommand(t *testing.T) {
 func TestNewDownloadCommand_RunE(t *testing.T) {
 	cmd := newDownloadCommand(testGetFlags)
 
-	// Execute the command with a valid URL
+	// A valid URL passes validation and reaches the SDK gap
 	cmd.SetArgs([]string{"https://acme-server/acme/cert/abc123"})
 	err := cmd.Execute()
 
-	// Should return ErrDaemonConnectionRequired
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "download", daemonErr.Command)
+	assert.True(t, errors.Is(err, downloadGap))
 }
 
 // TestNewRegisterCommand verifies the register command is properly configured
@@ -136,14 +141,12 @@ func TestNewRegisterCommand(t *testing.T) {
 func TestNewRegisterCommand_RunE(t *testing.T) {
 	cmd := newRegisterCommand(testGetFlags)
 
-	// Execute the command
+	// Without --email, validation refuses before the SDK gap
 	err := cmd.Execute()
 
-	// Should return ErrDaemonConnectionRequired
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "register", daemonErr.Command)
+	assert.True(t, errors.Is(err, ErrMissingEmail{}))
+	assert.False(t, errors.Is(err, registerGap))
 }
 
 // TestNewRegisterCommand_WithEmail verifies register command with email flag
@@ -153,10 +156,9 @@ func TestNewRegisterCommand_WithEmail(t *testing.T) {
 	cmd.SetArgs([]string{"--email", "admin@example.com"})
 	err := cmd.Execute()
 
-	// Should still return ErrDaemonConnectionRequired but with email set
+	// A valid email passes validation and reaches the SDK gap
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
+	assert.True(t, errors.Is(err, registerGap))
 }
 
 // TestNewRenewCommand verifies the renew command is properly configured
@@ -235,13 +237,12 @@ func TestNewRenewCommand_SANFlags(t *testing.T) {
 func TestNewRenewCommand_RunE(t *testing.T) {
 	cmd := newRenewCommand(testGetFlags)
 
+	// The defaults name no identifier, so validation refuses before the gap
 	err := cmd.Execute()
 
-	// Should return ErrDaemonConnectionRequired
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "renew", daemonErr.Command)
+	assert.True(t, errors.Is(err, ErrMissingAuthorizationValue{}))
+	assert.False(t, errors.Is(err, renewGap))
 }
 
 // TestNewRenewCommand_WithAllFlags verifies renew command with all flags set
@@ -262,10 +263,9 @@ func TestNewRenewCommand_WithAllFlags(t *testing.T) {
 	})
 	err := cmd.Execute()
 
-	// Should still return ErrDaemonConnectionRequired
+	// Valid input reaches the SDK gap
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
+	assert.True(t, errors.Is(err, renewGap))
 }
 
 // TestNewRotateKeyCommand verifies the rotate-key command is properly configured
@@ -285,11 +285,8 @@ func TestNewRotateKeyCommand_RunE(t *testing.T) {
 
 	err := cmd.Execute()
 
-	// Should return ErrDaemonConnectionRequired
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "rotate-key", daemonErr.Command)
+	assert.True(t, errors.Is(err, rotateKeyGap))
 }
 
 // TestRunDownload verifies the runDownload function
@@ -299,9 +296,33 @@ func TestRunDownload(t *testing.T) {
 	err := runDownload(flags, "https://acme-server/cert/123")
 
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "download", daemonErr.Command)
+	assert.True(t, errors.Is(err, downloadGap))
+}
+
+// TestRunDownload_InvalidURL verifies download refuses a URL that is not an
+// absolute https URL before it reaches the SDK gap
+func TestRunDownload_InvalidURL(t *testing.T) {
+	testCases := []struct {
+		name    string
+		certURL string
+		want    error
+	}{
+		{name: "empty", certURL: "", want: ErrMissingCertificateURL{}},
+		{name: "http scheme", certURL: "http://acme-server/cert/123", want: ErrInvalidCertificateURL{URL: "http://acme-server/cert/123"}},
+		{name: "relative", certURL: "/acme/cert/123", want: ErrInvalidCertificateURL{URL: "/acme/cert/123"}},
+		{name: "no host", certURL: "https:///cert/123", want: ErrInvalidCertificateURL{URL: "https:///cert/123"}},
+		{name: "unparseable", certURL: "https://acme server/%zz", want: ErrInvalidCertificateURL{URL: "https://acme server/%zz"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runDownload(testGetFlags(), tc.certURL)
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, tc.want), "got %v", err)
+			assert.False(t, errors.Is(err, downloadGap))
+		})
+	}
 }
 
 // TestRunRegister verifies the runRegister function
@@ -311,26 +332,81 @@ func TestRunRegister(t *testing.T) {
 	err := runRegister(flags, "admin@example.com")
 
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "register", daemonErr.Command)
+	assert.True(t, errors.Is(err, registerGap))
+}
+
+// TestRunRegister_InvalidEmail verifies register refuses a missing or
+// malformed email before it reaches the SDK gap
+func TestRunRegister_InvalidEmail(t *testing.T) {
+	testCases := []struct {
+		name  string
+		email string
+		want  error
+	}{
+		{name: "empty", email: "", want: ErrMissingEmail{}},
+		{name: "no at sign", email: "admin.example.com", want: ErrInvalidEmail{Email: "admin.example.com"}},
+		{name: "display name", email: "Admin <admin@example.com>", want: ErrInvalidEmail{Email: "Admin <admin@example.com>"}},
+		{name: "mailto URL", email: "mailto:admin@example.com", want: ErrInvalidEmail{Email: "mailto:admin@example.com"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runRegister(testGetFlags(), tc.email)
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, tc.want), "got %v", err)
+			assert.False(t, errors.Is(err, registerGap))
+		})
+	}
 }
 
 // TestRunRenew verifies the runRenew function
 func TestRunRenew(t *testing.T) {
-	flags := testGetFlags()
-	rf := &renewFlags{
-		cn:            "example.com",
-		authzType:     "dns",
-		challengeType: "http-01",
+	testCases := []struct {
+		name string
+		rf   *renewFlags
+	}{
+		{name: "dns with CN", rf: &renewFlags{cn: "example.com", authzType: "dns", challengeType: "http-01"}},
+		{name: "dns with SAN only", rf: &renewFlags{sansDNS: []string{"www.example.com"}, authzType: "dns", challengeType: "dns-01"}},
+		{name: "ip with IP SAN", rf: &renewFlags{sansIPs: []string{"192.0.2.10"}, authzType: "ip", challengeType: "http-01"}},
+		{name: "device attestation", rf: &renewFlags{cn: "device-01", authzType: "permanent-identifier", challengeType: "device-attest-01"}},
 	}
 
-	err := runRenew(flags, rf)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runRenew(testGetFlags(), tc.rf)
 
-	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "renew", daemonErr.Command)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, renewGap), "got %v", err)
+		})
+	}
+}
+
+// TestRunRenew_InvalidInput verifies renew refuses an invalid order before it
+// reaches the SDK gap
+func TestRunRenew_InvalidInput(t *testing.T) {
+	testCases := []struct {
+		name string
+		rf   *renewFlags
+		want error
+	}{
+		{name: "unknown authz", rf: &renewFlags{cn: "example.com", authzType: "invalid-authz-type", challengeType: "http-01"}, want: ErrInvalidAuthorizationType{Type: "invalid-authz-type"}},
+		{name: "empty authz", rf: &renewFlags{cn: "example.com", challengeType: "http-01"}, want: ErrInvalidAuthorizationType{Type: ""}},
+		{name: "unknown challenge", rf: &renewFlags{cn: "example.com", authzType: "dns", challengeType: "invalid-challenge-type"}, want: ErrInvalidChallengeType{Type: "invalid-challenge-type"}},
+		{name: "ip without IP SAN", rf: &renewFlags{cn: "example.com", authzType: "ip", challengeType: "http-01"}, want: ErrIPAuthorizationRequiresIP{}},
+		{name: "no identifier", rf: &renewFlags{authzType: "dns", challengeType: "http-01"}, want: ErrMissingAuthorizationValue{}},
+		{name: "email SAN is not an identifier", rf: &renewFlags{sansEmails: []string{"admin@example.com"}, authzType: "dns", challengeType: "http-01"}, want: ErrMissingAuthorizationValue{}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runRenew(testGetFlags(), tc.rf)
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, tc.want), "got %v", err)
+			assert.False(t, errors.Is(err, renewGap))
+		})
+	}
 }
 
 // TestRunRotateKey verifies the runRotateKey function
@@ -340,9 +416,8 @@ func TestRunRotateKey(t *testing.T) {
 	err := runRotateKey(flags)
 
 	require.Error(t, err)
-	var daemonErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &daemonErr))
-	assert.Equal(t, "rotate-key", daemonErr.Command)
+	assert.True(t, errors.Is(err, rotateKeyGap))
+	assert.False(t, errors.Is(err, renewGap), "the gap names its own verb")
 }
 
 // TestRenewFlags_Initialization verifies renewFlags struct initialization
@@ -542,9 +617,10 @@ func TestRenewCommand_MultipleSANs(t *testing.T) {
 		"--sans-email", "admin@example.com",
 	})
 
-	// Execute will fail but flags should be parsed
+	// The SANs are a valid identifier set, so execution reaches the SDK gap
 	err := cmd.Execute()
-	require.Error(t, err) // Expected to fail with daemon required error
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, renewGap))
 
 	// Verify the flags were parsed (command was set up correctly)
 	sansDNS, _ := cmd.Flags().GetStringArray("sans-dns")
@@ -560,34 +636,52 @@ func TestRenewCommand_MultipleSANs(t *testing.T) {
 // TestCommandRunE_ReturnsError verifies all commands return appropriate errors
 func TestCommandRunE_ReturnsError(t *testing.T) {
 	testCases := []struct {
-		name            string
-		cmd             *cobra.Command
-		args            []string
-		expectedCommand string
+		name string
+		cmd  *cobra.Command
+		args []string
+		want error
 	}{
 		{
-			name:            "download returns daemon error",
-			cmd:             newDownloadCommand(testGetFlags),
-			args:            []string{"https://example.com/cert"},
-			expectedCommand: "download",
+			name: "download returns the SDK gap",
+			cmd:  newDownloadCommand(testGetFlags),
+			args: []string{"https://example.com/cert"},
+			want: downloadGap,
 		},
 		{
-			name:            "register returns daemon error",
-			cmd:             newRegisterCommand(testGetFlags),
-			args:            []string{},
-			expectedCommand: "register",
+			name: "register returns the SDK gap",
+			cmd:  newRegisterCommand(testGetFlags),
+			args: []string{"--email", "admin@example.com"},
+			want: registerGap,
 		},
 		{
-			name:            "renew returns daemon error",
-			cmd:             newRenewCommand(testGetFlags),
-			args:            []string{},
-			expectedCommand: "renew",
+			name: "renew returns the SDK gap",
+			cmd:  newRenewCommand(testGetFlags),
+			args: []string{"--cn", "example.com"},
+			want: renewGap,
 		},
 		{
-			name:            "rotate-key returns daemon error",
-			cmd:             newRotateKeyCommand(testGetFlags),
-			args:            []string{},
-			expectedCommand: "rotate-key",
+			name: "rotate-key returns the SDK gap",
+			cmd:  newRotateKeyCommand(testGetFlags),
+			args: []string{},
+			want: rotateKeyGap,
+		},
+		{
+			name: "download refuses an http URL",
+			cmd:  newDownloadCommand(testGetFlags),
+			args: []string{"http://example.com/cert"},
+			want: ErrInvalidCertificateURL{URL: "http://example.com/cert"},
+		},
+		{
+			name: "register refuses a malformed email",
+			cmd:  newRegisterCommand(testGetFlags),
+			args: []string{"--email", "not-an-email"},
+			want: ErrInvalidEmail{Email: "not-an-email"},
+		},
+		{
+			name: "renew refuses an unknown challenge",
+			cmd:  newRenewCommand(testGetFlags),
+			args: []string{"--cn", "example.com", "--challenge", "tls-alpn-01"},
+			want: ErrInvalidChallengeType{Type: "tls-alpn-01"},
 		},
 	}
 
@@ -597,9 +691,7 @@ func TestCommandRunE_ReturnsError(t *testing.T) {
 			err := tc.cmd.Execute()
 
 			require.Error(t, err)
-			var daemonErr ErrDaemonConnectionRequired
-			assert.True(t, errors.As(err, &daemonErr))
-			assert.Equal(t, tc.expectedCommand, daemonErr.Command)
+			assert.True(t, errors.Is(err, tc.want), "got %v", err)
 		})
 	}
 }

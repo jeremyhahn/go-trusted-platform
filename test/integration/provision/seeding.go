@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -76,6 +77,11 @@ type lifecycleFixture struct {
 	// pkg/eab Service.Validate).
 	eabKeyID string
 	eabHMAC  string
+
+	// dbKeyID is the Secure Boot DB signing key seedDBSigningKey created in
+	// the platform KMS and had the CA certify. The seeded profile's
+	// secure-boot.db block names it as both the key-uri path and the cn.
+	dbKeyID string
 }
 
 // dialSeedConn opens the mTLS gRPC connection used by the seeding clients
@@ -115,17 +121,18 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 	eabClient := eabsdk.NewClientFromGRPC(platformv1.NewEABServiceClient(conn))
 
 	ekCertPEM, ekCertB64DER := newSelfSignedEKCert(t)
+	dbKeyID := seedDBSigningKey(t, ctx)
 	fixture := &lifecycleFixture{
 		ekSerial:     uniqueID("provision-mp-fixture-ek"),
 		macAddress:   uniqueMAC(),
 		ekCertPEM:    ekCertPEM,
 		ekCertB64DER: ekCertB64DER,
+		dbKeyID:      dbKeyID,
 		// The seeded config carries a recognizable platform section plus a
-		// secure-boot section provisioned for resign-mode "remote", so the
-		// SignDigest scenario is blocked only by the two authentication /
-		// availability gates asserted there (never by a missing secure-boot
-		// section). Values are strings/bools only so the JSON round-trip
-		// shape is stable for deep-equality assertions.
+		// secure-boot section provisioned for resign-mode "remote" whose
+		// DB key exists in the KMS and holds a CA certificate, so SignDigest
+		// takes its signed path. Values are strings/bools only so the JSON
+		// round-trip shape is stable for deep-equality assertions.
 		config: map[string]any{
 			"platform": map[string]any{
 				"hostname": uniqueID("provision-mp-node"),
@@ -134,8 +141,8 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 				"enabled":     true,
 				"resign-mode": "remote",
 				"db": map[string]any{
-					"key-uri": "kms://secure-boot/" + uniqueID("provision-mp-db"),
-					"cn":      uniqueID("provision-mp-db-cn"),
+					"key-uri": "kms://" + dbKeyID,
+					"cn":      dbKeyID,
 				},
 			},
 		},
@@ -217,6 +224,44 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 	})
 
 	return fixture
+}
+
+// seedDBSigningKey provisions the Secure Boot DB signing key the way an
+// operator does (docs/ca/cli.md `ca sign-csr`): it generates an ECDSA P-256
+// signing key in the platform KMS, has the KMS sign the key's CSR, and has the
+// CA certify the key for code signing. The CSR's subject is the key ID, so the
+// returned ID is both the profile's db.key-uri path and the CN the control
+// plane resolves the DB certificate by.
+func seedDBSigningKey(t *testing.T, ctx context.Context) string {
+	t.Helper()
+
+	cli := NewCLIAdapter()
+	if err := cli.Setup(ctx); err != nil {
+		t.Fatalf("seeding: platformctl setup failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cli.Teardown(); err != nil {
+			t.Logf("Warning: seeding platformctl teardown error: %v", err)
+		}
+	})
+
+	keyID := uniqueID("provision-mp-db")
+	dir := t.TempDir()
+	csrPath := filepath.Join(dir, "db.csr")
+	steps := [][]string{
+		{"kms", "key", "generate", keyID, "--algorithm", "ECDSA-P256", "--purpose", "sign"},
+		{"kms", "key", "csr", keyID, "--out", csrPath},
+		{"ca", "sign-csr", csrPath, "--out", filepath.Join(dir, "db.pem")},
+	}
+	for _, args := range steps {
+		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+		_, err := cli.runCommand(callCtx, args...)
+		cancel()
+		if err != nil {
+			t.Fatalf("seeding: DB signing key %q: %v", keyID, err)
+		}
+	}
+	return keyID
 }
 
 // newSelfSignedEKCert generates an ECDSA self-signed certificate and

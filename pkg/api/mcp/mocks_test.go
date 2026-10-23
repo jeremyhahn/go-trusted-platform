@@ -43,7 +43,7 @@ type mockServiceProvider struct {
 	vtpmCreateFunc    func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error)
 	vtpmDeleteFunc    func(ctx context.Context, name string) error
 	vtpmListFunc      func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error)
-	vtpmStartFunc     func(ctx context.Context, name string) error
+	vtpmStartFunc     func(ctx context.Context, name string) (interface{}, error)
 	vtpmStopFunc      func(ctx context.Context, name string) error
 	vtpmQuoteFunc     func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
 	vtpmSealFunc      func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error)
@@ -147,10 +147,12 @@ type mockServiceProvider struct {
 	iamCreateUserFunc      func(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
 	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) (interface{}, error)
 	iamGetUserFunc         func(ctx context.Context, tenantID, userID string) (interface{}, error)
+	iamUpdateUserFunc      func(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error)
 	iamListUsersFunc       func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 	iamCreateRoleFunc      func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
 	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) (interface{}, error)
 	iamGetRoleFunc         func(ctx context.Context, tenantID, roleID string) (interface{}, error)
+	iamUpdateRoleFunc      func(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error)
 	iamListRolesFunc       func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 	iamAssignRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
 	iamRevokeRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
@@ -200,6 +202,7 @@ type mockServiceProvider struct {
 	secretRotateFunc            func(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
 	secretRollbackFunc          func(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
 	secretUpdateStatusFunc      func(ctx context.Context, secretID, status string) (interface{}, error)
+	secretGetByPrefixFunc       func(ctx context.Context, prefix string, includeData bool, limit int, cursor string) (interface{}, error)
 
 	// DEK
 	dekCreateFunc func(ctx context.Context, req *DEKCreateRequest) (interface{}, error)
@@ -232,6 +235,7 @@ type mockServiceProvider struct {
 	iamCreateGroupFunc       func(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
 	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) (interface{}, error)
 	iamGetGroupFunc          func(ctx context.Context, tenantID, groupID string) (interface{}, error)
+	iamUpdateGroupFunc       func(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error)
 	iamListGroupsFunc        func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
 	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
@@ -299,8 +303,8 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"name": "vtpm-2", "status": "stopped"},
 			}, nil
 		},
-		vtpmStartFunc: func(ctx context.Context, name string) error {
-			return nil
+		vtpmStartFunc: func(ctx context.Context, name string) (interface{}, error) {
+			return map[string]interface{}{"success": true, "bundle_id": name, "running": true}, nil
 		},
 		vtpmStopFunc: func(ctx context.Context, name string) error {
 			return nil
@@ -890,11 +894,11 @@ func (m *mockServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOptio
 	return nil, nil
 }
 
-func (m *mockServiceProvider) VTPMStart(ctx context.Context, name string) error {
+func (m *mockServiceProvider) VTPMStart(ctx context.Context, name string) (interface{}, error) {
 	if m.vtpmStartFunc != nil {
 		return m.vtpmStartFunc(ctx, name)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) VTPMStop(ctx context.Context, name string) error {
@@ -1498,6 +1502,13 @@ func (m *mockServiceProvider) IAMGetUser(ctx context.Context, tenantID, userID s
 	return nil, nil
 }
 
+func (m *mockServiceProvider) IAMUpdateUser(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error) {
+	if m.iamUpdateUserFunc != nil {
+		return m.iamUpdateUserFunc(ctx, req)
+	}
+	return nil, nil
+}
+
 func (m *mockServiceProvider) IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 	if m.iamListUsersFunc != nil {
 		return m.iamListUsersFunc(ctx, req)
@@ -1522,6 +1533,13 @@ func (m *mockServiceProvider) IAMDeleteRole(ctx context.Context, tenantID, roleI
 func (m *mockServiceProvider) IAMGetRole(ctx context.Context, tenantID, roleID string) (interface{}, error) {
 	if m.iamGetRoleFunc != nil {
 		return m.iamGetRoleFunc(ctx, tenantID, roleID)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) IAMUpdateRole(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error) {
+	if m.iamUpdateRoleFunc != nil {
+		return m.iamUpdateRoleFunc(ctx, req)
 	}
 	return nil, nil
 }
@@ -1590,6 +1608,13 @@ func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID
 		"tenant_id": tenantID,
 		"name":      "test-group",
 	}, nil
+}
+
+func (m *mockServiceProvider) IAMUpdateGroup(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error) {
+	if m.iamUpdateGroupFunc != nil {
+		return m.iamUpdateGroupFunc(ctx, req)
+	}
+	return nil, nil
 }
 
 func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
@@ -1960,6 +1985,13 @@ func (m *mockServiceProvider) SecretUpdateStatus(ctx context.Context, secretID, 
 		return m.secretUpdateStatusFunc(ctx, secretID, status)
 	}
 	return map[string]interface{}{"secret_id": secretID, "status": status}, nil
+}
+
+func (m *mockServiceProvider) SecretGetByPrefix(ctx context.Context, prefix string, includeData bool, limit int, cursor string) (interface{}, error) {
+	if m.secretGetByPrefixFunc != nil {
+		return m.secretGetByPrefixFunc(ctx, prefix, includeData, limit, cursor)
+	}
+	return map[string]interface{}{"secrets": map[string]interface{}{}}, nil
 }
 
 func (m *mockServiceProvider) DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error) {

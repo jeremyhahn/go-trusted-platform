@@ -17,6 +17,7 @@ import (
 	"context"
 	"os"
 
+	kmspb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -82,6 +83,10 @@ type Client interface {
 	KMS() platformv1.KeyManagementServiceClient
 	Barrier() platformv1.BarrierServiceClient
 
+	// DEK returns the quicbaas.kms.v1 DEKManagement client platformd
+	// registers beside its own services, carried by this client's transport.
+	DEK() kmspb.DEKManagementClient
+
 	// Invitation returns the tenant invitation client; EAB returns the ACME
 	// External Account Binding client.
 	Invitation() platformv1.InvitationServiceClient
@@ -113,6 +118,7 @@ type ServiceClients struct {
 	IAM          platformv1.PlatformIAMServiceClient
 	KMS          platformv1.KeyManagementServiceClient
 	Barrier      platformv1.BarrierServiceClient
+	DEK          kmspb.DEKManagementClient
 	SDN          platformv1.SDNServiceClient
 	Compute      platformv1.ComputeServiceClient
 	BMC          platformv1.BMCServiceClient
@@ -361,6 +367,7 @@ func (c *platformClient) initServiceClients() {
 		IAM:          platformv1.NewPlatformIAMServiceClient(conn),
 		KMS:          platformv1.NewKeyManagementServiceClient(conn),
 		Barrier:      platformv1.NewBarrierServiceClient(conn),
+		DEK:          kmspb.NewDEKManagementClient(conn),
 		SDN:          platformv1.NewSDNServiceClient(conn),
 		Compute:      platformv1.NewComputeServiceClient(conn),
 		BMC:          platformv1.NewBMCServiceClient(conn),
@@ -506,6 +513,13 @@ func (c *platformClient) KMS() platformv1.KeyManagementServiceClient {
 		return nil
 	}
 	return c.services.KMS
+}
+
+func (c *platformClient) DEK() kmspb.DEKManagementClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.DEK
 }
 
 // Barrier returns the barrier service client.

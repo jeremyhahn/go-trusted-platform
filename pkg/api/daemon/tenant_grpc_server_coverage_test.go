@@ -759,7 +759,7 @@ func TestTenantGRPCServer_ResumeTenant_InvalidArgument(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
-func TestTenantGRPCServer_ResumeTenant_InvalidState(t *testing.T) {
+func TestTenantGRPCServer_ResumeTenant_ActiveIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
@@ -769,16 +769,18 @@ func TestTenantGRPCServer_ResumeTenant_InvalidState(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Try to resume an active tenant - should fail
+	// Resuming an active tenant is a same-state transition: it succeeds
+	// so a retried resume never fails (docs/tenant/engineering.md §2).
 	resp, err := server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{
 		TenantId: createResp.Tenant.Id,
 	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.GetStatus().GetSuccess())
 
-	assert.Nil(t, resp)
-	require.Error(t, err)
-	st, ok := status.FromError(err)
-	require.True(t, ok)
-	assert.Equal(t, codes.FailedPrecondition, st.Code())
+	got, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: createResp.Tenant.Id})
+	require.NoError(t, err)
+	assert.Equal(t, platformv1.TenantState_TENANT_STATE_ACTIVE, got.GetTenant().GetState())
 }
 
 func TestTenantGRPCServer_ResumeTenant_NotFound(t *testing.T) {
@@ -1041,11 +1043,10 @@ func TestTenantGRPCServer_GetUsage_TenantNotConfigured(t *testing.T) {
 // CheckQuota Tests - Currently at 10.5% coverage
 // =============================================================================
 
-func TestTenantGRPCServer_CheckQuota_ExecutesWithMissingEnforcer(t *testing.T) {
+func TestTenantGRPCServer_CheckQuota_UsesTenantQuotaWithoutEnforcer(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
-	// Create a tenant
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
 		Name: "check-quota-test",
 		ComputeQuota: &platformv1.ComputeQuota{
@@ -1054,17 +1055,34 @@ func TestTenantGRPCServer_CheckQuota_ExecutesWithMissingEnforcer(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Check quota - exercises the code path even if enforcer not configured
-	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
+	allowed, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
 		TenantId: createResp.Tenant.Id,
 		Resource: "vms",
 		Amount:   5,
 	})
-
-	// Should succeed with response (not error) even if quota check fails internally
 	require.NoError(t, err)
-	assert.NotNil(t, resp)
-	// Response may indicate unavailable because enforcer not configured
+	assert.True(t, allowed.GetAvailable(), allowed.GetMessage())
+
+	// A refusal is an answer, not an error.
+	refused, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
+		TenantId: createResp.Tenant.Id,
+		Resource: "vms",
+		Amount:   11,
+	})
+	require.NoError(t, err)
+	assert.False(t, refused.GetAvailable())
+}
+
+func TestTenantGRPCServer_CheckQuota_TenantNotFound(t *testing.T) {
+	server := createTestTenantGRPCServer(t)
+
+	_, err := server.CheckQuota(context.Background(), &platformv1.CheckQuotaRequest{
+		TenantId: "missing-tenant",
+		Resource: "vms",
+		Amount:   1,
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_EmptyTenantID(t *testing.T) {

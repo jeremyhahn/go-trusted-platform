@@ -108,6 +108,18 @@ func fromArtifact(a *pb.Artifact) ImageManifest {
 		Size:        a.GetSize(),
 		Annotations: a.GetAnnotations(),
 	}
+	if manifest := a.GetManifest(); manifest != nil {
+		m.MediaType = manifest.GetMediaType()
+		m.Config = Descriptor{Digest: manifest.GetConfigDigest()}
+		for _, l := range manifest.GetLayers() {
+			m.Layers = append(m.Layers, Descriptor{
+				MediaType:   l.GetMediaType(),
+				Digest:      l.GetDigest(),
+				Size:        l.GetSize(),
+				Annotations: l.GetAnnotations(),
+			})
+		}
+	}
 	if a.GetCreatedAt() != nil {
 		m.CreatedAt = a.GetCreatedAt().AsTime()
 	}
@@ -137,6 +149,20 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 	if opts.AllowOverwrite {
 		metadata = regsvc.WithOverwrite(metadata)
 	}
+	if opts.Encrypt {
+		if metadata.Annotations == nil {
+			metadata.Annotations = make(map[string]string, 2)
+		}
+		metadata.Annotations[registry.PushAnnotationEncrypt] = "true"
+		metadata.Annotations[registry.PushAnnotationKeyID] = opts.KeyID
+	}
+	if opts.SignImage {
+		if metadata.Annotations == nil {
+			metadata.Annotations = make(map[string]string, 1)
+		}
+		metadata.Annotations[registry.PushAnnotationSign] = "true"
+		metadata.Annotations[registry.PushAnnotationSigningKeyID] = opts.SigningKeyID
+	}
 	if err := stream.Send(regsvc.NewPushMetadataRequest(metadata)); err != nil {
 		return nil, err
 	}
@@ -152,6 +178,8 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		Reference: ref,
 		Digest:    resp.GetArtifact().GetDigest(),
 		Size:      resp.GetBytesReceived(),
+		Encrypted: resp.GetArtifact().GetAnnotations()[registry.ManifestAnnotationEncrypted] == "true",
+		Signed:    resp.GetArtifact().GetAnnotations()[registry.ManifestAnnotationSigned] == "true",
 	}
 	if resp.GetTimestamp() != nil {
 		result.PushedAt = resp.GetTimestamp().AsTime()
@@ -182,9 +210,14 @@ func (g *GRPCAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*
 		}
 		data.Write(msg.GetChunk())
 	}
+	return pullResultFromImage(ref, data.Bytes())
+}
 
+// pullResultFromImage decodes the image document a pull streams
+// (application/x-trusted-platform-image), the push envelope's shape.
+func pullResultFromImage(ref string, data []byte) (*PullResult, error) {
 	var img registry.Image
-	if err := json.Unmarshal(data.Bytes(), &img); err != nil {
+	if err := json.Unmarshal(data, &img); err != nil {
 		return nil, ErrInvalidResponse{Operation: "Pull", Err: err}
 	}
 	result := &PullResult{
@@ -246,10 +279,19 @@ func (g *GRPCAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, 
 	artifact := resp.GetDetail().GetArtifact()
 	manifest := fromArtifact(artifact)
 	manifest.Reference = ref
+	annotations := artifact.GetAnnotations()
 	return &InspectResult{
 		Reference: ref,
 		Manifest:  &manifest,
-		TotalSize: artifact.GetSize(),
+		Config: &ImageConfig{
+			Architecture: artifact.GetArchitecture(),
+			OS:           artifact.GetOs(),
+			Author:       artifact.GetAuthor(),
+		},
+		TotalSize:       artifact.GetSize(),
+		LayerCount:      len(manifest.Layers),
+		Encrypted:       annotations[registry.ManifestAnnotationEncrypted] == "true",
+		EncryptionKeyID: annotations[registry.ManifestAnnotationKeyID],
 	}, nil
 }
 
@@ -269,6 +311,12 @@ func (g *GRPCAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	}
 	if healthy {
 		result.Status = "running"
+	}
+	for _, c := range resp.GetComponents() {
+		if c.GetName() == registry.StatusComponentStorage {
+			result.StorageBackend = c.GetDetails()[registry.StatusDetailBackend]
+			result.StorageStatus = c.GetStatus().String()
+		}
 	}
 	if resp.GetStartedAt() != nil && resp.GetTimestamp() != nil {
 		result.Uptime = resp.GetTimestamp().AsTime().Sub(resp.GetStartedAt().AsTime())

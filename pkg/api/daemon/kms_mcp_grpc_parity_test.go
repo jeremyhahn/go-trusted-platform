@@ -137,6 +137,20 @@ func (s *parityStore) rotateSecret(secretID string, data []byte) (uint64, uint64
 	return oldVersion, s.putSecret(secretID, data), nil
 }
 
+// rollbackSecret writes a new version of secretID, as a rollback does. The
+// store keeps no history, so the new version carries the current data: the
+// parity tests compare the versions the transports answer.
+func (s *parityStore) rollbackSecret(secretID string, target uint64) (uint64, error) {
+	data, current, err := s.secret(secretID)
+	if err != nil {
+		return 0, err
+	}
+	if target >= current {
+		return 0, sdkerrors.NewInvalidInput("parity", "rollback target is not an earlier version")
+	}
+	return s.putSecret(secretID, data), nil
+}
+
 func (s *parityStore) rotationPolicy(secretID string) error {
 	if !s.rotation[secretID] {
 		return parityMissing(secretID)
@@ -235,6 +249,7 @@ func newParityMCP(store *parityStore) *mcp.ToolRegistry {
 		SecretsService: secretsService,
 		Logger:         slog.Default(),
 	})
+	provider.SetSecretsServer(NewSecretsServerAdapter(&paritySecretsClient{store: store}, slog.Default()))
 	return mcp.NewToolRegistry(provider, logging.DefaultLogger())
 }
 
@@ -329,6 +344,14 @@ func (c *paritySecretsClient) Rotate(ctx context.Context, req *secrets.RotateSec
 		return nil, err
 	}
 	return &secrets.RotateSecretResponse{SecretID: req.SecretID, OldVersion: int(oldVersion), NewVersion: int(newVersion)}, nil
+}
+
+func (c *paritySecretsClient) Rollback(ctx context.Context, req *secrets.RollbackSecretRequest) (*secrets.RollbackSecretResponse, error) {
+	newVersion, err := c.store.rollbackSecret(req.SecretID, uint64(req.TargetVersion))
+	if err != nil {
+		return nil, err
+	}
+	return &secrets.RollbackSecretResponse{SecretID: req.SecretID, NewVersion: int(newVersion)}, nil
 }
 
 // newParityCryptoClient serves the store through the quicbaas crypto client.
@@ -860,6 +883,27 @@ func TestMCPKMSParity_Secrets(t *testing.T) {
 		mcpErr := parityTool(t, tools, "secret_rollback", map[string]interface{}{"secret_id": "api/token"}, &service.RollbackSecretResponse{})
 		_, grpcErr := adapter.RollbackSecret(ctx, &pb.RollbackSecretRequest{SecretId: "api/token"})
 		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
+	})
+
+	t.Run("secret_rollback answers the version it wrote", func(t *testing.T) {
+		const id = "api/rollback"
+		storeArgs := map[string]interface{}{"secret_id": id, "data": b64(data)}
+		require.NoError(t, parityTool(t, tools, "secret_store", storeArgs, &service.StoreSecretResponse{}))
+		rotateArgs := map[string]interface{}{"secret_id": id, "new_data": b64([]byte("rotated"))}
+		require.NoError(t, parityTool(t, tools, "secret_rotate", rotateArgs, &service.RotateSecretResponse{}))
+		_, err := adapter.StoreSecret(ctx, &pb.StoreSecretRequest{SecretId: id, Data: data})
+		require.NoError(t, err)
+		_, err = adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: id, NewData: []byte("rotated")})
+		require.NoError(t, err)
+
+		var got service.RollbackSecretResponse
+		rollbackArgs := map[string]interface{}{"secret_id": id, "target_version": float64(1)}
+		require.NoError(t, parityTool(t, tools, "secret_rollback", rollbackArgs, &got))
+		want, err := adapter.RollbackSecret(ctx, &pb.RollbackSecretRequest{SecretId: id, TargetVersion: 1})
+		require.NoError(t, err)
+		assert.Equal(t, want.GetSecretId(), got.SecretID)
+		assert.Equal(t, want.GetNewVersion(), got.NewVersion)
+		assert.Equal(t, uint64(3), got.NewVersion, "store writes v1, rotate v2: the rollback writes v3")
 	})
 }
 

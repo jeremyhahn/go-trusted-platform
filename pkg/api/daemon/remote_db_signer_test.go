@@ -29,8 +29,10 @@ import (
 	"time"
 
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 )
 
 // fakeDigestSigner emulates the server-side KMS crypto client: it signs the
@@ -189,6 +191,31 @@ func TestRemoteDBKeySigner_SignErrors(t *testing.T) {
 
 	t.Run("kms failure", func(t *testing.T) {
 		signer := &fakeDigestSigner{key: key, err: errors.New("kms down")}
+		s := NewRemoteDBKeySigner(signer, &fakeCertResolver{cert: cert}, dbSignerTestLogger())
+		digest := sha256.Sum256([]byte("x"))
+		_, err := s.SignDigest(context.Background(), "kms://platform/secureboot/db", digest[:])
+		var signErr ErrDBSign
+		if !errors.As(err, &signErr) {
+			t.Fatalf("expected ErrDBSign, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("kms not found is not configured", func(t *testing.T) {
+		signer := &fakeDigestSigner{key: key, err: sdkerrors.NewNotFound("KMSService.Sign", "key not found")}
+		s := NewRemoteDBKeySigner(signer, &fakeCertResolver{cert: cert}, dbSignerTestLogger())
+		digest := sha256.Sum256([]byte("x"))
+		_, err := s.SignDigest(context.Background(), "kms://platform/secureboot/db", digest[:])
+		var notConfigured configdelivery.ErrRemoteSignNotConfigured
+		if !errors.As(err, &notConfigured) {
+			t.Fatalf("expected ErrRemoteSignNotConfigured, got %T: %v", err, err)
+		}
+	})
+
+	// The SDK reports a missing key as internal today (go-quicbaas
+	// KMSService.Sign). Only the typed code classifies a failure: a
+	// not-found message under an internal code stays a sign failure.
+	t.Run("kms internal with not-found text stays a sign failure", func(t *testing.T) {
+		signer := &fakeDigestSigner{key: key, err: sdkerrors.NewInternal("KMSService.Sign", "failed to get key metadata: key not found")}
 		s := NewRemoteDBKeySigner(signer, &fakeCertResolver{cert: cert}, dbSignerTestLogger())
 		digest := sha256.Sum256([]byte("x"))
 		_, err := s.SignDigest(context.Background(), "kms://platform/secureboot/db", digest[:])

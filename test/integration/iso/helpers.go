@@ -186,6 +186,17 @@ func (e ErrISONotFound) Error() string {
 	return fmt.Sprintf("ISO file not found: %s", e.Path)
 }
 
+// ErrOfflineRepositoryMissing reports a customized ISO tree without the
+// pre-fetched APK repository. The autoinstall script installs lvm2, parted
+// and the rest from it on a CD boot; the stock Alpine apks do not carry them.
+type ErrOfflineRepositoryMissing struct {
+	Index string
+}
+
+func (e ErrOfflineRepositoryMissing) Error() string {
+	return fmt.Sprintf("customized ISO tree has no offline APK repository index at %s: the install would fail in the guest", e.Index)
+}
+
 // ErrProfileNotFound indicates a profile was not found.
 type ErrProfileNotFound struct {
 	ProfileName string

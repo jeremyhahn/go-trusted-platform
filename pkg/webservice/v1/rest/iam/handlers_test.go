@@ -43,14 +43,15 @@ import (
 
 type mockIAMClient struct {
 	// User methods
-	createUserFn func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
-	listUsersFn  func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
-	getUserFn    func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
-	getByEmailFn func(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
-	updateUserFn func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
-	deleteUserFn func(ctx context.Context, tenantID, userID string) error
-	assignRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
-	revokeRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
+	createUserFn   func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
+	listUsersFn    func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
+	getUserFn      func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
+	getByEmailFn   func(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
+	updateUserFn   func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
+	setUserRolesFn func(ctx context.Context, tenantID, userID string, roles []string) error
+	deleteUserFn   func(ctx context.Context, tenantID, userID string) error
+	assignRoleFn   func(ctx context.Context, tenantID, userID, roleID string) error
+	revokeRoleFn   func(ctx context.Context, tenantID, userID, roleID string) error
 
 	// Group methods
 	createGroupFn       func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
@@ -133,6 +134,15 @@ func (m *mockIAMClient) DeleteUser(ctx context.Context, tenantID, userID string)
 		return m.deleteUserFn(ctx, tenantID, userID)
 	}
 	return status.Error(codes.Unimplemented, "not implemented")
+}
+
+// SetUserRoles is a no-op unless the test sets setUserRolesFn: an update that
+// names no roles must not fail on it.
+func (m *mockIAMClient) SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
+	if m.setUserRolesFn != nil {
+		return m.setUserRolesFn(ctx, tenantID, userID, roles)
+	}
+	return nil
 }
 
 func (m *mockIAMClient) AssignRole(ctx context.Context, tenantID, userID, roleID string) error {
@@ -766,6 +776,54 @@ func TestUpdateUser_NotFound(t *testing.T) {
 	handlers.UpdateUser(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+}
+
+func TestUpdateUser_ReplacesRoles(t *testing.T) {
+	var setRoles []string
+	iamClient := &mockIAMClient{
+		setUserRolesFn: func(ctx context.Context, tenantID, userID string, roles []string) error {
+			setRoles = roles
+			return nil
+		},
+		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: userID, TenantID: tenantID, Roles: []string{"0b5e-operator"}}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	body := UpdateUserRequest{Roles: []string{"operator"}}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-1/users/user-123", body, map[string]string{"tenant": "tenant-1", "id": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateUser(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.Equal(t, []string{"operator"}, setRoles, "the update's roles must reach the IAM client")
+}
+
+func TestUpdateUser_UnknownRoleIsNotFoundAndUpdatesNothing(t *testing.T) {
+	updated := false
+	iamClient := &mockIAMClient{
+		setUserRolesFn: func(ctx context.Context, tenantID, userID string, roles []string) error {
+			return ErrRoleNotFound{TenantID: tenantID, RoleID: roles[0]}
+		},
+		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
+			updated = true
+			return &iamsdk.User{ID: userID}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	body := UpdateUserRequest{Name: "Updated Name", Roles: []string{"owner"}}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-1/users/user-123", body, map[string]string{"tenant": "tenant-1", "id": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateUser(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+	assert.False(t, updated, "an unknown role must refuse the whole update")
 }
 
 func TestDeleteUser_Success(t *testing.T) {

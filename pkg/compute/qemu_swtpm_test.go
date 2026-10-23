@@ -52,6 +52,10 @@ type fakeEmulator struct {
 	initErr  error
 	initRuns atomic.Int32
 	running  atomic.Bool
+
+	// runSocket, when set, is where Start moves the socket, as the real
+	// swtpm does for a socket path past the Unix limit.
+	runSocket string
 }
 
 func (f *fakeEmulator) stateFile() string {
@@ -74,6 +78,9 @@ func (f *fakeEmulator) IsInitialized() bool {
 func (f *fakeEmulator) Start(ctx context.Context) error {
 	if !f.running.CompareAndSwap(false, true) {
 		return swtpm.ErrAlreadyRunning
+	}
+	if f.runSocket != "" {
+		f.config.SocketPath = f.runSocket
 	}
 	return nil
 }

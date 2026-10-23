@@ -610,6 +610,7 @@ func toolPermissionCatalog() map[string]string {
 	permissions["secret_rotate"] = "secrets:write"
 	permissions["secret_rollback"] = "secrets:write"
 	permissions["secret_update_status"] = "secrets:write"
+	permissions["secret_get_by_prefix"] = "secrets:read"
 	permissions["dek_create"] = "kms:write"
 	permissions["dek_list"] = "kms:read"
 	permissions["dek_get"] = "kms:read"
@@ -682,8 +683,8 @@ func toolPermissionCatalog() map[string]string {
 	// scope of CreateToken and RevokeToken, which refuse on every transport
 	// with the same OIDC error.
 	for _, tool := range []string{
-		"iam_create_user", "iam_create_role", "iam_assign_role", "iam_revoke_role",
-		"iam_create_group", "iam_add_group_member", "iam_remove_group_member",
+		"iam_create_user", "iam_update_user", "iam_create_role", "iam_update_role", "iam_assign_role", "iam_revoke_role",
+		"iam_create_group", "iam_update_group", "iam_add_group_member", "iam_remove_group_member",
 		"iam_create_tenant", "iam_create_token", "iam_revoke_token",
 	} {
 		permissions[tool] = "iam:write"
@@ -867,7 +868,10 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 				Message: "Invalid or expired token",
 			}
 		}
-		return ContextWithAuthorizedContext(ctx, authCtx), nil
+		// The token goes on ctx with its grant, whether it came in the
+		// params or the request: a tool that accepts only a token's grant,
+		// never a peer certificate's, tells the two apart by it.
+		return ContextWithAuthorizedContext(ContextWithToken(ctx, token), authCtx), nil
 	}
 
 	// Validate token if auth manager configured (legacy bool-only path)

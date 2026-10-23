@@ -22,11 +22,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // CLIAdapter drives the provisioning session verbs by shelling out to
@@ -87,16 +87,12 @@ func (c *CLIAdapter) createTestConfig() error {
 		return err
 	}
 	c.configDir = tmpDir
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	configContent := fmt.Sprintf(`current_context: integration-test
-contexts:
-  - name: integration-test
-    type: local
-    local:
-      socket_path: %s
-      grpc_addr: %s
-`, c.socketPath, c.grpcEndpoint)
-	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+	// The fixture's kms verbs (`kms key generate`, `kms key csr`) open the
+	// CLI's quicbaas client. The shared harness config points it at
+	// platformd's gRPC listener with the harness mTLS files
+	// (docs/kms/cli.md §3).
+	configPath, err := helpers.WriteLocalCLIConfig(tmpDir, c.socketPath, c.grpcEndpoint)
+	if err != nil {
 		return err
 	}
 	c.configPath = configPath

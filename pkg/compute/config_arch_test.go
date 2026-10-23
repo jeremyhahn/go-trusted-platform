@@ -137,6 +137,7 @@ func TestQEMUBase_CarriesTheArchAndFirmware(t *testing.T) {
 	assert.Equal(t, "/usr/share/AAVMF/AAVMF_VARS.fd", base.OVMFVars)
 	assert.Empty(t, base.Firmware, "compute VMs boot UEFI from pflash, never a -bios image")
 	assert.Equal(t, qemu.DiskFormatQCOW2, base.DiskFormat, "snapshots need the qcow2 disk on every arch")
+	assert.Equal(t, qemu.DiskFormatQCOW2, base.NVRAMFormat, "savevm refuses a VM with a raw writable pflash")
 	assert.Equal(t, "br-test", base.BridgeName)
 	assert.True(t, base.Debug)
 	assert.True(t, base.NoGraphic)

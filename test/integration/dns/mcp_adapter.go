@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -248,22 +249,35 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 	return nil
 }
 
-// callTool runs one tools/call. The platform MCP server answers with the
-// tool's result as the JSON-RPC result (pkg/api/mcp Server.handleToolsCall),
-// not wrapped in MCP content items; a tool failure is a JSON-RPC error.
+// callTool runs one tools/call. The platform MCP server answers with an
+// MCP CallToolResult whose text block holds the tool's output as JSON
+// (pkg/api/mcp Server.handleToolsCall); a tool failure is a JSON-RPC error.
 func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[string]interface{}, result interface{}) error {
 	toolReq := mcpCallToolRequest{
 		Name:      toolName,
 		Arguments: args,
 	}
 
-	err := m.sendRequest(ctx, "tools/call", toolReq, result)
+	var rawResult json.RawMessage
+	err := m.sendRequest(ctx, "tools/call", toolReq, &rawResult)
 	var toolErr ErrMCPToolCallFailed
 	if errors.As(err, &toolErr) {
 		toolErr.Tool = toolName
 		return toolErr
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	if result == nil {
+		_, err = mcpwire.ToolOutputJSON(rawResult)
+	} else {
+		err = mcpwire.DecodeToolOutput(rawResult, result)
+	}
+	if err != nil {
+		return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
+	}
+	return nil
 }
 
 // =============================================================================

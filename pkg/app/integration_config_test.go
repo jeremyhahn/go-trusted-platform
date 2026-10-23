@@ -88,6 +88,37 @@ func TestIntegrationConfig_TPMIsHarnessSwtpm(t *testing.T) {
 	}
 }
 
+// TestIntegrationConfig_EKCertIsTheSwtpmNVIndex holds both daemon configs to
+// the NV index provision_swtpm_state writes the harness EK certificate to.
+// With no tpm.ek.cert-handle, go-xkms looks for the EK certificate only in
+// the platform's certificate store, which these configs never fill, so every
+// transport's EK certificate call answered "not found".
+func TestIntegrationConfig_EKCertIsTheSwtpmNVIndex(t *testing.T) {
+	// TCG EK Credential Profile 2.1 §2.2.1.4: RSA 2048 EK certificate index.
+	const rsa2048EKCertIndex = 0x01C00002
+
+	for _, path := range []string{integrationConfig, barrierGateConfig} {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.TPMConfig.EK, "%s: tpm.ek", path)
+		assert.Equal(t, uint32(rsa2048EKCertIndex), a.TPMConfig.EK.CertHandle,
+			"%s: tpm.ek.cert-handle is the swtpm EK certificate index", path)
+	}
+}
+
+// TestIntegrationConfig_DaemonOnly pins both integration configs to
+// daemon-only mode. A webservices entry makes `platformd serve` take
+// runWithWebservices (pkg/daemon/commands/serve.go), which turns the daemon
+// REST listener off (EnableREST = false) and builds the CA and webserver
+// before the Unix socket exists; the runner then never sees its socket and
+// every REST adapter loses its endpoint. The gatewayd-facing routes the sdn
+// suite needs are on the daemon REST server.
+func TestIntegrationConfig_DaemonOnly(t *testing.T) {
+	for _, path := range []string{integrationConfig, barrierGateConfig} {
+		a := loadTemplate(t, path)
+		assert.Empty(t, a.WebServices, "%s: webservices switches platformd out of daemon-only mode", path)
+	}
+}
+
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can
 // fail: a runner that serves swtpm over TCP gives the daemon no socket path.
 func TestIntegrationConfig_TCPSwtpmNotASocket(t *testing.T) {

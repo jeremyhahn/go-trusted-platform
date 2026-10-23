@@ -20,6 +20,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
@@ -98,8 +101,8 @@ func TestVTPMToolExecution(t *testing.T) {
 		if !ok {
 			t.Fatal("result is not a map")
 		}
-		if _, ok := resultMap["sealed"]; !ok {
-			t.Error("expected 'sealed' key in result")
+		if _, ok := resultMap["sealed_data"]; !ok {
+			t.Error("expected 'sealed_data' key in result")
 		}
 	})
 
@@ -279,8 +282,8 @@ func TestVTPMToolExecution(t *testing.T) {
 
 	t.Run("executeVTPMStart error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmStartFunc = func(ctx context.Context, name string) error {
-			return ErrMockServiceError
+		svc.vtpmStartFunc = func(ctx context.Context, name string) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -301,6 +304,68 @@ func TestVTPMToolExecution(t *testing.T) {
 		if err == nil {
 			t.Error("expected error")
 		}
+	})
+
+	t.Run("runtime replies name the bundle with the gRPC reply fields", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.vtpmQuoteFunc = func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error) {
+			return &vtpm.QuoteResult{Quote: []byte("q"), Signature: []byte("s"), HashAlgorithm: "SHA256"}, nil
+		}
+		svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
+			return []byte("sealed"), nil
+		}
+		svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
+			return []byte("plain"), nil
+		}
+		svc.vtpmReadPCRFunc = func(ctx context.Context, name string, pcr int) ([]byte, error) {
+			return []byte("pcr"), nil
+		}
+		registry := NewToolRegistry(svc, log)
+		b64 := base64.StdEncoding.EncodeToString([]byte("x"))
+
+		cases := []struct {
+			tool string
+			args map[string]interface{}
+			want map[string]interface{}
+		}{
+			{"vtpm_stop", map[string]interface{}{"name": "test-vtpm"},
+				map[string]interface{}{"bundle_id": "test-vtpm", "stopped": true}},
+			{"vtpm_quote", map[string]interface{}{"name": "test-vtpm", "nonce": b64},
+				map[string]interface{}{"bundle_id": "test-vtpm", "hash_algorithm": "SHA256"}},
+			{"vtpm_seal", map[string]interface{}{"name": "test-vtpm", "data": b64},
+				map[string]interface{}{"bundle_id": "test-vtpm", "sealed_data": base64.StdEncoding.EncodeToString([]byte("sealed"))}},
+			{"vtpm_unseal", map[string]interface{}{"name": "test-vtpm", "sealed": b64},
+				map[string]interface{}{"bundle_id": "test-vtpm", "data": base64.StdEncoding.EncodeToString([]byte("plain"))}},
+			{"vtpm_extend_pcr", map[string]interface{}{"name": "test-vtpm", "pcr": float64(16), "data": b64},
+				map[string]interface{}{"bundle_id": "test-vtpm", "pcr_index": 16, "extended": true}},
+			{"vtpm_read_pcr", map[string]interface{}{"name": "test-vtpm", "pcr": float64(7)},
+				map[string]interface{}{"bundle_id": "test-vtpm", "pcr_index": 7, "value": base64.StdEncoding.EncodeToString([]byte("pcr"))}},
+		}
+		for _, tc := range cases {
+			result, err := registry.ExecuteTool(ctx, tc.tool, tc.args)
+			require.NoError(t, err, tc.tool)
+			resultMap, ok := result.(map[string]interface{})
+			require.True(t, ok, "%s: result is not a map", tc.tool)
+			for key, want := range tc.want {
+				assert.EqualValues(t, want, resultMap[key], "%s: %s", tc.tool, key)
+			}
+		}
+	})
+
+	t.Run("executeVTPMStart returns the service's start reply", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.vtpmStartFunc = func(ctx context.Context, name string) (interface{}, error) {
+			return map[string]interface{}{"bundle_id": name, "running": true, "socket_path": "/run/" + name + ".sock"}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "vtpm_start", map[string]interface{}{"name": "test-vtpm"})
+		require.NoError(t, err)
+		resultMap, ok := result.(map[string]interface{})
+		require.True(t, ok, "result is not a map")
+		assert.Equal(t, "test-vtpm", resultMap["bundle_id"])
+		assert.Equal(t, true, resultMap["running"])
+		assert.Equal(t, "/run/test-vtpm.sock", resultMap["socket_path"])
 	})
 }
 

@@ -20,6 +20,8 @@ import (
 
 	"google.golang.org/grpc"
 
+	kmspb "github.com/jeremyhahn/go-quicbaas/api/proto"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -657,6 +659,36 @@ func TestPlatformClient_SwitchReturnsTheTransportError(t *testing.T) {
 	_, err := c.Switch().EnablePort(context.Background(), &platformv1.EnableSwitchPortRequest{SwitchName: "tor-1", PortName: "Eth1/3"})
 	if !errors.Is(err, transportErr) {
 		t.Fatalf("EnablePort error = %v, want the transport error", err)
+	}
+}
+
+func TestPlatformClient_DEKIsBuiltOnTheConnection(t *testing.T) {
+	conn := &methodRecordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolUnix, nil)
+	if c.DEK() == nil {
+		t.Fatal("DEK() must be built on the adapter connection")
+	}
+
+	if _, err := c.DEK().GetDEKStatus(context.Background(), &kmspb.GetDEKStatusRequest{Path: "tenant/app"}); err != nil {
+		t.Fatalf("GetDEKStatus: %v", err)
+	}
+	want := kmspb.DEKManagement_GetDEKStatus_FullMethodName
+	if len(conn.methods) != 1 || conn.methods[0] != want {
+		t.Errorf("calls reached the transport as %v, want [%s]", conn.methods, want)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolUnix, nil); c.DEK() != nil {
+		t.Error("DEK() must be nil without a connection")
+	}
+}
+
+func TestPlatformClient_DEKReturnsTheTransportError(t *testing.T) {
+	transportErr := errors.New("transport down")
+	c := newClientFromAdapter(&connAdapter{conn: &methodRecordingConn{err: transportErr}}, ProtocolGRPC, nil)
+
+	_, err := c.DEK().GetDEKStatus(context.Background(), &kmspb.GetDEKStatusRequest{Path: "tenant/app"})
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("GetDEKStatus error = %v, want the transport error", err)
 	}
 }
 

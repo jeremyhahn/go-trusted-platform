@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // noCtxFlags returns CommonFlags with nil GetContext.
@@ -271,7 +272,7 @@ func TestRunUserGet_NoContext(t *testing.T) {
 }
 
 func TestRunUserList_NoContext(t *testing.T) {
-	err := runUserList(noCtxFlags(), "t-1", 1, 50)
+	err := runUserList(noCtxFlags(), "t-1", 1, 50, iamsvc.UserListFilter{})
 	assertNoCtxErr(t, err)
 }
 

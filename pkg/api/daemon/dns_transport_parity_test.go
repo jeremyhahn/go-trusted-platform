@@ -408,6 +408,237 @@ func TestDNSServiceServer_WithBackendStillRefusesBadInput(t *testing.T) {
 	assert.Empty(t, listed.(*platformv1.ListZonesResponse).GetZones())
 }
 
+// TestDNSServiceServer_ListZonesHonoursThePageSize is the regression for the
+// servicer that dropped the request's pagination and answered every zone on
+// gRPC, Unix, QUIC and MCP.
+func TestDNSServiceServer_ListZonesHonoursThePageSize(t *testing.T) {
+	ctx := context.Background()
+	server := NewDNSServiceServer(newDNSParityBackend(t), testLogger())
+	for _, name := range []string{"a.page.internal.", "b.page.internal.", "c.page.internal."} {
+		_, err := server.CreateZone(ctx, &platformv1.CreateZoneRequest{Name: name, Ttl: 3600, Internal: true})
+		require.NoError(t, err)
+	}
+
+	first, err := server.ListZones(ctx, &platformv1.ListZonesRequest{Pagination: &platformv1.PaginationRequest{PageSize: 2}})
+	require.NoError(t, err)
+	assert.Len(t, first.GetZones(), 2)
+	assert.Equal(t, uint64(3), first.GetPagination().GetTotalItems())
+	assert.Equal(t, uint32(2), first.GetPagination().GetTotalPages())
+
+	second, err := server.ListZones(ctx, &platformv1.ListZonesRequest{Pagination: &platformv1.PaginationRequest{PageSize: 2, Page: 2}})
+	require.NoError(t, err)
+	require.Len(t, second.GetZones(), 1)
+	for _, zone := range first.GetZones() {
+		assert.NotEqual(t, zone.GetName(), second.GetZones()[0].GetName(), "pages overlap")
+	}
+}
+
+func TestDNSServiceServer_ListZonesWithoutPageSizeAnswersEveryZone(t *testing.T) {
+	ctx := context.Background()
+	server := NewDNSServiceServer(newDNSParityBackend(t), testLogger())
+	for _, name := range []string{"a.all.internal.", "b.all.internal.", "c.all.internal."} {
+		_, err := server.CreateZone(ctx, &platformv1.CreateZoneRequest{Name: name, Ttl: 3600, Internal: true})
+		require.NoError(t, err)
+	}
+
+	listed, err := server.ListZones(ctx, &platformv1.ListZonesRequest{})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetZones(), 3)
+	assert.Equal(t, uint64(3), listed.GetPagination().GetTotalItems())
+}
+
+// newDNSRecordParityServer is a servicer on a real backend holding the zone
+// rec.internal. with the A record www.rec.internal. 192.0.2.10.
+func newDNSRecordParityServer(t *testing.T) *DNSServiceServer {
+	t.Helper()
+	ctx := context.Background()
+	server := NewDNSServiceServer(newDNSParityBackend(t), testLogger())
+	_, err := server.CreateZone(ctx, &platformv1.CreateZoneRequest{Name: "rec.internal.", Ttl: 3600, Internal: true})
+	require.NoError(t, err)
+	_, err = server.AddRecord(ctx, &platformv1.AddRecordRequest{ZoneName: "rec.internal.", Record: aRecord("www.rec.internal.", "192.0.2.10")})
+	require.NoError(t, err)
+	return server
+}
+
+func aRecord(name, value string) *platformv1.Record {
+	return &platformv1.Record{
+		Type:   platformv1.RecordType_RECORD_TYPE_A,
+		Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: name, Value: value, Ttl: 300}},
+	}
+}
+
+// newDNSRecordPageServer is newDNSRecordParityServer with four A records in
+// rec.internal.
+func newDNSRecordPageServer(t *testing.T) *DNSServiceServer {
+	t.Helper()
+	ctx := context.Background()
+	server := newDNSRecordParityServer(t)
+	for name, value := range map[string]string{
+		"a.rec.internal.": "192.0.2.20",
+		"b.rec.internal.": "192.0.2.21",
+		"c.rec.internal.": "192.0.2.22",
+	} {
+		_, err := server.AddRecord(ctx, &platformv1.AddRecordRequest{
+			ZoneName: "rec.internal.",
+			Record:   aRecord(name, value),
+		})
+		require.NoError(t, err)
+	}
+	return server
+}
+
+// TestDNSServiceServer_ListRecordsHonoursThePageSize is the regression for the
+// servicer that had no page on ListRecords and answered every record on gRPC,
+// Unix, QUIC and MCP.
+func TestDNSServiceServer_ListRecordsHonoursThePageSize(t *testing.T) {
+	ctx := context.Background()
+	server := newDNSRecordPageServer(t)
+
+	first, err := server.ListRecords(ctx, &platformv1.ListRecordsRequest{
+		ZoneName:   "rec.internal.",
+		Type:       platformv1.RecordType_RECORD_TYPE_A,
+		Pagination: &platformv1.PaginationRequest{PageSize: 2},
+	})
+	require.NoError(t, err)
+	assert.Len(t, first.GetRecords(), 2)
+	assert.Equal(t, uint64(4), first.GetPagination().GetTotalItems())
+	assert.Equal(t, uint32(2), first.GetPagination().GetTotalPages())
+
+	second, err := server.ListRecords(ctx, &platformv1.ListRecordsRequest{
+		ZoneName:   "rec.internal.",
+		Type:       platformv1.RecordType_RECORD_TYPE_A,
+		Pagination: &platformv1.PaginationRequest{PageSize: 2, Page: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, second.GetRecords(), 2)
+	for _, record := range first.GetRecords() {
+		for _, other := range second.GetRecords() {
+			assert.NotEqual(t, record.GetA().GetName(), other.GetA().GetName(), "pages overlap")
+		}
+	}
+}
+
+func TestDNSServiceServer_ListRecordsWithoutPageSizeAnswersEveryRecord(t *testing.T) {
+	server := newDNSRecordPageServer(t)
+
+	listed, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "rec.internal.",
+		Type:     platformv1.RecordType_RECORD_TYPE_A,
+	})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetRecords(), 4)
+	assert.Equal(t, uint64(4), listed.GetPagination().GetTotalItems())
+}
+
+func TestDNSServiceServer_ListRecordsPagePastTheEndIsEmpty(t *testing.T) {
+	server := newDNSRecordPageServer(t)
+
+	listed, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName:   "rec.internal.",
+		Type:       platformv1.RecordType_RECORD_TYPE_A,
+		Pagination: &platformv1.PaginationRequest{PageSize: 2, Page: 3},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, listed.GetRecords())
+	assert.Equal(t, uint64(4), listed.GetPagination().GetTotalItems())
+}
+
+// TestDNSServiceServer_AddRecordRefusesBadInput is the regression for the
+// servicer, shared by gRPC, Unix, QUIC and MCP, that stored a record with no
+// name, an A record holding no IPv4 address, an AAAA record holding no IPv6
+// address and a TLSA record with an unassigned certificate usage.
+func TestDNSServiceServer_AddRecordRefusesBadInput(t *testing.T) {
+	server := newDNSRecordParityServer(t)
+	tests := map[string]*platformv1.Record{
+		"EmptyName":    aRecord("", "192.0.2.11"),
+		"InvalidIPv4":  aRecord("bad.rec.internal.", "not-an-ip"),
+		"IPv6InA":      aRecord("bad.rec.internal.", "2001:db8::1"),
+		"InvalidIPv6":  {Type: platformv1.RecordType_RECORD_TYPE_AAAA, Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "bad.rec.internal.", Value: "not-an-ip"}}},
+		"IPv4InAAAA":   {Type: platformv1.RecordType_RECORD_TYPE_AAAA, Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "bad.rec.internal.", Value: "192.0.2.11"}}},
+		"TLSAUsage4":   {Type: platformv1.RecordType_RECORD_TYPE_TLSA, Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{Name: "_443._tcp.rec.internal.", Usage: 4, Selector: 1, MatchingType: 1, Data: "abcd"}}},
+		"TLSAUsage255": {Type: platformv1.RecordType_RECORD_TYPE_TLSA, Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{Name: "_443._tcp.rec.internal.", Usage: 255, Selector: 1, MatchingType: 1, Data: "abcd"}}},
+	}
+	for name, record := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := server.AddRecord(context.Background(), &platformv1.AddRecordRequest{ZoneName: "rec.internal.", Record: record})
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+		})
+	}
+
+	listed, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{ZoneName: "rec.internal."})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetRecords(), 1, "a refused record reached the zone")
+}
+
+func TestDNSServiceServer_AddRecordAcceptsValidRecords(t *testing.T) {
+	server := newDNSRecordParityServer(t)
+	records := []*platformv1.Record{
+		{Type: platformv1.RecordType_RECORD_TYPE_AAAA, Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "v6.rec.internal.", Value: "2001:db8::1"}}},
+		{Type: platformv1.RecordType_RECORD_TYPE_TLSA, Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{Name: "_443._tcp.rec.internal.", Usage: 3, Selector: 1, MatchingType: 1, Data: "abcd"}}},
+	}
+	for _, record := range records {
+		_, err := server.AddRecord(context.Background(), &platformv1.AddRecordRequest{ZoneName: "rec.internal.", Record: record})
+		require.NoError(t, err, record.GetType().String())
+	}
+}
+
+// TestDNSServiceServer_DeleteRecordRefusesAMissingRecord is the regression
+// for the servicer that answered success when deleting a record the zone
+// did not hold.
+func TestDNSServiceServer_DeleteRecordRefusesAMissingRecord(t *testing.T) {
+	server := newDNSRecordParityServer(t)
+	ctx := context.Background()
+
+	_, err := server.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{ZoneName: "rec.internal.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "missing.rec.internal."})
+	assert.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+
+	_, err = server.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{ZoneName: "rec.internal.", Type: platformv1.RecordType_RECORD_TYPE_AAAA, Name: "www.rec.internal."})
+	assert.Equal(t, codes.NotFound, status.Code(err), "a name held under another type is not the record: %v", err)
+
+	_, err = server.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{ZoneName: "rec.internal.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www.rec.internal."})
+	require.NoError(t, err)
+	_, err = server.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{ZoneName: "rec.internal.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www.rec.internal."})
+	assert.Equal(t, codes.NotFound, status.Code(err), "a deleted record deleted twice: %v", err)
+}
+
+// TestDNSServiceServer_UpdateRecordRefusesAMissingRecord is the regression
+// for the servicer that "updated" a record the zone did not hold by adding
+// the new one.
+func TestDNSServiceServer_UpdateRecordRefusesAMissingRecord(t *testing.T) {
+	server := newDNSRecordParityServer(t)
+	ctx := context.Background()
+
+	_, err := server.UpdateRecord(ctx, &platformv1.UpdateRecordRequest{
+		ZoneName:  "rec.internal.",
+		OldRecord: aRecord("missing.rec.internal.", "192.0.2.20"),
+		NewRecord: aRecord("missing.rec.internal.", "192.0.2.21"),
+	})
+	assert.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+
+	listed, err := server.ListRecords(ctx, &platformv1.ListRecordsRequest{ZoneName: "rec.internal."})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetRecords(), 1, "a refused update added its new record")
+}
+
+func TestDNSServiceServer_UpdateRecordRefusesABadNewValueAndKeepsTheOld(t *testing.T) {
+	server := newDNSRecordParityServer(t)
+	ctx := context.Background()
+
+	_, err := server.UpdateRecord(ctx, &platformv1.UpdateRecordRequest{
+		ZoneName:  "rec.internal.",
+		OldRecord: aRecord("www.rec.internal.", "192.0.2.10"),
+		NewRecord: aRecord("www.rec.internal.", "not-an-ip"),
+	})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+
+	_, err = server.UpdateRecord(ctx, &platformv1.UpdateRecordRequest{
+		ZoneName:  "rec.internal.",
+		OldRecord: aRecord("www.rec.internal.", "192.0.2.10"),
+		NewRecord: aRecord("www.rec.internal.", "192.0.2.11"),
+	})
+	require.NoError(t, err, "the refused update removed the old record")
+}
+
 // TestDaemon_DNSServicerIsTheOneEveryTransportShares: New hands
 // config.DNSService to the servicer it registers on gRPC and Unix, and the
 // embedded transport registers that same servicer.

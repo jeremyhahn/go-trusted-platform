@@ -86,6 +86,15 @@ func (m *CgroupManager) Prepare(def Definition) (*os.File, error) {
 			return nil, err
 		}
 	}
+	// The class table sets no swap limit, so a leaf reused by a relaunch gets
+	// the kernel default back: a swap limit left on it would otherwise
+	// survive into the successor. The file exists only with swap accounting.
+	swapMax := filepath.Join(path, "memory.swap.max")
+	if _, err := os.Stat(swapMax); err == nil {
+		if err := m.write(path, "memory.swap.max", "max"); err != nil {
+			return nil, err
+		}
+	}
 	if def.CPUMax != "" {
 		if err := m.write(path, "cpu.max", def.CPUMax); err != nil {
 			return nil, err

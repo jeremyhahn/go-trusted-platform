@@ -224,9 +224,26 @@ platformctl ca crl export --output ./ca.crl
 | `download` | `<certificate-url>` | Download a certificate from the ACME server |
 | `rotate-key` | — | Rotate the ACME account key |
 
+**No verb completes today.** platformd has no ACME call on any transport, and
+the platform SDK client the CLI uses has no ACME entry, so each verb checks its
+input and then refuses with `ErrACMEDaemonCallMissing`, naming the RFC 8555
+operation the daemon call would carry. This is an SDK gap (go-quicbaas), not a
+CLI defect: the CLI never talks to an ACME server itself. Invalid input is
+always refused first, with its own error, so a typo is never reported as the
+gap.
+
+| Verb | Validates | Refuses with the gap for |
+|---|---|---|
+| `register` | `--email` is present and a bare address (`admin@example.com`, no display name, no `mailto:`) | RFC 8555 §7.3 newAccount |
+| `renew` | `--authz` and `--challenge` are known types; `--authz ip` has at least one `--sans-ip`; a `--cn`, `--sans-dns` or `--sans-ip` names the identifier | RFC 8555 §7.4 order and finalize |
+| `download` | `<certificate-url>` is an absolute `https://` URL with a host (RFC 8555 §6.1) | RFC 8555 §7.4.2 certificate download |
+| `rotate-key` | — (no input) | RFC 8555 §7.3.5 key change |
+
+The refusal reads `acme <verb>: platformd has no ACME call for RFC 8555 <section> (SDK gap)`.
+
 ### `acme register`
 
-`--email` (string) is the only flag: the account contact.
+`--email` (string) is the only flag: the account contact. It is required.
 
 ### `acme renew`
 

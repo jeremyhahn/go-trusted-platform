@@ -62,10 +62,11 @@ func (r *ToolRegistry) executeVTPMList(ctx context.Context, args map[string]inte
 
 func (r *ToolRegistry) executeVTPMStart(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	name := getString(args, "name")
-	if err := r.service.VTPMStart(ctx, name); err != nil {
+	reply, err := r.service.VTPMStart(ctx, name)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(reply)
 }
 
 func (r *ToolRegistry) executeVTPMStop(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -73,7 +74,7 @@ func (r *ToolRegistry) executeVTPMStop(ctx context.Context, args map[string]inte
 	if err := r.service.VTPMStop(ctx, name); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "bundle_id": name, "stopped": true}, nil
 }
 
 func (r *ToolRegistry) executeVTPMQuote(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -90,7 +91,15 @@ func (r *ToolRegistry) executeVTPMQuote(ctx context.Context, args map[string]int
 	if err != nil {
 		return nil, err
 	}
-	return marshalResult(quote)
+	result, err := marshalResult(quote)
+	if err != nil {
+		return nil, err
+	}
+	// The reply names the bundle that quoted, as gRPC QuoteVTPM does.
+	if reply, ok := result.(map[string]interface{}); ok {
+		reply["bundle_id"] = name
+	}
+	return result, nil
 }
 
 func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -108,7 +117,8 @@ func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]inte
 		return nil, err
 	}
 	return map[string]interface{}{
-		"sealed": base64.StdEncoding.EncodeToString(sealed),
+		"bundle_id":   name,
+		"sealed_data": base64.StdEncoding.EncodeToString(sealed),
 	}, nil
 }
 
@@ -126,7 +136,8 @@ func (r *ToolRegistry) executeVTPMUnseal(ctx context.Context, args map[string]in
 		return nil, err
 	}
 	return map[string]interface{}{
-		"data": base64.StdEncoding.EncodeToString(data),
+		"bundle_id": name,
+		"data":      base64.StdEncoding.EncodeToString(data),
 	}, nil
 }
 
@@ -143,7 +154,7 @@ func (r *ToolRegistry) executeVTPMExtendPCR(ctx context.Context, args map[string
 	if err := r.service.VTPMExtendPCR(ctx, name, pcr, data); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "bundle_id": name, "pcr_index": pcr, "extended": true}, nil
 }
 
 func (r *ToolRegistry) executeVTPMReadPCR(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -155,7 +166,9 @@ func (r *ToolRegistry) executeVTPMReadPCR(ctx context.Context, args map[string]i
 		return nil, err
 	}
 	return map[string]interface{}{
-		"value": base64.StdEncoding.EncodeToString(value),
+		"bundle_id": name,
+		"pcr_index": pcr,
+		"value":     base64.StdEncoding.EncodeToString(value),
 	}, nil
 }
 
@@ -943,6 +956,24 @@ func (r *ToolRegistry) executeIAMGetUser(ctx context.Context, args map[string]in
 	return marshalResult(user)
 }
 
+func (r *ToolRegistry) executeIAMUpdateUser(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMUpdateUserRequest{
+		TenantID:   getString(args, "tenant_id"),
+		UserID:     getString(args, "user_id"),
+		Email:      getString(args, "email"),
+		Name:       getString(args, "name"),
+		Roles:      getStringSlice(args, "roles"),
+		Groups:     getStringSlice(args, "groups"),
+		Attributes: getStringMap(args, "attributes"),
+	}
+
+	user, err := r.service.IAMUpdateUser(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(user)
+}
+
 func (r *ToolRegistry) executeIAMListUsers(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	req := &IAMListUsersRequest{
 		TenantID:    getString(args, "tenant_id"),
@@ -1009,6 +1040,22 @@ func (r *ToolRegistry) executeIAMDeleteRole(ctx context.Context, args map[string
 
 func (r *ToolRegistry) executeIAMGetRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	role, err := r.service.IAMGetRole(ctx, getString(args, "tenant_id"), getString(args, "role_id"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(role)
+}
+
+func (r *ToolRegistry) executeIAMUpdateRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMUpdateRoleRequest{
+		TenantID:    getString(args, "tenant_id"),
+		RoleID:      getString(args, "role_id"),
+		Name:        getString(args, "name"),
+		Description: getString(args, "description"),
+		Permissions: getStringSlice(args, "permissions"),
+	}
+
+	role, err := r.service.IAMUpdateRole(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1103,6 +1150,21 @@ func (r *ToolRegistry) executeIAMDeleteGroup(ctx context.Context, args map[strin
 
 func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	group, err := r.service.IAMGetGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(group)
+}
+
+func (r *ToolRegistry) executeIAMUpdateGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMUpdateGroupRequest{
+		TenantID:    getString(args, "tenant_id"),
+		GroupID:     getString(args, "group_id"),
+		Name:        getString(args, "name"),
+		Description: getString(args, "description"),
+	}
+
+	group, err := r.service.IAMUpdateGroup(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1354,6 +1416,9 @@ func (r *ToolRegistry) executeContainerCreate(ctx context.Context, args map[stri
 	}
 	if resources := args["resources"]; resources != nil {
 		config["resources"] = resources
+	}
+	if getBool(args, "attest_on_create") {
+		config["attest_on_create"] = true
 	}
 
 	result, err := r.service.ContainerCreate(ctx, name, image, config)

@@ -16,13 +16,17 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // errKMSLifecycleMock is the typed error returned by the lifecycle mocks
@@ -44,8 +48,12 @@ type mockSDKKMSClient struct {
 	exportKeyFn       func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
 	updateKeyStatusFn func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
 	listKeyVersionsFn func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
+	getPublicKeyFn    func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error)
+	listKeysFn        func(ctx context.Context) (*kms.ListKeysResponse, error)
+	rotateKeyFn       func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
 
 	lastImportReq       *kms.ImportKeyRequest
+	lastPublicKeyID     string
 	lastExportReq       *kms.ExportKeyRequest
 	lastUpdateStatusReq *kms.UpdateKeyStatusRequest
 	lastListVersionsKey string
@@ -62,14 +70,24 @@ func (m *mockSDKKMSClient) GetKey(ctx context.Context, keyID string) (*kms.KeyIn
 }
 
 func (m *mockSDKKMSClient) GetPublicKey(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+	m.lastPublicKeyID = keyID
+	if m.getPublicKeyFn != nil {
+		return m.getPublicKeyFn(ctx, keyID)
+	}
 	return nil, errKMSLifecycleMock{method: "GetPublicKey"}
 }
 
 func (m *mockSDKKMSClient) ListKeys(ctx context.Context) (*kms.ListKeysResponse, error) {
+	if m.listKeysFn != nil {
+		return m.listKeysFn(ctx)
+	}
 	return nil, errKMSLifecycleMock{method: "ListKeys"}
 }
 
 func (m *mockSDKKMSClient) RotateKey(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error) {
+	if m.rotateKeyFn != nil {
+		return m.rotateKeyFn(ctx, keyID)
+	}
 	return nil, errKMSLifecycleMock{method: "RotateKey"}
 }
 
@@ -154,8 +172,8 @@ func (m *mockSDKKMSClient) UnwrapKey(ctx context.Context, req *kms.UnwrapKeyRequ
 }
 
 // mockSDKCryptoClient implements the full quicbaas.CryptoClient interface.
-// Only Hash delegates to a configurable function field; all other methods
-// return errKMSLifecycleMock.
+// Hash, the HMAC, random and data-key methods delegate to configurable
+// function fields; the rest return errKMSLifecycleMock.
 type mockSDKCryptoClient struct {
 	hashFn              func(ctx context.Context, req *quicbaas.HashRequest) (*quicbaas.HashResponse, error)
 	lastHashReq         *quicbaas.HashRequest
@@ -163,6 +181,12 @@ type mockSDKCryptoClient struct {
 	lastGenerateHMACReq *quicbaas.GenerateHMACRequest
 	verifyHMACFn        func(ctx context.Context, req *quicbaas.VerifyHMACRequest) (*quicbaas.VerifyHMACResponse, error)
 	lastVerifyHMACReq   *quicbaas.VerifyHMACRequest
+	generateRandomFn    func(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error)
+	lastRandomReq       *quicbaas.GenerateRandomRequest
+	generateDataKeyFn   func(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error)
+	lastDataKeyReq      *quicbaas.GenerateDataKeyRequest
+	generateWrappedFn   func(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error)
+	lastWrappedReq      *quicbaas.GenerateWrappedDataKeyRequest
 }
 
 var _ quicbaas.CryptoClient = (*mockSDKCryptoClient)(nil)
@@ -196,10 +220,18 @@ func (m *mockSDKCryptoClient) DecryptBatch(ctx context.Context, req *quicbaas.De
 }
 
 func (m *mockSDKCryptoClient) GenerateDataKey(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error) {
+	m.lastDataKeyReq = req
+	if m.generateDataKeyFn != nil {
+		return m.generateDataKeyFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "GenerateDataKey"}
 }
 
 func (m *mockSDKCryptoClient) GenerateWrappedDataKey(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error) {
+	m.lastWrappedReq = req
+	if m.generateWrappedFn != nil {
+		return m.generateWrappedFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "GenerateWrappedDataKey"}
 }
 
@@ -220,6 +252,10 @@ func (m *mockSDKCryptoClient) VerifyHMAC(ctx context.Context, req *quicbaas.Veri
 }
 
 func (m *mockSDKCryptoClient) GenerateRandom(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
+	m.lastRandomReq = req
+	if m.generateRandomFn != nil {
+		return m.generateRandomFn(ctx, req)
+	}
 	return nil, errKMSLifecycleMock{method: "GenerateRandom"}
 }
 
@@ -633,6 +669,267 @@ func TestKMSServerAdapterListKeyVersions(t *testing.T) {
 		t.Parallel()
 		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
 		_, err := adapter.ListKeyVersions(context.Background(), &pb.ListKeyVersionsRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestKMSServerAdapterListKeysPagination(t *testing.T) {
+	t.Parallel()
+
+	threeKeys := func(ctx context.Context) (*kms.ListKeysResponse, error) {
+		return &kms.ListKeysResponse{Keys: []kms.KeyInfo{
+			{KeyID: "key-a", Version: 1, Algorithm: kms.AlgorithmAES256GCM},
+			{KeyID: "key-b", Version: 1, Algorithm: kms.AlgorithmAES256GCM},
+			{KeyID: "key-c", Version: 2, Algorithm: kms.AlgorithmAES256GCM},
+		}}, nil
+	}
+
+	t.Run("LimitAndCursor", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+
+		first, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(first.GetKeys()) != 2 {
+			t.Fatalf("first page length = %d, want 2", len(first.GetKeys()))
+		}
+		if !first.GetHasMore() || first.GetNextCursor() != "2" || first.GetTotalCount() != 3 {
+			t.Errorf("first page HasMore=%v NextCursor=%q TotalCount=%d, want true \"2\" 3",
+				first.GetHasMore(), first.GetNextCursor(), first.GetTotalCount())
+		}
+
+		second, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2, Cursor: first.GetNextCursor()})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(second.GetKeys()) != 1 || second.GetKeys()[0].GetKeyId() != "key-c" {
+			t.Fatalf("second page = %v, want [key-c]", second.GetKeys())
+		}
+		if second.GetHasMore() || second.GetNextCursor() != "" {
+			t.Errorf("second page HasMore=%v NextCursor=%q, want false \"\"", second.GetHasMore(), second.GetNextCursor())
+		}
+	})
+
+	t.Run("SDKOrderChangesBetweenPages", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: rotatingKeyOrder(t, "key-a", "key-b", "key-c", "key-d", "key-e")}, slog.Default())
+
+		var walked []string
+		cursor := ""
+		for {
+			page, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2, Cursor: cursor})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, k := range page.GetKeys() {
+				walked = append(walked, k.GetKeyId())
+			}
+			if !page.GetHasMore() {
+				break
+			}
+			cursor = page.GetNextCursor()
+		}
+		want := []string{"key-a", "key-b", "key-c", "key-d", "key-e"}
+		if !slices.Equal(walked, want) {
+			t.Errorf("pages walked %v, want each key once in KeyID order %v", walked, want)
+		}
+	})
+
+	t.Run("NoLimitReturnsAll", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+		resp, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetKeys()) != 3 || resp.GetHasMore() {
+			t.Errorf("length=%d HasMore=%v, want 3 false", len(resp.GetKeys()), resp.GetHasMore())
+		}
+	})
+
+	t.Run("InvalidCursor", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Cursor: "not-a-number"})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("UnsupportedFilter", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{listKeysFn: threeKeys}, slog.Default())
+		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Filter: map[string]string{"status": "enabled"}})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.ListKeys(context.Background(), &pb.ListKeysRequest{Limit: 2})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+// rotatingKeyOrder returns an SDK ListKeys fake that lists the same keys on
+// every call but rotates their order by one each time, as the embedded KMS
+// does when it aggregates backends and map-backed metadata unsorted.
+func rotatingKeyOrder(t *testing.T, keyIDs ...string) func(context.Context) (*kms.ListKeysResponse, error) {
+	t.Helper()
+	var calls atomic.Int64
+	return func(context.Context) (*kms.ListKeysResponse, error) {
+		shift := int(calls.Add(1)) % len(keyIDs)
+		keys := make([]kms.KeyInfo, 0, len(keyIDs))
+		for i := range keyIDs {
+			id := keyIDs[(len(keyIDs)-i+shift)%len(keyIDs)]
+			keys = append(keys, kms.KeyInfo{KeyID: id, Version: 1, Algorithm: kms.AlgorithmAES256GCM})
+		}
+		return &kms.ListKeysResponse{Keys: keys}, nil
+	}
+}
+
+func TestKMSServerAdapterRotateKeyVersions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReportsReplacedVersion", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{
+			rotateKeyFn: func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error) {
+				return &kms.RotateKeyResponse{KeyID: keyID, NewVersion: 2}, nil
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.RotateKey(context.Background(), &pb.RotateKeyRequest{KeyId: "key-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetOldVersion() != 1 || resp.GetNewVersion() != 2 {
+			t.Errorf("OldVersion=%d NewVersion=%d, want 1 2", resp.GetOldVersion(), resp.GetNewVersion())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.RotateKey(context.Background(), &pb.RotateKeyRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestRotatedFromVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		newVersion int
+		want       uint64
+	}{
+		{newVersion: 2, want: 1},
+		{newVersion: 1, want: 0},
+		{newVersion: 0, want: 0},
+		{newVersion: -1, want: 0},
+	}
+	for _, tt := range tests {
+		if got := rotatedFromVersion(tt.newVersion); got != tt.want {
+			t.Errorf("rotatedFromVersion(%d) = %d, want %d", tt.newVersion, got, tt.want)
+		}
+	}
+}
+
+func TestKMSServerAdapterGetPublicKey(t *testing.T) {
+	t.Parallel()
+
+	der := []byte{0x30, 0x59, 0x30, 0x13}
+	currentKey := func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+		return &kms.GetPublicKeyResponse{
+			KeyID:     keyID,
+			PublicKey: der,
+			Algorithm: kms.AlgorithmECDSAP256,
+			Version:   3,
+		}, nil
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{getPublicKeyFn: currentKey}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if mock.lastPublicKeyID != "key-1" {
+			t.Errorf("keyID = %q, want %q", mock.lastPublicKeyID, "key-1")
+		}
+		if resp.GetKeyId() != "key-1" {
+			t.Errorf("KeyId = %q, want %q", resp.GetKeyId(), "key-1")
+		}
+		if string(resp.GetPublicKey()) != string(der) {
+			t.Errorf("PublicKey = %x, want %x", resp.GetPublicKey(), der)
+		}
+		if resp.GetAlgorithm() != pb.KeyAlgorithm_KEY_ALG_ECDSA_P256 {
+			t.Errorf("Algorithm = %v, want ECDSA_P256", resp.GetAlgorithm())
+		}
+		if resp.GetVersion() != 3 {
+			t.Errorf("Version = %d, want 3", resp.GetVersion())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("CurrentVersionRequested", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{getPublicKeyFn: currentKey}, slog.Default())
+		resp, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1", Version: 3})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetVersion() != 3 {
+			t.Errorf("Version = %d, want 3", resp.GetVersion())
+		}
+	})
+
+	t.Run("OlderVersionRefused", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{getPublicKeyFn: currentKey}, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1", Version: 2})
+		assertGRPCStatusCode(t, err, codes.NotFound)
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(nil, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1"})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("UnknownKeyIsNotFound", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKKMSClient{
+			getPublicKeyFn: func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+				return nil, sdkerrors.NewNotFound("key", keyID)
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "missing"})
+		assertGRPCStatusCode(t, err, codes.NotFound)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewKMSServerAdapter(&mockSDKKMSClient{}, slog.Default())
+		_, err := adapter.GetPublicKey(context.Background(), &pb.GetPublicKeyRequest{KeyId: "key-1"})
 		assertGRPCStatusCode(t, err, codes.Internal)
 	})
 }
@@ -1237,5 +1534,197 @@ func TestSdkHashAlgorithmToPb(t *testing.T) {
 				t.Errorf("sdkHashAlgorithmToPb(%v) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// =============================================================================
+// CryptoServerAdapter.GenerateRandom
+// =============================================================================
+
+func TestCryptoServerAdapterGenerateRandom(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKCryptoClient{
+			generateRandomFn: func(ctx context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
+				return &quicbaas.GenerateRandomResponse{RandomBytes: make([]byte, req.NumBytes)}, nil
+			},
+		}
+		adapter := NewCryptoServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: kmsMaxRandomBytes})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.lastRandomReq.NumBytes != int(kmsMaxRandomBytes) {
+			t.Errorf("NumBytes = %d, want %d", mock.lastRandomReq.NumBytes, kmsMaxRandomBytes)
+		}
+		if len(resp.GetRandomBytes()) != int(kmsMaxRandomBytes) {
+			t.Errorf("len(RandomBytes) = %d, want %d", len(resp.GetRandomBytes()), kmsMaxRandomBytes)
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(nil, slog.Default())
+		_, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: 16})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	for _, numBytes := range []int32{0, -1, kmsMaxRandomBytes + 1} {
+		t.Run("OutOfRange", func(t *testing.T) {
+			t.Parallel()
+			mock := &mockSDKCryptoClient{}
+			adapter := NewCryptoServerAdapter(mock, slog.Default())
+			_, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: numBytes})
+			assertGRPCStatusCode(t, err, codes.InvalidArgument)
+			if mock.lastRandomReq != nil {
+				t.Errorf("num_bytes %d reached the SDK", numBytes)
+			}
+		})
+	}
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateRandom(context.Background(), &pb.GenerateRandomRequest{NumBytes: 16})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+// =============================================================================
+// CryptoServerAdapter.GenerateDataKey / GenerateWrappedDataKey
+// =============================================================================
+
+func TestCryptoServerAdapterGenerateDataKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKCryptoClient{
+			generateDataKeyFn: func(ctx context.Context, req *quicbaas.GenerateDataKeyRequest) (*quicbaas.GenerateDataKeyResponse, error) {
+				return &quicbaas.GenerateDataKeyResponse{KeyID: req.KeyID, Plaintext: []byte("dek"), CiphertextBlob: []byte("wrapped-dek")}, nil
+			},
+		}
+		adapter := NewCryptoServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{
+			KeyId:   "kek",
+			KeySpec: &pb.KeySpec{KeySize: 128},
+			Context: []byte("aad"),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got := mock.lastDataKeyReq
+		if got.KeyID != "kek" || got.KeySize != 128 || string(got.Context) != "aad" {
+			t.Errorf("SDK request = %q/%d/%q, want kek/128/aad", got.KeyID, got.KeySize, got.Context)
+		}
+		if resp.GetKeyId() != "kek" || string(resp.GetPlaintext()) != "dek" || string(resp.GetCiphertextBlob()) != "wrapped-dek" {
+			t.Errorf("response = %q/%q/%q, want kek/dek/wrapped-dek", resp.GetKeyId(), resp.GetPlaintext(), resp.GetCiphertextBlob())
+		}
+		if resp.GetTimestamp() <= 0 {
+			t.Error("expected positive timestamp")
+		}
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(nil, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("NegativeKeySize", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{KeyId: "kek", KeySpec: &pb.KeySpec{KeySize: -256}})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateDataKey(context.Background(), &pb.GenerateDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+func TestCryptoServerAdapterGenerateWrappedDataKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockSDKCryptoClient{
+			generateWrappedFn: func(ctx context.Context, req *quicbaas.GenerateWrappedDataKeyRequest) (*quicbaas.GenerateWrappedDataKeyResponse, error) {
+				return &quicbaas.GenerateWrappedDataKeyResponse{KeyID: req.KeyID, CiphertextBlob: []byte("wrapped-dek")}, nil
+			},
+		}
+		adapter := NewCryptoServerAdapter(mock, slog.Default())
+
+		resp, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{
+			KeyId:   "kek",
+			KeySpec: &pb.KeySpec{KeySize: 256},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.lastWrappedReq.KeyID != "kek" || mock.lastWrappedReq.KeySize != 256 {
+			t.Errorf("SDK request = %q/%d, want kek/256", mock.lastWrappedReq.KeyID, mock.lastWrappedReq.KeySize)
+		}
+		if resp.GetKeyId() != "kek" || string(resp.GetCiphertextBlob()) != "wrapped-dek" {
+			t.Errorf("response = %q/%q, want kek/wrapped-dek", resp.GetKeyId(), resp.GetCiphertextBlob())
+		}
+	})
+
+	t.Run("NilClient", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(nil, slog.Default())
+		_, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Unavailable)
+	})
+
+	t.Run("MissingKeyID", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{})
+		assertGRPCStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("SDKError", func(t *testing.T) {
+		t.Parallel()
+		adapter := NewCryptoServerAdapter(&mockSDKCryptoClient{}, slog.Default())
+		_, err := adapter.GenerateWrappedDataKey(context.Background(), &pb.GenerateWrappedDataKeyRequest{KeyId: "kek"})
+		assertGRPCStatusCode(t, err, codes.Internal)
+	})
+}
+
+// TestCryptoServerAdapterServesEveryMethod dispatches every unary method of
+// the Crypto service descriptor to the adapter. An adapter without a client
+// answers Unavailable from each method it implements; a method it does not
+// implement (or implements under another name) falls through to the embedded
+// UnimplementedCryptoServer and answers Unimplemented.
+func TestCryptoServerAdapterServesEveryMethod(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewCryptoServerAdapter(nil, slog.Default())
+	decodeNothing := func(interface{}) error { return nil }
+
+	for _, method := range pb.Crypto_ServiceDesc.Methods {
+		_, err := method.Handler(adapter, context.Background(), decodeNothing, nil)
+		if code := status.Code(err); code != codes.Unavailable {
+			t.Errorf("Crypto/%s answered %v, want Unavailable: %v", method.MethodName, code, err)
+		}
 	}
 }

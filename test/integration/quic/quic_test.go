@@ -854,10 +854,14 @@ func TestQUICIAM(t *testing.T) {
 		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
-	t.Run("IAM VerifyToken is not implemented", func(t *testing.T) {
-		// Token verification is handled via OIDC flows in go-quicbaas; the
-		// daemon returns StatusNotImplemented for gRPC delegate parity.
-		resp, err := client.SendExpectStatus(ctx, quicwire.OpIAMTokenVerify, nil, quicwire.StatusNotImplemented)
+	t.Run("IAM VerifyToken rejects a token no issuer minted", func(t *testing.T) {
+		// VerifyToken answers a verdict, never an outage, for a token the
+		// platform cannot verify: the local JWT check calls it malformed and
+		// QuicBaaS, when wired, calls it rejected. Either way the transport
+		// returns OK with valid=false.
+		req := &platformv1.VerifyIAMTokenRequest{Token: "not-a-jwt"}
+		var resp platformv1.VerifyIAMTokenResponse
+		err := client.Send(ctx, quicwire.OpIAMTokenVerify, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -865,10 +869,11 @@ func TestQUICIAM(t *testing.T) {
 					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
+			t.Fatal(err)
 		}
-		if resp != nil {
-			assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
-		}
+		assert.False(t, resp.GetValid())
+		assert.Contains(t, []string{"malformed", "rejected"}, resp.GetReason())
+		assert.Empty(t, resp.GetUserId())
 	})
 }
 

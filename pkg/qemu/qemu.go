@@ -34,8 +34,9 @@ import (
 // Default timeout for QMP connection attempts
 const defaultQMPTimeout = 5 * time.Second
 
-// Default timeout for graceful shutdown via QMP before falling back to SIGTERM
-const defaultGracefulShutdownTimeout = 30 * time.Second
+// DefaultGracefulShutdownTimeout is how long Stop waits for the guest to
+// answer the QMP power-down before it falls back to SIGTERM.
+const DefaultGracefulShutdownTimeout = 30 * time.Second
 
 // How long Start waits for QEMU to create the TAP device before bringing it up
 const tapOpenTimeout = 2 * time.Second
@@ -64,6 +65,11 @@ type VM struct {
 	// tool's combined output.
 	// Overridable seam for tests; defaults to runQEMUImgCreate.
 	createImage func(format, path, size string) ([]byte, error)
+
+	// convertImage writes the raw image src to dst in format and returns
+	// the tool's combined output.
+	// Overridable seam for tests; defaults to runQEMUImgConvert.
+	convertImage func(src, format, dst string) ([]byte, error)
 }
 
 // NewVM creates a new QEMU VM instance
@@ -82,9 +88,10 @@ func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 	}
 
 	return &VM{
-		config:      config,
-		logger:      logger,
-		createImage: runQEMUImgCreate,
+		config:       config,
+		logger:       logger,
+		createImage:  runQEMUImgCreate,
+		convertImage: runQEMUImgConvert,
 	}, nil
 }
 
@@ -92,6 +99,12 @@ func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 // combined output.
 func runQEMUImgCreate(format, path, size string) ([]byte, error) {
 	return exec.Command("qemu-img", "create", "-f", format, path, size).CombinedOutput()
+}
+
+// runQEMUImgConvert converts the raw image src to dst in format with
+// qemu-img and returns its combined output.
+func runQEMUImgConvert(src, format, dst string) ([]byte, error) {
+	return exec.Command("qemu-img", "convert", "-f", DiskFormatRaw, "-O", format, src, dst).CombinedOutput()
 }
 
 // CreateDisk creates a qcow2 disk image
@@ -151,9 +164,29 @@ func (vm *VM) initializeNVRAM() error {
 		return nil
 	}
 
-	// Copy OVMF_VARS template to NVRAM location
+	if format := vm.config.nvramFormat(); format != DiskFormatRaw {
+		// An existing VM's raw NVRAM holds its boot entries and enrolled
+		// Secure Boot keys: convert it, never the pristine template. The
+		// raw file is left in place.
+		src, what := vm.config.OVMFVars, "the OVMF_VARS template"
+		if _, err := os.Stat(vm.config.rawNVRAMPath()); err == nil {
+			src, what = vm.config.rawNVRAMPath(), "the existing raw NVRAM"
+		}
+		vm.logger.Infof("Initializing NVRAM from %s: %s -> %s", what, src, nvramPath)
+		if output, err := vm.convertImage(src, format, nvramPath); err != nil {
+			// A half-written file would pass for an existing NVRAM next time.
+			if rmErr := os.Remove(nvramPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				vm.logger.Warnf("cannot remove the partial NVRAM %s: %v", nvramPath, rmErr)
+			}
+			return &CommandOutputError{Msg: "failed to convert " + what, Err: err, Detail: ": " + string(output)}
+		}
+		vm.logger.Infof("NVRAM initialized: %s", nvramPath)
+		return nil
+	}
+
 	vm.logger.Infof("Initializing NVRAM from template: %s -> %s", vm.config.OVMFVars, nvramPath)
 
+	// Copy OVMF_VARS template to NVRAM location
 	input, err := os.ReadFile(vm.config.OVMFVars)
 	if err != nil {
 		return &WrappedError{Msg: "failed to read OVMF_VARS template", Err: err}
@@ -591,7 +624,7 @@ func (vm *VM) bringTapUp() error {
 // waiting up to the configured timeout. If QMP is not available or the graceful
 // shutdown times out, it falls back to SIGTERM.
 func (vm *VM) Stop() error {
-	return vm.StopWithTimeout(defaultGracefulShutdownTimeout)
+	return vm.StopWithTimeout(DefaultGracefulShutdownTimeout)
 }
 
 // StopWithTimeout stops the VM with a custom timeout for graceful shutdown.

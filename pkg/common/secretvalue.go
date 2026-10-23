@@ -1,0 +1,105 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package common
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+)
+
+// ErrMalformedSecretValue reports a stored secret value that cannot be
+// turned back into the bytes that were stored: a string that is not
+// standard base64, or a value of an unexpected type.
+type ErrMalformedSecretValue struct {
+	Type string
+	Err  error
+}
+
+func (e ErrMalformedSecretValue) Error() string {
+	if e.Err != nil {
+		return "stored secret value is not base64 text: " + e.Err.Error()
+	}
+	return "stored secret value has unexpected type " + e.Type
+}
+
+func (e ErrMalformedSecretValue) Unwrap() error { return e.Err }
+
+// ErrSecretDataEncoding reports a secret data map that cannot be JSON-encoded.
+type ErrSecretDataEncoding struct {
+	Err error
+}
+
+func (e ErrSecretDataEncoding) Error() string {
+	return "secret data cannot be encoded: " + e.Err.Error()
+}
+
+func (e ErrSecretDataEncoding) Unwrap() error { return e.Err }
+
+// EncodeSecretData encodes a secret's data map the way the quicbaas Secrets
+// client encodes a Store request's data: as JSON. Rotate takes the new data
+// already encoded, so a rotation must send these bytes for a later get to
+// read the same map, and DecodeSecretValue the same "value", as after a store.
+func EncodeSecretData(data map[string]interface{}) ([]byte, error) {
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return nil, ErrSecretDataEncoding{Err: err}
+	}
+	return encoded, nil
+}
+
+// ErrSecretDataDecoding reports stored secret data that is not an encoded
+// data map.
+type ErrSecretDataDecoding struct {
+	Err error
+}
+
+func (e ErrSecretDataDecoding) Error() string {
+	return "secret data cannot be decoded: " + e.Err.Error()
+}
+
+func (e ErrSecretDataDecoding) Unwrap() error { return e.Err }
+
+// DecodeSecretData is the inverse of EncodeSecretData: it decodes a stored
+// version's raw data (a GetVersion response) back into its data map, as the
+// quicbaas Secrets client's Get does for the latest version.
+func DecodeSecretData(raw []byte) (map[string]interface{}, error) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, ErrSecretDataDecoding{Err: err}
+	}
+	return data, nil
+}
+
+// DecodeSecretValue returns the bytes stored as a secret's "value" data
+// entry. The quicbaas Secrets client JSON-encodes the data map, so a
+// []byte stored by the platform comes back from a get as its base64 text;
+// a transport that keeps the bytes returns them unchanged. A nil value
+// (no "value" entry) decodes to nil.
+func DecodeSecretValue(value interface{}) ([]byte, error) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, nil
+	case []byte:
+		return typed, nil
+	case string:
+		decoded, err := base64.StdEncoding.DecodeString(typed)
+		if err != nil {
+			return nil, ErrMalformedSecretValue{Type: "string", Err: err}
+		}
+		return decoded, nil
+	default:
+		return nil, ErrMalformedSecretValue{Type: fmt.Sprintf("%T", value)}
+	}
+}

@@ -37,6 +37,7 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
@@ -66,7 +67,8 @@ type mockCAService struct {
 	crlData            []byte
 	crlErr             error
 	// csrCA certifies CSRs; nil until a test sets it.
-	csrCA *issuancetest.CA
+	renewals []issuance.RenewOptions
+	csrCA    *issuancetest.CA
 }
 
 func newMockCAService() *mockCAService {
@@ -145,6 +147,18 @@ func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAtt
 	delete(m.issuedCerts, serial)
 	delete(m.certStore.certs, serial)
 	return nil
+}
+
+func (m *mockCAService) Renew(ctx context.Context, existing *x509.Certificate, opts issuance.RenewOptions) (*x509.Certificate, error) {
+	m.renewals = append(m.renewals, opts)
+	if err := m.Revoke(ctx, existing, nil); err != nil {
+		return nil, err
+	}
+	return m.IssueCertificate(ctx, &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{CommonName: existing.Subject.CommonName},
+		Valid:   opts.ValidDays,
+		SANS:    opts.NewSANs,
+	})
 }
 
 func (m *mockCAService) CertificateStore() xkmssdk.CertStore {
@@ -903,6 +917,34 @@ func TestCAHandlers_RenewCertificate_PreserveSANs(t *testing.T) {
 	router.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
+}
+
+// The handler renews through the CA's shared renewal, handing it the request's
+// validity and names unchanged.
+func TestCAHandlers_RenewCertificate_HandsTheRequestToTheSharedRenewal(t *testing.T) {
+	ca := newMockCAService()
+	cert := generateTestCertificate("renew.test.com", false, nil, nil)
+	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+	ca.certStore.certs[serial] = cert
+	_, router := setupCAHandlers(ca)
+
+	body, err := json.Marshal(CertificateRenewRequest{
+		ValidDays:    90,
+		PreserveSANs: true,
+		NewSANs:      &CASANsRequest{DNS: []string{"new.renew.test.com"}},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Len(t, ca.renewals, 1)
+	assert.Equal(t, 90, ca.renewals[0].ValidDays)
+	assert.True(t, ca.renewals[0].PreserveSANs)
+	require.NotNil(t, ca.renewals[0].NewSANs)
+	assert.Equal(t, []string{"new.renew.test.com"}, ca.renewals[0].NewSANs.DNS)
 }
 
 func TestCAHandlers_RenewCertificate_NewSANs(t *testing.T) {

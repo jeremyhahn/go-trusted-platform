@@ -1,0 +1,707 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package kms
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+)
+
+// fakeSecretsClient is an in-memory quicbaassdk.SecretsClient. Each method
+// returns err when it is set, and records the request it was given.
+type fakeSecretsClient struct {
+	err error
+
+	storeReq    *secretsclient.StoreSecretRequest
+	getPath     string
+	getOpts     int
+	listPrefix  string
+	deletePath  string
+	rotateReq   *secretsclient.RotateSecretRequest
+	versionReq  *secretsclient.GetSecretVersionRequest
+	versionsID  string
+	rollbackReq *secretsclient.RollbackSecretRequest
+	statusReq   *secretsclient.UpdateSecretStatusRequest
+	policyReq   *secretsclient.SetRotationPolicyRequest
+	policyID    string
+
+	secrets map[string]*secretsclient.Secret
+	paths   []string
+	policy  *secretsclient.RotationPolicy
+}
+
+func (f *fakeSecretsClient) Store(_ context.Context, req *secretsclient.StoreSecretRequest) (*secretsclient.StoreSecretResponse, error) {
+	f.storeReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &secretsclient.StoreSecretResponse{Version: 1}, nil
+}
+
+func (f *fakeSecretsClient) Get(_ context.Context, path string, opts ...secretsclient.GetOption) (*secretsclient.Secret, error) {
+	f.getPath = path
+	f.getOpts = len(opts)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.secrets[path], nil
+}
+
+func (f *fakeSecretsClient) List(_ context.Context, prefix string) (*secretsclient.ListSecretsResponse, error) {
+	f.listPrefix = prefix
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &secretsclient.ListSecretsResponse{Paths: f.paths}, nil
+}
+
+func (f *fakeSecretsClient) Delete(_ context.Context, path string) error {
+	f.deletePath = path
+	return f.err
+}
+
+func (f *fakeSecretsClient) Ensure(_ context.Context, _ *secretsclient.EnsureSecretRequest) (*secretsclient.EnsureSecretResponse, error) {
+	return nil, f.err
+}
+
+func (f *fakeSecretsClient) GetVersion(_ context.Context, req *secretsclient.GetSecretVersionRequest) (*secretsclient.SecretVersionInfo, error) {
+	f.versionReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &secretsclient.SecretVersionInfo{SecretID: req.SecretID, Version: req.Version, Data: []byte(`{"value":"dg==","description":"d"}`), CreatedBy: "op"}, nil
+}
+
+func (f *fakeSecretsClient) ListVersions(_ context.Context, secretID string) (*secretsclient.ListSecretVersionsResponse, error) {
+	f.versionsID = secretID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &secretsclient.ListSecretVersionsResponse{Versions: []secretsclient.SecretVersionInfo{
+		{SecretID: secretID, Version: 1, Data: []byte("never printed")},
+		{SecretID: secretID, Version: 2},
+	}}, nil
+}
+
+func (f *fakeSecretsClient) Rotate(_ context.Context, req *secretsclient.RotateSecretRequest) (*secretsclient.RotateSecretResponse, error) {
+	f.rotateReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &secretsclient.RotateSecretResponse{SecretID: req.SecretID, OldVersion: 1, NewVersion: 2}, nil
+}
+
+func (f *fakeSecretsClient) Rollback(_ context.Context, req *secretsclient.RollbackSecretRequest) (*secretsclient.RollbackSecretResponse, error) {
+	f.rollbackReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &secretsclient.RollbackSecretResponse{SecretID: req.SecretID, NewVersion: 3}, nil
+}
+
+func (f *fakeSecretsClient) UpdateStatus(_ context.Context, req *secretsclient.UpdateSecretStatusRequest) error {
+	f.statusReq = req
+	return f.err
+}
+
+func (f *fakeSecretsClient) SetRotationPolicy(_ context.Context, req *secretsclient.SetRotationPolicyRequest) error {
+	f.policyReq = req
+	return f.err
+}
+
+func (f *fakeSecretsClient) GetRotationPolicy(_ context.Context, secretID string) (*secretsclient.RotationPolicy, error) {
+	f.policyID = secretID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.policy, nil
+}
+
+var _ quicbaassdk.SecretsClient = (*fakeSecretsClient)(nil)
+
+// errFakeSecrets is the error a failing fakeSecretsClient returns.
+var errFakeSecrets = errors.New("secrets backend down")
+
+// runSecretsJSON runs a verb with a JSON printer and decodes what it printed.
+func runSecretsJSON(t *testing.T, run func(printer *cli.Printer) error) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, run(cli.NewPrinterWithWriter(cli.OutputFormatJSON, true, &buf)))
+	out := map[string]any{}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+	return out
+}
+
+// requireSecretOperationFailed asserts err wraps the fake's error for op.
+func requireSecretOperationFailed(t *testing.T, err error, op string) {
+	t.Helper()
+	require.ErrorIs(t, err, errFakeSecrets)
+	var opErr ErrSecretOperationFailed
+	require.ErrorAs(t, err, &opErr)
+	assert.Equal(t, op, opErr.Operation)
+}
+
+func TestOpenSecretsClient(t *testing.T) {
+	t.Run("factory override", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		restore := SetSecretsClientFactory(func(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error) {
+			return fake, nil
+		})
+		defer restore()
+
+		client, err := openSecretsClient(nil)
+		require.NoError(t, err)
+		assert.Same(t, fake, client)
+	})
+
+	t.Run("factory error", func(t *testing.T) {
+		restore := SetSecretsClientFactory(func(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error) {
+			return nil, errFakeSecrets
+		})
+		defer restore()
+
+		_, err := openSecretsClient(nil)
+		assert.ErrorIs(t, err, errFakeSecrets)
+	})
+}
+
+func TestExecuteSecretsStore(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("stores value, description and tags", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsStore(ctx, fake, p, cli.OutputFormatJSON, "db/pw",
+				secretStoreOptions{Value: "AAEC/w==", Base64: true, Description: "d", Tags: []string{"env=prod"}})
+		})
+		assert.Equal(t, "db/pw", out["name"])
+		assert.Equal(t, float64(1), out["version"])
+		assert.Equal(t, "db/pw", fake.storeReq.Path)
+		assert.Equal(t, []byte{0, 1, 2, 255}, fake.storeReq.Data["value"])
+		assert.Equal(t, "d", fake.storeReq.Data["description"])
+		assert.Equal(t, map[string]string{"env": "prod"}, fake.storeReq.Metadata)
+	})
+
+	t.Run("input errors never reach the client", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		p := newTestKMSPrinter()
+		assert.ErrorIs(t, executeSecretsStore(ctx, fake, p, cli.OutputFormatJSON, "", secretStoreOptions{Value: "v"}), ErrSecretNameRequired{})
+		assert.ErrorIs(t, executeSecretsStore(ctx, fake, p, cli.OutputFormatJSON, "n", secretStoreOptions{}), ErrSecretValueRequired{})
+		var b64Err ErrInvalidSecretValue
+		assert.ErrorAs(t, executeSecretsStore(ctx, fake, p, cli.OutputFormatJSON, "n", secretStoreOptions{Value: "!!", Base64: true}), &b64Err)
+		assert.ErrorIs(t, executeSecretsStore(ctx, fake, p, cli.OutputFormatJSON, "n", secretStoreOptions{Value: "v", Tags: []string{"bad"}}), ErrInvalidTagFormat{Tag: "bad"})
+		assert.Nil(t, fake.storeReq)
+	})
+
+	t.Run("client error", func(t *testing.T) {
+		err := executeSecretsStore(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n", secretStoreOptions{Value: "v"})
+		requireSecretOperationFailed(t, err, "store")
+	})
+
+	t.Run("invalid output format", func(t *testing.T) {
+		err := executeSecretsStore(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormat("xml"), "n", secretStoreOptions{Value: "v"})
+		assert.ErrorIs(t, err, cli.ErrInvalidOutputFormat{Format: "xml"})
+	})
+}
+
+func TestExecuteSecretsGet(t *testing.T) {
+	ctx := context.Background()
+	created := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+
+	t.Run("reads the value the REST surface stores", func(t *testing.T) {
+		// The SDK returns stored []byte data as its base64 JSON text.
+		fake := &fakeSecretsClient{secrets: map[string]*secretsclient.Secret{
+			"db/pw": {Path: "db/pw", Version: 2, CreatedAt: created, Metadata: map[string]string{"env": "prod"},
+				Data: map[string]interface{}{"value": "czNjcmV0", "description": "d"}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsGet(ctx, fake, p, cli.OutputFormatJSON, "db/pw", 2)
+		})
+		assert.Equal(t, "db/pw", out["name"])
+		assert.Equal(t, float64(2), out["version"])
+		assert.Equal(t, "czNjcmV0", out["value"])
+		assert.Equal(t, "d", out["description"])
+		assert.Equal(t, 1, fake.getOpts, "--version passes WithVersion")
+	})
+
+	t.Run("table format prints the stored bytes", func(t *testing.T) {
+		fake := &fakeSecretsClient{secrets: map[string]*secretsclient.Secret{
+			"n": {Path: "n", Version: 1, Data: map[string]interface{}{"value": "cmF3"}},
+		}}
+		var buf bytes.Buffer
+		require.NoError(t, executeSecretsGet(ctx, fake, cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf), cli.OutputFormatTable, "n", 0))
+		assert.Contains(t, buf.String(), "raw")
+		assert.NotContains(t, buf.String(), "cmF3", "the base64 text is decoded")
+		assert.Zero(t, fake.getOpts, "version 0 reads the current version")
+	})
+
+	t.Run("malformed stored value", func(t *testing.T) {
+		fake := &fakeSecretsClient{secrets: map[string]*secretsclient.Secret{
+			"n": {Path: "n", Version: 1, Data: map[string]interface{}{"value": "not base64!"}},
+		}}
+		err := executeSecretsGet(ctx, fake, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 0)
+		var failed ErrSecretOperationFailed
+		require.ErrorAs(t, err, &failed)
+		assert.Equal(t, "get", failed.Operation)
+		var malformed common.ErrMalformedSecretValue
+		assert.ErrorAs(t, err, &malformed)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		p := newTestKMSPrinter()
+		assert.ErrorIs(t, executeSecretsGet(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, "", 0), ErrSecretNameRequired{})
+		assert.ErrorIs(t, executeSecretsGet(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, "n", -1), ErrInvalidSecretVersion{Value: "-1"})
+		requireSecretOperationFailed(t, executeSecretsGet(ctx, &fakeSecretsClient{err: errFakeSecrets}, p, cli.OutputFormatJSON, "n", 0), "get")
+	})
+}
+
+func TestExecuteSecretsList(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("limit truncates and reports has_more", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"a/1", "a/2", "a/3"}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "a/", 2, false)
+		})
+		assert.Equal(t, []any{"a/1", "a/2"}, out["secrets"])
+		assert.Equal(t, true, out["has_more"])
+		assert.Equal(t, "a/", fake.listPrefix)
+	})
+
+	t.Run("empty list prints an empty array", func(t *testing.T) {
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, "", 100, false)
+		})
+		assert.Equal(t, []any{}, out["secrets"])
+		assert.Equal(t, false, out["has_more"])
+	})
+
+	t.Run("include data reads every secret", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"p/x"}, secrets: map[string]*secretsclient.Secret{
+			"p/x": {Path: "p/x", Version: 1, Data: map[string]interface{}{"value": "dng="}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
+		})
+		data, ok := out["data"].([]any)
+		require.True(t, ok)
+		require.Len(t, data, 1)
+		assert.Equal(t, "dng=", data[0].(map[string]any)["value"])
+	})
+
+	// The gRPC transport answers Get with the server's secret ID as Path,
+	// which need not be the listed name; every data entry is named by the
+	// path the listing returned, so a caller can match entries to names.
+	t.Run("include data names each entry by its listed path", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"p/x", "p/y"}, secrets: map[string]*secretsclient.Secret{
+			"p/x": {Path: "server-id-1", Version: 1, Data: map[string]interface{}{"value": "dng="}},
+			"p/y": {Version: 2, Data: map[string]interface{}{"value": "dnk="}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
+		})
+		data, ok := out["data"].([]any)
+		require.True(t, ok)
+		require.Len(t, data, 2)
+		assert.Equal(t, "p/x", data[0].(map[string]any)["name"])
+		assert.Equal(t, "p/y", data[1].(map[string]any)["name"])
+	})
+
+	// The SDK gRPC transport drops the prefix, so List can answer with every
+	// secret in the tenant; only the names under the prefix are listed and
+	// read, and secrets outside it are never fetched.
+	t.Run("include data lists and reads only names under the prefix", func(t *testing.T) {
+		fake := &fakeSecretsClient{paths: []string{"other/z", "p/x", "px", "q/p/y"}, secrets: map[string]*secretsclient.Secret{
+			"p/x": {Version: 1, Data: map[string]interface{}{"value": "dng="}},
+		}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsList(ctx, fake, p, cli.OutputFormatJSON, "p/", 0, true)
+		})
+		assert.Equal(t, []any{"p/x"}, out["secrets"])
+		data, ok := out["data"].([]any)
+		require.True(t, ok)
+		require.Len(t, data, 1)
+		assert.Equal(t, "p/x", data[0].(map[string]any)["name"])
+		assert.Equal(t, "dng=", data[0].(map[string]any)["value"])
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		requireSecretOperationFailed(t, executeSecretsList(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 0, false), "list")
+	})
+}
+
+func TestSecretPathsUnder(t *testing.T) {
+	t.Run("keeps names under the prefix in listed order", func(t *testing.T) {
+		got := secretPathsUnder([]string{"a/2", "b/1", "a/1", "ab"}, "a/")
+		assert.Equal(t, []string{"a/2", "a/1"}, got)
+	})
+
+	t.Run("empty prefix keeps every name", func(t *testing.T) {
+		assert.Equal(t, []string{"a", "b"}, secretPathsUnder([]string{"a", "b"}, ""))
+	})
+
+	t.Run("nil or unmatched paths give an empty non-nil list", func(t *testing.T) {
+		got := secretPathsUnder(nil, "a/")
+		require.NotNil(t, got)
+		assert.Empty(t, got)
+		got = secretPathsUnder([]string{"b/1"}, "a/")
+		require.NotNil(t, got)
+		assert.Empty(t, got)
+	})
+}
+
+func TestExecuteSecretsDelete(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("deletes", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsDelete(ctx, fake, p, cli.OutputFormatJSON, "n")
+		})
+		assert.Equal(t, true, out["deleted"])
+		assert.Equal(t, "n", fake.deletePath)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		assert.ErrorIs(t, executeSecretsDelete(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormatJSON, ""), ErrSecretNameRequired{})
+		requireSecretOperationFailed(t, executeSecretsDelete(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n"), "delete")
+	})
+}
+
+func TestExecuteSecretsRotate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("rotates", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsRotate(ctx, fake, p, cli.OutputFormatJSON, "n", "new", false)
+		})
+		assert.Equal(t, float64(1), out["old_version"])
+		assert.Equal(t, float64(2), out["new_version"])
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(fake.rotateReq.NewData, &data), "rotate sends the encoded data map")
+		value, err := common.DecodeSecretValue(data["value"])
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new"), value)
+	})
+
+	t.Run("a get after store and rotate reads the rotated value", func(t *testing.T) {
+		store := &encodingSecretsClient{}
+		require.NoError(t, executeSecretsStore(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", secretStoreOptions{Value: "old"}))
+		require.NoError(t, executeSecretsRotate(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", "new", false))
+
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsGet(ctx, store, p, cli.OutputFormatJSON, "db/password", 0)
+		})
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("new")), out["value"])
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		p := newTestKMSPrinter()
+		assert.ErrorIs(t, executeSecretsRotate(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, "", "v", false), ErrSecretNameRequired{})
+		assert.ErrorIs(t, executeSecretsRotate(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, "n", "", false), ErrSecretValueRequired{})
+		requireSecretOperationFailed(t, executeSecretsRotate(ctx, &fakeSecretsClient{err: errFakeSecrets}, p, cli.OutputFormatJSON, "n", "v", false), "rotate")
+	})
+}
+
+func TestExecuteSecretsVersion(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("reads one version", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsVersion(ctx, fake, p, cli.OutputFormatJSON, "n", 4)
+		})
+		assert.Equal(t, float64(4), out["version"])
+		assert.Equal(t, "dg==", out["value"])
+		assert.Equal(t, "d", out["description"])
+		assert.Equal(t, "op", out["created_by"])
+		assert.Equal(t, &secretsclient.GetSecretVersionRequest{SecretID: "n", Version: 4}, fake.versionReq)
+	})
+
+	t.Run("a version written by store and rotate prints the plain value", func(t *testing.T) {
+		store := &encodingSecretsClient{}
+		require.NoError(t, executeSecretsStore(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", secretStoreOptions{Value: "old"}))
+		require.NoError(t, executeSecretsRotate(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "db/password", "s3cret", false))
+
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsVersion(ctx, store, p, cli.OutputFormatJSON, "db/password", 2)
+		})
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("s3cret")), out["value"])
+
+		var table bytes.Buffer
+		require.NoError(t, executeSecretsVersion(ctx, store, cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &table), cli.OutputFormatTable, "db/password", 2))
+		assert.Contains(t, table.String(), "s3cret")
+		assert.NotContains(t, table.String(), `{"value"`, "the encoded data map is never printed")
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		assert.ErrorIs(t, executeSecretsVersion(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 1), ErrSecretNameRequired{})
+		requireSecretOperationFailed(t, executeSecretsVersion(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 1), "version")
+	})
+
+	t.Run("a malformed stored data map is a typed error", func(t *testing.T) {
+		store := &encodingSecretsClient{latest: map[string][]byte{"n": []byte("not a map")}}
+		err := executeSecretsVersion(ctx, store, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 1)
+		var opErr ErrSecretOperationFailed
+		require.ErrorAs(t, err, &opErr)
+		assert.Equal(t, "version", opErr.Operation)
+		assert.ErrorAs(t, err, &common.ErrSecretDataDecoding{})
+	})
+}
+
+func TestExecuteSecretsVersions(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("lists versions without values", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		var buf bytes.Buffer
+		require.NoError(t, executeSecretsVersions(ctx, fake, cli.NewPrinterWithWriter(cli.OutputFormatJSON, true, &buf), cli.OutputFormatJSON, "n"))
+		assert.NotContains(t, buf.String(), "never printed")
+		out := map[string]any{}
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+		assert.Len(t, out["versions"], 2)
+		assert.Equal(t, "n", fake.versionsID)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		assert.ErrorIs(t, executeSecretsVersions(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormatJSON, ""), ErrSecretNameRequired{})
+		requireSecretOperationFailed(t, executeSecretsVersions(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n"), "versions")
+	})
+}
+
+func TestExecuteSecretsRollback(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("rolls back", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsRollback(ctx, fake, p, cli.OutputFormatJSON, "n", 1)
+		})
+		assert.Equal(t, float64(3), out["new_version"])
+		assert.Equal(t, 1, fake.rollbackReq.TargetVersion)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		assert.ErrorIs(t, executeSecretsRollback(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormatJSON, "", 1), ErrSecretNameRequired{})
+		requireSecretOperationFailed(t, executeSecretsRollback(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n", 1), "rollback")
+	})
+}
+
+func TestExecuteSecretsStatus(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("disables", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsStatus(ctx, fake, p, cli.OutputFormatJSON, "n", secretsclient.SecretStatusDisabled)
+		})
+		assert.Equal(t, "disabled", out["status"])
+		assert.Equal(t, secretsclient.SecretStatusDisabled, fake.statusReq.Status)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		assert.ErrorIs(t, executeSecretsStatus(ctx, &fakeSecretsClient{}, newTestKMSPrinter(), cli.OutputFormatJSON, "", secretsclient.SecretStatusEnabled), ErrSecretNameRequired{})
+		requireSecretOperationFailed(t, executeSecretsStatus(ctx, &fakeSecretsClient{err: errFakeSecrets}, newTestKMSPrinter(), cli.OutputFormatJSON, "n", secretsclient.SecretStatusEnabled), "status")
+	})
+}
+
+func TestExecuteSecretsPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("get", func(t *testing.T) {
+		fake := &fakeSecretsClient{policy: &secretsclient.RotationPolicy{Enabled: true, Interval: time.Hour, RetainVersions: 5}}
+		out := runSecretsJSON(t, func(p *cli.Printer) error {
+			return executeSecretsPolicyGet(ctx, fake, p, cli.OutputFormatJSON, "n")
+		})
+		assert.Equal(t, true, out["enabled"])
+		assert.Equal(t, float64(3600), out["interval_seconds"])
+		assert.Equal(t, float64(5), out["retain_versions"])
+		assert.Equal(t, "n", fake.policyID)
+	})
+
+	t.Run("set", func(t *testing.T) {
+		fake := &fakeSecretsClient{}
+		var buf bytes.Buffer
+		opts := secretPolicyOptions{Enabled: true, Interval: 2 * time.Hour, RetainVersions: 3, RotationLambda: "gen"}
+		require.NoError(t, executeSecretsPolicySet(ctx, fake, cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf), cli.OutputFormatTable, "n", opts))
+		assert.Contains(t, buf.String(), "2h0m0s")
+		assert.Equal(t, &secretsclient.RotationPolicy{Enabled: true, Interval: 2 * time.Hour, RetainVersions: 3, RotationLambda: "gen"}, fake.policyReq.Policy)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		p := newTestKMSPrinter()
+		assert.ErrorIs(t, executeSecretsPolicyGet(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, ""), ErrSecretNameRequired{})
+		assert.ErrorIs(t, executeSecretsPolicySet(ctx, &fakeSecretsClient{}, p, cli.OutputFormatJSON, "", secretPolicyOptions{}), ErrSecretNameRequired{})
+		requireSecretOperationFailed(t, executeSecretsPolicyGet(ctx, &fakeSecretsClient{err: errFakeSecrets}, p, cli.OutputFormatJSON, "n"), "policy get")
+		requireSecretOperationFailed(t, executeSecretsPolicySet(ctx, &fakeSecretsClient{err: errFakeSecrets}, p, cli.OutputFormatJSON, "n", secretPolicyOptions{}), "policy set")
+	})
+}
+
+func TestParseSecretVersion(t *testing.T) {
+	version, err := parseSecretVersion("7")
+	require.NoError(t, err)
+	assert.Equal(t, 7, version)
+
+	for _, bad := range []string{"0", "-2", "x"} {
+		_, err := parseSecretVersion(bad)
+		assert.ErrorIs(t, err, ErrInvalidSecretVersion{Value: bad})
+	}
+}
+
+func TestSecretsCommandTree(t *testing.T) {
+	getFlags := func() *cli.CommonFlags { return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON} }
+	cmd := NewSecretsCommand(getFlags)
+
+	for _, path := range [][]string{
+		{"store"}, {"get"}, {"list"}, {"delete"}, {"rotate"}, {"version"}, {"versions"},
+		{"rollback"}, {"status", "enable"}, {"status", "disable"}, {"policy", "get"},
+		{"policy", "set"}, {"prefix", "list"}, {"watch"},
+	} {
+		sub, _, err := cmd.Find(path)
+		require.NoError(t, err, path)
+		assert.NotNil(t, sub.RunE, path)
+	}
+
+	store, _, err := cmd.Find([]string{"store"})
+	require.NoError(t, err)
+	for _, flag := range []string{"value", "base64", "description", "tag"} {
+		assert.NotNil(t, store.Flags().Lookup(flag), flag)
+	}
+}
+
+func TestSecretsVersionArgRefusedBeforeDial(t *testing.T) {
+	cmd := NewSecretsCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+	for _, verb := range []string{"version", "rollback"} {
+		sub, _, err := cmd.Find([]string{verb})
+		require.NoError(t, err)
+		assert.ErrorIs(t, sub.RunE(sub, []string{"n", "zero"}), ErrInvalidSecretVersion{Value: "zero"}, verb)
+	}
+}
+
+func TestSecretsWatchIsSDKGap(t *testing.T) {
+	cmd := NewSecretsCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+	watch, _, err := cmd.Find([]string{"watch"})
+	require.NoError(t, err)
+	assert.ErrorIs(t, watch.RunE(watch, []string{"n"}), ErrSecretsSDKGap{Verb: "watch", Method: "SecretsClient.Watch"})
+}
+
+// The SDK gRPC transport refuses a secrets method its proto does not carry
+// (GetVersion, GetRotationPolicy, SetRotationPolicy) as unimplemented; every
+// verb surfaces that refusal as ErrSecretsSDKGap naming its SDK method.
+func TestSecretsUnimplementedIsSDKGap(t *testing.T) {
+	ctx := context.Background()
+	refusal := sdkerrors.NewUnimplemented("secretsHandler.handleRequest", "method not exposed by SecretsManagement gRPC proto")
+	fake := &fakeSecretsClient{err: refusal}
+	p := newTestKMSPrinter()
+	f := cli.OutputFormatJSON
+
+	tests := []struct {
+		verb   string
+		method string
+		run    func() error
+	}{
+		{"store", "SecretsClient.Store", func() error {
+			return executeSecretsStore(ctx, fake, p, f, "n", secretStoreOptions{Value: "v"})
+		}},
+		{"get", "SecretsClient.Get", func() error { return executeSecretsGet(ctx, fake, p, f, "n", 0) }},
+		{"list", "SecretsClient.List", func() error { return executeSecretsList(ctx, fake, p, f, "p/", 0, false) }},
+		{"delete", "SecretsClient.Delete", func() error { return executeSecretsDelete(ctx, fake, p, f, "n") }},
+		{"rotate", "SecretsClient.Rotate", func() error { return executeSecretsRotate(ctx, fake, p, f, "n", "v", false) }},
+		{"version", "SecretsClient.GetVersion", func() error { return executeSecretsVersion(ctx, fake, p, f, "n", 2) }},
+		{"versions", "SecretsClient.ListVersions", func() error { return executeSecretsVersions(ctx, fake, p, f, "n") }},
+		{"rollback", "SecretsClient.Rollback", func() error { return executeSecretsRollback(ctx, fake, p, f, "n", 1) }},
+		{"status", "SecretsClient.UpdateStatus", func() error {
+			return executeSecretsStatus(ctx, fake, p, f, "n", secretsclient.SecretStatusEnabled)
+		}},
+		{"policy get", "SecretsClient.GetRotationPolicy", func() error { return executeSecretsPolicyGet(ctx, fake, p, f, "n") }},
+		{"policy set", "SecretsClient.SetRotationPolicy", func() error {
+			return executeSecretsPolicySet(ctx, fake, p, f, "n", secretPolicyOptions{Enabled: true})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.verb, func(t *testing.T) {
+			err := tt.run()
+			var gap ErrSecretsSDKGap
+			require.ErrorAs(t, err, &gap)
+			assert.Equal(t, tt.verb, gap.Verb)
+			assert.Equal(t, tt.method, gap.Method)
+			assert.ErrorIs(t, err, refusal)
+			assert.Contains(t, err.Error(), "the go-quicbaas SDK does not serve "+tt.method)
+		})
+	}
+}
+
+// Any failure other than an unimplemented refusal stays ErrSecretOperationFailed.
+func TestSecretOperationErrorKeepsOtherFailures(t *testing.T) {
+	err := secretOperationError("version", "n", errFakeSecrets)
+	requireSecretOperationFailed(t, err, "version")
+	assert.NotErrorAs(t, err, new(ErrSecretsSDKGap))
+}
+
+// encodingSecretsClient keeps each secret's data encoded the way the quicbaas
+// Secrets client's gRPC and embedded transports do: Store JSON-encodes the
+// data map, Rotate stores NewData as it is given, and Get decodes the latest
+// version back into a map.
+type encodingSecretsClient struct {
+	fakeSecretsClient
+
+	latest map[string][]byte
+}
+
+func (f *encodingSecretsClient) Store(_ context.Context, req *secretsclient.StoreSecretRequest) (*secretsclient.StoreSecretResponse, error) {
+	raw, err := json.Marshal(req.Data)
+	if err != nil {
+		return nil, err
+	}
+	if f.latest == nil {
+		f.latest = map[string][]byte{}
+	}
+	f.latest[req.Path] = raw
+	return &secretsclient.StoreSecretResponse{Version: 1}, nil
+}
+
+func (f *encodingSecretsClient) Rotate(_ context.Context, req *secretsclient.RotateSecretRequest) (*secretsclient.RotateSecretResponse, error) {
+	f.latest[req.SecretID] = req.NewData
+	return &secretsclient.RotateSecretResponse{SecretID: req.SecretID, OldVersion: 1, NewVersion: 2}, nil
+}
+
+func (f *encodingSecretsClient) Get(_ context.Context, path string, _ ...secretsclient.GetOption) (*secretsclient.Secret, error) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(f.latest[path], &data); err != nil {
+		return nil, err
+	}
+	return &secretsclient.Secret{Path: path, Version: 2, Data: data}, nil
+}
+
+// GetVersion returns the stored data still encoded, as the quicbaas client's
+// GetVersion does. The fake keeps only the latest version.
+func (f *encodingSecretsClient) GetVersion(_ context.Context, req *secretsclient.GetSecretVersionRequest) (*secretsclient.SecretVersionInfo, error) {
+	return &secretsclient.SecretVersionInfo{SecretID: req.SecretID, Version: req.Version, Data: f.latest[req.SecretID]}, nil
+}

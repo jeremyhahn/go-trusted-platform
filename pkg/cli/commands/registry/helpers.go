@@ -14,6 +14,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
@@ -54,6 +55,26 @@ func formatTimestamp(ts int64) string {
 		return "N/A"
 	}
 	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
+}
+
+// unixSeconds is a Unix timestamp in seconds that renders as an RFC 3339 UTC
+// string in --output json and yaml, the form every platformctl timestamp
+// takes; the table renderer formats it with formatTimestamp.
+type unixSeconds int64
+
+// rfc3339 returns the timestamp as an RFC 3339 UTC string.
+func (s unixSeconds) rfc3339() string {
+	return time.Unix(int64(s), 0).UTC().Format(time.RFC3339)
+}
+
+// MarshalJSON renders the timestamp as an RFC 3339 JSON string.
+func (s unixSeconds) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.rfc3339())
+}
+
+// MarshalYAML renders the timestamp as an RFC 3339 YAML string.
+func (s unixSeconds) MarshalYAML() (interface{}, error) {
+	return s.rfc3339(), nil
 }
 
 // formatTimePtr formats a time pointer for display

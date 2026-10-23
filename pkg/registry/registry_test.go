@@ -132,11 +132,7 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func TestRegistryPush(t *testing.T) {
-	reg, err := NewRegistry(validTestConfig(), testLogger())
-	if err != nil {
-		t.Fatalf("failed to create registry: %v", err)
-	}
-	defer func() { _ = reg.Close() }()
+	reg := newTestRegistry(t)
 
 	tests := []struct {
 		name        string
@@ -146,11 +142,21 @@ func TestRegistryPush(t *testing.T) {
 		expectError error
 	}{
 		{
-			name:        "valid push",
-			ref:         "myrepo/myimage:v1",
-			image:       &Image{Manifest: &ImageManifest{}},
+			name: "valid push",
+			ref:  "myrepo/myimage:v1",
+			image: &Image{
+				Manifest: &ImageManifest{Layers: []Descriptor{{Digest: "sha256:" + repeat64("c"), Size: 5}}},
+				Layers:   []Layer{{Digest: "sha256:" + repeat64("c"), Size: 5, Content: []byte("layer")}},
+			},
 			opts:        PushOptions{},
 			expectError: nil,
+		},
+		{
+			name:        "no layers",
+			ref:         "myrepo/myimage:v2",
+			image:       &Image{Manifest: &ImageManifest{}},
+			opts:        PushOptions{},
+			expectError: ErrImageEmpty{},
 		},
 		{
 			name:        "empty reference",
@@ -187,6 +193,9 @@ func TestRegistryPush(t *testing.T) {
 			ctx := context.Background()
 			err := reg.Push(ctx, tt.ref, tt.image, tt.opts)
 
+			if tt.expectError == nil && err != nil {
+				t.Fatalf("expected success, got: %v", err)
+			}
 			if tt.expectError != nil {
 				if err == nil {
 					t.Error("expected error but got nil")
@@ -203,6 +212,11 @@ func TestRegistryPush(t *testing.T) {
 					var target ErrInvalidManifest
 					if !errors.As(err, &target) {
 						t.Errorf("expected ErrInvalidManifest, got: %T", err)
+					}
+				case ErrImageEmpty:
+					var target ErrImageEmpty
+					if !errors.As(err, &target) {
+						t.Errorf("expected ErrImageEmpty, got: %T", err)
 					}
 				}
 			}
@@ -557,7 +571,7 @@ func TestRegistry_EncryptedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetManifest: %v", err)
 	}
-	if manifest.Annotations[manifestAnnotationEncrypted] != "true" {
+	if manifest.Annotations[ManifestAnnotationEncrypted] != "true" {
 		t.Errorf("expected encrypted annotation, got %v", manifest.Annotations)
 	}
 }

@@ -43,8 +43,9 @@ func StatusResultFromProto(resp *platformv1.RegistryStatusResponse) *RegistrySta
 	}
 	for _, c := range resp.GetComponents() {
 		result.Components = append(result.Components, &ComponentStatus{
-			Name:   c.GetName(),
-			Status: HealthStatusFromProto(c.GetStatus()),
+			Name:    c.GetName(),
+			Status:  HealthStatusFromProto(c.GetStatus()),
+			Details: c.GetDetails(),
 		})
 	}
 	return result

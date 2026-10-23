@@ -17,7 +17,6 @@ package registry
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
@@ -413,56 +412,6 @@ func (r *cliPushResponse) toPushResult() *PushResult {
 	}
 }
 
-type cliPullResponse struct {
-	Reference      string              `json:"reference"`
-	Manifest       cliManifestResponse `json:"manifest"`
-	Config         string              `json:"config"`
-	Layers         []cliLayerResponse  `json:"layers"`
-	Encrypted      bool                `json:"encrypted"`
-	Signed         bool                `json:"signed"`
-	SignatureValid bool                `json:"signature_valid"`
-	PulledAt       time.Time           `json:"pulled_at"`
-}
-
-func (r *cliPullResponse) toPullResult() *PullResult {
-	result := &PullResult{
-		Reference:      r.Reference,
-		Manifest:       r.Manifest.toImageManifest(),
-		Encrypted:      r.Encrypted,
-		Signed:         r.Signed,
-		SignatureValid: r.SignatureValid,
-		PulledAt:       r.PulledAt,
-	}
-
-	if r.Config != "" {
-		result.Config, _ = base64.StdEncoding.DecodeString(r.Config)
-	}
-
-	if len(r.Layers) > 0 {
-		result.Layers = make([]LayerData, len(r.Layers))
-		for i, layer := range r.Layers {
-			result.Layers[i] = layer.toLayerData()
-		}
-	}
-
-	return result
-}
-
-type cliLayerResponse struct {
-	MediaType   string            `json:"media_type"`
-	Content     string            `json:"content"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-func (r *cliLayerResponse) toLayerData() LayerData {
-	content, _ := base64.StdEncoding.DecodeString(r.Content)
-	return LayerData{
-		MediaType:   r.MediaType,
-		Content:     content,
-		Annotations: r.Annotations,
-	}
-}
-
 type cliManifestResponse struct {
 	SchemaVersion int                     `json:"schemaVersion"`
 	MediaType     string                  `json:"mediaType"`
@@ -537,78 +486,110 @@ func (r *cliListResponse) toListResult() *ListResult {
 	}
 }
 
+// cliDeleteResponse is `registry delete --output json` (docs/registry/cli.md
+// §6): the deletion time is `timestamp`, Unix seconds, as on push.
 type cliDeleteResponse struct {
-	Reference     string    `json:"reference"`
-	Digest        string    `json:"digest"`
-	DeletedAt     time.Time `json:"deleted_at"`
-	LayersDeleted int       `json:"layers_deleted"`
+	Reference string `json:"reference"`
+	Digest    string `json:"digest"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func (r *cliDeleteResponse) toDeleteResult() *DeleteResult {
-	return &DeleteResult{
-		Reference:     r.Reference,
-		Digest:        r.Digest,
-		DeletedAt:     r.DeletedAt,
-		LayersDeleted: r.LayersDeleted,
+	result := &DeleteResult{
+		Reference: r.Reference,
+		Digest:    r.Digest,
 	}
+	// A zero timestamp means the daemon reported none; time.Unix(0, 0) would
+	// pass a DeletedAt.IsZero check it should fail.
+	if r.Timestamp != 0 {
+		result.DeletedAt = time.Unix(r.Timestamp, 0).UTC()
+	}
+	return result
 }
 
+// cliInspectResponse is `platformctl registry inspect --output json`: one
+// "manifest" document in snake_case (pkg/cli/commands/registry/inspect.go),
+// the key style of the SDK's registry domain types. The verbatim OCI
+// manifest, with its camelCase keys, is `inspect --raw`.
 type cliInspectResponse struct {
-	Reference       string                 `json:"reference"`
-	Manifest        cliManifestResponse    `json:"manifest"`
-	Config          cliImageConfigResponse `json:"config"`
-	TotalSize       int64                  `json:"total_size"`
-	LayerCount      int                    `json:"layer_count"`
-	Encrypted       bool                   `json:"encrypted"`
-	EncryptionKeyID string                 `json:"encryption_key_id,omitempty"`
-	Signed          bool                   `json:"signed"`
-	SigningKeyID    string                 `json:"signing_key_id,omitempty"`
-	SignatureValid  bool                   `json:"signature_valid"`
+	Manifest cliInspectManifest `json:"manifest"`
 }
 
+type cliInspectManifest struct {
+	Reference     string                 `json:"reference"`
+	Digest        string                 `json:"digest"`
+	MediaType     string                 `json:"media_type"`
+	SchemaVersion int                    `json:"schema_version"`
+	OS            string                 `json:"os"`
+	Architecture  string                 `json:"architecture"`
+	Config        cliInspectDescriptor   `json:"config"`
+	Layers        []cliInspectDescriptor `json:"layers"`
+	Annotations   map[string]string      `json:"annotations,omitempty"`
+	Signature     *cliInspectSignature   `json:"signature,omitempty"`
+	Encryption    *cliInspectEncryption  `json:"encryption,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	PushedAt      time.Time              `json:"pushed_at"`
+}
+
+type cliInspectDescriptor struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	MediaType string `json:"media_type"`
+}
+
+func (d cliInspectDescriptor) toDescriptor() Descriptor {
+	return Descriptor{MediaType: d.MediaType, Digest: d.Digest, Size: d.Size}
+}
+
+type cliInspectSignature struct {
+	Signed bool   `json:"signed"`
+	KeyID  string `json:"key_id,omitempty"`
+	Valid  bool   `json:"valid"`
+}
+
+type cliInspectEncryption struct {
+	Encrypted bool     `json:"encrypted"`
+	KeyIDs    []string `json:"key_ids,omitempty"`
+}
+
+// toInspectResult maps the CLI document onto the suite's result. The CLI
+// renders no image config, so Config stays nil.
 func (r *cliInspectResponse) toInspectResult() *InspectResult {
-	return &InspectResult{
-		Reference:       r.Reference,
-		Manifest:        r.Manifest.toImageManifest(),
-		Config:          r.Config.toImageConfig(),
-		TotalSize:       r.TotalSize,
-		LayerCount:      r.LayerCount,
-		Encrypted:       r.Encrypted,
-		EncryptionKeyID: r.EncryptionKeyID,
-		Signed:          r.Signed,
-		SigningKeyID:    r.SigningKeyID,
-		SignatureValid:  r.SignatureValid,
+	m := r.Manifest
+	manifest := &ImageManifest{
+		SchemaVersion: m.SchemaVersion,
+		MediaType:     m.MediaType,
+		Config:        m.Config.toDescriptor(),
+		Annotations:   m.Annotations,
+		Reference:     m.Reference,
+		Digest:        m.Digest,
+		CreatedAt:     m.CreatedAt,
+		UpdatedAt:     m.PushedAt,
 	}
-}
-
-type cliImageConfigResponse struct {
-	Architecture string            `json:"architecture"`
-	OS           string            `json:"os"`
-	Author       string            `json:"author,omitempty"`
-	Created      time.Time         `json:"created"`
-	Entrypoint   []string          `json:"entrypoint,omitempty"`
-	Cmd          []string          `json:"cmd,omitempty"`
-	Env          []string          `json:"env,omitempty"`
-	WorkingDir   string            `json:"working_dir,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
-	ExposedPorts []string          `json:"exposed_ports,omitempty"`
-	Volumes      []string          `json:"volumes,omitempty"`
-}
-
-func (r *cliImageConfigResponse) toImageConfig() *ImageConfig {
-	return &ImageConfig{
-		Architecture: r.Architecture,
-		OS:           r.OS,
-		Author:       r.Author,
-		Created:      r.Created,
-		Entrypoint:   r.Entrypoint,
-		Cmd:          r.Cmd,
-		Env:          r.Env,
-		WorkingDir:   r.WorkingDir,
-		Labels:       r.Labels,
-		ExposedPorts: r.ExposedPorts,
-		Volumes:      r.Volumes,
+	result := &InspectResult{
+		Reference:  m.Reference,
+		Manifest:   manifest,
+		Config:     &ImageConfig{OS: m.OS, Architecture: m.Architecture},
+		LayerCount: len(m.Layers),
 	}
+	for _, layer := range m.Layers {
+		manifest.Layers = append(manifest.Layers, layer.toDescriptor())
+		result.TotalSize += layer.Size
+	}
+	if m.Signature != nil {
+		manifest.Signed = m.Signature.Signed
+		result.Signed = m.Signature.Signed
+		result.SigningKeyID = m.Signature.KeyID
+		result.SignatureValid = m.Signature.Valid
+	}
+	if m.Encryption != nil {
+		manifest.Encrypted = m.Encryption.Encrypted
+		result.Encrypted = m.Encryption.Encrypted
+		if len(m.Encryption.KeyIDs) > 0 {
+			result.EncryptionKeyID = m.Encryption.KeyIDs[0]
+		}
+	}
+	return result
 }
 
 type cliStatusResponse struct {

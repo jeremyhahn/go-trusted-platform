@@ -364,6 +364,19 @@ none (`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `installer`, `lb`,
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`.
 
+The `sdn` key runs `./test/integration/sdn/` and
+`./test/integration/sdn/mock_bgp/...` within its 15 minutes (its tests run
+one at a time and take about 11; the runner's `TARGET_TIMEOUTS` comment has
+the breakdown), not
+`./test/integration/sdn/...`: the load generators in `sdn/stress` keep every
+CPU busy for about 270 s, and running beside the `sdn` package they starved
+ovs-vswitchd, `platformd` and `platformctl` until it ran out of time (#973).
+They run as the `sdn-stress` key (`make integration-test-sdn-stress`, 30
+minutes, as `make stress-sdn` gives them). `sdn-stress` needs no daemon but is
+not in `TARGET_NO_DAEMON`, since the daemon-free keys run concurrently and the
+generators would starve them too; it runs alone, in `ALL_TARGETS` order right
+after `sdn`.
+
 Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
 `datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `ipxe`, `installer`, `e2e`)
 run concurrently. Each writes its own log under `/tmp/integration-logs/`, and
@@ -389,7 +402,7 @@ Kept out of the runner, or out of its default set:
 | `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
-| `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` key's `./test/integration/sdn/...`; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
+| `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` and `sdn-stress` keys' packages; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
 | `compute-aws` | A Floci emulator compose file, not a suite; the tests are in `pkg/compute/aws` | `make integration-test-compute-aws` on the host |
 | `diskimage/userspace` | An arm64 userspace container | `make integration-test-diskimage-userspace` |
 | `web` | Playwright (TypeScript), not Go | `npx playwright test --config ../test/integration/web/playwright.config.ts` from `web/` |
@@ -593,6 +606,17 @@ carries its reason and an `expired_at` date, after which the finding fails the
 gate again. Today it holds only advisories in the dependencies npm itself
 bundles, which no Node or npm release fixes yet.
 
+A fixed Debian package is never suppressed; the image picks it up instead. The
+`base` stage's `apt-get upgrade` layer reads the `APT_REFRESH` build argument,
+which `make docker-build` (the CI image job) sets to the UTC day
+(`date -u +%Y-%m-%d`), so the layer is rebuilt daily; the Dockerfile's dated
+default applies only to a bare `docker build`. Without a key BuildKit reused a
+cached layer that predated a Debian fix, and `trivy image` reported the fixed
+libexpat1 (deb12u4) as HIGH. A new key rebuilds that layer and, through
+`FROM base`, every apt layer of the toolchain and integration stages; the
+`tools` and `modules` stages stay cached. Pass `APT_REFRESH=<key>` to make to
+rebuild against a fixed key.
+
 The images come from one Dockerfile, `build/docker/devcontainer/Dockerfile`,
 built from the repository root. `scripts/tool-pins.sh` holds the base image and
 the pins for govulncheck, trivy and Node.js (the integration image's official
@@ -642,6 +666,56 @@ unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 
 To run a stage locally as CI does: `make docker-build`, then
 `make docker-run CMD='make test'`.
+
+### Foreign-Failure Baseline
+
+Company Agent ruling 125: a failure in a class that ruling 104 counts as
+foreign (fixed only by an upstream release this repository pins, and named
+on an open upstream issue) does not block a merge. Such failures are listed in
+`.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
+nothing is admin-merged.
+
+CI runs `make integration-test IT_FOREIGN_BASELINE=1`. The suites' output
+still goes to the job log, and is also written to `IT_LOG`. When the suites
+pass, nothing else happens. When they fail, `scripts/foreignfailures` decides
+the step's result instead:
+
+- It passes only when every failed leaf test is a row of the baseline.
+- It fails, naming each one, on a failed leaf the baseline does not list.
+- It fails closed on anything it cannot attribute to a listed test: a build
+  or compile failure, a panic or timeout, a package that failed with no
+  failing test, a target that failed outside go test, or a log without the
+  runner's closing summary.
+
+It prints the baseline hits per upstream issue. Rows that did not fail are
+reported as a notice; they do not fail the step. `ci-gate` reads the job's
+result unchanged.
+
+A local `make integration-test` leaves `IT_FOREIGN_BASELINE` unset, so it
+exits with the suites' own status and shows every failure.
+
+The file is tab-separated, with the columns `kind`, `package`, `name`,
+`upstream` and `closing_release`:
+
+| Column | Value |
+|--------|-------|
+| `kind` | `test` (one leaf test) or `job` (one runner target in `ALL_TARGETS`) |
+| `package` | the module-relative package, e.g. `test/integration/kms` |
+| `name` | the full leaf name, e.g. `TestKMS/gRPC/HMAC`; for `job`, the target |
+| `upstream` | the open issue, `repo#number`; several are joined by `+` |
+| `closing_release` | the release whose adoption fixes it |
+
+**Adding an entry:**
+
+- Only a ruling-104 foreign class may be listed, with its open upstream issue.
+- Add one row per failing leaf, copied exactly from the job log.
+- There are no wildcards or patterns, so a new failure can never hide under
+  an existing row.
+- `go test ./scripts/foreignfailures/` refuses a malformed, incomplete or
+  duplicated row.
+
+**Removing an entry:** a row is removed in the PR that adopts its
+`closing_release`.
 
 ## Protocol Parity Assertions
 
@@ -809,7 +883,12 @@ calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
 which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
 persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
 certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
-is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
+is written to NV index `0x01C00002`, the RSA 2048 Low Range index of the TCG
+EK Credential Profile (§2.2.1.4) and the `tpm.ek.cert-handle` both configs
+name, so every transport's EK certificate call reads it from NV
+(`TestIntegrationConfig_EKCertIsTheSwtpmNVIndex`). With no `cert-handle`,
+go-xkms looks only in the platform certificate store, which these configs
+never fill. Provisioned this way, `platformd` opens a TPM it
 recognises as initialized and does not take its recovery path, which no
 shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting

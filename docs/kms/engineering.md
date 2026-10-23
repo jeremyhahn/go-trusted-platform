@@ -55,36 +55,22 @@ API, so it is not re-exported under `sdk/go`.
 **Never add key-management logic here.** A missing capability is missing in
 go-xkms or in the quicbaas SDK (docs/00 L8).
 
-## 2. A large part of the CLI is deliberately unimplemented
+## 2. Four CLI verbs are deliberately unimplemented
 
-This is the most important thing to know about this feature, and it is stated
-in the code rather than hidden: **eight non-test files in
-`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by eight distinct
-typed errors:
+Four non-test files in `pkg/cli/commands/kms/` carry "not yet implemented",
+each backed by its own typed error:
 
-```go
-ErrSecretsNotImplemented        ErrKeyExportNotImplemented
-ErrKeyImportNotImplemented      ErrKeyVersionsNotImplemented
-ErrKeyStatusNotImplemented      ErrKeyUnwrapNotImplemented
-ErrDEKNotImplemented            ErrBackendTestNotImplemented
-```
+| File | Error | Verb |
+|---|---|---|
+| `key_export.go` | `ErrKeyExportNotImplemented` | `kms key export` |
+| `key_import.go` | `ErrKeyImportNotImplemented` | `kms key import` |
+| `key_unwrap.go` | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
+| `key_test_backend.go` | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
-Affected areas, by file:
-
-| File | Unimplemented surface |
-|---|---|
-| `secrets.go` | The **entire** `kms secrets` subtree — store, get, list, delete, rotate, version, versions, rollback, status, policy get/set, prefix list, watch |
-| `dek.go` | Data-encryption-key operations |
-| `key_export.go`, `key_import.go` | Key export and import |
-| `key_versions.go` | Key version listing |
-| `key_status.go` | Key status |
-| `key_unwrap.go` | Key unwrap |
-| `key_test_backend.go` | Backend test |
-
-`ErrSecretsNotImplemented.Error()` reads *"secrets management is not yet
-implemented in the platform KMS service"*, and the command's long help offers a
-workaround: use `kms crypto encrypt` / `decrypt` to manage encrypted secrets
-yourself.
+The `kms secrets` and `kms dek` subtrees call the go-quicbaas SDK. Where the
+SDK has no call for an option, the verb refuses with a typed SDK-gap error
+naming what is missing: `ErrSecretsSDKGap` (`secrets watch`) and
+`ErrDEKSDKGap` (`dek list --cursor`). See [cli.md](cli.md) §7–§8.
 
 **These are commands that exist, parse flags, and then refuse.** They are typed
 errors, not panics or silent no-ops, which is the right shape — but a caller

@@ -20,7 +20,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
@@ -1345,13 +1344,11 @@ func (r *ToolRegistry) SetAuthorizationChecker(checker *AuthorizationChecker) {
 func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
 	r.logger.Debug("Executing tool", "tool", name)
 
-	// Add timeout to context if not present
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-
+	// A tool runs as long as the caller's context, as a gRPC call runs as
+	// long as its client's: over HTTP that is the request, cancelled when
+	// the client gives up; over stdio, the server's RequestTimeout. No
+	// deadline is added here: a reboot is a stop window plus a start, and
+	// a fixed one cut it short over MCP alone (docs/compute/api.md).
 	// Route to appropriate handler
 	switch name {
 	// vTPM Operations
@@ -1622,6 +1619,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIAMDeleteUser(ctx, args)
 	case "iam_get_user":
 		return r.executeIAMGetUser(ctx, args)
+	case "iam_update_user":
+		return r.executeIAMUpdateUser(ctx, args)
 	case "iam_list_users":
 		return r.executeIAMListUsers(ctx, args)
 
@@ -1632,6 +1631,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIAMDeleteRole(ctx, args)
 	case "iam_get_role":
 		return r.executeIAMGetRole(ctx, args)
+	case "iam_update_role":
+		return r.executeIAMUpdateRole(ctx, args)
 	case "iam_list_roles":
 		return r.executeIAMListRoles(ctx, args)
 	case "iam_assign_role":
@@ -1652,6 +1653,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIAMDeleteGroup(ctx, args)
 	case "iam_get_group":
 		return r.executeIAMGetGroup(ctx, args)
+	case "iam_update_group":
+		return r.executeIAMUpdateGroup(ctx, args)
 	case "iam_list_groups":
 		return r.executeIAMListGroups(ctx, args)
 	case "iam_add_group_member":

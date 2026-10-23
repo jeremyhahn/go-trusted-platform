@@ -715,6 +715,8 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.IAMSubTenantList:   iamRead,
 		quicwire.IAMSubTenantUpdate: iamWrite,
 		quicwire.IAMSubTenantDelete: iamDelete,
+		quicwire.IAMSubGroupUpdate:  iamWrite,
+		quicwire.IAMSubRoleUpdate:   iamWrite,
 
 		// Invitations. GetByToken and Accept are preAuthSubOpcodes.
 		quicwire.InvitationSubCreate: invitationWrite,
@@ -913,6 +915,9 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.KMSSubGetDEKStatus:           kmsRead,
 		quicwire.KMSSubRotateDEK:              kmsWrite,
 		quicwire.KMSSubDeleteDEK:              kmsDelete,
+		quicwire.KMSSubSetDefaultDEK:          kmsWrite,
+		quicwire.KMSSubSetDEKSafety:           kmsWrite,
+		quicwire.KMSSubClearDEKSafety:         kmsWrite,
 	},
 
 	quicwire.OpSecretsCategory: {
