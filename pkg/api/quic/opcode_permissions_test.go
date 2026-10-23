@@ -138,6 +138,9 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"dek status", quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetDEKStatus, OpcodePermission{Resource: "kms", Action: "read"}},
 		{"dek rotate", quicwire.OpKMSExtendedCategory, quicwire.KMSSubRotateDEK, OpcodePermission{Resource: "kms", Action: "write"}},
 		{"dek delete", quicwire.OpKMSExtendedCategory, quicwire.KMSSubDeleteDEK, OpcodePermission{Resource: "kms", Action: "delete"}},
+		{"dek set-default", quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetDefaultDEK, OpcodePermission{Resource: "kms", Action: "write"}},
+		{"dek set-safety", quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetDEKSafety, OpcodePermission{Resource: "kms", Action: "write"}},
+		{"dek clear-safety", quicwire.OpKMSExtendedCategory, quicwire.KMSSubClearDEKSafety, OpcodePermission{Resource: "kms", Action: "write"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -192,6 +192,9 @@ unknown key fails it whole. Each answer has the layout of the platform.v1 reply
 | DEK status | `GET /api/v1/kms/deks/{path}/status` | `DEKManagement.GetDEKStatus` | sub `0x0B` | `dek_status` (`kms:read`) | — |
 | Rotate DEK | `POST /api/v1/kms/deks/{path}/rotate` | `DEKManagement.RotateDEK` | sub `0x0C` | `dek_rotate` (`kms:write`) | — |
 | Delete DEK | `DELETE /api/v1/kms/deks/{path}` | `DEKManagement.DeleteDEK` | sub `0x0D` | `dek_delete` (`kms:delete`) | — |
+| Set default DEK | — (go-quicbaas SDK DEK client) | `DEKManagement.SetDefaultDEK` (`kms:write`) | sub `0x0E` (`kms:write`) | — (go-quicbaas SDK DEK client) | — |
+| Set DEK safety limits | — (go-quicbaas SDK DEK client) | `DEKManagement.SetDEKSafety` (`kms:write`) | sub `0x0F` (`kms:write`) | — (go-quicbaas SDK DEK client) | — |
+| Clear DEK safety limits | — (go-quicbaas SDK DEK client) | `DEKManagement.ClearDEKSafety` (`kms:write`) | sub `0x10` (`kms:write`) | — (go-quicbaas SDK DEK client) | — |
 
 | Secrets capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|

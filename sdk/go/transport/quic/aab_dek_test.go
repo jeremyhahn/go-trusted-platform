@@ -25,12 +25,15 @@ import (
 // daemon's DEK dispatcher serves.
 func TestDEKMethodsRouteToTheKMSExtendedCategory(t *testing.T) {
 	want := map[string]byte{
-		kmspb.DEKManagement_CreateDEK_FullMethodName:    0x08,
-		kmspb.DEKManagement_ListDEKs_FullMethodName:     0x09,
-		kmspb.DEKManagement_GetDEK_FullMethodName:       0x0A,
-		kmspb.DEKManagement_GetDEKStatus_FullMethodName: 0x0B,
-		kmspb.DEKManagement_RotateDEK_FullMethodName:    0x0C,
-		kmspb.DEKManagement_DeleteDEK_FullMethodName:    0x0D,
+		kmspb.DEKManagement_CreateDEK_FullMethodName:      0x08,
+		kmspb.DEKManagement_ListDEKs_FullMethodName:       0x09,
+		kmspb.DEKManagement_GetDEK_FullMethodName:         0x0A,
+		kmspb.DEKManagement_GetDEKStatus_FullMethodName:   0x0B,
+		kmspb.DEKManagement_RotateDEK_FullMethodName:      0x0C,
+		kmspb.DEKManagement_DeleteDEK_FullMethodName:      0x0D,
+		kmspb.DEKManagement_SetDefaultDEK_FullMethodName:  0x0E,
+		kmspb.DEKManagement_SetDEKSafety_FullMethodName:   0x0F,
+		kmspb.DEKManagement_ClearDEKSafety_FullMethodName: 0x10,
 	}
 	for method, wantSub := range want {
 		t.Run(method, func(t *testing.T) {

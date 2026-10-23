@@ -261,10 +261,12 @@ var activeDEKSafetyClientFactory dekSafetyClientFactory = defaultDEKSafetyClient
 // platformDEKSafetyProtocols are the platform transports on which the default
 // and safety commands use platformd's DEKManagement service: the pinned SDK DEK
 // client cannot send SetDefaultDEK, SetDEKSafety or ClearDEKSafety over its
-// gRPC and Unix transports. QUIC keeps the SDK client, which carries them.
+// gRPC and Unix transports, and QUIC carries them through the
+// sdk/go/transport/quic DEK mapping as it carries GetDEKStatus.
 var platformDEKSafetyProtocols = map[platform.Protocol]bool{
 	platform.ProtocolGRPC: true,
 	platform.ProtocolUnix: true,
+	platform.ProtocolQUIC: true,
 }
 
 func defaultDEKSafetyClientFactory(base *cli.BaseCommand) (dekSafetyClient, error) {

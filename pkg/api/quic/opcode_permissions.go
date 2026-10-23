@@ -898,6 +898,9 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.KMSSubGetDEKStatus:           kmsRead,
 		quicwire.KMSSubRotateDEK:              kmsWrite,
 		quicwire.KMSSubDeleteDEK:              kmsDelete,
+		quicwire.KMSSubSetDefaultDEK:          kmsWrite,
+		quicwire.KMSSubSetDEKSafety:           kmsWrite,
+		quicwire.KMSSubClearDEKSafety:         kmsWrite,
 	},
 
 	quicwire.OpSecretsCategory: {

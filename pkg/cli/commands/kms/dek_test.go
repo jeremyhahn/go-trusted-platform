@@ -695,7 +695,7 @@ func TestDEKSafetyClientFor(t *testing.T) {
 		return nil, nil
 	}
 
-	for _, protocol := range []platform.Protocol{platform.ProtocolGRPC, platform.ProtocolUnix} {
+	for _, protocol := range []platform.Protocol{platform.ProtocolGRPC, platform.ProtocolUnix, platform.ProtocolQUIC} {
 		t.Run("PlatformServiceOver"+protocol.String(), func(t *testing.T) {
 			rpc := &fakeDEKSafetyRPC{}
 			client, err := dekSafetyClientFor(fakeStatusPlatformClient{protocol: protocol, dek: rpc}, noSDK)
@@ -711,7 +711,7 @@ func TestDEKSafetyClientFor(t *testing.T) {
 		assert.ErrorIs(t, err, ErrDEKServiceUnavailable{})
 	})
 
-	for _, protocol := range []platform.Protocol{platform.ProtocolQUIC, platform.ProtocolREST, platform.ProtocolMCP} {
+	for _, protocol := range []platform.Protocol{platform.ProtocolREST, platform.ProtocolMCP} {
 		t.Run("SDKClientOver"+protocol.String(), func(t *testing.T) {
 			sdk := &fakeDEKClient{}
 			client, err := dekSafetyClientFor(fakeStatusPlatformClient{protocol: protocol},
