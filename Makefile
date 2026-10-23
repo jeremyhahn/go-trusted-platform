@@ -1377,9 +1377,28 @@ test: check-insecure-tls check-go-build-tags
 # would report green while a regulated path used prohibited cryptography.
 # WITH_FIPS=1, never BUILD_TAGS="...": a command-line BUILD_TAGS replaces the
 # Makefile's tag list instead of appending to it.
+# CUSTOMIZE (ruling 125): the unit tests' output also goes to $(FIPS_LOG) and,
+# when they fail, scripts/foreignfailures -job fips is the target's verdict. It
+# passes only when every failure is a listed panic of $(FIPS_FOREIGN_BASELINE)
+# (exact test, message and stack frame, nothing else failing) AND every other
+# top-level test of each panicked package, rerun by explicit name with the same
+# environment and tags, passes. A rerun round that fails only by another
+# listed panic excludes that test too and runs the rest again, at most one
+# round per row of the package. It fails closed on anything else
+# (docs/test/integration.md "The FIPS baseline").
+test-fips: SHELL := /bin/bash
 test-fips:
 	GOFIPS140=latest GODEBUG=fips140=only go build -tags "$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)" ./...
-	GOFIPS140=latest GODEBUG=fips140=only $(MAKE) --no-print-directory test WITH_FIPS=1
+	@set -o pipefail; status=0; \
+	tags="$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)"; \
+	GOFIPS140=latest GODEBUG=fips140=only $(MAKE) --no-print-directory test WITH_FIPS=1 2>&1 | tee "$(FIPS_LOG)" || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+		echo "FIPS unit tests failed (status $$status); checking the failures against $(FIPS_FOREIGN_BASELINE) (ruling 125)"; \
+		status=0; \
+		GOFIPS140=latest GODEBUG=fips140=only $(GO) run ./scripts/foreignfailures -job fips \
+			-baseline $(FIPS_FOREIGN_BASELINE) -tags "$$tags" -skip-tests "$(TEST_SKIP)" "$(FIPS_LOG)" || status=$$?; \
+	fi; \
+	exit $$status
 
 .PHONY: test-pkg
 ## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
@@ -2063,7 +2082,7 @@ integration-test: docker-build-it
 	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
 		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
 		status=0; \
-		$(GO) run ./scripts/foreignfailures -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
+		$(GO) run ./scripts/foreignfailures -job integration -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
 	fi; \
 	exit $$status
 
@@ -2170,6 +2189,9 @@ IT_PROJECT ?= go-trusted-platform-it
 IT_FOREIGN_BASELINE ?=
 IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
 FOREIGN_BASELINE ?= .github/foreign-failures.tsv
+# The FIPS job's sibling baseline, always consulted by `make test-fips`.
+FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
+FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
 
 # A KEY=value file with the forge credentials the module download needs
 # (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
