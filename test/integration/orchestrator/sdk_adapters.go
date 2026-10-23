@@ -36,9 +36,14 @@ import (
 // QUIC category 0x66 sub-opcode map, MCP tool map) the production clients
 // use.
 type SDKAdapter struct {
-	name         string
-	endpoint     string
-	options      func() *platform.Options
+	name     string
+	endpoint string
+	options  func() *platform.Options
+	// adminBearer adds the harness admin console bearer to the options:
+	// the webservice serves the orchestrator REST routes behind the admin
+	// role gate, which takes a console session, not the client certificate
+	// (docs/test/integration.md, "Admin session").
+	adminBearer  bool
 	client       platform.Client
 	orchestrator platformv1.OrchestratorServiceClient
 }
@@ -59,12 +64,15 @@ func NewGRPCAdapter() *SDKAdapter {
 	}
 }
 
-// NewRESTAdapter drives the orchestrator service over HTTPS REST.
+// NewRESTAdapter drives the orchestrator service over HTTPS REST, on the
+// webservice listener the harness serves REST from, with the admin console
+// bearer its orchestrator routes take.
 func NewRESTAdapter() *SDKAdapter {
 	endpoints := GetServiceEndpoints()
 	return &SDKAdapter{
-		name:     "REST",
-		endpoint: endpoints.PlatformREST,
+		name:        "REST",
+		endpoint:    endpoints.PlatformREST,
+		adminBearer: true,
 		options: func() *platform.Options {
 			return platform.NewOptions(
 				platform.WithOnlyProtocol(platform.ProtocolREST),
@@ -128,7 +136,15 @@ func (a *SDKAdapter) Name() string { return a.name }
 
 // Setup connects the platform SDK client over the selected transport.
 func (a *SDKAdapter) Setup(ctx context.Context) error {
-	client, err := platform.Connect(ctx, a.options())
+	options := a.options()
+	if a.adminBearer {
+		token, err := helpers.HarnessAdminSession().Bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+		}
+		platform.WithBearerToken(token)(options)
+	}
+	client, err := platform.Connect(ctx, options)
 	if err != nil {
 		return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
 	}
