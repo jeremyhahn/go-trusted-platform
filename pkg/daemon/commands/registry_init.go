@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -95,12 +96,21 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 		return
 	}
 
-	r, err := registry.NewRegistry(
-		cfgReg,
-		slog.Default(),
+	opts := []registry.RegistryOption{
 		registry.WithStorage(storage),
 		registry.WithEncryptor(encryptor),
-	)
+	}
+	signer, err := registryManifestSigner(app.QuicBaaSSDKClient())
+	if err != nil {
+		logger.Warnf("registry: manifest signer unavailable: %v", err)
+		return
+	}
+	if signer != nil {
+		opts = append(opts, registry.WithSigner(signer))
+	} else {
+		logger.Warn("registry: no QuicBaaS SDK client, signed pushes are refused")
+	}
+	r, err := registry.NewRegistry(cfgReg, slog.Default(), opts...)
 	if err != nil {
 		logger.Warnf("registry: failed to construct: %v", err)
 		return
@@ -108,4 +118,20 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 	cfg.RegistryService = registry.NewGRPCAdapter(r)
 	registryBackends[cfg] = r
 	logger.Info("registry service wired", "root", root, "kms_root", kmsRoot)
+}
+
+// registryManifestSigner builds the registry's manifest signer on the SDK
+// KMS: a signed push signs with the SDK KMS key its SigningKeyID names,
+// under that key's policies. With no SDK client it returns no signer, and
+// the registry refuses a signed push with registry.ErrSigningNotConfigured.
+func registryManifestSigner(sdk quicbaassdk.Client) (registry.SigningKMSClient, error) {
+	if sdk == nil {
+		return nil, nil
+	}
+	security := sdk.Security()
+	signer, err := registry.NewSDKSigner(security.KMS(), security.Crypto())
+	if err != nil {
+		return nil, err
+	}
+	return signer, nil
 }

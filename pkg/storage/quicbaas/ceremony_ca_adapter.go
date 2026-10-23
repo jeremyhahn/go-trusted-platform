@@ -178,8 +178,12 @@ func translateSignCSROptions(opts *quicbaas.QRDBCeremonySignCSROptions) *xkmsca.
 	if opts == nil {
 		return nil
 	}
+	// opts.Profile is the ceremony's role label ("security-officer",
+	// "administrator", ...), not a go-xkms certificate profile: forwarding it
+	// makes the CA's profile registry reject every ceremony CSR. The ceremony
+	// states the whole certificate policy in the validity, key usage and
+	// extended key usage, which the CA issues with its TLS leaf profile.
 	return &xkmsca.SignOptions{
-		Profile:      opts.Profile,
 		ValidityDays: opts.ValidityDays,
 		KeyUsage:     opts.KeyUsage,
 		ExtKeyUsage:  opts.ExtKeyUsage,

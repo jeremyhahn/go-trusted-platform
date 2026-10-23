@@ -562,6 +562,11 @@ func (s *TenantGRPCServer) CheckQuota(
 	}
 
 	err := s.manager.CheckQuota(ctx, req.GetTenantId(), resourceType, req.GetAmount())
+	// Only a quota refusal is an answer; any other failure, such as an
+	// unknown tenant, is an error the caller must see.
+	if err != nil && !tenant.IsQuotaExceeded(err) {
+		return nil, s.toGRPCError(err)
+	}
 
 	response := &platformv1.CheckQuotaResponse{
 		TenantId: req.GetTenantId(),

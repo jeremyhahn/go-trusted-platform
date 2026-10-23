@@ -813,8 +813,23 @@ parseCerts:
 	if len(certs) == 0 {
 		return nil, &MessageError{Msg: "no certificates in PKCS#7"}
 	}
+	if len(sd.SignerInfos) == 0 {
+		return nil, &MessageError{Msg: "no signer info in PKCS#7"}
+	}
 
-	return certs[0], nil
+	return signerCertificate(certs, sd.SignerInfos[0].IssuerAndSerialNumber)
+}
+
+// signerCertificate returns the certificate the SignerInfo names by issuer and
+// serial number (RFC 5652 §5.3). Taking the first certificate instead would
+// verify a signature against, or pin, a certificate the signer never claimed.
+func signerCertificate(certs []*x509.Certificate, sid issuerAndSerial) (*x509.Certificate, error) {
+	for _, cert := range certs {
+		if cert.SerialNumber.Cmp(sid.SerialNumber) == 0 && bytes.Equal(cert.RawIssuer, sid.IssuerName.FullBytes) {
+			return cert, nil
+		}
+	}
+	return nil, &ErrSignerCertificateNotFound{SerialNumber: sid.SerialNumber}
 }
 
 // extractSigningTime extracts the signing time from PKCS#7 signature

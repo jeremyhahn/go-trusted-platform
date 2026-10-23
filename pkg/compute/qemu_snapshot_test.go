@@ -66,6 +66,12 @@ func (f *fakeSnapshotOps) Delete(ctx context.Context, name string) error {
 		return f.deleteErr
 	}
 	f.deleted = append(f.deleted, name)
+	for i := range f.infos {
+		if f.infos[i].Name == name {
+			f.infos = append(f.infos[:i], f.infos[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -77,6 +83,9 @@ func (f *fakeSnapshotOps) List(ctx context.Context) ([]qemu.SnapshotInfo, error)
 }
 
 func (f *fakeSnapshotOps) Get(ctx context.Context, name string) (*qemu.SnapshotInfo, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	for i := range f.infos {
 		if f.infos[i].Name == name {
 			return &f.infos[i], nil
@@ -241,9 +250,11 @@ func TestQEMUOrchestrator_RestoreSnapshot_Errors(t *testing.T) {
 func TestQEMUOrchestrator_DeleteSnapshot(t *testing.T) {
 	orch, ops := newSnapshotTestOrchestrator(t)
 	addFakeVMInstance(t, orch, "vm1", true, "/vms/vm1/disk.qcow2", "")
+	ops.infos = []qemu.SnapshotInfo{{Name: "snap1", ID: "1"}}
 
 	require.NoError(t, orch.DeleteSnapshot(context.Background(), "vm1", "snap1"))
 	assert.Equal(t, []string{"snap1"}, ops.deleted)
+	assert.Empty(t, ops.infos)
 }
 
 func TestQEMUOrchestrator_DeleteSnapshot_Errors(t *testing.T) {
@@ -257,12 +268,35 @@ func TestQEMUOrchestrator_DeleteSnapshot_Errors(t *testing.T) {
 		assert.ErrorIs(t, err, ErrInvalidSnapshotName)
 	})
 
-	t.Run("snapshot not found translated", func(t *testing.T) {
-		ops.deleteErr = qemu.ErrSnapshotNotFound{Name: "missing"}
+	// delvm answers success for a name no disk holds; the orchestrator must
+	// not, or deleting a deleted snapshot reads as a second delete.
+	t.Run("already deleted snapshot is not found and never reaches delvm", func(t *testing.T) {
+		ops.infos = []qemu.SnapshotInfo{{Name: "once", ID: "1"}}
+		ops.deleted = nil
+		require.NoError(t, orch.DeleteSnapshot(ctx, "vm1", "once"))
+
+		err := orch.DeleteSnapshot(ctx, "vm1", "once")
+		assert.ErrorIs(t, err, ErrSnapshotNotFound)
+		assert.Equal(t, []string{"once"}, ops.deleted)
+	})
+
+	t.Run("delete not found translated", func(t *testing.T) {
+		ops.infos = []qemu.SnapshotInfo{{Name: "racing", ID: "1"}}
+		ops.deleteErr = qemu.ErrSnapshotNotFound{Name: "racing"}
 		defer func() { ops.deleteErr = nil }()
 
-		err := orch.DeleteSnapshot(ctx, "vm1", "missing")
+		err := orch.DeleteSnapshot(ctx, "vm1", "racing")
 		assert.ErrorIs(t, err, ErrSnapshotNotFound)
+	})
+
+	t.Run("lookup failure is returned", func(t *testing.T) {
+		ops.listErr = errors.New("monitor gone")
+		defer func() { ops.listErr = nil }()
+
+		err := orch.DeleteSnapshot(ctx, "vm1", "racing")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrSnapshotNotFound)
+		assert.ErrorIs(t, err, ops.listErr)
 	})
 }
 

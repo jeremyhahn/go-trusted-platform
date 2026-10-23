@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
@@ -550,7 +551,7 @@ func TestMCPServiceProvider_VTPMStart_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	err := provider.VTPMStart(ctx, "test-bundle")
+	_, err := provider.VTPMStart(ctx, "test-bundle")
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -568,12 +569,22 @@ func TestMCPServiceProvider_VTPMStart_Success(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	err := provider.VTPMStart(ctx, "test-bundle")
+	reply, err := provider.VTPMStart(ctx, "test-bundle")
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if !mockSvc.running["test-bundle"] {
 		t.Error("expected bundle to be running")
+	}
+	// The reply carries the gRPC StartVTPM fields.
+	want := map[string]interface{}{
+		"success":     true,
+		"bundle_id":   "test-bundle",
+		"running":     true,
+		"socket_path": mockSvc.GetTPMSocketPath("test-bundle"),
+	}
+	if !reflect.DeepEqual(reply, want) {
+		t.Errorf("reply = %v, want %v", reply, want)
 	}
 }
 
@@ -585,7 +596,7 @@ func TestMCPServiceProvider_VTPMStart_BundleNotFound(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	err := provider.VTPMStart(ctx, "nonexistent")
+	_, err := provider.VTPMStart(ctx, "nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent bundle")
 	}

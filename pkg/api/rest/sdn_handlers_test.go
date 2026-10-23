@@ -41,12 +41,16 @@ type mockSDNService struct {
 	// deletedCookies records every cookie DeleteFlowsByCookie removed.
 	deletedCookies []uint64
 
+	// createBridgeOpts records the options of every CreateBridgeWithOptions
+	// call that passed validation.
+	createBridgeOpts []*ovs.BridgeOptions
+	// addPortTypes records the interface type of every port added.
+	addPortTypes []string
+
 	createBridgeErr error
 	deleteBridgeErr error
 	getBridgeErr    error
 	listBridgesErr  error
-	setFailModeErr  error
-	setProtocolsErr error
 
 	addPortErr       error
 	deletePortErr    error
@@ -88,21 +92,43 @@ func newMockSDNService() *mockSDNService {
 	}
 }
 
-func (m *mockSDNService) CreateBridge(ctx context.Context, name string) (*ovs.Bridge, error) {
+// CreateBridgeWithOptions validates the options as the OVS client does and
+// records them on the bridge row it creates.
+func (m *mockSDNService) CreateBridgeWithOptions(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error) {
 	if m.createBridgeErr != nil {
 		return nil, m.createBridgeErr
 	}
+	var failMode string
+	var protocols []string
+	if opts != nil {
+		failMode, protocols = opts.FailMode, opts.Protocols
+	}
+	if failMode != "" && failMode != "secure" && failMode != "standalone" {
+		return nil, &ovs.ErrInvalidFailMode{FailMode: failMode}
+	}
+	validProtocols := map[string]bool{
+		"OpenFlow10": true, "OpenFlow11": true, "OpenFlow12": true,
+		"OpenFlow13": true, "OpenFlow14": true, "OpenFlow15": true,
+	}
+	for _, p := range protocols {
+		if !validProtocols[p] {
+			return nil, ovs.ErrInvalidProtocol
+		}
+	}
+	m.createBridgeOpts = append(m.createBridgeOpts, opts)
 	if _, exists := m.bridges[name]; exists {
 		return nil, ovs.ErrBridgeExists
 	}
 	bridge := &ovs.Bridge{
-		UUID:         "bridge-" + name,
-		Name:         name,
-		DatapathType: "system",
-		Ports:        []string{},
-		ExternalIDs:  make(map[string]string),
-		OtherConfig:  make(map[string]string),
-		Status:       map[string]string{"state": "up"},
+		UUID:          "bridge-" + name,
+		Name:          name,
+		DatapathType:  "system",
+		Ports:         []string{},
+		ExternalIDs:   make(map[string]string),
+		OtherConfig:   make(map[string]string),
+		Status:        map[string]string{"state": "up"},
+		FailMode:      failMode,
+		FlowProtocols: protocols,
 	}
 	m.bridges[name] = bridge
 	return bridge, nil
@@ -141,34 +167,16 @@ func (m *mockSDNService) ListBridges(ctx context.Context) ([]*ovs.Bridge, error)
 	return result, nil
 }
 
-func (m *mockSDNService) SetBridgeFailMode(ctx context.Context, name, failMode string) error {
-	if m.setFailModeErr != nil {
-		return m.setFailModeErr
-	}
-	bridge, exists := m.bridges[name]
-	if !exists {
-		return ovs.ErrBridgeNotFound
-	}
-	bridge.FailMode = failMode
-	return nil
-}
-
-func (m *mockSDNService) SetBridgeProtocols(ctx context.Context, name string, protocols []string) error {
-	if m.setProtocolsErr != nil {
-		return m.setProtocolsErr
-	}
-	bridge, exists := m.bridges[name]
-	if !exists {
-		return ovs.ErrBridgeNotFound
-	}
-	bridge.FlowProtocols = protocols
-	return nil
-}
-
-func (m *mockSDNService) AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+// AddPortWithType refuses an interface type Open vSwitch does not implement,
+// as the OVS client does, and records the type of every port it adds.
+func (m *mockSDNService) AddPortWithType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error) {
 	if m.addPortErr != nil {
 		return nil, m.addPortErr
 	}
+	if ifType == "bogus" {
+		return nil, &ovs.ErrInvalidPortType{Type: ifType}
+	}
+	m.addPortTypes = append(m.addPortTypes, ifType)
 	if _, exists := m.bridges[bridgeName]; !exists {
 		return nil, ovs.ErrBridgeNotFound
 	}
@@ -491,6 +499,9 @@ func TestCreateBridge(t *testing.T) {
 		decodeSDNResponse(t, w.Body, &resp)
 		assert.Equal(t, "br-test", resp.Name)
 		assert.Equal(t, "secure", resp.FailMode)
+		// The fail mode rides the create transaction itself.
+		require.Len(t, svc.createBridgeOpts, 1)
+		assert.Equal(t, "secure", svc.createBridgeOpts[0].FailMode)
 	})
 
 	t.Run("with protocols", func(t *testing.T) {
@@ -510,6 +521,8 @@ func TestCreateBridge(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusCreated, w.Code)
+		require.Len(t, svc.createBridgeOpts, 1)
+		assert.Equal(t, []string{"OpenFlow10", "OpenFlow13"}, svc.createBridgeOpts[0].Protocols)
 	})
 
 	t.Run("missing name", func(t *testing.T) {
@@ -771,6 +784,40 @@ func TestAddPort(t *testing.T) {
 		var resp PortResponse
 		decodeSDNResponse(t, w.Body, &resp)
 		assert.Equal(t, "eth0", resp.Name)
+	})
+
+	t.Run("passes the requested interface type", func(t *testing.T) {
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		body, err := json.Marshal(AddPortRequest{Name: "int0", Type: "internal"})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br-test/ports", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		assert.Equal(t, []string{"internal"}, svc.addPortTypes)
+	})
+
+	t.Run("invalid interface type", func(t *testing.T) {
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		body, err := json.Marshal(AddPortRequest{Name: "bad0", Type: "bogus"})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br-test/ports", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.NotContains(t, svc.ports, "bad0")
 	})
 
 	t.Run("with trunk VLANs", func(t *testing.T) {
@@ -1513,14 +1560,10 @@ func TestOVSFlowToResponse(t *testing.T) {
 
 func TestBridgeFailModeError(t *testing.T) {
 	svc := newMockSDNService()
-	svc.setFailModeErr = errors.New("fail mode error")
 	_, router := setupSDNTestHandler(svc)
 
-	reqBody := CreateBridgeRequest{
-		Name:     "br-test",
-		FailMode: "secure",
-	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(CreateBridgeRequest{Name: "br-test", FailMode: "bogus"})
+	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -1528,20 +1571,18 @@ func TestBridgeFailModeError(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	// Should still succeed, fail mode is optional
-	assert.Equal(t, http.StatusCreated, w.Code)
+	// An invalid fail mode refuses the whole create: no bridge is left
+	// behind in standalone mode.
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.NotContains(t, svc.bridges, "br-test")
 }
 
 func TestBridgeProtocolsError(t *testing.T) {
 	svc := newMockSDNService()
-	svc.setProtocolsErr = errors.New("protocols error")
 	_, router := setupSDNTestHandler(svc)
 
-	reqBody := CreateBridgeRequest{
-		Name:      "br-test",
-		Protocols: []string{"OpenFlow13"},
-	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(CreateBridgeRequest{Name: "br-test", Protocols: []string{"OpenFlow99"}})
+	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -1549,8 +1590,8 @@ func TestBridgeProtocolsError(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	// Should still succeed, protocols are optional
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.NotContains(t, svc.bridges, "br-test")
 }
 
 func TestPortVLANError(t *testing.T) {

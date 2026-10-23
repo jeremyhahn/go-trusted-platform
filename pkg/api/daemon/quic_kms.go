@@ -647,24 +647,20 @@ func pbKeyAlgorithmToPlatformKMS(alg pb.KeyAlgorithm) int32 {
 // KeyUsage values. Usages the QuicBaaS pb cannot express (UNWRAP, DERIVE,
 // HMAC) return a typed error.
 func platformKMSUsagesToPb(usages []int32) ([]pb.KeyUsage, error) {
-	result := make([]pb.KeyUsage, 0, len(usages))
-	for _, u := range usages {
-		switch platformv1.KeyUsage(u) {
-		case platformv1.KeyUsage_KEY_USAGE_ENCRYPT:
-			result = append(result, pb.KeyUsage_KEY_USAGE_ENCRYPT)
-		case platformv1.KeyUsage_KEY_USAGE_DECRYPT:
-			result = append(result, pb.KeyUsage_KEY_USAGE_DECRYPT)
-		case platformv1.KeyUsage_KEY_USAGE_SIGN:
-			result = append(result, pb.KeyUsage_KEY_USAGE_SIGN)
-		case platformv1.KeyUsage_KEY_USAGE_VERIFY:
-			result = append(result, pb.KeyUsage_KEY_USAGE_VERIFY)
-		case platformv1.KeyUsage_KEY_USAGE_WRAP:
-			result = append(result, pb.KeyUsage_KEY_USAGE_WRAP_KEY)
-		default:
-			return nil, ErrKMSUnsupportedValue{Kind: "key usage", Value: u}
-		}
-	}
-	return result, nil
+	return convertKeyUsages(usages, platformKMSUsageToPb)
+}
+
+// platformKMSUsageToPb maps each platform wire usage to the go-quicbaas
+// wire usages QUIC forwards to the KMS adapter. HMAC maps to the MAC
+// usages, which pbKeyUsageToSDK grants as sign and verify; UNWRAP, DERIVE
+// and UNSPECIFIED are absent and therefore refused.
+var platformKMSUsageToPb = map[platformv1.KeyUsage][]pb.KeyUsage{
+	platformv1.KeyUsage_KEY_USAGE_ENCRYPT: {pb.KeyUsage_KEY_USAGE_ENCRYPT},
+	platformv1.KeyUsage_KEY_USAGE_DECRYPT: {pb.KeyUsage_KEY_USAGE_DECRYPT},
+	platformv1.KeyUsage_KEY_USAGE_SIGN:    {pb.KeyUsage_KEY_USAGE_SIGN},
+	platformv1.KeyUsage_KEY_USAGE_VERIFY:  {pb.KeyUsage_KEY_USAGE_VERIFY},
+	platformv1.KeyUsage_KEY_USAGE_WRAP:    {pb.KeyUsage_KEY_USAGE_WRAP_KEY},
+	platformv1.KeyUsage_KEY_USAGE_HMAC:    {pb.KeyUsage_KEY_USAGE_GENERATE_MAC, pb.KeyUsage_KEY_USAGE_VERIFY_MAC},
 }
 
 // pbKeyUsagesToPlatformKMS converts QuicBaaS pb KeyUsage values to platform.v1
@@ -909,7 +905,10 @@ func stringsToKeyUsages(usages []string) []pb.KeyUsage {
 func keyUsagesToStrings(usages []pb.KeyUsage) []string {
 	result := make([]string, 0, len(usages))
 	for _, u := range usages {
-		result = append(result, u.String())
+		// The short name (ENCRYPT, WRAP_KEY, ...) is the form REST answers
+		// and stringToKeyUsage accepts, so a policy read over QUIC can be
+		// written back unchanged.
+		result = append(result, strings.TrimPrefix(u.String(), "KEY_USAGE_"))
 	}
 	return result
 }
@@ -2378,11 +2377,11 @@ func (a *kmsQUICAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest) (*pb
 }
 
 func (a *kmsQUICAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
-	return a.crypto.BatchEncrypt(ctx, req)
+	return a.crypto.EncryptBatch(ctx, req)
 }
 
 func (a *kmsQUICAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
-	return a.crypto.BatchDecrypt(ctx, req)
+	return a.crypto.DecryptBatch(ctx, req)
 }
 
 // GenerateRandom generates cryptographically secure random bytes using crypto/rand.

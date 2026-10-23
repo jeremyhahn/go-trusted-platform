@@ -161,7 +161,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			OtherConfig: map[string]string{"config-key": "config-value"},
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "bridge-id-1")
+		result := svc.ovsPortToPb(ovsPort, "bridge-id-1", platformv1.PortStatus_PORT_STATUS_DOWN)
 
 		require.NotNil(t, result)
 		assert.Equal(t, "uuid-port-1", result.Id)
@@ -171,7 +171,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 		assert.Equal(t, platformv1.PortType_PORT_TYPE_INTERNAL, result.Config.Type)
 		assert.Equal(t, uint32(100), result.Config.Vlan)
 		assert.Equal(t, "value1", result.Config.Labels["port-id"])
-		assert.Equal(t, platformv1.PortStatus_PORT_STATUS_UP, result.Status)
+		assert.Equal(t, platformv1.PortStatus_PORT_STATUS_DOWN, result.Status, "the status given, never a fixed up")
 		assert.NotNil(t, result.CreatedAt)
 		assert.NotNil(t, result.UpdatedAt)
 	})
@@ -184,7 +184,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			ExternalIDs: nil,
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "bridge-id-2")
+		result := svc.ovsPortToPb(ovsPort, "bridge-id-2", platformv1.PortStatus_PORT_STATUS_UP)
 
 		require.NotNil(t, result)
 		assert.Equal(t, "uuid-port-2", result.Id)
@@ -197,7 +197,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			Name: "port2",
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "")
+		result := svc.ovsPortToPb(ovsPort, "", platformv1.PortStatus_PORT_STATUS_UP)
 
 		require.NotNil(t, result)
 		assert.Equal(t, "", result.BridgeId)
@@ -215,7 +215,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			},
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "bridge-id-3")
+		result := svc.ovsPortToPb(ovsPort, "bridge-id-3", platformv1.PortStatus_PORT_STATUS_UP)
 
 		require.NotNil(t, result)
 		assert.Len(t, result.Config.Labels, 3)
@@ -231,7 +231,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			Tag:  4095, // Max VLAN ID
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "bridge-id-4")
+		result := svc.ovsPortToPb(ovsPort, "bridge-id-4", platformv1.PortStatus_PORT_STATUS_UP)
 
 		require.NotNil(t, result)
 		assert.Equal(t, uint32(4095), result.Config.Vlan)
@@ -243,7 +243,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			Name: "",
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "bridge-id-5")
+		result := svc.ovsPortToPb(ovsPort, "bridge-id-5", platformv1.PortStatus_PORT_STATUS_UP)
 
 		require.NotNil(t, result)
 		assert.Equal(t, "", result.Id)
@@ -258,7 +258,7 @@ func TestSDNService_ovsPortToPb(t *testing.T) {
 			Trunks:   []int64{100, 200, 300, 400},
 		}
 
-		result := svc.ovsPortToPb(ovsPort, "bridge-id-6")
+		result := svc.ovsPortToPb(ovsPort, "bridge-id-6", platformv1.PortStatus_PORT_STATUS_UP)
 
 		require.NotNil(t, result)
 		// The current implementation sets Type to PORT_TYPE_INTERNAL regardless

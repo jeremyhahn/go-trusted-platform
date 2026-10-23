@@ -389,6 +389,13 @@ func TestOverlayRuntimeVerdicts_SeparatesNotFoundFromOutage(t *testing.T) {
 		t.Fatalf("LatestDeviceVerdict without a report = %v, want gateway.ErrOverlayRecordNotFound", err)
 	}
 
+	// platformd without the reporting service records no verdict at all.
+	unreported := &overlayRuntimeVerdicts{client: &fakeOverlayReportClient{err: status.Error(codes.FailedPrecondition,
+		"attestation reporting service is not configured on this node")}}
+	if _, err := unreported.LatestDeviceVerdict(context.Background(), 42); !errors.Is(err, gateway.ErrOverlayRecordNotFound) {
+		t.Fatalf("LatestDeviceVerdict with no reporting service = %v, want gateway.ErrOverlayRecordNotFound", err)
+	}
+
 	down := &overlayRuntimeVerdicts{client: &fakeOverlayReportClient{err: status.Error(codes.Unavailable, "down")}}
 	_, err := down.LatestDeviceVerdict(context.Background(), 42)
 	if err == nil || errors.Is(err, gateway.ErrOverlayRecordNotFound) {

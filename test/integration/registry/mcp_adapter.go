@@ -26,6 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -159,23 +161,57 @@ func (m *MCPAdapter) rpc(ctx context.Context, method string, params, out interfa
 	return nil
 }
 
-// callTool invokes tools/call and decodes the tool's result into out.
-// platformd returns the tool's value as the JSON-RPC result and a failed
-// tool as a JSON-RPC error (pkg/api/mcp/server.go handleToolsCall).
+// callTool invokes tools/call and decodes the tool's output into out.
+// platformd answers with an MCP CallToolResult whose text block holds the
+// tool's output as JSON, and a failed tool as a JSON-RPC error
+// (pkg/api/mcp/server.go handleToolsCall).
 func (m *MCPAdapter) callTool(ctx context.Context, tool string, args map[string]interface{}, out interface{}) error {
-	return m.rpc(ctx, "tools/call", map[string]interface{}{"name": tool, "arguments": args}, out)
+	var raw json.RawMessage
+	if err := m.rpc(ctx, "tools/call", map[string]interface{}{"name": tool, "arguments": args}, &raw); err != nil {
+		return err
+	}
+	var err error
+	if out == nil {
+		_, err = mcpwire.ToolOutputJSON(raw)
+	} else {
+		err = mcpwire.DecodeToolOutput(raw, out)
+	}
+	if err != nil {
+		return ErrInvalidResponse{Operation: tool, Err: err}
+	}
+	return nil
 }
 
 // mcpArtifact is an artifact as pkg/api/daemon/mcp_registry.go renders it;
 // times are UNIX milliseconds, 0 when unset.
 type mcpArtifact struct {
-	Repository  string            `json:"repository"`
-	Tag         string            `json:"tag"`
+	Repository   string            `json:"repository"`
+	Tag          string            `json:"tag"`
+	Digest       string            `json:"digest"`
+	Size         int64             `json:"size"`
+	Annotations  map[string]string `json:"annotations"`
+	OS           string            `json:"os"`
+	Architecture string            `json:"architecture"`
+	Author       string            `json:"author"`
+	Manifest     *mcpManifest      `json:"manifest"`
+	CreatedAt    int64             `json:"created_at"`
+	UpdatedAt    int64             `json:"updated_at"`
+}
+
+// mcpManifest is the manifest platform_registry_inspect carries on an
+// artifact (docs/registry/api.md §4).
+type mcpManifest struct {
+	MediaType    string          `json:"media_type"`
+	ConfigDigest string          `json:"config_digest"`
+	Layers       []mcpDescriptor `json:"layers"`
+}
+
+// mcpDescriptor is one layer of an mcpManifest.
+type mcpDescriptor struct {
+	MediaType   string            `json:"media_type"`
 	Digest      string            `json:"digest"`
 	Size        int64             `json:"size"`
 	Annotations map[string]string `json:"annotations"`
-	CreatedAt   int64             `json:"created_at"`
-	UpdatedAt   int64             `json:"updated_at"`
 }
 
 // fromMilli converts the tools' millisecond timestamps, keeping 0 as unset.
@@ -187,7 +223,7 @@ func fromMilli(ms int64) time.Time {
 }
 
 func (a mcpArtifact) manifest() ImageManifest {
-	return ImageManifest{
+	m := ImageManifest{
 		Reference:   a.Repository + ":" + a.Tag,
 		Digest:      a.Digest,
 		Size:        a.Size,
@@ -195,6 +231,14 @@ func (a mcpArtifact) manifest() ImageManifest {
 		CreatedAt:   fromMilli(a.CreatedAt),
 		UpdatedAt:   fromMilli(a.UpdatedAt),
 	}
+	if a.Manifest != nil {
+		m.MediaType = a.Manifest.MediaType
+		m.Config = Descriptor{Digest: a.Manifest.ConfigDigest}
+		for _, l := range a.Manifest.Layers {
+			m.Layers = append(m.Layers, Descriptor(l))
+		}
+	}
+	return m
 }
 
 // Push is not an MCP tool.
@@ -264,7 +308,20 @@ func (m *MCPAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, e
 	}
 	manifest := resp.Artifact.manifest()
 	manifest.Reference = ref
-	return &InspectResult{Reference: ref, Manifest: &manifest, TotalSize: resp.Artifact.Size}, nil
+	annotations := resp.Artifact.Annotations
+	return &InspectResult{
+		Reference: ref,
+		Manifest:  &manifest,
+		Config: &ImageConfig{
+			Architecture: resp.Artifact.Architecture,
+			OS:           resp.Artifact.OS,
+			Author:       resp.Artifact.Author,
+		},
+		TotalSize:       resp.Artifact.Size,
+		LayerCount:      len(manifest.Layers),
+		Encrypted:       annotations[registry.ManifestAnnotationEncrypted] == "true",
+		EncryptionKeyID: annotations[registry.ManifestAnnotationKeyID],
+	}, nil
 }
 
 // Status calls platform_registry_status.
@@ -278,6 +335,13 @@ func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
 			UsedBytes     int64 `json:"used_bytes"`
 			ArtifactCount int   `json:"artifact_count"`
 		} `json:"storage"`
+		// The storage backend travels as the storage component's
+		// details.backend, as on gRPC (pkg/api/daemon/mcp_registry.go).
+		Components []struct {
+			Name    string            `json:"name"`
+			Status  string            `json:"status"`
+			Details map[string]string `json:"details"`
+		} `json:"components"`
 	}
 	if err := m.callTool(ctx, mcpToolRegistryStatus, map[string]interface{}{}, &resp); err != nil {
 		return nil, err
@@ -293,8 +357,19 @@ func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	if healthy {
 		result.Status = "running"
 	}
+	for _, c := range resp.Components {
+		if c.Name == registry.StatusComponentStorage {
+			result.StorageBackend = c.Details[registry.StatusDetailBackend]
+			result.StorageStatus = c.Status
+		}
+	}
 	if resp.StartedAt != 0 && resp.Timestamp != 0 {
 		result.Uptime = fromMilli(resp.Timestamp).Sub(fromMilli(resp.StartedAt))
+	}
+	for _, c := range resp.Components {
+		if c.Name == storageComponentName {
+			result.StorageBackend = c.Details[storageBackendDetail]
+		}
 	}
 	return result, nil
 }

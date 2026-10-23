@@ -224,8 +224,8 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Call MCP tool
-	result, err := c.adapter.client.CallTool(ctx, toolName, arguments)
+	// Call MCP tool, waiting as long as the daemon may take to answer it
+	result, err := c.adapter.client.CallToolWithin(ctx, toolName, arguments, replyWindow(method, args))
 	if err != nil {
 		return translateMCPErrorToGRPC(err)
 	}
@@ -324,12 +324,14 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/CreateUser": "iam_create_user",
 	"/platform.v1.PlatformIAMService/DeleteUser": "iam_delete_user",
 	"/platform.v1.PlatformIAMService/GetUser":    "iam_get_user",
+	"/platform.v1.PlatformIAMService/UpdateUser": "iam_update_user",
 	"/platform.v1.PlatformIAMService/ListUsers":  "iam_list_users",
 
 	// IAM Role Operations
 	"/platform.v1.PlatformIAMService/CreateRole": "iam_create_role",
 	"/platform.v1.PlatformIAMService/DeleteRole": "iam_delete_role",
 	"/platform.v1.PlatformIAMService/GetRole":    "iam_get_role",
+	"/platform.v1.PlatformIAMService/UpdateRole": "iam_update_role",
 	"/platform.v1.PlatformIAMService/ListRoles":  "iam_list_roles",
 	"/platform.v1.PlatformIAMService/AssignRole": "iam_assign_role",
 	"/platform.v1.PlatformIAMService/RevokeRole": "iam_revoke_role",
@@ -338,6 +340,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/CreateGroup":       "iam_create_group",
 	"/platform.v1.PlatformIAMService/DeleteGroup":       "iam_delete_group",
 	"/platform.v1.PlatformIAMService/GetGroup":          "iam_get_group",
+	"/platform.v1.PlatformIAMService/UpdateGroup":       "iam_update_group",
 	"/platform.v1.PlatformIAMService/ListGroups":        "iam_list_groups",
 	"/platform.v1.PlatformIAMService/AddGroupMember":    "iam_add_group_member",
 	"/platform.v1.PlatformIAMService/RemoveGroupMember": "iam_remove_group_member",
@@ -482,6 +485,14 @@ func translateMCPErrorToGRPC(err error) error {
 	var statusErr *mcpwire.HTTPStatusError
 	if errors.As(err, &statusErr) {
 		return status.Error(statusErr.Class(), statusErr.Error())
+	}
+
+	// A malformed or failed CallToolResult is the server's answer, not a
+	// connection fault.
+	var shapeErr *mcpwire.ErrToolResultShape
+	var toolErr *mcpwire.ErrToolFailed
+	if errors.As(err, &shapeErr) || errors.As(err, &toolErr) {
+		return status.Error(codes.Internal, err.Error())
 	}
 
 	// Default to unavailable for connection issues

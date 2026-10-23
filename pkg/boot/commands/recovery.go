@@ -39,20 +39,18 @@ var (
 // RecoveryCmd provides the recovery command for platform-initrd
 var RecoveryCmd = &cobra.Command{
 	Use:   "recovery",
-	Short: "Recovery mode - Unlock with fallback and reseal keys",
+	Short: "Recovery mode - Unlock with fallback methods",
 	Long: `Recovery mode provides disaster recovery capabilities including:
   - Manual unlock with password or FIDO2
-  - PCR reseal after kernel updates
   - Key slot management and recovery
   - System integrity verification
   - Emergency key rotation
 
-This command is used when automatic unlock fails or after system changes.`,
+This command is used when automatic unlock fails or after system changes.
+It does not reseal the TPM-PCR key: the initrd cannot store a new seal, so
+unlock, boot, and reseal from the running system.`,
 	Example: `  # Enter recovery mode
   platform-initrd recovery --device /dev/sda2
-
-  # Recovery with automatic reseal
-  platform-initrd recovery --device /dev/sda2 --reseal-pcrs
 
   # Interactive recovery mode
   platform-initrd recovery --device /dev/sda2 --interactive`,
@@ -62,7 +60,7 @@ This command is used when automatic unlock fails or after system changes.`,
 }
 
 func init() {
-	RecoveryCmd.Flags().BoolVar(&recoveryResealPCRs, "reseal-pcrs", true, "Automatically reseal to current PCRs after unlock")
+	RecoveryCmd.Flags().BoolVar(&recoveryResealPCRs, "reseal-pcrs", true, "Recorded but not read; recovery does not reseal the TPM-PCR key")
 	RecoveryCmd.Flags().BoolVar(&recoveryFIDO2, "fido2", true, "Enable FIDO2 authenticator unlock")
 	RecoveryCmd.Flags().BoolVar(&recoveryInteractive, "interactive", false, "Interactive recovery menu")
 	RecoveryCmd.Flags().StringVarP(&recoveryDevice, "device", "d", "", "LUKS device path (e.g., /dev/sda2)")

@@ -319,7 +319,9 @@ func TestClient_SetBridgeFailMode(t *testing.T) {
 
 	t.Run("set invalid fail mode", func(t *testing.T) {
 		err := client.SetBridgeFailMode(ctx, "br-failmode", "invalid")
-		require.Error(t, err)
+		var invalid *ErrInvalidFailMode
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, "invalid", invalid.FailMode)
 		assert.Contains(t, err.Error(), "invalid fail mode")
 	})
 
@@ -724,8 +726,9 @@ func TestClient_CreateBridgeWithOptions(t *testing.T) {
 
 	t.Run("invalid fail mode", func(t *testing.T) {
 		_, err := client.CreateBridgeWithOptions(ctx, "br-badfm", &BridgeOptions{FailMode: "bogus"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid fail mode")
+		var invalid *ErrInvalidFailMode
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, "bogus", invalid.FailMode)
 	})
 
 	t.Run("invalid protocol", func(t *testing.T) {

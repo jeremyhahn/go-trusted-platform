@@ -20,6 +20,9 @@ import (
 
 	gojwt "github.com/golang-jwt/jwt/v5"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"google.golang.org/grpc/codes"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 )
 
@@ -250,6 +253,12 @@ func (v *grpcTokenValidator) verifyIAMToken(ctx context.Context, token string) (
 		return nil, ErrIAMTokenInvalid{Reason: string(reason)}
 	}
 	resp, err := v.validateWithQuicBaaS(ctx, token)
+	if errclass.Code(err) == codes.Unauthenticated {
+		// QuicBaaS answers a token it did not mint with an unauthorized
+		// error rather than Valid=false. That is a verdict on the token,
+		// not an outage, so it is reported as a rejection.
+		return nil, ErrIAMTokenInvalid{Reason: string(IAMTokenRejected)}
+	}
 	if err != nil {
 		return nil, err
 	}

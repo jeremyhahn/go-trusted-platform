@@ -38,6 +38,7 @@ type createOptions struct {
 	workDir     string
 	tpmAccess   bool
 	start       bool
+	attest      bool
 }
 
 // newCreateCommand creates the container create subcommand
@@ -100,6 +101,7 @@ Examples:
 	cmd.Flags().StringVarP(&opts.workDir, "workdir", "w", "", "working directory inside container")
 	cmd.Flags().BoolVar(&opts.tpmAccess, "tpm-access", false, "mount host TPM device into container")
 	cmd.Flags().BoolVar(&opts.start, "start", false, "start container immediately after creation")
+	cmd.Flags().BoolVar(&opts.attest, "attest", false, "measure the container into the TPM event log on create")
 
 	// Mark required flags
 	cli.MarkFlagsRequired(cmd, "name", "image")
@@ -167,18 +169,19 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 
 	// Build create params
 	params := &computesvc.CreateContainerParams{
-		Name:       opts.name,
-		Image:      opts.image,
-		Env:        envVars,
-		Labels:     labels,
-		Ports:      ports,
-		Volumes:    volumes,
-		Privileged: opts.privileged,
-		Network:    opts.networkMode,
-		Command:    opts.command,
-		WorkingDir: opts.workDir,
-		TpmAccess:  opts.tpmAccess,
-		Start:      opts.start,
+		Name:           opts.name,
+		Image:          opts.image,
+		Env:            envVars,
+		Labels:         labels,
+		Ports:          ports,
+		Volumes:        volumes,
+		Privileged:     opts.privileged,
+		Network:        opts.networkMode,
+		Command:        opts.command,
+		WorkingDir:     opts.workDir,
+		TpmAccess:      opts.tpmAccess,
+		AttestOnCreate: opts.attest,
+		Start:          opts.start,
 	}
 
 	// Set resource limits if specified
@@ -192,12 +195,32 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 	ctx := base.Context()
 	container, err := sdkClient.CreateContainerDomain(ctx, params)
 	if err != nil {
-		return ErrContainerOperationFailed{Operation: "create", ID: opts.name, Err: err}
+		return createFailed(opts.name, container, err)
 	}
 
-	printer := base.Printer()
+	return printCreatedContainer(base.Printer(), flags.OutputFormat, opts.name, container)
+}
 
-	switch flags.OutputFormat {
+// createFailed wraps a failed create. A create that failed after the
+// container was made, as when attest-on-create could not attest it, names the
+// container's ID so the caller can inspect or remove it; otherwise the error
+// names the requested container name.
+func createFailed(name string, container *computesvc.Container, err error) error {
+	id := name
+	if container != nil && container.ID != "" {
+		id = container.ID
+	}
+	return ErrContainerOperationFailed{Operation: "create", ID: id, Err: err}
+}
+
+// printCreatedContainer prints the container the daemon created. A create
+// answered without a container is refused, not printed.
+func printCreatedContainer(printer *cli.Printer, format cli.OutputFormat, name string, container *computesvc.Container) error {
+	if container == nil {
+		return ErrContainerMissingFromResponse{Operation: "create", ID: name}
+	}
+
+	switch format {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
 		return printer.Print(container)
 
@@ -208,7 +231,7 @@ func runCreate(flags *cli.CommonFlags, opts *createOptions) error {
 		return nil
 
 	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
+		return cli.ErrInvalidOutputFormat{Format: string(format)}
 	}
 }
 

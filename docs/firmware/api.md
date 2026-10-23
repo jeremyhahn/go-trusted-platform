@@ -101,6 +101,7 @@ certificate through `CAService.GetCertificate`.
 | No device profile matched | `ErrRemoteSignNotConfigured{"no device profile matched the request identity"}` |
 | EK certificate absent or mismatched | EK-binding error |
 | Secure Boot disabled / resign-mode not `remote` / no `db.key-uri` / selector other than `db` | `ErrRemoteSignNotConfigured{Reason}` |
+| KMS reports the DB key not found (typed SDK not-found, `sdkerrors.IsNotFound`) | `ErrRemoteSignNotConfigured{Reason}` (wrapped in `ErrSignFailed`) |
 | KMS refused the signature | `ErrSignFailed{Cause}` |
 | DB certificate unavailable | `ErrCertUnavailable{Cause}` |
 | Profile service missing | `ErrMissingProfileService` |

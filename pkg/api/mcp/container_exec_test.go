@@ -106,6 +106,34 @@ func TestContainerCreateExecution(t *testing.T) {
 		}
 	})
 
+	t.Run("attest_on_create reaches the service only when set", func(t *testing.T) {
+		for _, attest := range []bool{true, false} {
+			svc := newMockServiceProvider()
+			var got map[string]interface{}
+			svc.containerCreateFunc = func(ctx context.Context, name string, image string, config map[string]interface{}) (interface{}, error) {
+				got = config
+				return map[string]interface{}{"id": "container-123"}, nil
+			}
+			registry := NewToolRegistry(svc, log)
+
+			_, err := registry.ExecuteTool(ctx, "container_create", map[string]interface{}{
+				"name":             "test",
+				"image":            "alpine",
+				"attest_on_create": attest,
+			})
+			if err != nil {
+				t.Fatalf("attest_on_create=%v: unexpected error: %v", attest, err)
+			}
+			value, present := got["attest_on_create"]
+			if attest && value != true {
+				t.Errorf("attest_on_create=true: config carries %v, want true", value)
+			}
+			if !attest && present {
+				t.Errorf("attest_on_create=false: config carries %v, want it absent", value)
+			}
+		}
+	})
+
 	t.Run("container list with filters", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		svc.containerListFunc = func(ctx context.Context, all bool, filters map[string][]string, limit int) ([]interface{}, error) {

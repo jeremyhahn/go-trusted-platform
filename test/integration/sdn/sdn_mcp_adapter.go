@@ -26,6 +26,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -141,7 +142,8 @@ func (m *SDNMCPAdapter) callTool(ctx context.Context, toolName string, params ma
 		return nil, fmt.Errorf("MCP error (%d): %s", mcpResp.Error.Code, mcpResp.Error.Message)
 	}
 
-	return mcpResp.Result, nil
+	// The tool output is JSON in the CallToolResult's text block.
+	return mcpwire.ToolOutputJSON(mcpResp.Result)
 }
 
 // =============================================================================

@@ -57,11 +57,17 @@ of type `RECORD_TYPE_TLSA`.
 | `AddRecord` | `zone_name`, `record` | `status`, `zone` |
 | `DeleteRecord` | `zone_name`, `type`, `name` | `status`, `zone` |
 | `UpdateRecord` | `zone_name`, `old_record`, `new_record` | `status`, `zone` |
-| `ListRecords` | `zone_name`, `type` | `records` |
+| `ListRecords` | `zone_name`, `type`, `pagination` | `records`, `pagination` |
 | `SignZone` | `zone_name` | `status`, `zone` |
 | `GetDNSSECStatus` | `zone_name` | `status` (`enabled`, `zone_signed`, `keys`, `ds_records`, `algorithm`, `key_size`) |
 | `Resolve` | `fqdn`, `type` | `records`, `authoritative` |
 | `Register` | `fqdn`, `ip` | `status`, `zone` |
+
+`ListZones` and `ListRecords` page the same way: `pagination.page_size` 0
+answers every item as one page, `pagination.page` 0 is page 1, a page past the
+end answers none, and the response `pagination` always carries `total_items`
+and `total_pages`. Unix, QUIC and the MCP list tools share this servicer, so
+they page identically.
 
 ## Records
 

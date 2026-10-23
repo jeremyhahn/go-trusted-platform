@@ -687,31 +687,38 @@ func TestMCPServiceProviderSecretVersions(t *testing.T) {
 		assert.ErrorAs(t, err, &opErr)
 	})
 
-	t.Run("RollbackDelegates", func(t *testing.T) {
-		var got *service.RollbackSecretRequest
-		mock := &lifecycleSecretsServiceMock{
-			rollbackSecretFunc: func(ctx context.Context, req *service.RollbackSecretRequest) (*service.RollbackSecretResponse, error) {
-				got = req
-				return &service.RollbackSecretResponse{}, nil
-			},
-		}
-		provider := newLifecycleProvider(nil, mock)
-
-		_, err := provider.SecretRollback(ctx, "db/password", 1)
+	// secret_rollback answers what the gRPC SecretsManagement adapter answers:
+	// the version the rollback wrote, not the target version plus one.
+	t.Run("RollbackAnswersTheVersionItWrote", func(t *testing.T) {
+		store := newParityStore()
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		provider.SetSecretsServer(NewSecretsServerAdapter(&paritySecretsClient{store: store}, slog.Default()))
+		_, rotated, err := store.rotateSecret(paritySecretID, []byte("rotated"))
 		require.NoError(t, err)
-		require.NotNil(t, got)
-		assert.Equal(t, uint64(1), got.TargetVersion)
+
+		result, err := provider.SecretRollback(ctx, paritySecretID, paritySecretVersion)
+		require.NoError(t, err)
+		resp, ok := result.(*service.RollbackSecretResponse)
+		require.True(t, ok, "secret_rollback answers %T", result)
+		assert.Equal(t, paritySecretID, resp.SecretID)
+		assert.Equal(t, rotated+1, resp.NewVersion, "a rollback writes a new version")
 	})
 
 	t.Run("RollbackErrors", func(t *testing.T) {
 		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		var unavailable ErrServiceNotAvailable
+		_, err := provider.SecretRollback(ctx, "db/password", 1)
+		assert.ErrorAs(t, err, &unavailable, "the quicbaas secrets service alone does not serve a rollback")
+
+		provider.SetSecretsServer(NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default()))
 		var invalidErr ErrKMSInvalidParameter
-		_, err := provider.SecretRollback(ctx, "db/password", 0)
+		_, err = provider.SecretRollback(ctx, "db/password", 0)
 		assert.ErrorAs(t, err, &invalidErr)
 
 		_, err = provider.SecretRollback(ctx, "db/password", 1)
 		var opErr ErrSecretsOperationFailed
-		assert.ErrorAs(t, err, &opErr)
+		require.ErrorAs(t, err, &opErr)
+		assert.Equal(t, "RollbackSecret", opErr.Operation)
 	})
 
 	t.Run("UpdateStatusDelegates", func(t *testing.T) {

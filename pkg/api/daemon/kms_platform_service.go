@@ -14,8 +14,10 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -425,7 +427,7 @@ func (b *PlatformKMSBackend) ListKeys(
 		return nil, err
 	}
 
-	keys := resp.Keys
+	keys := sortKeyInfos(resp.Keys)
 	if len(req.Filter) > 0 {
 		keys, err = filterKeyInfos(keys, req.Filter)
 		if err != nil {
@@ -504,13 +506,9 @@ func (b *PlatformKMSBackend) RotateKey(
 		return nil, err
 	}
 
-	var oldVersion uint64
-	if resp.NewVersion > 0 {
-		oldVersion = uint64(resp.NewVersion) - 1
-	}
 	return &grpcapi.KMSRotateKeyResponse{
 		KeyID:      resp.KeyID,
-		OldVersion: oldVersion,
+		OldVersion: rotatedFromVersion(resp.NewVersion),
 		NewVersion: uint64(resp.NewVersion),
 		Timestamp:  unixNow(),
 	}, nil
@@ -1158,26 +1156,20 @@ func sdkAlgorithmToPlatformKMS(alg kms.KeyAlgorithm) int32 {
 // platformKMSUsagesToSDK converts platform.v1 KeyUsage values to SDK KeyUsage
 // values. Usages with no SDK equivalent return a typed error.
 func platformKMSUsagesToSDK(usages []int32) ([]kms.KeyUsage, error) {
-	result := make([]kms.KeyUsage, 0, len(usages))
-	for _, u := range usages {
-		switch platformv1.KeyUsage(u) {
-		case platformv1.KeyUsage_KEY_USAGE_ENCRYPT:
-			result = append(result, kms.KeyUsageEncrypt)
-		case platformv1.KeyUsage_KEY_USAGE_DECRYPT:
-			result = append(result, kms.KeyUsageDecrypt)
-		case platformv1.KeyUsage_KEY_USAGE_SIGN:
-			result = append(result, kms.KeyUsageSign)
-		case platformv1.KeyUsage_KEY_USAGE_VERIFY:
-			result = append(result, kms.KeyUsageVerify)
-		case platformv1.KeyUsage_KEY_USAGE_WRAP:
-			result = append(result, kms.KeyUsageWrap)
-		case platformv1.KeyUsage_KEY_USAGE_UNWRAP:
-			result = append(result, kms.KeyUsageUnwrap)
-		default:
-			return nil, ErrKMSUnsupportedValue{Kind: "key usage", Value: u}
-		}
-	}
-	return result, nil
+	return convertKeyUsages(usages, platformKMSUsageToSDK)
+}
+
+// platformKMSUsageToSDK maps each platform wire usage to the SDK usages it
+// grants. HMAC maps to sign and verify, as pbKeyUsageToSDK maps the MAC
+// usages; DERIVE and UNSPECIFIED are absent and therefore refused.
+var platformKMSUsageToSDK = map[platformv1.KeyUsage][]kms.KeyUsage{
+	platformv1.KeyUsage_KEY_USAGE_ENCRYPT: {kms.KeyUsageEncrypt},
+	platformv1.KeyUsage_KEY_USAGE_DECRYPT: {kms.KeyUsageDecrypt},
+	platformv1.KeyUsage_KEY_USAGE_SIGN:    {kms.KeyUsageSign},
+	platformv1.KeyUsage_KEY_USAGE_VERIFY:  {kms.KeyUsageVerify},
+	platformv1.KeyUsage_KEY_USAGE_WRAP:    {kms.KeyUsageWrap},
+	platformv1.KeyUsage_KEY_USAGE_UNWRAP:  {kms.KeyUsageUnwrap},
+	platformv1.KeyUsage_KEY_USAGE_HMAC:    {kms.KeyUsageSign, kms.KeyUsageVerify},
 }
 
 // sdkUsagesToPlatformKMS converts SDK KeyUsage values to platform.v1 KeyUsage
@@ -1332,6 +1324,16 @@ func unixOrZero(t time.Time) int64 {
 // paginateKMSOffset applies offset-cursor pagination over total items. The
 // cursor is a decimal offset produced by a previous call; an empty cursor
 // starts at offset 0. A limit <= 0 returns all remaining items.
+// rotatedFromVersion returns the version a rotation replaced. The SDK
+// RotateKeyResponse carries only the new version, and a rotation always adds
+// exactly one version, so the replaced one is the version before it.
+func rotatedFromVersion(newVersion int) uint64 {
+	if newVersion <= 0 {
+		return 0
+	}
+	return uint64(newVersion) - 1
+}
+
 func paginateKMSOffset(total int, limit int32, cursor string) (start, end int, nextCursor string, hasMore bool, err error) {
 	if cursor != "" {
 		offset, parseErr := strconv.Atoi(cursor)
@@ -1375,4 +1377,19 @@ func filterKeyInfos(keys []kms.KeyInfo, filter map[string]string) ([]kms.KeyInfo
 		result = append(result, k)
 	}
 	return result, nil
+}
+
+// sortKeyInfos returns a copy of keys in a deterministic order: by KeyID,
+// then by Version. The SDK key listing aggregates backends and map-backed
+// metadata in no fixed order, so offset pagination over it is only stable
+// once every request sorts the same way.
+func sortKeyInfos(keys []kms.KeyInfo) []kms.KeyInfo {
+	sorted := slices.Clone(keys)
+	slices.SortFunc(sorted, func(a, b kms.KeyInfo) int {
+		if c := cmp.Compare(a.KeyID, b.KeyID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Version, b.Version)
+	})
+	return sorted
 }

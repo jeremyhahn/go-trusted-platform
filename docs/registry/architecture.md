@@ -46,7 +46,7 @@ storage backend never holds plaintext.
 | Platform REST surface `/api/v1/compute/images` | `pkg/webservice/v1/rest/registry/` | this repo |
 | gRPC `RegistryService` | `pkg/api/grpc/proto/registry.proto`, `pkg/registry/grpc_adapter.go` | this repo |
 | MCP tools | `pkg/api/mcp/registry_tools.go` | this repo |
-| **Key management (DEK wrap/unwrap)** | consumed through the quicbaas SDK | **not this repo** |
+| **Key management (DEK wrap/unwrap, manifest signing)** | consumed through the quicbaas SDK | **not this repo** |
 | **Blob storage** | consumed through the quicbaas SDK | **not this repo** |
 | **Attestation verification primitives** | `pkg/attestation/` — see [`docs/attestation/`](../attestation/) | this repo |
 
@@ -57,6 +57,31 @@ Everything below the platform — keys, blobs, identity — is reached through
 `LocalKMSClient` and `FileStorageClient` exist for development and tests only;
 the storage config's own doc comment names the stack's object-storage service as
 the sole supported production backend.
+
+### Decision: manifests are signed with the SDK KMS key the push names
+
+A push with `sign` set is signed by the registry, after encryption and before
+anything is stored (see [engineering.md](engineering.md)). The registry signs
+through `SigningKMSClient` (`pkg/registry/manifest_signer.go`),
+`Sign(ctx, keyID, digest)`, and the daemon wires `SDKSigner`
+(`pkg/registry/sdk_signer.go`) on the quicbaas SDK: it looks the key up with
+`Security().KMS().GetKey` and signs the digest with `Security().Crypto().Sign`
+(pre-hashed SHA-256). The key a push names is that SDK KMS key, so its
+policies and lifecycle apply and the private key never leaves the KMS.
+
+The signer never creates a key. A key the KMS does not hold is refused with
+`ErrSigningKeyUnavailable`, and a key that is not ECDSA P-256 or P-384 with
+`ErrSigningKeyUnsupported`. A push that names no key uses `registry-default`,
+which the platform does not create either: until an operator creates it, for
+example `platformctl kms key generate registry-default --algorithm ECDSA-P256
+--purpose sign`, such a push is refused. A daemon with no SDK client wires no
+signer, and a signed push is refused with `ErrSigningNotConfigured`.
+
+Rejected: signing with local keys (`<PlatformDir>/registry/keys/*.sign.pem`,
+created on first use). A push naming a managed KMS key would have been signed
+with unrelated material outside that key's policies, and the platform would
+have kept a parallel key store, the duplication the SDK Consumption Invariant
+forbids. `LocalKMSClient` keeps only the encryption half.
 
 ## Trust boundaries
 

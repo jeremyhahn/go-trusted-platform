@@ -74,6 +74,8 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"iam tenant create", quicwire.OpIAMCategory, quicwire.IAMSubTenantCreate, OpcodePermission{Resource: "iam", Action: "write"}},
 		{"iam tenant list", quicwire.OpIAMCategory, quicwire.IAMSubTenantList, OpcodePermission{Resource: "iam", Action: "read"}},
 		{"iam tenant delete", quicwire.OpIAMCategory, quicwire.IAMSubTenantDelete, OpcodePermission{Resource: "iam", Action: "delete"}},
+		{"iam group update", quicwire.OpIAMCategory, quicwire.IAMSubGroupUpdate, OpcodePermission{Resource: "iam", Action: "write"}},
+		{"iam role update", quicwire.OpIAMCategory, quicwire.IAMSubRoleUpdate, OpcodePermission{Resource: "iam", Action: "write"}},
 		{"invitation create", quicwire.OpIAMCategory, quicwire.InvitationSubCreate, OpcodePermission{Resource: "invitation", Action: "write"}},
 		{"invitation get", quicwire.OpIAMCategory, quicwire.InvitationSubGet, OpcodePermission{Resource: "invitation", Action: "read"}},
 		{"invitation list", quicwire.OpIAMCategory, quicwire.InvitationSubList, OpcodePermission{Resource: "invitation", Action: "read"}},
@@ -136,6 +138,9 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"dek status", quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetDEKStatus, OpcodePermission{Resource: "kms", Action: "read"}},
 		{"dek rotate", quicwire.OpKMSExtendedCategory, quicwire.KMSSubRotateDEK, OpcodePermission{Resource: "kms", Action: "write"}},
 		{"dek delete", quicwire.OpKMSExtendedCategory, quicwire.KMSSubDeleteDEK, OpcodePermission{Resource: "kms", Action: "delete"}},
+		{"dek set-default", quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetDefaultDEK, OpcodePermission{Resource: "kms", Action: "write"}},
+		{"dek set-safety", quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetDEKSafety, OpcodePermission{Resource: "kms", Action: "write"}},
+		{"dek clear-safety", quicwire.OpKMSExtendedCategory, quicwire.KMSSubClearDEKSafety, OpcodePermission{Resource: "kms", Action: "write"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

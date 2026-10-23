@@ -120,7 +120,43 @@ Examples:
 
 // runRenew executes the renew command
 func runRenew(flags *cli.CommonFlags, rf *renewFlags) error {
-	// Daemon connection required for ACME operations
-	// Dual-mode support will be added later
-	return ErrDaemonConnectionRequired{Command: "renew"}
+	if err := rf.validate(); err != nil {
+		return err
+	}
+	return ErrACMEDaemonCallMissing{Command: "renew", Section: "§7.4 order and finalize"}
+}
+
+// authorizationTypes are the identifier types --authz accepts.
+var authorizationTypes = map[string]struct{}{
+	"dns":                  {},
+	"ip":                   {},
+	"permanent-identifier": {},
+}
+
+// challengeTypes are the challenge types --challenge accepts.
+var challengeTypes = map[string]struct{}{
+	"http-01":          {},
+	"dns-01":           {},
+	"endorse-01":       {},
+	"device-01":        {},
+	"device-attest-01": {},
+}
+
+// validate checks the order a renew would place: a known authorization and
+// challenge type, an IP SAN for IP authorization, and at least one
+// identifier (a CN or a SAN).
+func (rf *renewFlags) validate() error {
+	if _, ok := authorizationTypes[rf.authzType]; !ok {
+		return ErrInvalidAuthorizationType{Type: rf.authzType}
+	}
+	if _, ok := challengeTypes[rf.challengeType]; !ok {
+		return ErrInvalidChallengeType{Type: rf.challengeType}
+	}
+	if rf.authzType == "ip" && len(rf.sansIPs) == 0 {
+		return ErrIPAuthorizationRequiresIP{}
+	}
+	if rf.cn == "" && len(rf.sansDNS) == 0 && len(rf.sansIPs) == 0 {
+		return ErrMissingAuthorizationValue{}
+	}
+	return nil
 }

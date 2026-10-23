@@ -64,17 +64,6 @@ func (e ErrQUICStatus) Error() string {
 	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
 }
 
-// QUICNotSupportedError represents an operation with no QUIC opcode. Role and
-// group update have no PlatformIAMService QUIC opcode (the QUIC surface exposes
-// user update only); the multi-protocol harness treats this as a skip.
-type QUICNotSupportedError struct {
-	Operation string
-}
-
-func (e *QUICNotSupportedError) Error() string {
-	return fmt.Sprintf("QUIC protocol does not support operation: %s", e.Operation)
-}
-
 // QUICAdapter implements IAMCommands using the platform binary QUIC protocol.
 type QUICAdapter struct {
 	endpoint   string
@@ -120,19 +109,34 @@ func (a *QUICAdapter) Name() string { return "QUIC" }
 // doRequest performs one binary QUIC request/response round trip. body is a
 // platform.v1 request message (or nil).
 func (a *QUICAdapter) doRequest(ctx context.Context, opcode byte, body interface{}) ([]byte, error) {
-	stream, err := a.conn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, &QUICAdapterError{Operation: quicwire.OpcodeToString(opcode), Message: "failed to open stream: " + err.Error()}
-	}
-	defer stream.Close()
-
 	var encoded []byte
 	if body != nil {
+		var err error
 		encoded, err = quicwire.EncodePayload(body)
 		if err != nil {
 			return nil, &QUICAdapterError{Operation: quicwire.OpcodeToString(opcode), Message: "failed to encode payload: " + err.Error()}
 		}
 	}
+	return a.send(ctx, opcode, encoded)
+}
+
+// doCategoryRequest sends body under a category opcode: the sub-opcode is
+// payload[0] and the encoded body follows it.
+func (a *QUICAdapter) doCategoryRequest(ctx context.Context, opcode, sub byte, body interface{}) ([]byte, error) {
+	encoded, err := quicwire.EncodePayload(body)
+	if err != nil {
+		return nil, &QUICAdapterError{Operation: quicwire.OpcodeToString(opcode), Message: "failed to encode payload: " + err.Error()}
+	}
+	return a.send(ctx, opcode, append([]byte{sub}, encoded...))
+}
+
+// send writes one request on a new stream and returns the OK response payload.
+func (a *QUICAdapter) send(ctx context.Context, opcode byte, encoded []byte) ([]byte, error) {
+	stream, err := a.conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, &QUICAdapterError{Operation: quicwire.OpcodeToString(opcode), Message: "failed to open stream: " + err.Error()}
+	}
+	defer stream.Close()
 
 	req := &quicwire.Request{Opcode: opcode, Token: a.token, Payload: encoded}
 	if err := quicwire.WriteRequest(stream, req); err != nil {
@@ -338,9 +342,23 @@ func (a *QUICAdapter) GetRole(ctx context.Context, opts GetRoleOptions) (*GetRol
 	return &GetRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
-// UpdateRole has no QUIC opcode on the PlatformIAMService surface.
+// UpdateRole updates a role on the IAM category's role-update sub-opcode.
 func (a *QUICAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*UpdateRoleResult, error) {
-	return nil, &QUICNotSupportedError{Operation: "UpdateRole"}
+	payload, err := a.doCategoryRequest(ctx, quicwire.OpIAMCategory, quicwire.IAMSubRoleUpdate, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    opts.TenantID,
+		RoleId:      opts.RoleID,
+		Name:        opts.Name,
+		Description: opts.Description,
+		Permissions: opts.Permissions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMRoleResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "UpdateRole", Message: "failed to decode response: " + err.Error()}
+	}
+	return &UpdateRoleResult{Role: pbRoleToRole(resp.GetRole())}, nil
 }
 
 // DeleteRole removes a role.
@@ -419,9 +437,23 @@ func (a *QUICAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetG
 	return &GetGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
-// UpdateGroup has no QUIC opcode on the PlatformIAMService surface.
+// UpdateGroup rides the IAM category opcode (0x51) as sub-opcode
+// IAMSubGroupUpdate: the group opcode bytes have no room for an update.
 func (a *QUICAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error) {
-	return nil, &QUICNotSupportedError{Operation: "UpdateGroup"}
+	payload, err := a.doCategoryRequest(ctx, quicwire.OpIAMCategory, quicwire.IAMSubGroupUpdate, &platformv1.UpdateIAMGroupRequest{
+		TenantId:    opts.TenantID,
+		GroupId:     opts.GroupID,
+		Name:        opts.Name,
+		Description: opts.Description,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMGroupResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "UpdateGroup", Message: "failed to decode response: " + err.Error()}
+	}
+	return &UpdateGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
 }
 
 // DeleteGroup removes a group.

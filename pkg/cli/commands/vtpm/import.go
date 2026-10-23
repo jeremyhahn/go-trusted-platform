@@ -66,7 +66,7 @@ func runImport(flags *cli.CommonFlags, archivePath string) error {
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 

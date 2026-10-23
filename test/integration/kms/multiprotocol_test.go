@@ -363,6 +363,9 @@ func testKeyStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 
 	t.Run("DisableKey", func(t *testing.T) {
 		result, err := cmd.KeyStatus(testCtx, keyID, 0, false)
+		if requireKeyStatusSDKGap(t, cmd.Name(), err) {
+			return
+		}
 		require.NoError(t, err, "KeyStatus (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -370,10 +373,35 @@ func testKeyStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 
 	t.Run("EnableKey", func(t *testing.T) {
 		result, err := cmd.KeyStatus(testCtx, keyID, 0, true)
+		if requireKeyStatusSDKGap(t, cmd.Name(), err) {
+			return
+		}
 		require.NoError(t, err, "KeyStatus (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
 	})
+}
+
+// keyStatusSDKGapAdapters are the adapters whose key status update reaches
+// kms.Client.UpdateKeyStatus through the daemon's KMS adapter, which the
+// pinned SDK's embedded transport refuses (helpers.KMSKeyStatusSDKGap).
+var keyStatusSDKGapAdapters = map[string]bool{
+	"gRPC": true,
+	"QUIC": true,
+	"Unix": true,
+}
+
+// requireKeyStatusSDKGap asserts the typed SDK-gap refusal for the adapters in
+// keyStatusSDKGapAdapters and reports whether it did; other adapters return
+// false and keep their own assertions.
+func requireKeyStatusSDKGap(t *testing.T, adapter string, err error) bool {
+	t.Helper()
+	if !keyStatusSDKGapAdapters[adapter] {
+		return false
+	}
+	require.ErrorIs(t, helpers.CLIUpstreamGap("kms key status", helpers.KMSKeyStatusSDKGap, err),
+		helpers.ErrCLIUpstreamGap{}, "%s key status must answer the SDK refusal", adapter)
+	return true
 }
 
 func testKeyAlgorithms(t *testing.T, ctx context.Context, cmd KMSCommands, prefix string) {
@@ -844,6 +872,21 @@ func testRandom(t *testing.T, ctx context.Context, cmd KMSCommands, prefix strin
 // DEK Management Tests
 // =============================================================================
 
+// withoutCLIDEKDescription returns opts unchanged on every transport but the
+// CLI. kms dek create has no --description flag (docs/kms/cli.md §7), so on
+// the CLI it asserts the typed refusal and returns opts without the
+// description, for the leaf to create the DEK with.
+func withoutCLIDEKDescription(t *testing.T, ctx context.Context, cmd KMSCommands, opts DEKCreateOptions) DEKCreateOptions {
+	t.Helper()
+	if _, isCLI := cmd.(*CLIAdapter); !isCLI {
+		return opts
+	}
+	_, err := cmd.DEKCreate(ctx, opts)
+	require.ErrorIs(t, err, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--description"})
+	opts.Description = ""
+	return opts
+}
+
 func testDEKCreate(t *testing.T, ctx context.Context, cmd KMSCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -855,6 +898,7 @@ func testDEKCreate(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 			Algorithm:   "AES-256-GCM",
 			Description: "Multi-protocol test DEK",
 		}
+		opts = withoutCLIDEKDescription(t, testCtx, cmd, opts)
 
 		result, err := cmd.DEKCreate(testCtx, opts)
 		require.NoError(t, err, "DEKCreate should succeed")
@@ -901,6 +945,7 @@ func testDEKGet(t *testing.T, ctx context.Context, cmd KMSCommands, prefix strin
 		Algorithm:   "AES-256-GCM",
 		Description: "DEK for get test",
 	}
+	createOpts = withoutCLIDEKDescription(t, testCtx, cmd, createOpts)
 	_, err := cmd.DEKCreate(testCtx, createOpts)
 	require.NoError(t, err, "Setup: DEKCreate should succeed")
 
@@ -909,7 +954,7 @@ func testDEKGet(t *testing.T, ctx context.Context, cmd KMSCommands, prefix strin
 		require.NoError(t, err, "DEKGet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, path, result.Path, "Path should match")
-		assert.Equal(t, "DEK for get test", result.Description, "Description should match")
+		assert.Equal(t, createOpts.Description, result.Description, "Description should match")
 	})
 
 	t.Run("GetNonexistentDEKFails", func(t *testing.T) {
@@ -1030,6 +1075,7 @@ func testDEKStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 		MaxBytes:       500000,
 		WarningPercent: 75,
 	}
+	createOpts = withoutCLIDEKDescription(t, testCtx, cmd, createOpts)
 	_, err := cmd.DEKCreate(testCtx, createOpts)
 	require.NoError(t, err, "Setup: DEKCreate should succeed")
 
@@ -1038,7 +1084,7 @@ func testDEKStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 		require.NoError(t, err, "DEKStatus should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, path, result.Path, "Path should match")
-		assert.Equal(t, "DEK for status test", result.Description, "Description should match")
+		assert.Equal(t, createOpts.Description, result.Description, "Description should match")
 		assert.Equal(t, uint64(5000), result.MaxUsageCount, "MaxUsageCount should match")
 		assert.Equal(t, uint64(500000), result.MaxBytesUsed, "MaxBytesUsed should match")
 		assert.Equal(t, int32(75), result.WarningPercent, "WarningPercent should match")
@@ -1159,6 +1205,10 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	require.NoError(t, err, "Setup: SecretsStore should succeed")
 	originalVersion := storeResult.Version
 
+	// wantData is what SecretsGet must answer after the rotate: the new data,
+	// or the original data when the CLI's rotate is the declared SDK refusal.
+	wantData := []byte("new-rotated-secret-data")
+
 	t.Run("RotateSecret", func(t *testing.T) {
 		newData := []byte("new-rotated-secret-data")
 		rotateOpts := SecretsRotateOptions{
@@ -1167,6 +1217,10 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 		}
 
 		result, err := cmd.SecretsRotate(testCtx, rotateOpts)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			wantData = originalData
+			return
+		}
 		require.NoError(t, err, "SecretsRotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
@@ -1176,7 +1230,19 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	t.Run("VerifyRotatedSecret", func(t *testing.T) {
 		result, err := cmd.SecretsGet(testCtx, secretName)
 		require.NoError(t, err, "SecretsGet should succeed")
-		assert.True(t, bytes.Equal([]byte("new-rotated-secret-data"), result.Data), "Secret data should be rotated")
+		assert.True(t, bytes.Equal(wantData, result.Data), "Secret data should be rotated, or unchanged after a refused rotate")
+	})
+
+	t.Run("RotateNonexistentSecretFails", func(t *testing.T) {
+		rotateOpts := SecretsRotateOptions{
+			Name:    prefix + "-nonexistent-rotate",
+			NewData: []byte("data"),
+		}
+		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
+		require.Error(t, err, "SecretsRotate should fail for nonexistent secret")
 	})
 }
 
@@ -1200,11 +1266,16 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		require.NoError(t, err, "Setup: SecretsRotate should succeed")
+		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			require.NoError(t, err, "Setup: SecretsRotate should succeed")
+		}
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.SecretsVersions(testCtx, secretName, SecretsVersionsOptions{Limit: 10})
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsVersions should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Versions), 3, "Should have at least 3 versions")
@@ -1212,6 +1283,9 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 
 	t.Run("GetSpecificSecretVersion", func(t *testing.T) {
 		result, err := cmd.SecretsVersion(testCtx, secretName, 1)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsVersion should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(1), result.Version, "Version should be 1")
@@ -1239,10 +1313,15 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 		NewData: []byte("rotated-data"),
 	}
 	_, err = cmd.SecretsRotate(testCtx, rotateOpts)
-	require.NoError(t, err, "Setup: SecretsRotate should succeed")
+	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		require.NoError(t, err, "Setup: SecretsRotate should succeed")
+	}
 
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.SecretsRollback(testCtx, secretName, 1)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsRollback should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Greater(t, result.NewVersion, uint64(2), "NewVersion should be > 2 (creates new version)")
@@ -1302,6 +1381,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, false)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -1310,6 +1392,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, true)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
@@ -1317,6 +1402,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("StatusNonexistentSecretFails", func(t *testing.T) {
 		_, err := cmd.SecretsStatus(testCtx, prefix+"-nonexistent-status", true)
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
 		require.Error(t, err, "SecretsStatus should fail for nonexistent secret")
 	})
 }

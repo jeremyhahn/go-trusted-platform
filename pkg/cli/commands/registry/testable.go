@@ -217,7 +217,7 @@ func printListResponse(printer Printer, format cli.OutputFormat, resp *ListResul
 				formatBytes(img.Size),
 				formatBool(img.Encrypted),
 				formatBool(img.Signed),
-				formatTimestamp(img.PushedAt),
+				formatTimestamp(int64(img.PushedAt)),
 			)
 		}
 
@@ -338,8 +338,8 @@ func printInspectTableTestable(printer Printer, manifest *ImageManifest, showLay
 	printer.PrintKeyValue("Digest", manifest.Digest)
 	printer.PrintKeyValue("Media Type", manifest.MediaType)
 	printer.PrintKeyValue("Schema Version", fmt.Sprintf("%d", manifest.SchemaVer))
-	printer.PrintKeyValue("Created At", formatTimestamp(manifest.CreatedAt))
-	printer.PrintKeyValue("Pushed At", formatTimestamp(manifest.PushedAt))
+	printer.PrintKeyValue("Created At", formatTimestamp(int64(manifest.CreatedAt)))
+	printer.PrintKeyValue("Pushed At", formatTimestamp(int64(manifest.PushedAt)))
 	if manifest.PushedBy != "" {
 		printer.PrintKeyValue("Pushed By", manifest.PushedBy)
 	}

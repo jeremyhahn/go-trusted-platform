@@ -1358,6 +1358,26 @@ func TestHandleCheckQuota_Exceeded(t *testing.T) {
 	}
 }
 
+func TestHandleCheckQuota_TenantNotFound(t *testing.T) {
+	mgr := newMockTenantManager()
+	mgr.checkQuotaErr = tenant.ErrTenantNotFound{ID: "missing"}
+
+	h := newTestTenantHandlersWithMock(mgr)
+	router := mux.NewRouter()
+	h.RegisterRoutes(router)
+
+	req := CheckQuotaRequest{
+		Resource: "vms",
+		Amount:   1,
+	}
+
+	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/missing/check-quota", req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, rr.Code)
+	}
+}
+
 func TestHandleCheckQuota_MissingResource(t *testing.T) {
 	mgr := newMockTenantManager()
 	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))

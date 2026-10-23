@@ -145,7 +145,8 @@ long forms in scripts.**
 ### 2.4 The config file
 
 `platformctl` writes this file through `context add`, `context use` and
-`context delete`, with mode `0600`. Keys are snake_case.
+`context delete`, with mode `0600`, back to the path it was read from
+(`--config` or the default). Keys are snake_case.
 
 ```yaml
 current_context: prod
@@ -290,6 +291,11 @@ started or stopped at runtime: <reason>`, changes nothing, and the command
 exits 1. `--force` does not override the refusal. Restart `platformd` instead
 ([api.md](api.md) §2).
 
+With `-o json` (or `yaml`), `service list` prints a bare array, one object per
+service, with keys `name`, `type`, `status`, `health`, `uptime_seconds` and
+`version`. There is no wrapping object. `service status` prints that one
+object bare, with the same keys.
+
 - **Exit:** 0; 1 on a wrong argument count, an unknown type, an unreachable
   daemon or a failed operation.
 
@@ -313,6 +319,10 @@ file is managed with `context`, §4.6.)
 `Changes not persisted`. A pair without `=` fails with
 `invalid key=value pair: <arg>`; the daemon must be reachable before the pairs
 are applied.
+
+With `-o json` (or `yaml`), `config get` prints a bare array of sections, each
+`{"section": "<name>", "values": {"<key>": "<value>", ...}}`. With a section
+argument the array holds that one section. There is no wrapping object.
 
 - **Exit:** 0; 1 on a bad argument or an unreachable daemon.
 
@@ -352,9 +362,11 @@ Errors: `--server is required for remote contexts`;
 `invalid context type "<t>" (must be 'local', 'remote', or 'embedded')`; an
 unknown `--protocol`.
 
-**Known defects.** The writing verbs (`add`, `use`, `delete`) always save to
-`~/.platformctl/config.yaml` and ignore `--config`. `list` and `current` always
-print a table and ignore `-o`.
+The writing verbs (`add`, `use`, `delete`) save to the file they read: the
+`--config` / `PLATFORMCTL_CONFIG` path when given, else the default (§2.4). A
+`--config` path that does not exist yet is created.
+
+**Known defect.** `list` and `current` always print a table and ignore `-o`.
 
 - **Exit:** 0; 1 on any error above.
 

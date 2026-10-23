@@ -93,6 +93,17 @@ func (e ErrContainerClientNotInitialized) Error() string {
 	return "container client not initialized"
 }
 
+// ErrContainerMissingFromResponse is returned when the daemon answers an
+// operation without the container it acted on
+type ErrContainerMissingFromResponse struct {
+	Operation string
+	ID        string
+}
+
+func (e ErrContainerMissingFromResponse) Error() string {
+	return fmt.Sprintf("container %s %s: the daemon answered no container", e.Operation, e.ID)
+}
+
 // ErrContainerAlreadyRunning is returned when attempting to start an already running container
 type ErrContainerAlreadyRunning struct {
 	ID string

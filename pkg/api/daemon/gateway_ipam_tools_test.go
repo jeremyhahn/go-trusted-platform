@@ -151,7 +151,23 @@ func TestGatewayIPAMTools_AllocateReleaseAllocations(t *testing.T) {
 		require.Len(t, allocs, 1)
 		assert.Equal(t, alloc.IP, allocs[0].(*ipam.Allocation).IP)
 
+		everyPool, err := tools.GatewayIPAMAllocations(ctx, "")
+		require.NoError(t, err, "an empty pool id lists every pool")
+		require.Len(t, everyPool, 1)
+		assert.Equal(t, alloc.IP, everyPool[0].(*ipam.Allocation).IP)
+
 		require.NoError(t, tools.GatewayIPAMRelease(ctx, alloc.IP.String()))
+
+		allocs, err = tools.GatewayIPAMAllocations(ctx, pool.ID)
+		require.NoError(t, err)
+		assert.Empty(t, allocs, "a released address is no longer listed")
+	})
+
+	t.Run("refuses to list an unknown pool", func(t *testing.T) {
+		tools, _ := newIPAMToolsWithPool(t)
+
+		_, err := tools.GatewayIPAMAllocations(ctx, "no-such-pool")
+		assert.ErrorIs(t, err, ipam.ErrPoolNotFound)
 	})
 
 	t.Run("refuses an unknown pool and a malformed address", func(t *testing.T) {

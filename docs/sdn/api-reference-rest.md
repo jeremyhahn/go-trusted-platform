@@ -46,7 +46,10 @@ DELETE /api/v1/sdn/bridges/{id}     # Delete bridge
 ```
 
 Create body: `name` (required), optional `datapath_type`, `fail_mode`,
-`protocols`, `stp`, `options` and `labels`. List takes no query parameters
+`protocols`, `stp`, `options` and `labels`. The bridge is created with its
+`fail_mode` and `protocols` in one Open vSwitch transaction, so a `secure`
+bridge never runs as a standalone learning switch; an invalid `fail_mode` or
+`protocols` entry is `400` and creates nothing. List takes no query parameters
 and answers `{bridges, count, timestamp}`.
 
 ## Port Endpoints
@@ -60,9 +63,17 @@ PUT    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Set port state
 GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 ```
 
+Add takes `name` (required) and an optional `type`, the Open vSwitch interface
+type (`internal`, `vxlan`, `patch`, ...) written in the same transaction that
+creates the port. An empty `type` attaches the existing kernel device of the
+port's name; a type Open vSwitch does not implement is `400` and adds nothing.
+
 The state and stats routes read the port's Open vSwitch interface row. State
 answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
-`link_state`, `speed` and `duplex`. Stats answers the interface counters:
+`link_state`, `speed` and `duplex`. A state Open vSwitch has not recorded (it
+writes `admin_state` and `link_state` only once it has opened the port's
+network device) is `unknown`, the word the webservice router uses for the same
+case. Stats answers the interface counters:
 `rx_`/`tx_` `packets`, `bytes`, `dropped` and `errors`, plus `rx_frame_err`,
 `rx_over_err`, `rx_crc_err` and `collisions`.
 

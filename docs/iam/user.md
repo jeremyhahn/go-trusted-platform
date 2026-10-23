@@ -179,8 +179,9 @@ reconcile, which mirrors the missing user; if it does not, its
 **Registration fails with "failed to mirror user ... into IAM tenant".**
 The IAM tenant refused the new owner, and the registration was rolled back. The
 daemon log line `failed to mirror new owner into IAM tenant` carries the cause.
-An `iam.role: not_found` cause means the tenant is missing its default roles,
-which every new tenant is now given at creation.
+A `role not found` cause means the tenant holds no role of that name or ID.
+Every new tenant is given its default roles (`admin` among them) at creation,
+and role names are resolved to role IDs before the user is written.
 
 **A REST call operated on the wrong tenant.**
 The unscoped routes (`/api/v1/iam/users` and friends) get their tenant from

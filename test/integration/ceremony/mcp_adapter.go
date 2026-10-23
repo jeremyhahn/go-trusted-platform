@@ -28,6 +28,7 @@ import (
 	"time"
 
 	ceremonysdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -117,18 +118,6 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
-// mcpCallToolResult is the MCP tool-call result envelope.
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-// mcpContentItem is an MCP content item (text/resource/etc).
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
 // rpc sends a JSON-RPC request and decodes result into out.
 func (m *MCPAdapter) rpc(ctx context.Context, method string, params interface{}, out interface{}) error {
 	body := jsonRPCRequest{
@@ -180,33 +169,11 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 	if err := m.rpc(ctx, "tools/call", params, &raw); err != nil {
 		return err
 	}
-	if len(raw) == 0 {
-		return nil
-	}
-	var result mcpCallToolResult
-	if err := json.Unmarshal(raw, &result); err != nil || len(result.Content) == 0 {
-		// Some servers return the result map directly without the content wrapper.
-		if out != nil {
-			return json.Unmarshal(raw, out)
-		}
-		return nil
-	}
-	if result.IsError {
-		msg := ""
-		if len(result.Content) > 0 {
-			msg = result.Content[0].Text
-		}
-		return fmt.Errorf("MCP tool %s error: %s", name, msg)
-	}
 	if out == nil {
-		return nil
+		_, err := mcpwire.ToolOutputJSON(raw)
+		return err
 	}
-	for _, item := range result.Content {
-		if item.Type == "text" && item.Text != "" {
-			return json.Unmarshal([]byte(item.Text), out)
-		}
-	}
-	return nil
+	return mcpwire.DecodeToolOutput(raw, out)
 }
 
 // Init invokes platform_ceremony_init.
@@ -266,11 +233,11 @@ func (m *MCPAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cla
 		"nonce":     req.Nonce,
 		"signature": req.Signature,
 	}
-	resp := &ceremonysdk.ClaimCertCompleteResponse{}
-	if err := m.callTool(ctx, mcpToolClaimCertComplete, args, resp); err != nil {
+	var wire issuedCertWire
+	if err := m.callTool(ctx, mcpToolClaimCertComplete, args, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolClaimCertComplete, Err: err}
 	}
-	return resp, nil
+	return &ceremonysdk.ClaimCertCompleteResponse{Certificate: wire.CertificatePEM, Chain: wire.ChainPEM}, nil
 }
 
 // ClaimShareBegin invokes platform_ceremony_claim_share_begin.
@@ -315,11 +282,11 @@ func (m *MCPAdapter) SignCSR(ctx context.Context, req *ceremonysdk.SignCSRReques
 		"csr_pem":  req.CSRPEM,
 		"role":     string(req.Role),
 	}
-	resp := &ceremonysdk.SignCSRResponse{}
-	if err := m.callTool(ctx, mcpToolSignCSR, args, resp); err != nil {
+	var wire issuedCertWire
+	if err := m.callTool(ctx, mcpToolSignCSR, args, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolSignCSR, Err: err}
 	}
-	return resp, nil
+	return &ceremonysdk.SignCSRResponse{Certificate: wire.CertificatePEM, Chain: wire.ChainPEM}, nil
 }
 
 var _ CeremonyCommands = (*MCPAdapter)(nil)

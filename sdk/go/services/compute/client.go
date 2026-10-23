@@ -493,13 +493,27 @@ func (c *Client) ListVMsDomain(ctx context.Context, params *ListVMsParams) (*Lis
 // Container Domain-typed convenience methods
 
 // CreateContainerDomain creates a new container using domain parameters.
+//
+// A create the daemon answers with a failed status, as when attest-on-create
+// could not attest the container it created, returns the created container
+// together with ErrContainerCreateIncomplete: the container exists, and the
+// caller decides whether to keep it.
 func (c *Client) CreateContainerDomain(ctx context.Context, params *CreateContainerParams) (*Container, error) {
 	req := createContainerParamsToProto(params)
 	resp, err := c.grpc.CreateContainer(ctx, req)
 	if err != nil {
 		return nil, &ErrCreateContainerFailed{Cause: err}
 	}
-	return ContainerFromProto(resp.Container), nil
+
+	container := ContainerFromProto(resp.Container)
+	if status := resp.GetStatus(); status != nil && !status.GetSuccess() {
+		incomplete := &ErrContainerCreateIncomplete{Message: status.GetMessage()}
+		if container != nil {
+			incomplete.ID = container.ID
+		}
+		return container, incomplete
+	}
+	return container, nil
 }
 
 // GetContainerDomain retrieves a container by ID and returns a domain Container.

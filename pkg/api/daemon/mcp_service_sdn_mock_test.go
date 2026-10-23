@@ -239,7 +239,7 @@ func TestMCPServiceProvider_SDNCreateBridge_Success(t *testing.T) {
 	ctx := context.Background()
 
 	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+	mockOVS.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 		return &ovs.Bridge{
 			UUID: "new-bridge-uuid",
 			Name: name,
@@ -258,8 +258,8 @@ func TestMCPServiceProvider_SDNCreateBridge_Success(t *testing.T) {
 	}
 
 	// Verify the mock was called
-	if mockOVS.GetCallCount("CreateBridge") != 1 {
-		t.Errorf("expected CreateBridge to be called once, got %d calls", mockOVS.GetCallCount("CreateBridge"))
+	if mockOVS.GetCallCount("CreateBridgeWithOptions") != 1 {
+		t.Errorf("expected CreateBridge to be called once, got %d calls", mockOVS.GetCallCount("CreateBridgeWithOptions"))
 	}
 }
 
@@ -267,7 +267,7 @@ func TestMCPServiceProvider_SDNCreateBridge_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+	mockOVS.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 		return nil, errors.New("bridge already exists")
 	})
 
@@ -1201,7 +1201,7 @@ func TestMCPServiceProvider_SDN_TableDrivenScenarios(t *testing.T) {
 		{
 			name: "create_bridge_success",
 			setupMock: func(m *ConfigurableMockOVSClient) {
-				m.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+				m.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 					return &ovs.Bridge{UUID: "new-uuid", Name: name}, nil
 				})
 			},
@@ -1214,7 +1214,7 @@ func TestMCPServiceProvider_SDN_TableDrivenScenarios(t *testing.T) {
 		{
 			name: "create_bridge_already_exists",
 			setupMock: func(m *ConfigurableMockOVSClient) {
-				m.OnCreateBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+				m.OnCreateBridgeWithOptions(func(ctx context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
 					return nil, errors.New("bridge already exists")
 				})
 			},

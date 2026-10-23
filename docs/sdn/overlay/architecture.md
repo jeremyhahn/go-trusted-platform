@@ -92,7 +92,8 @@ ARP suppression and symmetric IRB are specified in
   - they carry a 12 s hard timeout that the controller refreshes;
   - stop removes them;
   - any meter or queue drop, or refused packet-out, withdraws them for a
-    hold-down of 30 s, doubling on repeated fallbacks up to 8 minutes;
+    hold-down of 30 s (`OverlayModeConfig.NDFallbackHoldDown` sets another,
+    at most 8 minutes), doubling on repeated fallbacks up to 8 minutes;
   - a lost OpenFlow connection is redialled; the whole pipeline is rebuilt
     from the committed state and the meter reinstalled, since a restarted
     switch keeps neither, and the punts return after the hold-down. The

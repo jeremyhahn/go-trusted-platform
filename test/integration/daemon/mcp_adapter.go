@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -113,16 +114,6 @@ type mcpServerInfo struct {
 type mcpCallToolRequest struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
-}
-
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
 }
 
 // =============================================================================
@@ -254,47 +245,21 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 		Arguments: args,
 	}
 
-	// Get the raw JSON result so we can handle both MCP content-wrapped
-	// and raw map response formats.
 	var rawResult json.RawMessage
 	if err := m.sendRequest(ctx, "tools/call", toolReq, &rawResult); err != nil {
 		return err
 	}
 
-	if result == nil || len(rawResult) == 0 {
-		return nil
+	// The tool output is JSON in the CallToolResult's text block.
+	var err error
+	if result == nil {
+		_, err = mcpwire.ToolOutputJSON(rawResult)
+	} else {
+		err = mcpwire.DecodeToolOutput(rawResult, result)
 	}
-
-	// Try MCP content-wrapped format first: {"content":[{"type":"text","text":"..."}],"isError":false}
-	var toolResult mcpCallToolResult
-	if err := json.Unmarshal(rawResult, &toolResult); err == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			var errMsg string
-			for _, item := range toolResult.Content {
-				if item.Type == "text" {
-					errMsg = item.Text
-					break
-				}
-			}
-			return ErrMCPToolCallFailed{Tool: toolName, Code: jsonRPCInternalError, Message: errMsg}
-		}
-
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if err := json.Unmarshal([]byte(item.Text), result); err != nil {
-					return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
-				}
-				return nil
-			}
-		}
-		return nil
-	}
-
-	// Server returned result directly as a raw map (not wrapped in content items).
-	if err := json.Unmarshal(rawResult, result); err != nil {
+	if err != nil {
 		return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
 	}
-
 	return nil
 }
 

@@ -435,3 +435,16 @@ func TestQUICDeviceRegister_MissingDevice(t *testing.T) {
 	resp := handler.HandleRequest(context.Background(), req)
 	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
+
+// TestQUICDeviceRegister_NoSerial verifies a device without a serial is
+// rejected with InvalidArgument, the request the device integration suite's
+// "RegisterDevice/no serial" case sends.
+func TestQUICDeviceRegister_NoSerial(t *testing.T) {
+	handler, _ := newQUICDeviceProfileHandler(t)
+
+	req := encodeQUICRequest(t, quicwire.OpDeviceRegister, &platformv1.CreateDeviceRequest{
+		Device: &platformv1.Device{Model: "no-serial-480"},
+	})
+	resp := handler.HandleRequest(context.Background(), req)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+}

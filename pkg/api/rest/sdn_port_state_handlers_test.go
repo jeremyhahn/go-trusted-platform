@@ -67,6 +67,23 @@ func TestGetPortState(t *testing.T) {
 		assert.False(t, resp.UpdatedAt.IsZero())
 	})
 
+	t.Run("reports unknown for a state Open vSwitch has not recorded", func(t *testing.T) {
+		// ovs-vswitchd leaves admin_state and link_state unset on an
+		// interface whose network device it could not open.
+		svc, router := portStateRouter()
+		svc.interfaces["nodev"] = &ovs.Interface{Name: "nodev", OFPort: -1}
+
+		w := serveSDN(router, http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/nodev/state", nil)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var resp PortStateResponse
+		decodeSDNResponse(t, w.Body, &resp)
+		assert.Equal(t, "nodev", resp.PortID)
+		assert.Equal(t, "unknown", resp.AdminState)
+		assert.Equal(t, "unknown", resp.OperState)
+		assert.Equal(t, "unknown", resp.LinkState)
+	})
+
 	t.Run("answers 404 for an unknown port", func(t *testing.T) {
 		_, router := portStateRouter()
 

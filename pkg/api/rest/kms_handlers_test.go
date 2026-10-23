@@ -23,12 +23,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/mux"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -681,7 +683,7 @@ func TestHandleGenerateKey(t *testing.T) {
 		assert.Equal(t, "test-key-123", genResp.Key.KeyID)
 		assert.Equal(t, "test-key", genResp.Metadata.Name)
 		require.NotNil(t, svc.lastGenerateKeyReq.KeySpec)
-		assert.Equal(t, int32(3), svc.lastGenerateKeyReq.KeySpec.Algorithm, "AES-256-GCM")
+		assert.Equal(t, int32(22), svc.lastGenerateKeyReq.KeySpec.Algorithm, "AES-256-GCM is platform.v1 KMS_KEY_ALGORITHM_AES_256")
 		assert.Equal(t, []int32{1, 2}, svc.lastGenerateKeyReq.KeySpec.Usage, "ENCRYPT, DECRYPT")
 	})
 
@@ -761,6 +763,28 @@ func TestHandleGenerateKey(t *testing.T) {
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("returns error for an algorithm with no platform.v1 number", func(t *testing.T) {
+		svc := newMockKMSService()
+		_, router := setupKMSTestHandler(svc)
+
+		reqBody := KMSGenerateKeyRequest{
+			Name:    "test-key",
+			KeySpec: KMSKeySpecRequest{Algorithm: "X448"},
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Nil(t, svc.lastGenerateKeyReq, "the service must not see the request")
 	})
 
 	t.Run("returns error when service fails", func(t *testing.T) {
@@ -1326,7 +1350,7 @@ func TestHandleImportKey(t *testing.T) {
 		assert.Equal(t, "imported-key-123", impResp.Key.KeyID)
 		assert.Equal(t, []byte("test-key-material"), svc.lastImportKeyReq.KeyMaterial, "the key material reaches the KMS decoded")
 		require.NotNil(t, svc.lastImportKeyReq.KeySpec)
-		assert.Equal(t, int32(3), svc.lastImportKeyReq.KeySpec.Algorithm, "AES-256-GCM")
+		assert.Equal(t, int32(22), svc.lastImportKeyReq.KeySpec.Algorithm, "AES-256-GCM is platform.v1 KMS_KEY_ALGORITHM_AES_256")
 	})
 
 	t.Run("returns error when key_material is missing", func(t *testing.T) {
@@ -2637,63 +2661,136 @@ func TestHandleBackendStatus(t *testing.T) {
 // =============================================================================
 
 func TestAlgorithmConversions(t *testing.T) {
-	h := NewKMSHandlers(nil, nil)
-
+	// Each REST name, its platform.v1 KMSKeyAlgorithm enum name and the
+	// number the KMS service decodes. The number is looked up by the proto
+	// enum name too, so a renumbering or a wrong constant fails here.
 	tests := []struct {
 		name     string
+		protoKey string
 		expected int32
 	}{
-		{"AES-128-GCM", 1},
-		{"AES-192-GCM", 2},
-		{"AES-256-GCM", 3},
-		{"CHACHA20-POLY1305", 4},
-		{"XCHACHA20-POLY1305", 5},
-		{"RSA-2048", 10},
-		{"RSA-3072", 11},
-		{"RSA-4096", 12},
-		{"ECDSA-P256", 20},
-		{"ECDSA-P384", 21},
-		{"ECDSA-P521", 22},
-		{"ED25519", 30},
-		{"ED448", 31},
-		{"X25519", 40},
-		{"X448", 41},
-		{"HMAC-SHA256", 50},
-		{"HMAC-SHA384", 51},
-		{"HMAC-SHA512", 52},
-		{"UNKNOWN", 0},
+		{"AES-128-GCM", "KMS_KEY_ALGORITHM_AES_128", 20},
+		{"AES-192-GCM", "KMS_KEY_ALGORITHM_AES_192", 21},
+		{"AES-256-GCM", "KMS_KEY_ALGORITHM_AES_256", 22},
+		{"CHACHA20-POLY1305", "KMS_KEY_ALGORITHM_CHACHA20_POLY1305", 23},
+		{"RSA-2048", "KMS_KEY_ALGORITHM_RSA_2048", 1},
+		{"RSA-3072", "KMS_KEY_ALGORITHM_RSA_3072", 2},
+		{"RSA-4096", "KMS_KEY_ALGORITHM_RSA_4096", 3},
+		{"ECDSA-P256", "KMS_KEY_ALGORITHM_ECDSA_P256", 4},
+		{"ECDSA-P384", "KMS_KEY_ALGORITHM_ECDSA_P384", 5},
+		{"ECDSA-P521", "KMS_KEY_ALGORITHM_ECDSA_P521", 6},
+		{"ED25519", "KMS_KEY_ALGORITHM_ED25519", 7},
+		{"HMAC-SHA256", "KMS_KEY_ALGORITHM_HMAC_SHA256", 30},
+		{"HMAC-SHA384", "KMS_KEY_ALGORITHM_HMAC_SHA384", 31},
+		{"HMAC-SHA512", "KMS_KEY_ALGORITHM_HMAC_SHA512", 32},
 	}
 
+	require.Len(t, kmsAlgorithmNumbers, len(tests), "every map row has a test row")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := h.stringToKeyAlgorithm(tt.name)
-			assert.Equal(t, tt.expected, result)
+			protoNumber, ok := platformv1.KMSKeyAlgorithm_value[tt.protoKey]
+			require.True(t, ok, "%s is a platform.v1 KMSKeyAlgorithm", tt.protoKey)
+			assert.Equal(t, tt.expected, protoNumber)
+
+			result, err := kmsAlgorithmNumber(tt.name)
+			require.NoError(t, err)
+			assert.Equal(t, protoNumber, result)
+
+			underscored, err := kmsAlgorithmNumber(strings.ReplaceAll(tt.name, "-", "_"))
+			require.NoError(t, err)
+			assert.Equal(t, protoNumber, underscored, "underscores are accepted for dashes")
+		})
+	}
+
+	t.Run("reverse: every platform.v1 algorithm has one REST name or none", func(t *testing.T) {
+		// The platform.v1 numbers the REST API deliberately does not name.
+		unnamed := map[string]bool{
+			"KMS_KEY_ALGORITHM_UNSPECIFIED": true,
+			"KMS_KEY_ALGORITHM_DILITHIUM2":  true,
+			"KMS_KEY_ALGORITHM_DILITHIUM3":  true,
+			"KMS_KEY_ALGORITHM_DILITHIUM5":  true,
+		}
+		names := make(map[platformv1.KMSKeyAlgorithm][]string)
+		for name, number := range kmsAlgorithmNumbers {
+			names[number] = append(names[number], name)
+		}
+		for number, protoName := range platformv1.KMSKeyAlgorithm_name {
+			restNames := names[platformv1.KMSKeyAlgorithm(number)]
+			if unnamed[protoName] {
+				assert.Empty(t, restNames, "%s has no REST name", protoName)
+				continue
+			}
+			assert.Len(t, restNames, 1, "%s has exactly one REST name", protoName)
+		}
+	})
+
+	// A name with no platform.v1 number is refused, never defaulted.
+	for _, name := range []string{"XCHACHA20-POLY1305", "ED448", "X25519", "X448", "UNKNOWN", "", "aes-256-gcm"} {
+		t.Run("refused "+name, func(t *testing.T) {
+			result, err := kmsAlgorithmNumber(name)
+			assert.Equal(t, int32(0), result)
+			var invalid ErrKMSInvalidAlgorithm
+			require.ErrorAs(t, err, &invalid)
+			assert.Equal(t, name, invalid.Algorithm)
 		})
 	}
 }
 
 func TestUsageConversions(t *testing.T) {
-	h := NewKMSHandlers(nil, nil)
-
+	// Each REST usage name, its platform.v1 KeyUsage enum name and number,
+	// looked up by the proto enum name so a renumbering fails here.
 	tests := []struct {
 		name     string
+		protoKey string
 		expected int32
 	}{
-		{"ENCRYPT", 1},
-		{"DECRYPT", 2},
-		{"SIGN", 3},
-		{"VERIFY", 4},
-		{"WRAP_KEY", 5},
-		{"DERIVE_KEY", 6},
-		{"GENERATE_MAC", 7},
-		{"VERIFY_MAC", 8},
-		{"UNKNOWN", 0},
+		{"ENCRYPT", "KEY_USAGE_ENCRYPT", 1},
+		{"DECRYPT", "KEY_USAGE_DECRYPT", 2},
+		{"SIGN", "KEY_USAGE_SIGN", 3},
+		{"VERIFY", "KEY_USAGE_VERIFY", 4},
+		{"WRAP", "KEY_USAGE_WRAP", 5},
+		{"WRAP_KEY", "KEY_USAGE_WRAP", 5},
+		{"UNWRAP", "KEY_USAGE_UNWRAP", 6},
+		{"UNWRAP_KEY", "KEY_USAGE_UNWRAP", 6},
+		{"DERIVE_KEY", "KEY_USAGE_DERIVE", 7},
+		{"GENERATE_MAC", "KEY_USAGE_HMAC", 8},
+		{"VERIFY_MAC", "KEY_USAGE_HMAC", 8},
 	}
 
+	require.Len(t, kmsUsageNumbers, len(tests), "every map row has a test row")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := h.stringToKeyUsage(tt.name)
-			assert.Equal(t, tt.expected, result)
+			protoNumber, ok := platformv1.KeyUsage_value[tt.protoKey]
+			require.True(t, ok, "%s is a platform.v1 KeyUsage", tt.protoKey)
+			assert.Equal(t, tt.expected, protoNumber)
+
+			result, err := kmsUsageNumber(tt.name)
+			require.NoError(t, err)
+			assert.Equal(t, protoNumber, result)
+		})
+	}
+
+	t.Run("reverse: every platform.v1 usage but UNSPECIFIED has a REST name", func(t *testing.T) {
+		named := make(map[platformv1.KeyUsage]bool)
+		for _, number := range kmsUsageNumbers {
+			named[number] = true
+		}
+		for number, protoName := range platformv1.KeyUsage_name {
+			if protoName == "KEY_USAGE_UNSPECIFIED" {
+				assert.False(t, named[platformv1.KeyUsage(number)], "UNSPECIFIED has no REST name")
+				continue
+			}
+			assert.True(t, named[platformv1.KeyUsage(number)], "%s has a REST name", protoName)
+		}
+	})
+
+	for _, name := range []string{"UNKNOWN", "", "encrypt", "KEY_USAGE_SIGN"} {
+		t.Run("refused "+name, func(t *testing.T) {
+			result, err := kmsUsageNumber(name)
+			assert.Equal(t, int32(0), result)
+			var invalid ErrKMSInvalidKeyUsage
+			require.ErrorAs(t, err, &invalid)
+			assert.Equal(t, name, invalid.Usage)
 		})
 	}
 }
@@ -2827,7 +2924,8 @@ func TestKeySpecRequestToService(t *testing.T) {
 	h := NewKMSHandlers(nil, nil)
 
 	t.Run("nil input", func(t *testing.T) {
-		result := h.keySpecRequestToService(nil)
+		result, err := h.keySpecRequestToService(nil)
+		require.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
@@ -2839,14 +2937,122 @@ func TestKeySpecRequestToService(t *testing.T) {
 			Exportable:         true,
 			DeletionProtection: true,
 		}
-		result := h.keySpecRequestToService(spec)
+		result, err := h.keySpecRequestToService(spec)
+		require.NoError(t, err)
 		assert.NotNil(t, result)
-		assert.Equal(t, int32(3), result.Algorithm)
+		assert.Equal(t, int32(22), result.Algorithm, "AES-256-GCM is platform.v1 KMS_KEY_ALGORITHM_AES_256")
 		assert.Equal(t, int32(256), result.KeySize)
 		assert.Equal(t, []int32{1, 2}, result.Usage)
 		assert.True(t, result.Exportable)
 		assert.True(t, result.DeletionProtection)
 	})
+
+	t.Run("unknown algorithm", func(t *testing.T) {
+		result, err := h.keySpecRequestToService(&KMSKeySpecRequest{Algorithm: "X448"})
+		assert.Nil(t, result)
+		assert.ErrorAs(t, err, &ErrKMSInvalidAlgorithm{})
+	})
+
+	t.Run("unknown usage", func(t *testing.T) {
+		result, err := h.keySpecRequestToService(&KMSKeySpecRequest{
+			Algorithm: "AES-256-GCM",
+			Usage:     []string{"ENCRYPT", "BOGUS"},
+		})
+		assert.Nil(t, result)
+		var invalid ErrKMSInvalidKeyUsage
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, "BOGUS", invalid.Usage)
+	})
+}
+
+// refusingKMSService fails the test when a key is generated or imported:
+// a request it receives is one the handler should have refused.
+type refusingKMSService struct {
+	*mockKMSService
+	t *testing.T
+}
+
+func (s *refusingKMSService) GenerateKey(context.Context, *KMSGenerateKeyServiceRequest) (*KMSGenerateKeyServiceResponse, error) {
+	s.t.Error("GenerateKey reached the service")
+	return nil, ErrKMSOperationFailed{Reason: "refused request reached the service"}
+}
+
+func (s *refusingKMSService) ImportKey(context.Context, *KMSImportKeyServiceRequest) (*KMSImportKeyServiceResponse, error) {
+	s.t.Error("ImportKey reached the service")
+	return nil, ErrKMSOperationFailed{Reason: "refused request reached the service"}
+}
+
+// TestKMSKeySpecNamesAtTheRoutes drives generate and import with the key
+// spec names of #1006: an unknown name answers 400 before the service, and
+// the three reported names reach the service as their platform.v1 numbers.
+func TestKMSKeySpecNamesAtTheRoutes(t *testing.T) {
+	keyMaterial := base64.StdEncoding.EncodeToString([]byte("key"))
+	bodies := map[string]func(spec KMSKeySpecRequest) any{
+		"/api/v1/kms/keys": func(spec KMSKeySpecRequest) any {
+			return KMSGenerateKeyRequest{Name: "k", KeySpec: spec}
+		},
+		"/api/v1/kms/keys/import": func(spec KMSKeySpecRequest) any {
+			return KMSImportKeyRequest{Name: "k", KeyMaterial: keyMaterial, KeySpec: spec}
+		},
+	}
+	post := func(t *testing.T, svc KMSService, path string, body any) *http.Response {
+		router := mux.NewRouter()
+		NewKMSHandlers(svc, slog.Default()).RegisterRoutes(router)
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(encoded)))
+		return w.Result()
+	}
+
+	refused := []struct {
+		name string
+		spec KMSKeySpecRequest
+		want string
+	}{
+		{"unknown algorithm", KMSKeySpecRequest{Algorithm: "X448"}, "invalid algorithm: X448"},
+		{"unknown usage", KMSKeySpecRequest{Algorithm: "AES-256-GCM", Usage: []string{"BOGUS"}}, "invalid key usage: BOGUS"},
+	}
+	for path, body := range bodies {
+		for _, tt := range refused {
+			t.Run(path+" "+tt.name, func(t *testing.T) {
+				svc := &refusingKMSService{mockKMSService: newMockKMSService(), t: t}
+				resp := post(t, svc, path, body(tt.spec))
+				defer resp.Body.Close()
+				assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+				raw, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				assert.Contains(t, string(raw), tt.want)
+			})
+		}
+	}
+
+	reported := []struct {
+		name     string
+		protoKey string
+	}{
+		{"ECDSA-P256", "KMS_KEY_ALGORITHM_ECDSA_P256"},
+		{"RSA-2048", "KMS_KEY_ALGORITHM_RSA_2048"},
+		{"AES-256-GCM", "KMS_KEY_ALGORITHM_AES_256"},
+	}
+	for _, tt := range reported {
+		t.Run("generate "+tt.name, func(t *testing.T) {
+			svc := newMockKMSService()
+			resp := post(t, svc, "/api/v1/kms/keys", bodies["/api/v1/kms/keys"](KMSKeySpecRequest{Algorithm: tt.name}))
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusCreated, resp.StatusCode)
+			require.NotNil(t, svc.lastGenerateKeyReq)
+			assert.Equal(t, platformv1.KMSKeyAlgorithm_value[tt.protoKey], svc.lastGenerateKeyReq.KeySpec.Algorithm)
+		})
+		t.Run("import "+tt.name, func(t *testing.T) {
+			svc := newMockKMSService()
+			resp := post(t, svc, "/api/v1/kms/keys/import", bodies["/api/v1/kms/keys/import"](KMSKeySpecRequest{Algorithm: tt.name}))
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusCreated, resp.StatusCode)
+			require.NotNil(t, svc.lastImportKeyReq)
+			assert.Equal(t, platformv1.KMSKeyAlgorithm_value[tt.protoKey], svc.lastImportKeyReq.KeySpec.Algorithm)
+		})
+	}
 }
 
 func TestKeyHandleToResponse(t *testing.T) {

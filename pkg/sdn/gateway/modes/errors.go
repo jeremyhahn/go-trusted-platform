@@ -72,6 +72,10 @@ var (
 	// ErrAccessPortEmpty is returned when the overlay has no access port.
 	ErrAccessPortEmpty = &errAccessPortEmpty{}
 
+	// ErrNDFallbackHoldDownInvalid is returned when the overlay's ND
+	// fallback hold-down is negative or above its back-off cap.
+	ErrNDFallbackHoldDownInvalid = &errNDFallbackHoldDownInvalid{}
+
 	// ErrAccessPortUnresolved is returned when the access port has no
 	// OpenFlow port number on the bridge.
 	ErrAccessPortUnresolved = &errAccessPortUnresolved{}
@@ -184,6 +188,12 @@ func (e *errInvalidVTEPIP) Error() string { return "invalid VTEP IP address" }
 type errAccessPortEmpty struct{}
 
 func (e *errAccessPortEmpty) Error() string { return "access port is empty" }
+
+type errNDFallbackHoldDownInvalid struct{}
+
+func (e *errNDFallbackHoldDownInvalid) Error() string {
+	return "ND fallback hold-down must be between zero and the 8-minute back-off cap"
+}
 
 type errAccessPortUnresolved struct{}
 

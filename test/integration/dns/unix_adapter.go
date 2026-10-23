@@ -390,6 +390,12 @@ func (s *UnixAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 		req.Type = recordTypeStringToProto(opts.RecordType)
 	}
 
+	if opts.Limit > 0 {
+		req.Pagination = &pb.PaginationRequest{
+			PageSize: uint32(opts.Limit),
+		}
+	}
+
 	resp, err := s.dns.ListRecords(ctx, req)
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "ListRecords", Err: err}
@@ -407,10 +413,15 @@ func (s *UnixAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 		})
 	}
 
-	return &ListRecordsResult{
+	result := &ListRecordsResult{
 		Records:    records,
 		TotalCount: int32(len(records)),
-	}, nil
+	}
+	if resp.Pagination != nil {
+		result.TotalCount = int32(resp.Pagination.TotalItems)
+		result.HasMore = resp.Pagination.Page < resp.Pagination.TotalPages
+	}
+	return result, nil
 }
 
 // =============================================================================

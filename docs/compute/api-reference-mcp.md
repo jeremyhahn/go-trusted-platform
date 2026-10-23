@@ -10,7 +10,9 @@ Endpoint: `https://localhost:9445/mcp`
 The compute MCP tools manage VMs and containers. The VM lifecycle tools are
 the gRPC `ComputeService` RPCs; the other VM tools and the container tools take
 the arguments listed below. The permission each tool needs is in
-[api.md](api.md) §7.
+[api.md](api.md) §7. A tool's result is a `CallToolResult` whose text block
+holds the tool's JSON output ([daemon api.md](../daemon/api.md) §1 "MCP tool
+results").
 
 ## VM lifecycle tools
 
@@ -196,7 +198,14 @@ transport ([api.md §2](api.md#2-vm-lifecycle)). An unknown state, any
 
 `vm_stop` and `vm_reboot` honour `force` and `timeout_seconds` as `StopVM` and
 `RebootVM` do ([api.md](api.md) §2): `force` with a timeout, or a timeout over
-3600, is invalid argument. The service does not yet read `delete_disks`, on
+3600, is invalid argument. A graceful stop may run past the server's 30-second
+`RequestTimeout`; the reply still answers, because the write deadline restarts
+once the reply is ready, and the tool runs as long as the HTTP request. Over
+stdio the call runs for its reply window, described next, when that is longer
+than `RequestTimeout`. The Go SDK's MCP transport waits for that reply for
+the stop's reply window — the guest's power-down window (`timeout_seconds`,
+30 by default, none when forced) plus 30 seconds — instead of its 5-second
+default request timeout ([api.md](api.md) §2). The service does not yet read `delete_disks`, on
 any transport.
 
 ### vm_migration_prepare
@@ -269,7 +278,7 @@ failed precondition, as `PrepareMigration` and `FinalizeMigration` do on gRPC.
 
 | Tool | Required | Optional (default) |
 |------|----------|--------------------|
-| `container_create` | `name`, `image` | `command`, `args` (string arrays), `env`, `labels` (objects), `working_dir`, `user`, `privileged` (false), `mounts` (`[{"source", "target", "read_only", "type"}]`), `ports` (`[{"container_port", "host_port", "host_ip", "protocol"}]`), `resources` (`{"cpu_limit", "memory_limit", "pids_limit"}`) |
+| `container_create` | `name`, `image` | `command`, `args` (string arrays), `env`, `labels` (objects), `working_dir`, `user`, `privileged` (false), `mounts` (`[{"source", "target", "read_only", "type"}]`), `ports` (`[{"container_port", "host_port", "host_ip", "protocol"}]`), `resources` (`{"cpu_limit", "memory_limit", "pids_limit"}`), `attest_on_create` (false) |
 | `container_start` | `id` | — |
 | `container_stop` | `id` | `timeout` (10) |
 | `container_remove` | `id` | `force` (false) |
@@ -279,6 +288,8 @@ failed precondition, as `PrepareMigration` and `FinalizeMigration` do on gRPC.
 | `container_exec` | `id`, `command` | `env` (object), `working_dir`, `tty` (false) |
 | `container_metrics` | `id` | — |
 | `container_attest` | `id` | — |
+
+`container_create` returns the container fields plus `status` (`{"success", "message"}`), the same status gRPC `CreateContainerResponse` carries. With `attest_on_create` true the daemon attests the container right after creating it: an orchestrator that cannot attest refuses the create (nothing is created), and a failed attestation still answers the created container with `status.success` false and the cause in `status.message`.
 
 ## Error Handling
 

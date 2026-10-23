@@ -253,9 +253,15 @@ that authenticates without scopes cannot reach it:
 | REST, web service (`/api/v1/ca/sign-csr`) | Platform token granting `ca:sign-csr` | No token → 401; token without the scope → 403 (`ErrSignCSRScopeRequired`) |
 | gRPC (TCP) | Platform token granting `ca:sign-csr` | mTLS or a legacy token alone → `PermissionDenied` |
 | Unix (gRPC over the socket) | Root (uid 0), by peer credentials, or a platform token granting `ca:sign-csr` | Any other uid → `PermissionDenied` |
-| QUIC | Platform token granting `ca:sign-csr` | Anything else → `StatusPermissionDenied` |
-| MCP (`ca_sign_csr`) | Platform token granting `ca:sign-csr` | Anything else → refused |
+| QUIC | Platform token granting `ca:sign-csr` | Anything else, including an operator client certificate alone → `StatusPermissionDenied` |
+| MCP (`ca_sign_csr`) | Platform token granting `ca:sign-csr` | Anything else, including an operator client certificate alone → refused |
 | Embedded | Root, by the identity the embedder attaches through `ServiceRegistry.CallerContext`, or a context carrying a `ca:sign-csr` platform token | Any other uid, or no identity attached → `PermissionDenied` |
+
+On QUIC and MCP an operator client certificate presented with no token
+authenticates with `*:*`, which opens every other tool; sign-csr does not
+count that grant (`tokenAuthorizedContext` in `pkg/api/quic`, the token
+check in `MCPServiceProvider.CASignCSR`), so only a token's grant reaches
+`issuance.AuthorizeSignCSR`, the one rule every transport shares.
 
 `platformctl ca sign-csr` run as root on the platformd host therefore works
 with no token configured; from anywhere else it needs a `ca:sign-csr` token.

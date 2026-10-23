@@ -196,17 +196,18 @@ func (s *SDNService) CreateBridge(ctx context.Context, req *platformv1.CreateBri
 
 	client := s.getOVSClient()
 
-	// Create the bridge via OVS without holding the lock
-	ovsBridge, err := client.CreateBridge(ctx, config.GetName())
+	// Create the bridge with its fail mode in one OVS transaction, without
+	// holding the lock: setting the fail mode afterwards costs a second
+	// ovs-vswitchd reconfiguration and leaves a "secure" bridge running as a
+	// standalone learning switch in between.
+	opts := &ovs.BridgeOptions{FailMode: config.GetOptions()["fail_mode"]}
+	ovsBridge, err := client.CreateBridgeWithOptions(ctx, config.GetName(), opts)
 	if err != nil {
-		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create bridge: %v", err))
-	}
-
-	// Set fail mode if specified (best-effort, no lock needed)
-	if config.GetOptions() != nil {
-		if failMode, ok := config.GetOptions()["fail_mode"]; ok {
-			_ = client.SetBridgeFailMode(ctx, config.GetName(), failMode)
+		var invalidFailMode *ovs.ErrInvalidFailMode
+		if errors.As(err, &invalidFailMode) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create bridge: %v", err))
 	}
 
 	// Track the bridge under write lock
@@ -307,6 +308,15 @@ func (s *SDNService) ListBridges(ctx context.Context, req *platformv1.ListBridge
 	}, nil
 }
 
+// portInterfaceTypes maps a requested port type to the Open vSwitch Interface
+// type that implements it. Every other type is "" (system): an existing kernel
+// device of the port's name, which for PORT_TYPE_TAP AddPort creates first.
+var portInterfaceTypes = map[platformv1.PortType]string{
+	platformv1.PortType_PORT_TYPE_INTERNAL: "internal",
+	platformv1.PortType_PORT_TYPE_VXLAN:    "vxlan",
+	platformv1.PortType_PORT_TYPE_GRE:      "gre",
+}
+
 // AddPort adds a port to a bridge (requires root)
 func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error) {
 	if req.GetBridgeId() == "" {
@@ -355,8 +365,9 @@ func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest
 		_ = s.netlinkManager.SetTAPUp(config.GetName())
 	}
 
-	// Add port to bridge via OVS without holding the lock
-	ovsPort, err := client.AddPort(ctx, bridgeName, config.GetName())
+	// Add port to bridge via OVS without holding the lock, its interface
+	// typed in the same transaction
+	ovsPort, err := client.AddPortWithType(ctx, bridgeName, config.GetName(), portInterfaceTypes[config.GetType()])
 	if err != nil {
 		// Clean up TAP if we created it
 		if config.GetType() == platformv1.PortType_PORT_TYPE_TAP {
@@ -384,8 +395,11 @@ func (s *SDNService) AddPort(ctx context.Context, req *platformv1.AddPortRequest
 	}
 	s.mu.Unlock()
 
-	// Convert OVS port to proto port
-	port := s.ovsPortToPb(ovsPort, req.GetBridgeId())
+	portStatus, err := s.portStatus(ctx, client, ovsPort.Name)
+	if err != nil {
+		return nil, err
+	}
+	port := s.ovsPortToPb(ovsPort, req.GetBridgeId(), portStatus)
 
 	return &platformv1.AddPortResponse{
 		Status: &platformv1.Status{
@@ -465,8 +479,13 @@ func (s *SDNService) GetPort(ctx context.Context, req *platformv1.GetPortRequest
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get port: %v", err))
 	}
 
+	portStatus, err := s.portStatus(ctx, client, ovsPort.Name)
+	if err != nil {
+		return nil, err
+	}
+
 	return &platformv1.GetPortResponse{
-		Port: s.ovsPortToPb(ovsPort, req.GetBridgeId()),
+		Port: s.ovsPortToPb(ovsPort, req.GetBridgeId(), portStatus),
 	}, nil
 }
 
@@ -491,7 +510,11 @@ func (s *SDNService) ListPorts(ctx context.Context, req *platformv1.ListPortsReq
 
 	ports := make([]*platformv1.Port, 0, len(ovsPorts))
 	for _, ovsPort := range ovsPorts {
-		ports = append(ports, s.ovsPortToPb(ovsPort, req.GetBridgeId()))
+		portStatus, err := s.portStatus(ctx, client, ovsPort.Name)
+		if err != nil {
+			return nil, err
+		}
+		ports = append(ports, s.ovsPortToPb(ovsPort, req.GetBridgeId(), portStatus))
 	}
 
 	return &platformv1.ListPortsResponse{
@@ -1083,14 +1106,12 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get updated port: %v", err))
 	}
 
-	port := s.ovsPortToPb(ovsPort, req.GetBridgeId())
-
-	// Override status based on the requested state
+	// The port reports the state the transaction above committed.
+	portStatus := platformv1.PortStatus_PORT_STATUS_DOWN
 	if portState == ovs.PortStateUp {
-		port.Status = platformv1.PortStatus_PORT_STATUS_UP
-	} else {
-		port.Status = platformv1.PortStatus_PORT_STATUS_DOWN
+		portStatus = platformv1.PortStatus_PORT_STATUS_UP
 	}
+	port := s.ovsPortToPb(ovsPort, req.GetBridgeId(), portStatus)
 
 	return &platformv1.SetPortStateResponse{
 		Status: &platformv1.Status{
@@ -1534,7 +1555,7 @@ func (s *SDNService) ovsBridgeToPb(ovsBridge *ovs.Bridge) *platformv1.Bridge {
 	}
 }
 
-func (s *SDNService) ovsPortToPb(ovsPort *ovs.Port, bridgeID string) *platformv1.Port {
+func (s *SDNService) ovsPortToPb(ovsPort *ovs.Port, bridgeID string, portStatus platformv1.PortStatus) *platformv1.Port {
 	return &platformv1.Port{
 		Id:       ovsPort.UUID,
 		BridgeId: bridgeID,
@@ -1544,10 +1565,31 @@ func (s *SDNService) ovsPortToPb(ovsPort *ovs.Port, bridgeID string) *platformv1
 			Vlan:   uint32(ovsPort.Tag),
 			Labels: ovsPort.ExternalIDs,
 		},
-		Status:    platformv1.PortStatus_PORT_STATUS_UP,
+		Status:    portStatus,
 		CreatedAt: timestamppb.New(time.Now()),
 		UpdatedAt: timestamppb.New(time.Now()),
 	}
+}
+
+// portAdminStatus maps an OVSDB Interface admin_state to the port status it
+// reports. A state OVS has not recorded yet is PORT_STATUS_UNSPECIFIED.
+var portAdminStatus = map[string]platformv1.PortStatus{
+	"up":   platformv1.PortStatus_PORT_STATUS_UP,
+	"down": platformv1.PortStatus_PORT_STATUS_DOWN,
+}
+
+// portStatus reads a port's status from the admin_state of its interface,
+// the column SetPortState writes. A port with no interface of its own name
+// (a bond) has no single state and is PORT_STATUS_UNSPECIFIED.
+func (s *SDNService) portStatus(ctx context.Context, client ovs.ClientInterface, portName string) (platformv1.PortStatus, error) {
+	iface, err := client.GetInterface(ctx, portName)
+	if errors.Is(err, ovs.ErrPortNotFound) {
+		return platformv1.PortStatus_PORT_STATUS_UNSPECIFIED, nil
+	}
+	if err != nil {
+		return platformv1.PortStatus_PORT_STATUS_UNSPECIFIED, status.Error(codes.Internal, fmt.Sprintf("failed to read port state: %v", err))
+	}
+	return portAdminStatus[iface.AdminState], nil
 }
 
 func (s *SDNService) ovsFlowToPb(ovsFlow *ovs.Flow, bridgeID string) *platformv1.Flow {

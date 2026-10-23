@@ -61,7 +61,9 @@ Response — the verdict, reporting each check rather than a single flag:
 
 A quote that fails verification is `200` with `verified: false` — the caller
 asked whether the device attests and "no" is a successful answer. `400`,
-`404` and `503` are reserved for requests that could not be evaluated. The
+`404` and `503` are reserved for requests that could not be evaluated:
+evidence that is not JSON or lacks `quote`, `signature`, `nonce` or `pcrs` is
+`400` (`INVALID_ARGUMENT` on gRPC), never `500`. The
 route is registered only when the daemon has a verifier wired, so a `404`
 means attestation is not configured on this node, never that it silently
 passed.
