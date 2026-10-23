@@ -460,6 +460,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.tpm.platform-policy` | bool | should be `false` — the initrd unseals before platformd creates the platform policy |
 | `disk.encryption.tpm.factory-reset-on-firstboot` | bool | `false` in Go, `true` in reference templates |
 | `disk.encryption.tpm.force-clear-via-ppi` | bool | `false` in Go, `true` in reference X10 templates |
+| `disk.encryption.tpm.allow-missing-ek-certificate` | bool | `false`: firstboot refuses a TPM without an EK certificate (`EKCertificateMissingError`, `pkg/firstboot/firstprovision.go`); `true` provisions it without an IDevID and logs a warning naming the key. See [architecture.md](architecture.md) "First provision, the EK and recovery" |
 | `disk.encryption.tpm.recovery-key-strategy` | `destroy` \| `escrow` | `escrow` (`ResolvedRecoveryKeyStrategy()`) |
 | `disk.encryption.tpm.recovery-key.enabled` / `.method` | bool / string | `method` supports `autogen` only |
 | `os.os` | `alpine` \| `debian` \| `fedora` \| `ubuntu` | `alpine` |

@@ -35,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
 	platform "github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tpmowner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi/firmware"
 )
 
@@ -105,6 +106,11 @@ type FirstbootSealStrategy struct {
 	logger   *logging.Logger
 	priority int
 	luks     luks.Handler
+
+	// soPINConfigPaths and soPINHandoffFile are where the SO PIN firstboot
+	// takes TPM ownership with is read from and staged for platformd.
+	soPINConfigPaths []string
+	soPINHandoffFile string
 }
 
 // NewFirstbootSealStrategy creates a new first boot sealing strategy
@@ -114,6 +120,9 @@ func NewFirstbootSealStrategy(executor *Executor, luksHandler luks.Handler, logg
 		logger:   logger,
 		priority: 0,
 		luks:     luksHandler,
+
+		soPINConfigPaths: platformConfigPaths,
+		soPINHandoffFile: tpmowner.SOPINHandoffFile,
 	}
 }
 
@@ -339,16 +348,10 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// installed node enrolled against its own local CA forever. That
 	// false-positive bit a 2026-05-02 GW reflash where enroll-01 against
 	// the CP never fired and no DNS records got registered.
-	priorProvisioning := false
-	for _, marker := range []string{
-		filepath.Join(efiPath, "tpm2", "seal-platform.pub"),
-		filepath.Join(efiPath, strategySealPub),
-	} {
-		if _, err := os.Stat(marker); err == nil {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PRIOR-PROVISIONING DETECTED: %s exists — skipping TPM provisioning + sealing\n", marker)
-			priorProvisioning = true
-			break
-		}
+	state, marker := classifyProvisioning(efiPath)
+	priorProvisioning := state == sealPresent
+	if priorProvisioning {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PRIOR-PROVISIONING DETECTED: %s exists — skipping TPM provisioning + sealing\n", marker)
 	}
 
 	if priorProvisioning {
@@ -797,31 +800,43 @@ func closeInstallerMapping(ops installerMappingCloser) error {
 	return err
 }
 
-// provisionInsideInstaller runs minimal TPM provisioning (EK + SSRK only).
-// PlatformSRK is NOT created here because PCR 9 differs between the installer
-// initramfs and the production boot initramfs, so any PCR 23 policy bound to
-// PlatformSRK would fail on subsequent boots. PlatformSRK creation is deferred
-// to platformd on the first stable boot.
+// provisionInsideInstaller provisions the TPM from the installed system: EK,
+// SSRK, platform policy, IAK, IDevID and the Platform KeyStore SRK, all
+// created under the empty owner auth, and then takes TPM ownership with the
+// SO PIN platformd uses (docs/tpm/engineering.md §4 item 5).
 //
 // TPM persistent handles survive OS reinstalls. To ensure a clean slate on
 // firstboot, FactoryReset is called first to evict stale platform handles
 // while preserving EK certificates provisioned by the manufacturer.
 func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) error {
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Running minimal TPM provisioning (EK + SSRK only)...\n")
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Running TPM provisioning (EK + SSRK + Platform SRK + IAK, then TPM ownership)...\n")
 
-	if s.executor.TPM() == nil {
+	tpm := s.executor.TPM()
+	if tpm == nil {
 		return ErrTPMNotAvailable
 	}
 
-	// We DO NOT generate a hierarchy auth PIN here. firstboot used to
-	// generate a random soPIN and pass it to FactoryReset+Install, which
-	// caused TPM_RC_BAD_AUTH at platformd startup because the random PIN
-	// was discarded when firstboot exited and platformd's autogen-derived
-	// auth didn't match. Hierarchy auth is left empty after the (clear or
-	// non-clear) reset pass, and the per-key SRK auth that platformd
-	// resolves from autogen:// is set on the SRK object itself by
-	// platformd at PlatformSRK creation time. See the long comment around
-	// the Install() call below for the full chain.
+	// The SO PIN firstboot takes TPM ownership with is the one platformd
+	// presents (docs/tpm/engineering.md §4 item 5). It is resolved before
+	// the TPM is touched, so a configuration that cannot name it fails
+	// provisioning with the TPM unchanged. firstboot once generated a random
+	// PIN here and discarded it at exit, which left platformd facing
+	// TPM_RC_BAD_AUTH (docs/installer/factory-reset.md).
+	soPIN, err := resolveSOPIN(s.soPINConfigPaths, s.soPINHandoffFile)
+	if err != nil {
+		return &WrappedError{Msg: "SO PIN resolution failed", Err: err}
+	}
+
+	// A TPM without an EK certificate is refused, before it is touched,
+	// unless the admin relaxed the requirement
+	// (disk.encryption.tpm.allow-missing-ek-certificate). The manufacturer
+	// certificate lives in the platform hierarchy, which neither the clear
+	// nor the evictions below reach, so the answer read here holds for the
+	// rest of provisioning.
+	allowMissingEK := s.allowMissingEKCertificate()
+	if err := requireEKCertificate(tpm, allowMissingEK, os.Stderr); err != nil {
+		return err
+	}
 
 	// Factory reset to clear stale persistent handles from previous installs.
 	// TPM persistent handles survive OS reinstalls, so we must evict them
@@ -830,9 +845,8 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	// Two modes, both preserve manufacturer EK certificates:
 	//
 	//   1. Plain FactoryReset (default): EvictControl on each persistent
-	//      handle using the supplied owner auth. Fails with TPM_RC_BAD_AUTH
-	//      if a previous failed run set the owner hierarchy auth to a
-	//      value we don't know.
+	//      handle under the owner auth, which tpmowner.Prepare has just
+	//      returned to empty.
 	//
 	//   2. FactoryResetWithClear (opt-in via installer config
 	//      encryption.tpm.factory-reset-on-firstboot=true): TPM2_Clear via
@@ -846,40 +860,21 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	// installer config flag to true so first-time provisioning Just Works
 	// on fresh hardware. Operators reinstalling on hardware with a
 	// known-good TPM state should set the flag to false.
-	// Pass nil for ownerAuth: when we follow up with FactoryResetWithClear,
-	// the TPM2_Clear pre-pass leaves OWNER auth empty so empty is correct.
-	// When we follow up with plain FactoryReset on a clean-or-fresh TPM,
-	// empty is also correct. The previous code passed firstboot's random
-	// soPIN here which would have been wrong AFTER the Clear pass anyway.
 	wantClear := s.shouldFactoryResetWithClear()
 	if wantClear {
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Clearing TPM via FactoryResetWithClear (DESTRUCTIVE — opt-in via installer config)...\n")
-		if err := s.executor.TPM().FactoryResetWithClear(nil); err != nil {
-			// Not fatal - may be a clean TPM with no handles to evict
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] FactoryResetWithClear: %v (may be clean TPM)\n", err)
-			// When the software clear fails with an auth/lockout error the TPM
-			// has BOTH owner and lockout auths stale (a prior failed run) —
-			// TPM2_Clear via empty lockout can't recover it. Escalate to a
-			// UEFI PPI ForceClear so the firmware clears it at next POST,
-			// when the operator opted in. Loop-guarded; reboots at most once.
-			if s.shouldForceClearViaPPI() && isTPMAuthError(err) {
-				s.escalateToPPIForceClear(err)
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] FactoryResetWithClear complete - TPM hierarchies cleared\n")
-			// Software clear succeeded (e.g. the post-PPI-clear boot with a
-			// now-clean TPM). Drop any stale PPI-escalation marker so a future
-			// re-install can escalate again if needed.
-			_ = os.Remove(filepath.Join(s.getEFIPath(), "tpm2", "ppi-clear-attempted"))
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Clearing stale platform handles (preserving EK certs, no TPM2_Clear)...\n")
-		if err := s.executor.TPM().FactoryReset(nil); err != nil {
-			// Not fatal - may be a clean TPM with no handles to evict
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Factory reset: %v (may be clean TPM)\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Factory reset complete - stale handles cleared\n")
-		}
+		s.clearTPM()
+	}
+
+	// The keys are created under the empty owner auth and ownership is taken
+	// last. On a TPM a previous install already owned, Prepare proves the SO
+	// PIN, so a wrong one fails here with tpmowner.OwnerAuthRejectedError,
+	// and returns the owner auth to empty for the keys to be recreated.
+	if err := tpmowner.Prepare(tpm, soPIN); err != nil {
+		return &WrappedError{Msg: "TPM owner hierarchy preparation failed", Err: err}
+	}
+
+	if !wantClear {
+		s.evictStaleHandles()
 	}
 
 	// FULL install: EK + SSRK + platform policy + IAK + IDevID (#61).
@@ -891,35 +886,16 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	// present, policy digest matching) and ADOPTS it instead of running
 	// its destructive re-provisioning (TPM2_Clear), which regenerated the
 	// storage seed and invalidated the LUKS seal written moments earlier.
-	// (IDevID creation warn-continues without an EK certificate — swtpm.)
+	// (IDevID creation warn-continues without an EK certificate only when
+	// allow-missing-ek-certificate accepted such a TPM above.)
 	//
-	// CRITICAL: pass nil for soPIN, NOT a freshly-generated random PIN.
-	//
-	// xkms.Install() interprets a non-nil soPIN as "set the OWNER /
-	// ENDORSEMENT / LOCKOUT hierarchy auths to this value" and writes
-	// them via TPM2_HierarchyChangeAuth. firstboot's random soPIN is
-	// generated locally, used only to seed the call, and DISCARDED when
-	// firstboot returns. platformd then starts with NO knowledge of that
-	// PIN, reads its own autogen://-resolved srk-auth from config, and
-	// every subsequent TPM operation that needs OWNER hierarchy auth
-	// fails with TPM_RC_BAD_AUTH because firstboot's PIN ≠ platformd's
-	// autogen output.
-	//
-	// Passing nil here makes Install skip the SetHierarchyAuth pass
-	// entirely (see go-xkms/pkg/tpm2/provision.go — `if soPIN != nil`),
-	// leaving OWNER / ENDORSEMENT / LOCKOUT auths as their post-Clear
-	// state (empty). The per-key SRK auth (the platformctl autogen value)
-	// is set on the key object itself, not on the hierarchy. The SRK auth
-	// is the protection boundary; hierarchy auth is irrelevant once root
-	// has the TPM device anyway.
-	//
-	// This was the second bug uncovered after the FactoryResetWithClear
-	// pre-pass got node-02 past the original BAD_AUTH on the eviction
-	// loop. See docs/installer/factory-reset.md for the full chain.
+	// Install is passed a nil SO PIN: a non-nil one would set the owner,
+	// endorsement AND lockout auth together. Only the owner auth is
+	// changed, by tpmowner.TakeOwnership below; the endorsement and lockout
+	// auth are left empty, as platformd leaves them.
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installing EK + SSRK + platform policy + IAK + IDevID...\n")
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Hierarchy auth left EMPTY so platformd can re-open OWNER hierarchy\n")
-	if err := s.executor.TPM().Install(
-		nil, // see comment above — DO NOT set hierarchy auth here
+	if err := tpm.Install(
+		nil,
 		&xkmssdk.InstallOptions{
 			EK:             true,
 			SSRK:           true,
@@ -928,11 +904,13 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 			IDevID:         true,
 		},
 	); err != nil {
-		// ErrTPMEndorsementCertNotFound is expected for swtpm
-		if !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
+		// IDevID creation needs the EK certificate. Its absence was
+		// already accepted above only when the admin relaxed the EK
+		// requirement; otherwise it is a failure like any other.
+		if !allowMissingEK || !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
 			return &WrappedError{Msg: "TPM install failed", Err: err}
 		}
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: EK cert not found (expected for swtpm)\n")
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: IDevID not created: no EK certificate (%s is true)\n", ekCertificateSetting)
 	}
 
 	// Create the Platform KeyStore SRK (0x81000002) — the LUKS seal
@@ -944,8 +922,56 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 		return &WrappedError{Msg: "Platform KeyStore SRK creation failed", Err: err}
 	}
 
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Provisioning complete (EK + SSRK + Platform SRK + IAK)\n")
+	// Take ownership before reporting provisioning complete: no device
+	// leaves firstboot with an empty owner auth. platformd then finds the
+	// TPM owned and proves the same SO PIN on every start.
+	if err := tpmowner.TakeOwnership(tpm, soPIN); err != nil {
+		return &WrappedError{Msg: "TPM ownership failed", Err: err}
+	}
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM ownership taken: owner hierarchy auth set to the SO PIN\n")
+
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Provisioning complete (EK + SSRK + Platform SRK + IAK, TPM owned)\n")
 	return nil
+}
+
+// clearTPM runs FactoryResetWithClear: TPM2_Clear through the empty lockout
+// auth, then eviction of the stale persistent handles. A failure is not
+// fatal; it may be a clean TPM with no handles to evict.
+func (s *FirstbootSealStrategy) clearTPM() {
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Clearing TPM via FactoryResetWithClear (DESTRUCTIVE — opt-in via installer config)...\n")
+	if err := s.executor.TPM().FactoryResetWithClear(nil); err != nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] FactoryResetWithClear: %v (may be clean TPM)\n", err)
+		// When the software clear fails with an auth/lockout error the TPM
+		// has BOTH owner and lockout auths stale (a prior failed run) —
+		// TPM2_Clear via empty lockout can't recover it. Escalate to a
+		// UEFI PPI ForceClear so the firmware clears it at next POST,
+		// when the operator opted in. Loop-guarded; reboots at most once.
+		if s.shouldForceClearViaPPI() && isTPMAuthError(err) {
+			s.escalateToPPIForceClear(err)
+		}
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] FactoryResetWithClear complete - TPM hierarchies cleared\n")
+	// Software clear succeeded (e.g. the post-PPI-clear boot with a
+	// now-clean TPM). Drop any stale PPI-escalation marker so a future
+	// re-install can escalate again if needed.
+	marker := filepath.Join(s.getEFIPath(), "tpm2", "ppi-clear-attempted")
+	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: could not remove %s: %v\n", marker, err)
+	}
+}
+
+// evictStaleHandles runs the plain FactoryReset: eviction of the stale
+// persistent handles under the empty owner auth, preserving EK
+// certificates and without TPM2_Clear. A failure is not fatal; it may be a
+// clean TPM with no handles to evict.
+func (s *FirstbootSealStrategy) evictStaleHandles() {
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Clearing stale platform handles (preserving EK certs, no TPM2_Clear)...\n")
+	if err := s.executor.TPM().FactoryReset(nil); err != nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Factory reset: %v (may be clean TPM)\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Factory reset complete - stale handles cleared\n")
 }
 
 // ensurePlatformSRK creates the Platform KeyStore SRK at its configured
@@ -1494,6 +1520,17 @@ func (s *FirstbootSealStrategy) shouldFactoryResetWithClear() bool {
 	return cfg.Disk.Encryption.TPM.FactoryResetOnFirstBoot
 }
 
+// allowMissingEKCertificate reads the installer config's
+// disk.encryption.tpm.allow-missing-ek-certificate flag. Default is false:
+// a TPM without an EK certificate is refused.
+func (s *FirstbootSealStrategy) allowMissingEKCertificate() bool {
+	cfg := s.loadInstallerConfig()
+	if cfg == nil || cfg.Disk == nil || cfg.Disk.Encryption == nil || cfg.Disk.Encryption.TPM == nil {
+		return false
+	}
+	return cfg.Disk.Encryption.TPM.AllowMissingEKCertificate
+}
+
 // shouldForceClearViaPPI reports whether firstboot may escalate to a UEFI PPI
 // ForceClear when the software TPM2_Clear cannot recover a stale-auth TPM.
 // Gated by disk.encryption.tpm.force-clear-via-ppi (default false).
@@ -1651,27 +1688,8 @@ func (s *FirstbootSealStrategy) applyRecoveryKeyStrategy(devicePath, recoveryKey
 
 	case installer.RecoveryKeyStrategyEscrow:
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] recovery-key-strategy=escrow: staging passphrase at %s for platformd pickup\n", firstbootHandoffRecoveryKey)
-		if err := os.MkdirAll(firstbootHandoffDir, 0700); err != nil {
-			return strategy, &WrappedError{Msg: fmt.Sprintf("mkdir %s", firstbootHandoffDir), Err: err}
-		}
-		// Write atomically: O_EXCL refuses to clobber any pre-existing
-		// handoff file so a stale consumer cannot silently overwrite a
-		// still-unconsumed key.
-		f, err := os.OpenFile(firstbootHandoffRecoveryKey, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_EXCL, 0600)
-		if err != nil {
-			return strategy, &WrappedError{Msg: fmt.Sprintf("open %s", firstbootHandoffRecoveryKey), Err: err}
-		}
-		if _, err := f.Write([]byte(recoveryKey)); err != nil {
-			f.Close()
-			_ = os.Remove(firstbootHandoffRecoveryKey)
-			return strategy, &WrappedError{Msg: fmt.Sprintf("write %s", firstbootHandoffRecoveryKey), Err: err}
-		}
-		if err := f.Sync(); err != nil {
-			f.Close()
-			return strategy, &WrappedError{Msg: fmt.Sprintf("sync %s", firstbootHandoffRecoveryKey), Err: err}
-		}
-		if err := f.Close(); err != nil {
-			return strategy, &WrappedError{Msg: fmt.Sprintf("close %s", firstbootHandoffRecoveryKey), Err: err}
+		if err := writeHandoffFile(firstbootHandoffRecoveryKey, []byte(recoveryKey)); err != nil {
+			return strategy, err
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Recovery passphrase staged for platformd escrow consumer\n")
 		return strategy, nil

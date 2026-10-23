@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tpmowner"
 )
 
 // harnessEKHandle is where swtpm_setup --createek persists the RSA EK
@@ -137,13 +138,13 @@ func ownerAuthorizes(t *testing.T, tpm transport.TPM, auth string) error {
 	t.Helper()
 	pw, err := xkmssdk.NewPasswordFromString(auth)
 	require.NoError(t, err)
-	return verifyOwnerAuth(tpm, pw)
+	return tpmowner.VerifyOwnerAuth(tpm, pw)
 }
 
 // hierarchyAuthState reads TPMA_PERMANENT from the TPM.
-func hierarchyAuthState(t *testing.T, tpm transport.TPM) tpmHierarchyAuthState {
+func hierarchyAuthState(t *testing.T, tpm transport.TPM) tpmowner.HierarchyAuthState {
 	t.Helper()
-	state, err := readTPMHierarchyAuthState(tpm)
+	state, err := tpmowner.ReadHierarchyAuthState(tpm)
 	require.NoError(t, err)
 	return state
 }
@@ -154,7 +155,7 @@ func hierarchyAuthState(t *testing.T, tpm transport.TPM) tpmHierarchyAuthState {
 // The endorsement auth is left empty.
 func TestTPMOwnership_FirstStartTakesOwnership(t *testing.T) {
 	sim := newHarnessSwtpmState(t)
-	require.False(t, hierarchyAuthState(t, sim).ownerAuthSet, "a fresh TPM has empty owner auth")
+	require.False(t, hierarchyAuthState(t, sim).OwnerAuthSet, "a fresh TPM has empty owner auth")
 	counting := newCountingTPM(sim)
 
 	a, err := harnessStart(t, counting, t.TempDir(), harnessSOPIN)
@@ -163,10 +164,10 @@ func TestTPMOwnership_FirstStartTakesOwnership(t *testing.T) {
 	require.Equal(t, 1, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
 
 	state := hierarchyAuthState(t, sim)
-	require.True(t, state.ownerAuthSet)
-	require.False(t, state.endorsementAuthSet, "the endorsement auth is not changed")
+	require.True(t, state.OwnerAuthSet)
+	require.False(t, state.EndorsementAuthSet, "the endorsement auth is not changed")
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
-	var rejected *OwnerAuthRejectedError
+	var rejected *tpmowner.OwnerAuthRejectedError
 	require.ErrorAs(t, ownerAuthorizes(t, sim, ""), &rejected)
 	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
 	require.Empty(t, a.TPMConfig.EK.HierarchyAuth)
@@ -198,7 +199,7 @@ func TestTPMOwnership_SecondStartWrongSOPIN(t *testing.T) {
 	require.NoError(t, err)
 
 	a, err := harnessStart(t, sim, dir, "654321")
-	var rejected *OwnerAuthRejectedError
+	var rejected *tpmowner.OwnerAuthRejectedError
 	require.ErrorAs(t, err, &rejected)
 	require.Nil(t, a.PlatformKS)
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN), "the owner auth is unchanged")
@@ -234,33 +235,8 @@ func TestTPMOwnership_ChangeAuthFault(t *testing.T) {
 	counting.failCC = tpm2.TPMCCHierarchyChanegAuth
 
 	_, err := harnessStart(t, counting, t.TempDir(), harnessSOPIN)
-	var ownership *TPMOwnershipError
+	var ownership *tpmowner.TPMOwnershipError
 	require.ErrorAs(t, err, &ownership)
 	require.ErrorIs(t, err, errInjectedTPMFault)
-	require.False(t, hierarchyAuthState(t, sim).ownerAuthSet)
-}
-
-// TestReadTPMHierarchyAuthState_TransportFault: a failed TPM2_GetCapability
-// is a TPMPermanentReadError, never a silent "not owned".
-func TestReadTPMHierarchyAuthState_TransportFault(t *testing.T) {
-	counting := newCountingTPM(newHarnessSwtpmState(t))
-	counting.failCC = tpm2.TPMCCGetCapability
-
-	_, err := readTPMHierarchyAuthState(counting)
-	var readErr *TPMPermanentReadError
-	require.ErrorAs(t, err, &readErr)
-	require.ErrorIs(t, err, errInjectedTPMFault)
-}
-
-// TestVerifyOwnerAuth_TransportFault: a probe that fails for a reason other
-// than the auth is an OwnerAuthProbeError, not a rejected SO PIN.
-func TestVerifyOwnerAuth_TransportFault(t *testing.T) {
-	counting := newCountingTPM(newHarnessSwtpmState(t))
-	counting.failCC = tpm2.TPMCCCreatePrimary
-
-	err := ownerAuthorizes(t, counting, harnessSOPIN)
-	var probeErr *OwnerAuthProbeError
-	require.ErrorAs(t, err, &probeErr)
-	var rejected *OwnerAuthRejectedError
-	require.False(t, errors.As(err, &rejected))
+	require.False(t, hierarchyAuthState(t, sim).OwnerAuthSet)
 }
