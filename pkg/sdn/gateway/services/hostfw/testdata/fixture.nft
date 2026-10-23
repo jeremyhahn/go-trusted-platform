@@ -6,7 +6,7 @@ table inet tp_host {
 	chain input {
 		type filter hook input priority filter; policy drop;
 		iifname "lo" accept comment "loopback"
-		ct state established,related accept comment "established/related"
+		meta l4proto != { gre, esp } ct state established,related accept comment "established/related"
 		ct state invalid drop comment "invalid"
 		iifname "eth1" accept comment "unfiltered: eth1"
 		meta l4proto icmp limit rate 50/second burst 100 packets accept comment "icmp rate-limited"

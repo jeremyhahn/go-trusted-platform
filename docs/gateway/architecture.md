@@ -197,6 +197,12 @@ nftables table, `inet tp_host`, with an input chain whose policy is `drop`;
 nothing outside that table is ever read or written, so it composes with any
 other table the host carries.
 
+The conntrack rule (`ct state established,related accept`) excludes GRE and
+ESP: once the host has sent either to an address, conntrack calls that
+address's packets established, so without the exclusion an address the host
+tunnels to would be admitted whether or not a peer allowance names it. Only the
+peer allowance admits tunnel encapsulation.
+
 Two layers carry it, because a daemon that starts after the network is up
 leaves a window:
 
