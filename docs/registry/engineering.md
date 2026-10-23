@@ -30,7 +30,7 @@ type TrustedRegistry interface {
 }
 ```
 
-> **Correction (2026-08-18).** An earlier draft of `architecture.md` gave
+> **Correction.** An earlier draft of `architecture.md` gave
 > `List(ctx, opts ListOptions) ([]ImageManifest, error)` and passed `image
 > Image` by value. Both are wrong: the option type is **`RegistryListOptions`**,
 > not `ListOptions` (which is a different type belonging to other packages), and
@@ -267,7 +267,7 @@ trouble or corruption. It now names the version instead.
 `TestDecodeEncryptedLayer_RejectsRetiredVersion` pins that, and is a diagnosis
 path rather than a migration.
 
-**Correction (2026-09-03, #209): "not supported" is not the same as "not
+**Correction (#209): "not supported" is not the same as "not
 reached", and this section previously implied it was.** `LocalKMSClient` is
 wired by `pkg/daemon/commands/registry_init.go` (`registryDistBackend`, called
 from `serve.go`), so the shipped daemon does construct it: it backs the
@@ -304,7 +304,7 @@ showed five red packages while this one failed silently.
 | Transport parity | see [api.md](api.md) | REST, gRPC, MCP, Unix, embedded |
 
 **Known gap — record, do not paper over.** This repository has **no
-`CommandDefinition` type** (grepped repo-wide, 2026-08-18), so the parity
+`CommandDefinition` type**, so the parity
 requirement in `conventions/feature-docs.md` §4 — every `cli.md` verb has a
 `CommandDefinition` in the integration parity suite — is **unmet repo-wide**,
 not only here. It is listed as an owner question in the migration report rather

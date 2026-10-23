@@ -121,7 +121,7 @@ values for everything else — **notably `TrustedRoots: nil` and
 `MTLSConfig.RequireClientAuth` and `MTLSConfig.RevocationEndpoint` are stored
 and never read inside `pkg/auth`. `RequireClientAuth` is advisory for the caller
 building its `tls.Config`; `RevocationEndpoint` is recorded but the revocation
-check goes through the CA, not that URL. Verified 2026-08-18.
+check goes through the CA, not that URL.
 
 ### The adapter
 
@@ -446,7 +446,7 @@ match with `errors.As` on the value type.
 | `ErrRevocationRequiresCA` | — | `WithRequireRevocation` on `NewMTLSAdapterFromRoots` |
 
 **`ErrAuthenticationFailed` and `ErrRevocationCheckFailed` are declared and
-unused** inside the package (grepped 2026-08-18). They are part of the exported
+unused** inside the package. They are part of the exported
 vocabulary for callers; do not assume `Authenticate` produces them.
 
 ### Fail-closed paths
@@ -492,7 +492,7 @@ vocabulary for callers; do not assume `Authenticate` produces them.
 
 ## 5. Transport-layer contracts
 
-Not `pkg/auth`, but the code that consumes it. Signatures verified 2026-08-18.
+Not `pkg/auth`, but the code that consumes it.
 
 ### gRPC mTLS (`pkg/api/daemon/mtls_interceptor.go`)
 
@@ -717,8 +717,8 @@ Fault-injection seams:
   swap in an in-process auth service.
 - `TokenValidator` / `AuthorizationChecker` on gRPC and QUIC.
 
-**Known repo-wide gap:** no `CommandDefinition` type exists in this repository
-(grepped 2026-08-18), so the CLI parity requirement in
+**Known repo-wide gap:** no `CommandDefinition` type exists in this repository,
+so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide, including for the `auth`
 and `credential` verbs in [cli.md](cli.md).
 

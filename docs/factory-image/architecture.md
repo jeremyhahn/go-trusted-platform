@@ -257,7 +257,7 @@ What crosses the container boundary: the media (read-only) and the output
 directory, nothing else. The host's `/dev` is never bind-mounted: the
 installer's `mdev -s`, which creates the partition nodes, resets the mode of
 every device node it walks, and on a shared `/dev` that takes `/dev/null` away
-from every unprivileged process on the build host (the 2026-09-16 incident).
+from every unprivileged process on the build host.
 The container's private `/dev` starts with the host's loop nodes; a loop device
 allocated later gets its node from `assemble` itself. The Secure Boot DB key
 travels on the media
