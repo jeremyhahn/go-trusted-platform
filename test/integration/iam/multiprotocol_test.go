@@ -524,7 +524,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID),
-			Name:        "Test Role " + testID,
+			Name:        GenerateTestRoleName(testID),
 			Description: "Test role description",
 			Permissions: []string{"device:read", "device:write"},
 		}
@@ -533,6 +533,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, opts.ID)
 
 		if result.Role == nil {
 			t.Fatal("CreateRole returned nil role")
@@ -552,7 +553,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-get"),
-			Name:        "Test Role Get " + testID,
+			Name:        GenerateTestRoleName(testID + " Get"),
 			Description: "Test role for get operation",
 			Permissions: []string{"device:read"},
 		}
@@ -561,6 +562,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, createOpts.ID)
 
 		// Now get the role
 		getOpts := GetRoleOptions{
@@ -587,7 +589,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-update"),
-			Name:        "Test Role Original",
+			Name:        GenerateTestRoleName(testID + " Original"),
 			Description: "Original description",
 			Permissions: []string{"device:read"},
 		}
@@ -596,12 +598,13 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, createOpts.ID)
 
 		// Update the role
 		updateOpts := UpdateRoleOptions{
 			TenantID:    tenantID,
 			RoleID:      createResult.Role.ID,
-			Name:        "Test Role Updated",
+			Name:        GenerateTestRoleName(testID + " Updated"),
 			Description: "Updated description",
 			Permissions: []string{"device:read", "device:write", "device:delete"},
 		}
@@ -630,7 +633,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-delete"),
-			Name:        "Test Role Delete",
+			Name:        GenerateTestRoleName(testID + " Delete"),
 			Description: "Test role for deletion",
 			Permissions: []string{"device:read"},
 		}
@@ -673,7 +676,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			createOpts := CreateRoleOptions{
 				TenantID:    tenantID,
 				ID:          GenerateTestRoleID(testID + "-list-" + string(rune('a'+i))),
-				Name:        "Test Role List " + testID,
+				Name:        GenerateTestRoleName(testID + " List " + string(rune('a'+i))),
 				Description: "Test role for listing",
 				Permissions: []string{"device:read"},
 			}
@@ -682,6 +685,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			if err != nil {
 				t.Fatalf("CreateRole failed: %v", err)
 			}
+			CleanupRole(t, ctx, adapter, tenantID, createOpts.ID)
 		}
 
 		// List roles
@@ -715,7 +719,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          roleID,
-			Name:        "Test Role Permission Allow",
+			Name:        GenerateTestRoleName(testID + " Permission Allow"),
 			Description: "Test role for permission check",
 			Permissions: []string{"device:read", "device:write"},
 		}
@@ -724,6 +728,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 		if err != nil {
 			t.Fatalf("CreateRole failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, roleOpts.ID)
 
 		// Create a user with the role
 		userOpts := CreateUserOptions{
@@ -737,6 +742,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 		if err != nil {
 			t.Fatalf("CreateUser failed: %v", err)
 		}
+		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
 
 		// Check permission
 		checkOpts := CheckPermissionOptions{
@@ -769,6 +775,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 		if err != nil {
 			t.Fatalf("CreateUser failed: %v", err)
 		}
+		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
 
 		// Check permission for an action the user doesn't have
 		checkOpts := CheckPermissionOptions{
