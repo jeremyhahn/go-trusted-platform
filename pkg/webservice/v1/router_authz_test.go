@@ -317,7 +317,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.dnsService = &stubDNSService{}
 	registry.eabService = &stubEABServer{}
 	registry.ntpService = &stubNTPServer{}
-	registry.orchestratorService = platformv1.UnimplementedOrchestratorServiceServer{}
+	if registry.orchestratorService == nil {
+		registry.orchestratorService = platformv1.UnimplementedOrchestratorServiceServer{}
+	}
 	registry.vpnService = &stubVPNServer{}
 	if registry.appServices == (restapi.AppServiceServers{}) {
 		registry.appServices = restapi.AppServiceServers{
