@@ -44,6 +44,18 @@ func (e *RerunError) Error() string {
 	return fmt.Sprintf("%s: the rerun of its other tests under fips140=only %s", e.Package, e.Reason)
 }
 
+// RerunBoundError is a FIPS rerun whose every round, up to one per
+// baseline row for its package, ended in a listed test's panic: each round
+// excludes one more listed test, so a further round cannot be a new row's.
+type RerunBoundError struct {
+	Package string
+	Bound   int
+}
+
+func (e *RerunBoundError) Error() string {
+	return fmt.Sprintf("%s: the rerun of its other tests under fips140=only still panicked in a listed test after %d rounds, its bound (one per baseline row for the package)", e.Package, e.Bound)
+}
+
 // ErrEmptyLog is returned for a suite log with no lines: nothing in it can be
 // attributed to a test, so the suite's failure stands.
 var ErrEmptyLog = errors.New("foreignfailures: the integration suite log is empty")

@@ -171,14 +171,14 @@ func checkFIPS(ctx context.Context, env environment, opts options, b *baseline, 
 	if v.gating() {
 		return v, nil
 	}
-	rr := &rerunner{goCmd: env.goCmd(opts.goBin), module: opts.module, tags: opts.tags, skip: skip, stdout: stdout}
+	rr := &rerunner{goCmd: env.goCmd(opts.goBin), module: opts.module, tags: opts.tags, skip: skip, baseline: b, stdout: stdout}
 	for _, r := range reruns {
-		names, err := rr.rest(ctx, r)
+		rounds, hidden, err := rr.settle(ctx, r)
+		v.Reran = append(v.Reran, rounds...)
+		v.settleRerun(b, r, hidden)
 		if err != nil {
 			v.Unattributable = append(v.Unattributable, err.Error())
-			continue
 		}
-		v.Reran = append(v.Reran, fmt.Sprintf("%s: %d other tests passed under fips140=only (all but %s)", r.Package, len(names), r.Exclude))
 	}
 	return v, nil
 }

@@ -763,7 +763,19 @@ The job passes only when that rerun passes and runs every name. No `t.Skip`,
 `-short` or build tag is involved. The rerun passes no `-skip` either: the
 names `make test`'s `TEST_SKIP` drops, passed in as `-skip-tests`, are left
 out of the explicit list, exactly as the run left them out. Each rerun's
-output and a `rerun:` line are printed in the job log.
+output is printed in the job log, with a `rerun:` line for every round.
+
+**A rerun repeats until it settles.** The first panic can hide a second
+listed test's panic behind it. When a rerun round fails only by such a
+panic, and that panic meets every rule above (exact row, message, frame,
+the test's own frame, the round's only failure, and the round finished),
+the next round excludes that test as well and runs the rest again. Every
+round keeps the same guards: explicit names, every name run, no `-skip`, no
+`-short`, the same environment and tags. Any other round failure gates.
+The rounds are bounded by the package's number of rows, one per listed test
+it can exclude, so the loop cannot spin: a round past that bound gates. A
+row first hit in a rerun counts as a hit; a row of a rerun package that no
+round hit is reported stale.
 
 The columns are `kind` (always `panic`), `package`, `name`, `upstream`,
 `closing_release`, `frame` (a Go function as a stack trace names it, without
@@ -771,11 +783,13 @@ its arguments, e.g. `github.com/google/go-tpm/tpm2.(*policySession).Authorize`)
 and `message` (last, because it holds spaces). Rows are added and removed as
 for the Integration file.
 
-The rows today are the two go-tpm HMAC panics (go-quicbaas#1389, removed by
+The rows today are the go-tpm HMAC panics (go-quicbaas#1389, removed by
 the go-quicbaas v0.16.0-alpha adoption):
 
 - `pkg/vpn/agent` `TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey`
 - `pkg/app` `TestDeviceActivation_IDevIDOverMTLS`
+- `pkg/app` `TestFetchProfileAndActivate_IDevIDOverMTLS`, which runs after
+  the first and surfaces only in the rerun's second round
 
 ## Protocol Parity Assertions
 

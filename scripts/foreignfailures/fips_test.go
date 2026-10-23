@@ -29,6 +29,9 @@ var errExit = errors.New("exit status 1")
 type fakeGo struct {
 	// lists are the -list output per import path.
 	lists map[string]string
+	// rounds are the outputs of successive reruns per import path, taken
+	// first; past them, runs apply.
+	rounds map[string][]fakeRound
 	// runs override the rerun output per import path; unset, every
 	// requested name passes.
 	runs    map[string]string
@@ -37,11 +40,21 @@ type fakeGo struct {
 	calls   [][]string
 }
 
+// fakeRound is one rerun's output and exit error.
+type fakeRound struct {
+	out string
+	err error
+}
+
 func (f *fakeGo) command(_ context.Context, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, args)
 	importPath := args[len(args)-1]
 	if args[3] == "-list" {
 		return []byte(f.lists[importPath]), f.listErr
+	}
+	if rounds := f.rounds[importPath]; len(rounds) > 0 {
+		f.rounds[importPath] = rounds[1:]
+		return []byte(rounds[0].out), rounds[0].err
 	}
 	if out, ok := f.runs[importPath]; ok {
 		return []byte(out), f.runErr
@@ -337,9 +350,10 @@ func TestARerunOfAPackageWithNoOtherTestsRunsNothing(t *testing.T) {
 	f := newFakeGo()
 	f.lists[app] = listing(app, appPanic, "BenchmarkActivation")
 	rr := &rerunner{goCmd: f.command, module: defaultModule, stdout: &bytes.Buffer{}}
-	names, err := rr.rest(context.Background(), rerun{Package: "pkg/app", Exclude: appPanic})
+	names, hidden, err := rr.round(context.Background(), rerun{Package: "pkg/app", Exclude: appPanic})
 	require.NoError(t, err)
 	assert.Empty(t, names)
+	assert.Nil(t, hidden)
 	assert.Len(t, f.calls, 1, "only the listing ran")
 }
 
@@ -462,7 +476,7 @@ func TestParseFIPSBaselineRejectsMalformedRows(t *testing.T) {
 
 func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	b := repositoryFIPSBaseline(t)
-	require.Len(t, b.entries, 2)
+	require.Len(t, b.entries, 3)
 	for _, e := range b.entries {
 		assert.Equal(t, kindPanic, e.Kind)
 		assert.Equal(t, fipsPanic, e.Message)
@@ -472,6 +486,7 @@ func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	}
 	assert.Contains(t, b.tests, testKey{Package: "pkg/vpn/agent", Name: vpnPanic})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: appPanic})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: appHiddenPanic})
 }
 
 func TestTheSkipPatternOnlyDropsWhatItMatches(t *testing.T) {

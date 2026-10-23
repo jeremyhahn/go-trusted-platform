@@ -10,6 +10,25 @@ import (
 type rerun struct {
 	Package string // module-relative import path
 	Exclude string // the listed test that panicked
+	// Hidden are the listed tests whose panics earlier rerun rounds found
+	// behind Exclude's, in round order.
+	Hidden []string
+}
+
+// excluded are the tests a rerun round leaves out: Exclude, then Hidden.
+func (r rerun) excluded() []string {
+	return append([]string{r.Exclude}, r.Hidden...)
+}
+
+// rowsIn counts the baseline rows for pkg: the bound on a rerun's rounds.
+func (b *baseline) rowsIn(pkg string) int {
+	n := 0
+	for _, e := range b.entries {
+		if e.Package == pkg {
+			n++
+		}
+	}
+	return n
 }
 
 // decideFIPS sorts a FIPS run's failures against b, a FIPS baseline. It
@@ -40,8 +59,39 @@ func decideFIPS(log *goTestLog, b *baseline) (*verdict, []rerun) {
 		hit[e] = true
 		reruns = append(reruns, rerun{Package: p.Package, Exclude: e.Name})
 	}
-	v.settle(b, hit)
+	rerunning := map[string]bool{}
+	for _, r := range reruns {
+		rerunning[r.Package] = true
+	}
+	for _, e := range b.entries {
+		switch {
+		case hit[e]:
+			v.Hits = append(v.Hits, e)
+		case rerunning[e.Package]:
+			// Its test may not have run: the rerun settles the row.
+		default:
+			v.Stale = append(v.Stale, e)
+		}
+	}
 	return v, reruns
+}
+
+// settleRerun files the rows of r's package that the run left to its
+// rerun: each one a rerun round's panic hit is a hit, the others stale.
+func (v *verdict) settleRerun(b *baseline, r rerun, hidden []*entry) {
+	found := map[*entry]bool{}
+	for _, e := range hidden {
+		found[e] = true
+	}
+	for _, e := range b.entries {
+		switch {
+		case e.Package != r.Package || e.Name == r.Exclude:
+		case found[e]:
+			v.Hits = append(v.Hits, e)
+		default:
+			v.Stale = append(v.Stale, e)
+		}
+	}
 }
 
 // decideFIPSFailure sorts a package that failed without a panic. The FIPS

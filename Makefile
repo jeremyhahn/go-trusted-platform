@@ -1382,7 +1382,9 @@ test: check-insecure-tls check-go-build-tags
 # passes only when every failure is a listed panic of $(FIPS_FOREIGN_BASELINE)
 # (exact test, message and stack frame, nothing else failing) AND every other
 # top-level test of each panicked package, rerun by explicit name with the same
-# environment and tags, passes. It fails closed on anything else
+# environment and tags, passes. A rerun round that fails only by another
+# listed panic excludes that test too and runs the rest again, at most one
+# round per row of the package. It fails closed on anything else
 # (docs/test/integration.md "The FIPS baseline").
 test-fips: SHELL := /bin/bash
 test-fips:
