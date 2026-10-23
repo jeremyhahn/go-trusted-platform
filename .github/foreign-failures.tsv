@@ -391,3 +391,8 @@ test	test/integration/iam	TestIAMREST/UpdateGroup	go-trusted-platform#997	the PR
 test	test/integration/iam	TestIAMREST/UpdateRole	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration/iam	TestIAMREST/UpdateUser	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration/iam	TestIAMTenantDefaultRoles_OwnerMirrorSucceeds/REST	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
+# go-quicbaas#1811 (release carrying 68410b64e, go-quicbaas#1560): embedded transport has no quicbaas.Secrets/Rollback on v0.16.0-alpha.
+test	test/integration/secrets	TestSecretsMultiProtocol/MCP/VersionManagement/RollbackToVersion1	go-quicbaas#1811	first go-quicbaas tag after v0.16.0-alpha that carries 68410b64e (go-quicbaas#1560), tracked on go-quicbaas#1811
+test	test/integration/secrets	TestSecretsMultiProtocol/MCP/VersionManagement/VerifyRollbackData	go-quicbaas#1811	first go-quicbaas tag after v0.16.0-alpha that carries 68410b64e (go-quicbaas#1560), tracked on go-quicbaas#1811
+test	test/integration/kms	TestKMSMultiProtocol/MCP/SecretsManagement/RollbackToVersion1	go-quicbaas#1811	first go-quicbaas tag after v0.16.0-alpha that carries 68410b64e (go-quicbaas#1560), tracked on go-quicbaas#1811
+test	test/integration/kms	TestKMSMultiProtocol/MCP/SecretsManagement/VerifyRollbackData	go-quicbaas#1811	first go-quicbaas tag after v0.16.0-alpha that carries 68410b64e (go-quicbaas#1560), tracked on go-quicbaas#1811
