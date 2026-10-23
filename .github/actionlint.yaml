@@ -7,7 +7,8 @@
 # - `batch` is the self-hosted label of the batch runners batch.yml runs on
 #   (#860); nothing else uses it.
 # - `bigdisk` is the label of the Dell/omega runners with the large disks; the
-#   Devcontainer image job in ci.yml runs on it (DS-2467).
+#   Devcontainer image and Integration jobs in ci.yml run on it on Gitea
+#   (DS-2467, DS-3381); on github.com they fall back to ubuntu-latest.
 # - `codex` and `qwen` are the review runners code-review.yml runs on: Codex
 #   on `codex`, the advisory opencode review on `qwen` (ci-node-2), handbook
 #   code-review template v5.3 (m826).

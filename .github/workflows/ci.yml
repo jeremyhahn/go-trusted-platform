@@ -266,7 +266,7 @@ jobs:
   # now runs on every PR.
   image:
     name: Devcontainer image [build, test, security, deps-check, trivy image]
-    runs-on: bigdisk
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: needs.changes.outputs.docs_only != 'true'
     needs: [changes]
     timeout-minutes: 120
@@ -475,7 +475,7 @@ jobs:
 
   integration:
     name: Integration [build tag integration]
-    runs-on: bigdisk
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     # `needs: test` keeps the heavy jobs off the runner at the same time.
     needs: [test]
