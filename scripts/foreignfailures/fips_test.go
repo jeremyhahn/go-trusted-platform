@@ -261,13 +261,17 @@ func TestASecondFailingTestInAPanickedPackageGates(t *testing.T) {
 
 func TestAFIPSRunThatDidNotFinishGates(t *testing.T) {
 	fixture := readFixture(t, "fips-panics.log")
+	insidePackage, _, found := strings.Cut(fixture, "FAIL\t"+app)
+	if !found {
+		t.Fatalf("fixture has no %q line to cut the log before", "FAIL\t"+app)
+	}
 	cases := map[string]struct{ text, want string }{
 		"no closing FAIL": {
 			strings.TrimSuffix(fixture, "FAIL\nmake: *** [Makefile:1363: test] Error 1\n"),
 			"did not finish",
 		},
 		"cut off inside a package": {
-			fixture[:strings.Index(fixture, "FAIL\t"+app)],
+			insidePackage,
 			"the log ends inside a package",
 		},
 		"nothing failed": {
