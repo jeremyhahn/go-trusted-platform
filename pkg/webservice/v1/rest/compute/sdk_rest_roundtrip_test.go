@@ -266,14 +266,7 @@ func TestSDKREST_ListVMsSendsTheWholeFilter(t *testing.T) {
 // serveListVMs sends one ListVMs request straight to the router.
 func serveListVMs(t *testing.T, server platformv1.ComputeServiceServer, query, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	parent := mux.NewRouter()
-	NewComputeRouter(logging.NewLogger(slog.LevelError, io.Discard), server, newTestWriter()).
-		RegisterRoutes(parent.PathPrefix("/api/v1").Subrouter())
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/compute/vms"+query, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	parent.ServeHTTP(rec, req)
-	return rec
+	return serveCompute(t, server, http.MethodGet, "/api/v1/compute/vms"+query, body)
 }
 
 func TestComputeHandlers_ListVMsQueryPagesOverTheBody(t *testing.T) {

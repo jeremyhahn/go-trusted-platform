@@ -263,9 +263,71 @@ func TestGatewayRoutes_RequireProvisioningWrite(t *testing.T) {
 }
 
 func TestGatewayRoutes_NilServer(t *testing.T) {
-	rec := post(gatewayRoot(nil, nil), devicePath(knownMAC, "state"), `{"state":"booting"}`)
+	for action, body := range map[string]string{
+		"register":         `{"port_id":"port-1"}`,
+		"state":            `{"state":"booting"}`,
+		"install-complete": `{"status":"success"}`,
+	} {
+		t.Run(action, func(t *testing.T) {
+			rec := post(gatewayRoot(nil, nil), devicePath(knownMAC, action), body)
 
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		})
+	}
+}
+
+// TestGatewayRoutes_RefuseAMalformedBodyBeforeTheService checks each gateway
+// report answers 400 to a body that is not JSON without calling the service.
+func TestGatewayRoutes_RefuseAMalformedBodyBeforeTheService(t *testing.T) {
+	for _, action := range []string{"register", "state", "install-complete"} {
+		t.Run(action, func(t *testing.T) {
+			server := newFakePXE()
+			rec := post(gatewayRoot(server, nil), devicePath(knownMAC, action), "{not json")
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Zero(t, server.calls, "a malformed body reached the service")
+		})
+	}
+}
+
+// vanishingPXE answers AlreadyExists to the registration and then no longer
+// has the device: a RemoveDevice landed between the two calls.
+type vanishingPXE struct{ *fakePXE }
+
+func (v vanishingPXE) RegisterDevice(_ context.Context, _ *platformv1.RegisterPXEDeviceRequest) (*platformv1.RegisterPXEDeviceResponse, error) {
+	v.calls++
+	return nil, status.Error(codes.AlreadyExists, "device already registered")
+}
+
+// TestGatewayRegister_KnownDeviceGoneBeforeTheLookup checks an
+// already-registered device that cannot then be found answers the lookup's
+// 404, never a success naming no device.
+func TestGatewayRegister_KnownDeviceGoneBeforeTheLookup(t *testing.T) {
+	server := vanishingPXE{&fakePXE{devices: map[string]*platformv1.PXEDeviceInfo{}}}
+	rec := post(gatewayRoot(server, nil), devicePath(knownMAC, "register"), `{"port_id":"port-1"}`)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), "device not found")
+	assert.Equal(t, 2, server.calls, "register, then the lookup")
+}
+
+// stuckPXE finds the device but refuses every state transition.
+type stuckPXE struct{ *fakePXE }
+
+func (s stuckPXE) UpdateState(_ context.Context, _ *platformv1.UpdatePXEStateRequest) (*platformv1.UpdatePXEStateResponse, error) {
+	s.calls++
+	return nil, status.Error(codes.FailedPrecondition, "illegal transition")
+}
+
+// TestGatewayReportState_RefusedTransition checks a transition the service
+// refuses answers 400 with its reason and leaves the device where it was.
+func TestGatewayReportState_RefusedTransition(t *testing.T) {
+	server := stuckPXE{newFakePXE()}
+	rec := post(gatewayRoot(server, nil), devicePath(knownMAC, "state"), `{"state":"booting"}`)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "illegal transition")
+	assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, server.devices[knownMAC].GetState())
 }
 
 func TestProvisioningState(t *testing.T) {

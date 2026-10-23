@@ -819,6 +819,29 @@ var templatedRouteTable = map[string]templatedRoute{
 			{name: "vni", field: "vni"},
 		},
 	},
+	// Overlay tunnel and MAC reads — the server reads its filters from the
+	// query string only. As flat GET routes the filters travelled in a body
+	// the server never reads, so a REST caller asking for one VNI got every
+	// VNI, and GetTunnelStats never saw its remote VTEP. Zero values are
+	// omitted: no filter, as on gRPC.
+	"/platform.v1.OverlayService/ListTunnels": {
+		path:        "/api/v1/overlay/tunnels",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "vni", field: "vni"}},
+	},
+	"/platform.v1.OverlayService/GetTunnelStats": {
+		path:   "/api/v1/overlay/tunnels/stats",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "remote_vtep", field: "remote_vtep"},
+			{name: "vni", field: "vni"},
+		},
+	},
+	"/platform.v1.OverlayService/ListRemoteMACs": {
+		path:        "/api/v1/overlay/macs",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "vni", field: "vni"}},
+	},
 
 	"/platform.v1.GatewayService/GetPerfDatapath": {
 		path:        "/api/v1/sdn/gateway/perf/datapath",
@@ -1646,9 +1669,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.OverlayService/ListVTEPs":        {"/api/v1/overlay/vteps", http.MethodGet},
 	"/platform.v1.OverlayService/CreateVNI":        {"/api/v1/overlay/vnis", http.MethodPost},
 	"/platform.v1.OverlayService/ListVNIs":         {"/api/v1/overlay/vnis", http.MethodGet},
-	"/platform.v1.OverlayService/ListTunnels":      {"/api/v1/overlay/tunnels", http.MethodGet},
-	"/platform.v1.OverlayService/GetTunnelStats":   {"/api/v1/overlay/tunnels/stats", http.MethodGet},
-	"/platform.v1.OverlayService/ListRemoteMACs":   {"/api/v1/overlay/macs", http.MethodGet},
 	"/platform.v1.OverlayService/GetOverlayStatus": {"/api/v1/overlay/status", http.MethodGet},
 
 	// PIV Service — proto: pkg/api/grpc/proto/piv.proto

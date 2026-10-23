@@ -170,6 +170,47 @@ func TestSignCSR_WithoutACA(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
 }
 
+// TestCARouter_WithKMS proves the router hands its KMS to the sign-csr
+// route: the same CSR is certified through a router given the KMS and
+// refused, without reaching the CA, through one that was not.
+func TestCARouter_WithKMS(t *testing.T) {
+	key := issuancetest.RSAKey(t)
+	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))
+	cases := []struct {
+		name    string
+		withKMS bool
+		code    int
+	}{
+		{"with the KMS", true, http.StatusCreated},
+		{"without a KMS", false, http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			signer := issuancetest.NewCA(t)
+			writer := &mockHttpWriter{}
+			caRouter := NewCARouter(newTestLogger(), &mockCertificateAuthority{
+				initialized: true,
+				signCSRFn:   signer.SignCSR,
+			}, writer)
+			if tc.withKMS {
+				require.Same(t, caRouter, caRouter.WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey)))
+			}
+
+			body, err := protojson.Marshal(&platformv1.SignCSRRequest{CsrPem: csr})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/sign-csr", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req = req.WithContext(iammw.SetAuthorizedContext(req.Context(),
+				&platformtoken.AuthorizedContext{Subject: "admin", Scopes: []string{SignCSRScope}}))
+			rec := httptest.NewRecorder()
+			newTestRouter(caRouter).ServeHTTP(rec, req)
+
+			assert.Equal(t, tc.code, writer.lastStatus, rec.Body.String())
+			assert.Equal(t, tc.withKMS, signer.Opts != nil, "reached the CA")
+		})
+	}
+}
+
 // Issuing a certificate never certifies a caller's CSR: csr_pem is no longer
 // part of the request, so the field is dropped and the CA never signs it.
 func TestIssueCertificate_IgnoresACSR(t *testing.T) {
