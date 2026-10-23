@@ -140,7 +140,7 @@
   "host_firewall": {
     "active": true,
     "installed": true,
-    "fingerprint": "sha256:23801a10fbdf77f1f47db071da0720a835d482e0d98c6185111683130feae530",
+    "fingerprint": "sha256:773dfb978f8caadc919c66a53c37dc9336a5e9b34d72be8bcd5800e29c23f936",
     "rule_count": 10,
     "last_reconcile": "2026-09-08T22:29:00Z"
   },
