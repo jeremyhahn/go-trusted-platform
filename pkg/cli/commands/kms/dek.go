@@ -15,8 +15,8 @@ package kms
 
 import (
 	"context"
-	"time"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -373,7 +373,7 @@ func newDEKOutput(info *dekclient.DEKInfo) dekOutput {
 // dekAlgorithmNames maps the DEKManagement algorithm enum to the SDK names
 // the other `kms dek` verbs print.
 var dekAlgorithmNames = map[kmspb.KeyAlgorithm]string{
-	kmspb.KeyAlgorithm_KEY_ALG_AES_256_GCM:        sdkkms.AlgorithmAES256GCM.String(),
+	kmspb.KeyAlgorithm_KEY_ALG_AES_256_GCM:       sdkkms.AlgorithmAES256GCM.String(),
 	kmspb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305: sdkkms.AlgorithmChaCha20Poly1305.String(),
 }
 

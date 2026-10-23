@@ -410,7 +410,7 @@ type fakeStatusPlatformClient struct {
 	dek      kmspb.DEKManagementClient
 }
 
-func (f fakeStatusPlatformClient) Protocol() platform.Protocol      { return f.protocol }
+func (f fakeStatusPlatformClient) Protocol() platform.Protocol    { return f.protocol }
 func (f fakeStatusPlatformClient) DEK() kmspb.DEKManagementClient { return f.dek }
 
 // fakeDEKManagementClient answers GetDEKStatus for dekStatusSourceFor tests.
