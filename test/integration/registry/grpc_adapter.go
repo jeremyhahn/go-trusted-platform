@@ -273,6 +273,11 @@ func (g *GRPCAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	if resp.GetStartedAt() != nil && resp.GetTimestamp() != nil {
 		result.Uptime = resp.GetTimestamp().AsTime().Sub(resp.GetStartedAt().AsTime())
 	}
+	for _, c := range resp.GetComponents() {
+		if c.GetName() == storageComponentName {
+			result.StorageBackend = c.GetDetails()[storageBackendDetail]
+		}
+	}
 	return result, nil
 }
 

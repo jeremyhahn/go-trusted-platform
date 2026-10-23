@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -163,6 +164,58 @@ func TestGRPCAdapter_ReferenceGrammar(t *testing.T) {
 				t.Errorf("gRPC code = %s, want InvalidArgument", code)
 			}
 		})
+	}
+}
+
+// TestGRPCAdapter_Status_ReportsUptimeVersionAndBackend pins the fields
+// the RegistryStatus integration leaves assert: a non-empty version, an
+// uptime measured from adapter construction (not from the call), and the
+// storage backend name.
+func TestGRPCAdapter_Status_ReportsUptimeVersionAndBackend(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	a.clock = func() time.Time { return a.startedAt.Add(90 * time.Second) }
+
+	resp, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if resp.Health != grpcapi.RegistryHealthStatusHealthy {
+		t.Fatalf("Health = %v, want healthy", resp.Health)
+	}
+	if resp.Version != envelopeVersion {
+		t.Fatalf("Version = %q, want %q", resp.Version, envelopeVersion)
+	}
+	if uptime := resp.Timestamp.Sub(resp.StartedAt); uptime != 90*time.Second {
+		t.Fatalf("uptime = %v, want 90s", uptime)
+	}
+	if len(resp.Components) != 1 || resp.Components[0].Details["backend"] != storageBackendName {
+		t.Fatalf("Components = %+v, want one storage component with backend %q", resp.Components, storageBackendName)
+	}
+}
+
+// TestGRPCAdapter_Status_UnconfiguredStorageIsUnhealthy covers the error
+// branch: a Registry without storage reports unhealthy and keeps its
+// start time.
+func TestGRPCAdapter_Status_UnconfiguredStorageIsUnhealthy(t *testing.T) {
+	reg, err := NewRegistry(validTestConfig(), testLogger())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	a := NewGRPCAdapter(reg)
+
+	resp, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if resp.Health != grpcapi.RegistryHealthStatusUnhealthy {
+		t.Fatalf("Health = %v, want unhealthy", resp.Health)
+	}
+	if !resp.StartedAt.Equal(a.startedAt) {
+		t.Fatalf("StartedAt = %v, want %v", resp.StartedAt, a.startedAt)
+	}
+	if len(resp.Components) != 1 || resp.Components[0].Message == "" {
+		t.Fatalf("Components = %+v, want one storage component with the failure message", resp.Components)
 	}
 }
 

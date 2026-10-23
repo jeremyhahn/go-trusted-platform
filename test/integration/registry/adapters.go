@@ -625,6 +625,13 @@ type cliStatusResponse struct {
 	StorageStatus      string `json:"storage_status"`
 }
 
+// storageComponentName and storageBackendDetail locate the storage
+// backend name in a status response's component list.
+const (
+	storageComponentName = "storage"
+	storageBackendDetail = "backend"
+)
+
 func (r *cliStatusResponse) toStatusResult() *StatusResult {
 	return &StatusResult{
 		Healthy:            r.Healthy,

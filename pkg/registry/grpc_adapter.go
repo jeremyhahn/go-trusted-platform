@@ -41,9 +41,19 @@ import (
 // envelope is sufficient for the WebUI and platformctl callers Phase 5
 // targets.
 type GRPCAdapter struct {
-	registry *Registry
-	clock    func() time.Time
+	registry  *Registry
+	clock     func() time.Time
+	startedAt time.Time
 }
+
+// envelopeVersion is the version of the JSON image envelope described
+// above; Status reports it as the registry version.
+const envelopeVersion = "envelope/v1"
+
+// storageBackendName names the only storage the Registry has
+// (QuicBaaSStorage). Status reports it as the "storage" component's
+// "backend" detail.
+const storageBackendName = "quicbaas"
 
 // NewGRPCAdapter returns an adapter ready to be plugged into
 // daemon Config.RegistryService.
@@ -51,7 +61,7 @@ func NewGRPCAdapter(r *Registry) *GRPCAdapter {
 	if r == nil {
 		return nil
 	}
-	return &GRPCAdapter{registry: r, clock: time.Now}
+	return &GRPCAdapter{registry: r, clock: time.Now, startedAt: time.Now().UTC()}
 }
 
 // refOf joins Repository + Tag into the colon-delimited reference
@@ -247,11 +257,14 @@ func (a *GRPCAdapter) Delete(ctx context.Context, req *grpcapi.RegistryDeleteReq
 // Status reports a synthetic health view. A real-storage probe lands
 // alongside the cluster-wide forwarder.
 func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusResponse, error) {
+	now := a.clock().UTC()
 	manifests, err := a.registry.List(ctx, RegistryListOptions{Limit: 0})
 	if err != nil {
 		return &grpcapi.RegistryStatusResponse{
 			Health:    grpcapi.RegistryHealthStatusUnhealthy,
-			Timestamp: a.clock().UTC(),
+			Version:   envelopeVersion,
+			Timestamp: now,
+			StartedAt: a.startedAt,
 			Components: []*grpcapi.RegistryComponentHealth{{
 				Name:    "storage",
 				Status:  grpcapi.RegistryHealthStatusUnhealthy,
@@ -260,12 +273,18 @@ func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusRespon
 		}, nil
 	}
 	return &grpcapi.RegistryStatusResponse{
-		Health: grpcapi.RegistryHealthStatusHealthy,
+		Health:  grpcapi.RegistryHealthStatusHealthy,
+		Version: envelopeVersion,
 		Storage: &grpcapi.RegistryStorageStats{
 			ArtifactCount: int64(len(manifests)),
 		},
-		Timestamp: a.clock().UTC(),
-		StartedAt: a.clock().UTC(),
+		Components: []*grpcapi.RegistryComponentHealth{{
+			Name:    "storage",
+			Status:  grpcapi.RegistryHealthStatusHealthy,
+			Details: map[string]string{"backend": storageBackendName},
+		}},
+		Timestamp: now,
+		StartedAt: a.startedAt,
 	}, nil
 }
 
