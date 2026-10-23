@@ -41,6 +41,7 @@ DELETE /api/v1/kms/keys/{name}
 DELETE /api/v1/kms/secrets/{name}
 DELETE /api/v1/messaging/channels/{name}
 DELETE /api/v1/object-storage/object
+DELETE /api/v1/orchestrator/sessions/{session_id}
 DELETE /api/v1/overlay/macs
 DELETE /api/v1/overlay/vnis/{vni:[0-9]+}
 DELETE /api/v1/platform/config/snapshots/{id}
@@ -226,6 +227,12 @@ GET /api/v1/object-storage/object/metadata
 GET /api/v1/object-storage/objects
 GET /api/v1/object-storage/objects/by-tag
 GET /api/v1/object-storage/tenants/{tenant_id}/objects
+GET /api/v1/orchestrator/health
+GET /api/v1/orchestrator/sessions
+GET /api/v1/orchestrator/tenants/{tenant_id}/agents
+GET /api/v1/orchestrator/tenants/{tenant_id}/agents/{agent_id}
+GET /api/v1/orchestrator/tenants/{tenant_id}/jobs
+GET /api/v1/orchestrator/tenants/{tenant_id}/jobs/{job_id}
 GET /api/v1/overlay
 GET /api/v1/overlay/macs
 GET /api/v1/overlay/status
@@ -481,6 +488,9 @@ POST /api/v1/messaging/channels/{channel}/messages
 POST /api/v1/ntp/step
 POST /api/v1/object-storage/objects
 POST /api/v1/object-storage/objects/copy
+POST /api/v1/orchestrator/tenants/{tenant_id}/agents/{agent_id}/disable
+POST /api/v1/orchestrator/tenants/{tenant_id}/agents/{agent_id}/enable
+POST /api/v1/orchestrator/tenants/{tenant_id}/jobs/{job_id}/cancel
 POST /api/v1/overlay/vnis
 POST /api/v1/platform/config/reload
 POST /api/v1/platform/config/snapshots
