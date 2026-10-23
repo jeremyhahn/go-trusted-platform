@@ -233,7 +233,12 @@ func (r *PXERouter) listDevices(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.ListDevices(req.Context(), &platformv1.ListPXEDevicesRequest{})
+	filter, err := deviceFilter(req.URL.Query())
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.ListDevices(req.Context(), &platformv1.ListPXEDevicesRequest{Filter: filter})
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
