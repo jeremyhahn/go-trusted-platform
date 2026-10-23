@@ -576,7 +576,10 @@ sequenceDiagram
     PD-->>Br: console bearer
 ```
 
-qrdb first-boot creates the `admin` account without an email, and the SDK
+qrdb first-boot can create the `admin` account without an email; the
+embedded quicbaas bootstrap gives it `<username>@<tenant>.qrdb.local`
+(`admin@system.qrdb.local`), so `admin-email` must name that address there.
+The SDK
 registers a passkey only for an account its keystore finds **by email**; with
 self-service registration off it refuses any other with "public registration
 is disabled". So passkey begin first gives the backbone `admin` account the

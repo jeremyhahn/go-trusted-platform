@@ -478,9 +478,12 @@ verify (the challenge signed with `admin.key`), then passkey begin and finish
 with a test-side software authenticator (ES256, "none" attestation) against
 the `webauthn` relying party in `test/integration/config.yaml`. The webservice
 registry builds those routes only when the config names the firstboot admin
-account: `admin-email: admin@integration.internal` in
-`test/integration/config.yaml` (an address in the harness DNS zone; IAM refuses
-one without a dotted domain). Without it platformd logs
+account: `admin-email: admin@system.qrdb.local` in
+`test/integration/config.yaml`, the email the embedded quicbaas bootstrap gives
+the system tenant's `admin` account (`<username>@<tenant>.qrdb.local`). Any
+other address fails passkey begin with HTTP 500 `ErrAdminEmailConflict`
+(`admin-email … does not match the admin account's email …`), and
+`TestIntegrationConfig_AdminEmailIsBootstrapAccount` pins it. Without it platformd logs
 `adminclaim: admin email is required`, leaves the routes unregistered, and
 every REST leg fails its first call with a 404 on `/api/v1/admin/claim/status`.
 `TestIntegrationConfig_RunMode` (`pkg/app/integration_config_test.go`) fails

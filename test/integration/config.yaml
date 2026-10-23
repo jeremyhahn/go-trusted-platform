@@ -16,8 +16,11 @@ ca-dir: /tmp/platformd-integration/ca
 # (pkg/app/app.go AdminEmail). The webservice registry builds the
 # /api/v1/admin/claim routes only when it is set, and the admin session the
 # REST adapters open starts there (docs/test/integration.md, "Admin session").
-# The address is in the harness DNS zone below; IAM requires a dotted domain.
-admin-email: admin@integration.internal
+# It is the email the embedded quicbaas bootstrap gives that account,
+# <username>@<tenant>.qrdb.local (go-quicbaas pkg/iam/qrdbadapter
+# syntheticEmail); admin-claim refuses any other (ErrAdminEmailConflict).
+# TestIntegrationConfig_AdminEmailIsBootstrapAccount pins it.
+admin-email: admin@system.qrdb.local
 
 # Domain for test certificates
 domain: localhost

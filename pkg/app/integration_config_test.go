@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
@@ -188,6 +189,23 @@ func TestIntegrationConfig_RunModeMismatch(t *testing.T) {
 		"daemon-only: no webservice mounts the admin-claim routes, whatever the email")
 	assert.True(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@integration.internal"}),
 		"a webservice with an IAM-valid admin-email serves the claim")
+}
+
+// bootstrapAdminEmail is the email the embedded quicbaas bootstrap gives a
+// tenant's firstboot account: <username>@<tenant>.qrdb.local (go-quicbaas
+// pkg/iam/qrdbadapter syntheticEmail).
+func bootstrapAdminEmail(username, tenantID string) string {
+	return username + "@" + tenantID + ".qrdb.local"
+}
+
+// TestIntegrationConfig_AdminEmailIsBootstrapAccount pins the harness
+// admin-email to the system admin account's own email. admin-claim refuses
+// passkey begin when the two differ (ErrAdminEmailConflict), which failed
+// every REST leg's admin session in CI.
+func TestIntegrationConfig_AdminEmailIsBootstrapAccount(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+	assert.Equal(t, bootstrapAdminEmail(common.AdminUsername, SystemTenantID), a.AdminEmail,
+		"admin-email is the system admin account's email")
 }
 
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can
