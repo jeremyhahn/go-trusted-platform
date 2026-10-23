@@ -805,7 +805,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          roleID,
-			Name:        "Test Role Assign",
+			Name:        GenerateTestRoleName(testID + " Assign"),
 			Description: "Test role for assignment",
 			Permissions: []string{"device:read"},
 		}
@@ -814,6 +814,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, roleOpts.ID)
 
 		// Create a user without roles
 		userOpts := CreateUserOptions{
@@ -826,6 +827,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateUser failed: %v", err)
 		}
+		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
 
 		// Assign role to user
 		assignOpts := AssignRoleOptions{
@@ -872,7 +874,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          roleID,
-			Name:        "Test Role Revoke",
+			Name:        GenerateTestRoleName(testID + " Revoke"),
 			Description: "Test role for revocation",
 			Permissions: []string{"device:read"},
 		}
@@ -881,6 +883,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, roleOpts.ID)
 
 		// Create a user with the role
 		userOpts := CreateUserOptions{
@@ -894,6 +897,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateUser failed: %v", err)
 		}
+		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
 
 		// Revoke role from user
 		revokeOpts := RevokeRoleOptions{
@@ -936,7 +940,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		role1Opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          role1ID,
-			Name:        "Test Role Multi 1",
+			Name:        GenerateTestRoleName(testID + " Multi 1"),
 			Description: "Test role 1 for multiple role assignment",
 			Permissions: []string{"device:read"},
 		}
@@ -945,12 +949,13 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole 1 failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, role1Opts.ID)
 
 		role2ID := GenerateTestRoleID(testID + "-multi2")
 		role2Opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          role2ID,
-			Name:        "Test Role Multi 2",
+			Name:        GenerateTestRoleName(testID + " Multi 2"),
 			Description: "Test role 2 for multiple role assignment",
 			Permissions: []string{"device:write"},
 		}
@@ -959,6 +964,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateRole 2 failed: %v", err)
 		}
+		CleanupRole(t, ctx, adapter, tenantID, role2Opts.ID)
 
 		// Create a user with both roles
 		userOpts := CreateUserOptions{
@@ -972,6 +978,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		if err != nil {
 			t.Fatalf("CreateUser failed: %v", err)
 		}
+		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
 
 		// Verify user has both roles
 		getOpts := GetUserOptions{

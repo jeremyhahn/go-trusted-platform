@@ -16,7 +16,10 @@
 package iam
 
 import (
+	"context"
 	"os"
+	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -97,6 +100,33 @@ func GenerateTestRoleName(testID string) string {
 // GenerateTestRoleID generates a unique role ID for testing
 func GenerateTestRoleID(testID string) string {
 	return "test-role-" + testID
+}
+
+// CleanupUser deletes userID when t ends, so no subtest sees another's
+// leftovers. The delete runs on a context detached from ctx: a subtest's
+// context may already be cancelled when t.Cleanup runs.
+func CleanupUser(t *testing.T, ctx context.Context, adapter IAMCommands, tenantID, userID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if _, err := adapter.DeleteUser(cleanupCtx, DeleteUserOptions{TenantID: tenantID, UserID: userID}); err != nil {
+			t.Errorf("cleanup: delete IAM user %s: %v", userID, err)
+		}
+	})
+}
+
+// CleanupRole deletes roleID when t ends, so no subtest sees another's
+// leftovers. The delete runs on a context detached from ctx, as CleanupUser's.
+func CleanupRole(t *testing.T, ctx context.Context, adapter IAMCommands, tenantID, roleID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if _, err := adapter.DeleteRole(cleanupCtx, DeleteRoleOptions{TenantID: tenantID, RoleID: roleID}); err != nil {
+			t.Errorf("cleanup: delete IAM role %s: %v", roleID, err)
+		}
+	})
 }
 
 // GenerateTestGroupName generates a unique group name for testing

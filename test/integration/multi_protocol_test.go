@@ -568,37 +568,6 @@ func requireIAMSDKGap(t *testing.T, adapter ProtocolAdapter, operation, gap stri
 	return true
 }
 
-// cleanupIAMUser deletes a user the IAM matrix created, so no subtest sees
-// another's leftovers.
-func cleanupIAMUser(t *testing.T, ctx context.Context, cmd iam.IAMCommands, userID string) {
-	t.Helper()
-	t.Cleanup(func() {
-		cleanupCtx, cancel := iamCleanupContext(ctx)
-		defer cancel()
-		_, err := cmd.DeleteUser(cleanupCtx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: userID})
-		assert.NoError(t, err, "cleanup: delete IAM user %s", userID)
-	})
-}
-
-// cleanupIAMRole deletes a role the IAM matrix created, so no subtest sees
-// another's leftovers.
-func cleanupIAMRole(t *testing.T, ctx context.Context, cmd iam.IAMCommands, roleID string) {
-	t.Helper()
-	t.Cleanup(func() {
-		cleanupCtx, cancel := iamCleanupContext(ctx)
-		defer cancel()
-		_, err := cmd.DeleteRole(cleanupCtx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: roleID})
-		assert.NoError(t, err, "cleanup: delete IAM role %s", roleID)
-	})
-}
-
-// iamCleanupContext detaches a cleanup from the subtest's context: each IAM
-// subtest cancels its context on return, before t.Cleanup runs, so a delete
-// on that context never reaches the server and leaves the entity behind.
-func iamCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-}
-
 // allProtocolNames lists every transport the matrix runner supports, for the
 // zero-transport guard's failure message.
 func allProtocolNames() []string {
@@ -1356,7 +1325,7 @@ func testIAMCreateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, result)
 	require.NotNil(t, result.User)
 	require.NotEmpty(t, result.User.ID, "User ID should not be empty")
-	cleanupIAMUser(t, ctx, cmd, result.User.ID)
+	iam.CleanupUser(t, ctx, cmd, helpers.HarnessTenantID, result.User.ID)
 	assert.Equal(t, email, result.User.Email)
 }
 
@@ -1373,7 +1342,7 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
-	cleanupIAMUser(t, ctx, cmd, createResult.User.ID)
+	iam.CleanupUser(t, ctx, cmd, helpers.HarnessTenantID, createResult.User.ID)
 
 	result, err := cmd.GetUser(ctx, iam.GetUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	if missing := surfaceMissing(adapter, "IAM", "GetUser", err); missing != nil {
@@ -1409,7 +1378,7 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
-	cleanupIAMUser(t, ctx, cmd, createResult.User.ID)
+	iam.CleanupUser(t, ctx, cmd, helpers.HarnessTenantID, createResult.User.ID)
 
 	updatedName := fmt.Sprintf("Matrix Updated User %d", suffix)
 	result, err := cmd.UpdateUser(ctx, iam.UpdateUserOptions{
@@ -1462,7 +1431,7 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, result)
 	require.NotNil(t, result.Role)
 	require.NotEmpty(t, result.Role.ID)
-	cleanupIAMRole(t, ctx, cmd, result.Role.ID)
+	iam.CleanupRole(t, ctx, cmd, helpers.HarnessTenantID, result.Role.ID)
 }
 
 func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1479,7 +1448,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err)
 	require.NotNil(t, userResult)
 	require.NotNil(t, userResult.User)
-	cleanupIAMUser(t, ctx, cmd, userResult.User.ID)
+	iam.CleanupUser(t, ctx, cmd, helpers.HarnessTenantID, userResult.User.ID)
 
 	roleID := fmt.Sprintf("matrix-assign-role-%d", suffix)
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
@@ -1492,7 +1461,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err)
 	require.NotNil(t, roleResult)
 	require.NotNil(t, roleResult.Role)
-	cleanupIAMRole(t, ctx, cmd, roleResult.Role.ID)
+	iam.CleanupRole(t, ctx, cmd, helpers.HarnessTenantID, roleResult.Role.ID)
 
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
