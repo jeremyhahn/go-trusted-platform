@@ -127,12 +127,8 @@ type RESTAdapter struct {
 // NewRESTAdapter creates a new REST adapter.
 func NewRESTAdapter() *RESTAdapter {
 	adapter := &RESTAdapter{
-		endpoint: GetRESTEndpoint(),
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
-			},
-		},
+		endpoint:   GetRESTEndpoint(),
+		httpClient: helpers.NewAdminHTTPClient(0),
 	}
 	adapter.client = computesvc.NewClientFromGRPC(&restComputeClient{adapter: adapter})
 	return adapter

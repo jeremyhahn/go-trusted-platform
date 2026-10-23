@@ -47,6 +47,10 @@ var _ KMSCommands = (*RESTAdapter)(nil)
 // RESTAdapter implements KMSCommands using HTTP/REST calls to platformd.
 // This adapter makes REST API calls to the platformd server for testing
 // the REST transport layer consistency with other protocol adapters.
+// restBackendStatusPath is the webservice KMS router's backend status
+// route (pkg/webservice/v1/rest/kms), the adapter's connectivity probe.
+const restBackendStatusPath = "/api/v1/kms/backend/status"
+
 type RESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client
@@ -62,7 +66,7 @@ func NewRESTAdapter() *RESTAdapter {
 func NewRESTAdapterWithConfig(baseURL string, timeout time.Duration) *RESTAdapter {
 	return &RESTAdapter{
 		baseURL:    baseURL,
-		httpClient: helpers.NewHTTPClient(timeout),
+		httpClient: helpers.NewAdminHTTPClient(timeout),
 	}
 }
 
@@ -82,10 +86,10 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	}
 
 	// The REST listener is mTLS: present the runner's client certificate.
-	r.httpClient = helpers.NewHTTPClient(30 * time.Second)
+	r.httpClient = helpers.NewAdminHTTPClient(30 * time.Second)
 
 	// Verify connectivity by checking backend status
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)
+	_, statusCode, err := r.doRequest(ctx, http.MethodGet, restBackendStatusPath, nil)
 	if err != nil {
 		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
 	}
@@ -631,7 +635,7 @@ func (r *RESTAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOptio
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/encrypt/%s", opts.KeyID)
+	path := "/api/v1/kms/encrypt/" + url.PathEscape(opts.KeyID)
 	// The current REST contract has no separate nonce field: the nonce
 	// travels inside the returned ciphertext envelope.
 	restReq := resttypes.EncryptRequest{
@@ -662,7 +666,7 @@ func (r *RESTAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOptio
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/decrypt/%s", opts.KeyID)
+	path := "/api/v1/kms/decrypt/" + url.PathEscape(opts.KeyID)
 	// The nonce is carried inside the ciphertext envelope on the current
 	// contract, so opts.Nonce is not sent separately.
 	restReq := resttypes.DecryptRequest{
@@ -696,7 +700,7 @@ func (r *RESTAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/sign/%s", opts.KeyID)
+	path := "/api/v1/kms/sign/" + url.PathEscape(opts.KeyID)
 	restReq := resttypes.SignRequest{
 		Data: opts.Message,
 		Hash: opts.HashAlgorithm,
@@ -726,7 +730,7 @@ func (r *RESTAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/verify/%s", opts.KeyID)
+	path := "/api/v1/kms/verify/" + url.PathEscape(opts.KeyID)
 	restReq := resttypes.VerifyRequest{
 		Data:      opts.Message,
 		Signature: opts.Signature,
@@ -781,7 +785,7 @@ func (r *RESTAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/hmac/%s", opts.KeyID)
+	path := "/api/v1/kms/hmac/" + url.PathEscape(opts.KeyID)
 	restReq := resttypes.HMACRequest{
 		Data: opts.Message,
 		Hash: opts.HashAlgorithm,
@@ -810,7 +814,7 @@ func (r *RESTAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMA
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/hmac/%s/verify", opts.KeyID)
+	path := "/api/v1/kms/hmac/" + url.PathEscape(opts.KeyID) + "/verify"
 	restReq := resttypes.VerifyHMACRequest{
 		Data: opts.Message,
 		HMAC: opts.HMAC,

@@ -821,6 +821,7 @@ type RestHandlerRegistry interface {
 	AttestationVerdicts() restattestation.VerdictPoller
 	GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource)
 	GatewayVPNLeases() restgateway.VPNLeaseSink
+	DaemonRESTRoutes() DaemonRESTRoutes
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
 	TenantServiceServer() platformv1.TenantServiceServer
@@ -1109,6 +1110,13 @@ type RegistryParams struct {
 	// GatewayVPNLeases backs /api/v1/gateway/vpn-leases/*. When nil those
 	// routes answer 500 ErrGatewayControlNotConfigured.
 	GatewayVPNLeases restgateway.VPNLeaseSink
+	// DaemonRESTRoutes is the daemon's REST route table. platformd serve
+	// sets it when a webservices: section replaces the daemon REST
+	// listener; the router then mounts the daemon-owned groups (health,
+	// version, services, protocols, BMC, ceremony, PIV, LUKS, FIDO2,
+	// cluster) behind a verified-client-certificate gate. When nil they
+	// are not mounted.
+	DaemonRESTRoutes DaemonRESTRoutes
 	// OCIDistBackend wires the spec-compliant /v2/ distribution
 	// surface so `crane` / `skopeo` / `oras` can push and pull
 	// against the registry directly. Set by the daemon boot path
@@ -2057,6 +2065,11 @@ func (registry *HandlerRegistry) GatewayControlPlane() (restgateway.GatewayState
 // GatewayVPNLeases returns the record of the gateways' VPN leases, or nil.
 func (registry *HandlerRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink {
 	return registry.params.GatewayVPNLeases
+}
+
+// DaemonRESTRoutes returns the daemon's REST route table, or nil.
+func (registry *HandlerRegistry) DaemonRESTRoutes() DaemonRESTRoutes {
+	return registry.params.DaemonRESTRoutes
 }
 
 // EABServiceServer returns the in-process EABService gRPC implementation, or nil.

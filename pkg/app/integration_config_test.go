@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -27,7 +28,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
 
 // integrationConfig is the platformd config run-integration-tests.sh starts
@@ -105,18 +108,86 @@ func TestIntegrationConfig_EKCertIsTheSwtpmNVIndex(t *testing.T) {
 	}
 }
 
-// TestIntegrationConfig_DaemonOnly pins both integration configs to
-// daemon-only mode. A webservices entry makes `platformd serve` take
-// runWithWebservices (pkg/daemon/commands/serve.go), which turns the daemon
-// REST listener off (EnableREST = false) and builds the CA and webserver
-// before the Unix socket exists; the runner then never sees its socket and
-// every REST adapter loses its endpoint. The gatewayd-facing routes the sdn
-// suite needs are on the daemon REST server.
-func TestIntegrationConfig_DaemonOnly(t *testing.T) {
-	for _, path := range []string{integrationConfig, barrierGateConfig} {
-		a := loadTemplate(t, path)
-		assert.Empty(t, a.WebServices, "%s: webservices switches platformd out of daemon-only mode", path)
+// webserviceTLSPorts returns the TLS port of every webservice a config
+// declares. None means daemon-only: `platformd serve` takes runDaemonOnly.
+func webserviceTLSPorts(a *App) []string {
+	var ports []string
+	for _, ws := range a.WebServices {
+		ports = append(ports, strconv.Itoa(ws.TLSPort))
 	}
+	return ports
+}
+
+// adminClaimServed reports whether platformd registers /api/v1/admin/claim
+// for a: only the webservice registry mounts it, and only with an
+// admin-email (pkg/webservice/v1/registry.go AdminClaimRestHandler). The
+// address must also pass the IAM pattern the claim's passkey enrolment and
+// the platform-local admin user are held to (pkg/platform/service/email.go).
+func adminClaimServed(a *App) bool {
+	if len(a.WebServices) == 0 || a.AdminEmail == "" {
+		return false
+	}
+	return service.ValidateEmail(a.AdminEmail) == nil
+}
+
+// TestIntegrationConfig_RunMode pins the serve path each integration config
+// takes. A webservices entry sends `platformd serve` into runWithWebservices
+// (pkg/daemon/commands/serve.go), the path production runs.
+// leaveRESTToWebservice sets RESTRoutesOnly: the daemon builds its REST route
+// table but opens no REST listener, and the webservice mounts that table
+// (daemonRESTRoutes) beside the webservice routers and the gatewayd-facing
+// control plane. The Unix socket binds in platformDaemon.Start, after
+// LoadOrInitCA and InitWebServer and before any webservice listener runs.
+//
+// The harness config serves REST from one webservice on the runner's
+// PLATFORMD_REST_PORT, where PLATFORM_REST_ENDPOINT points. The barrier-gate
+// config stays daemon-only: its suite starts its own platformd on its own
+// ports and reaches REST on the daemon listener
+// (test/integration/barrier_gate/helpers.go).
+func TestIntegrationConfig_RunMode(t *testing.T) {
+	script, err := os.ReadFile(integrationRunner)
+	require.NoError(t, err)
+	restPort, ok := harnessRESTPort(script)
+	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+
+	tests := []struct {
+		path  string
+		ports []string
+		claim bool
+		mode  string
+	}{
+		{integrationConfig, []string{restPort}, true, "runWithWebservices, REST and /api/v1/admin/claim on the webservice"},
+		{barrierGateConfig, nil, false, "daemon-only, REST on the daemon listener"},
+	}
+	for _, tt := range tests {
+		a := loadTemplate(t, tt.path)
+		assert.Equal(t, tt.ports, webserviceTLSPorts(a), "%s: %s", tt.path, tt.mode)
+		assert.Equal(t, tt.claim, adminClaimServed(a), "%s: %s (admin-email %q)", tt.path, tt.mode, a.AdminEmail)
+	}
+}
+
+// TestIntegrationConfig_RunModeMismatch proves the run-mode pin can fail: a
+// daemon-only config, or a webservice on another port, does not serve REST
+// where the runner's adapters dial.
+func TestIntegrationConfig_RunModeMismatch(t *testing.T) {
+	daemonOnly := &App{}
+	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(daemonOnly), "no webservice serves no REST port")
+
+	otherPort := &App{WebServices: []*v1.Config{{TLSPort: 9443}}}
+	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(otherPort), "a webservice on 9443 is not the runner's 8443")
+
+	twoServices := &App{WebServices: []*v1.Config{{TLSPort: 8443}, {TLSPort: 9443}}}
+	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(twoServices), "a second webservice changes the mode the pin names")
+
+	webservice := []*v1.Config{{TLSPort: 8443}}
+	assert.False(t, adminClaimServed(&App{WebServices: webservice}),
+		"no admin-email: the registry leaves /api/v1/admin/claim unregistered")
+	assert.False(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@localhost"}),
+		"an address IAM refuses (no dotted domain) cannot back the claim")
+	assert.False(t, adminClaimServed(&App{AdminEmail: "admin@integration.internal"}),
+		"daemon-only: no webservice mounts the admin-claim routes, whatever the email")
+	assert.True(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@integration.internal"}),
+		"a webservice with an IAM-valid admin-email serves the claim")
 }
 
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can
@@ -126,6 +197,58 @@ func TestIntegrationConfig_TCPSwtpmNotASocket(t *testing.T) {
 	socket, ok := harnessSwtpmSocket(script)
 	assert.False(t, ok)
 	assert.Empty(t, socket)
+}
+
+// swtpmProvisionScript provisions the harness swtpm's EK and EK certificate.
+const swtpmProvisionScript = "../../build/docker/devcontainer/swtpm-provision.sh"
+
+// The EK certificate NV indices swtpm_setup writes, from the Low Range of
+// the TCG EK Credential Profile v2.1 §2.2.1.4 (0x01C00002 - 0x01C0000C).
+const (
+	ekCertIndexRSA2048 uint32 = 0x01C00002
+	ekCertIndexECCP256 uint32 = 0x01C0000A
+)
+
+// harnessEKCertIndex returns the NV index swtpm_setup writes the EK
+// certificate to, as the provisioning script invokes it: the RSA 2048 index,
+// or the ECC P256 index under --ecc. It returns false when the script does
+// not ask for an EK certificate.
+func harnessEKCertIndex(script []byte) (uint32, bool) {
+	if !bytes.Contains(script, []byte("--create-ek-cert")) {
+		return 0, false
+	}
+	if bytes.Contains(script, []byte("--ecc")) {
+		return ekCertIndexECCP256, true
+	}
+	return ekCertIndexRSA2048, true
+}
+
+// The harness swtpm carries a manufacturer-style EK certificate in NV. With
+// no tpm.ek.cert-handle, go-xkms looks the certificate up in the platform
+// certificate store instead, never reads NV, and `tpm ek certificate`
+// answers NotFound on every transport.
+func TestIntegrationConfig_EKCertificateAtHarnessIndex(t *testing.T) {
+	script, err := os.ReadFile(swtpmProvisionScript)
+	require.NoError(t, err)
+	index, ok := harnessEKCertIndex(script)
+	require.True(t, ok, "swtpm-provision.sh creates the EK certificate")
+
+	for _, path := range []string{integrationConfig, barrierGateConfig} {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.TPMConfig.EK, "%s: tpm.ek", path)
+		assert.Equal(t, index, a.TPMConfig.EK.CertHandle,
+			"%s: tpm.ek.cert-handle is the NV index swtpm_setup writes the EK certificate to", path)
+	}
+}
+
+func TestIntegrationConfig_EKCertIndexFollowsSwtpmSetup(t *testing.T) {
+	index, ok := harnessEKCertIndex([]byte("swtpm_setup --tpm2 --createek --create-ek-cert --ecc"))
+	assert.True(t, ok)
+	assert.Equal(t, ekCertIndexECCP256, index)
+
+	index, ok = harnessEKCertIndex([]byte("swtpm_setup --tpm2 --createek"))
+	assert.False(t, ok, "no EK certificate without --create-ek-cert")
+	assert.Zero(t, index)
 }
 
 // TestIntegrationConfig_LoadsWithDNSServer loads the integration config the
@@ -214,4 +337,66 @@ func TestIntegrationConfig_NTPTypoRefused(t *testing.T) {
 	var unknown *config.ErrUnknownConfigKeys
 	require.True(t, errors.As(err, &unknown), "got %v", err)
 	assert.Equal(t, "ntp", unknown.Section)
+}
+
+// restPortVariable is the runner's REST port, the one PLATFORM_REST_ENDPOINT
+// names.
+var restPortVariable = regexp.MustCompile(`(?m)^PLATFORMD_REST_PORT="(\d+)"$`)
+
+// harnessRESTPort returns the REST port run-integration-tests.sh points the
+// adapters at.
+func harnessRESTPort(script []byte) (string, bool) {
+	match := restPortVariable.FindSubmatch(script)
+	if match == nil {
+		return "", false
+	}
+	return string(match[1]), true
+}
+
+// TestIntegrationConfig_ServesRESTThroughWebservice guards the harness mode:
+// without a webservice platformd runs daemon-only, whose REST lacks the
+// webservice routers, and every REST adapter answers 404
+// (docs/daemon/architecture.md).
+func TestIntegrationConfig_ServesRESTThroughWebservice(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+
+	require.Len(t, a.WebServices, 1, "one webservice serves the harness REST")
+	ws := a.WebServices[0]
+
+	script, err := os.ReadFile(integrationRunner)
+	require.NoError(t, err)
+	port, ok := harnessRESTPort(script)
+	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+	assert.Equal(t, port, strconv.Itoa(ws.TLSPort), "the webservice listens where PLATFORM_REST_ENDPOINT points")
+	assert.Zero(t, ws.Port, "no plaintext listener")
+
+	assert.Equal(t, "localhost", ws.Certificate.Subject.CommonName)
+	require.NotNil(t, ws.Certificate.SANS)
+	assert.Contains(t, ws.Certificate.SANS.DNS, "localhost", "the adapters dial https://localhost")
+	require.NotNil(t, ws.Key, "the TLS key is required (ErrWebServiceKeyRequired)")
+	assert.True(t, ws.Key.PlatformPolicy, "the key is sealed with the swtpm platform policy")
+}
+
+// TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin pins the relying
+// party the harness admin session registers its passkey against: the
+// helper's origin is PLATFORM_REST_ENDPOINT, https://localhost:<REST port>.
+func TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+
+	require.Len(t, a.WebServices, 1, "one webservice serves the harness REST")
+	ws := a.WebServices[0]
+	require.NotNil(t, ws.WebAuthn, "the admin claim registers a passkey, so a relying party is required")
+
+	script, err := os.ReadFile(integrationRunner)
+	require.NoError(t, err)
+	port, ok := harnessRESTPort(script)
+	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+	assert.Equal(t, "localhost", ws.WebAuthn.RPID, "the RP id is the host the adapters dial")
+	assert.Equal(t, []string{"https://localhost:" + port}, ws.WebAuthn.RPOrigins)
+}
+
+func TestIntegrationConfig_HarnessRESTPortMissing(t *testing.T) {
+	port, ok := harnessRESTPort([]byte("PLATFORMD_GRPC_PORT=\"10443\"\n# PLATFORMD_REST_PORT=\"8443\"\n"))
+	assert.False(t, ok, "a commented or absent REST port is not the runner's")
+	assert.Empty(t, port)
 }

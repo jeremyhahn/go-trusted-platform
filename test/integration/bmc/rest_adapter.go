@@ -68,7 +68,7 @@ func NewRESTAdapter() *RESTAdapter {
 
 	return &RESTAdapter{
 		endpoint:   endpoint,
-		httpClient: helpers.NewHTTPClient(DefaultRESTTimeout),
+		httpClient: helpers.NewAdminHTTPClient(DefaultRESTTimeout),
 	}
 }
 

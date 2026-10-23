@@ -227,6 +227,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.tenantRoutes()
 	v1Router.tpmRoutes()
 	v1Router.vtpmRoutes()
+	v1Router.daemonRoutes()
 	v1Router.quicbaasStubRoutes()
 
 	// Always mount /platform/service-registry last so it observes the

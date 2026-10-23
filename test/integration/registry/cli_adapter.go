@@ -350,7 +350,11 @@ func (c *CLIAdapter) Status(ctx context.Context) (*StatusResult, error) {
 		return nil, ErrInvalidResponse{Operation: "Status", Err: err}
 	}
 
-	return result.toStatusResult(), nil
+	status, err := result.toStatusResult()
+	if err != nil {
+		return nil, ErrInvalidResponse{Operation: "Status", Err: err}
+	}
+	return status, nil
 }
 
 // Tag has no platformctl registry command.

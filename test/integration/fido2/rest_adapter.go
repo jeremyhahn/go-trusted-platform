@@ -51,7 +51,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 		endpoint = GetServiceEndpoints().PlatformREST
 	}
 	r.baseURL = endpoint
-	r.httpClient = helpers.NewHTTPClient(defaultRESTTimeout)
+	r.httpClient = helpers.NewAdminHTTPClient(defaultRESTTimeout)
 	return nil
 }
 

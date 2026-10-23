@@ -122,12 +122,16 @@ func (g *ScopeGuard) authorize(r *http.Request, scope string, tokenOnly bool) (*
 	if g == nil {
 		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: "no authorization is configured for this route"}
 	}
-	if tokenOnly && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "this route requires a platform bearer token granting " + scope}
-	}
-	authCtx, err := g.authenticate(r)
-	if err != nil {
-		return nil, http.StatusUnauthorized, err
+	authCtx, replayed := replayedCaller(r)
+	if !replayed {
+		if tokenOnly && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "this route requires a platform bearer token granting " + scope}
+		}
+		var err error
+		authCtx, err = g.authenticate(r)
+		if err != nil {
+			return nil, http.StatusUnauthorized, err
+		}
 	}
 	if authCtx == nil {
 		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "the credential authorized no caller"}
@@ -169,6 +173,37 @@ func (g *ScopeGuard) loggerOrDefault() *slog.Logger {
 		return slog.Default()
 	}
 	return g.logger
+}
+
+// callerContextKey keys the principal a front end serving a daemon route in
+// the same process has already authenticated.
+type callerContextKey struct{}
+
+// WithCaller returns a copy of ctx carrying caller: the principal the
+// webservice authenticated by its own session before it replays a daemon
+// route in-process. A context value cannot cross the wire, so only code in
+// this process can set it.
+func WithCaller(ctx context.Context, caller *platformtoken.AuthorizedContext) context.Context {
+	return context.WithValue(ctx, callerContextKey{}, caller)
+}
+
+// replayedCaller returns the principal a replaying front end put in r's
+// context. When it is present it is the only principal r acts as: the
+// transport's client certificate belongs to the front end, not the caller,
+// so no check may fall back to it.
+func replayedCaller(r *http.Request) (*platformtoken.AuthorizedContext, bool) {
+	caller, ok := r.Context().Value(callerContextKey{}).(*platformtoken.AuthorizedContext)
+	return caller, ok && caller != nil
+}
+
+// caller returns the principal r acts as: the one a replaying front end put
+// in the context, else the one the bearer token or verified client
+// certificate authenticates on this listener.
+func (g *ScopeGuard) caller(r *http.Request) (*platformtoken.AuthorizedContext, error) {
+	if caller, ok := replayedCaller(r); ok {
+		return caller, nil
+	}
+	return g.authenticate(r)
 }
 
 // writeGuardError writes the standard REST error envelope for a refusal.

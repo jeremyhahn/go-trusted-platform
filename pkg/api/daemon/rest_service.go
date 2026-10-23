@@ -91,6 +91,9 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	// ownedRoutes are the daemon-owned route groups, in registration order,
+	// that MountOwnedRoutes registers on another router.
+	ownedRoutes []func(api *mux.Router) error
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -264,9 +267,21 @@ func (s *RESTServer) registerRoutes() {
 
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 
-	// Health and status endpoints (also available under /api/v1 for consistency)
-	api.HandleFunc("/health", s.handleHealth).Methods(http.MethodGet)
+	// The webservice listener serves its own GET /api/v1/status, so status
+	// stays off the daemon-owned groups MountOwnedRoutes replays there.
 	api.HandleFunc("/status", s.handleStatus).Methods(http.MethodGet)
+	s.mountOwned(s.registerCoreRoutes)
+
+	// Register IDevID/IAK routes
+	s.mountOwned(s.registerIDevIDRoutes)
+
+	s.logger.Info("REST routes registered", "basePath", restBasePath)
+}
+
+// registerCoreRoutes registers the daemon's health, version, service
+// management and protocol status endpoints under /api/v1.
+func (s *RESTServer) registerCoreRoutes(api *mux.Router) {
+	api.HandleFunc("/health", s.handleHealth).Methods(http.MethodGet)
 	api.HandleFunc("/version", s.handleVersion).Methods(http.MethodGet)
 
 	// Service management endpoints
@@ -278,11 +293,67 @@ func (s *RESTServer) registerRoutes() {
 
 	// Protocol status endpoint
 	api.HandleFunc("/protocols", s.handleProtocols).Methods(http.MethodGet)
+}
 
-	// Register IDevID/IAK routes
-	s.registerIDevIDRoutes()
+// mountOwned registers a route group on this server's /api/v1 subrouter, and
+// records it so MountOwnedRoutes can register the same handlers on the
+// webservice listener.
+func (s *RESTServer) mountOwned(register func(api *mux.Router)) {
+	register(s.router.PathPrefix(restBasePath).Subrouter())
+	s.ownedRoutes = append(s.ownedRoutes, func(api *mux.Router) error {
+		register(api)
+		return nil
+	})
+}
 
-	s.logger.Info("REST routes registered", "basePath", restBasePath)
+// mountOwnedAbsolute is mountOwned for a pkg/api/rest handler group, which
+// registers absolute /api/v1 paths on a root router. The replay builds the
+// group on a scratch router and registers each route on api at its path
+// below /api/v1.
+func (s *RESTServer) mountOwnedAbsolute(register func(root *mux.Router)) {
+	register(s.router)
+	s.ownedRoutes = append(s.ownedRoutes, func(api *mux.Router) error {
+		group := mux.NewRouter()
+		register(group)
+		return group.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+			return replayRoute(api, route)
+		})
+	})
+}
+
+// replayRoute registers route's handler on api, a router rooted at /api/v1,
+// at the route's path below /api/v1 and for the route's methods.
+func replayRoute(api *mux.Router, route *mux.Route) error {
+	template, err := route.GetPathTemplate()
+	if err != nil {
+		return ErrOwnedRouteNotReplayable{Template: template, Cause: err}
+	}
+	path, ok := strings.CutPrefix(template, restBasePath+"/")
+	if !ok {
+		return ErrOwnedRouteNotReplayable{Template: template}
+	}
+	replayed := api.Handle("/"+path, route.GetHandler())
+	// The template resolved, so the route carries no build error, and
+	// GetMethods failing means only that the route matches every method.
+	if methods, err := route.GetMethods(); err == nil {
+		replayed.Methods(methods...)
+	}
+	return nil
+}
+
+// MountOwnedRoutes registers every REST route group the daemon builds inside
+// daemon.New on api, a router rooted at /api/v1. With a webservices: section
+// platformd runs no REST listener of its own and the webservice router mounts
+// these groups after its own, so a path the webservice serves itself keeps
+// its webservice handler (docs/daemon/architecture.md). The caller owns the
+// authentication in front of api.
+func (s *RESTServer) MountOwnedRoutes(api *mux.Router) error {
+	for _, register := range s.ownedRoutes {
+		if err := register(api); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetTPM2Service sets the TPM2 service for REST handlers.
@@ -306,14 +377,15 @@ func (s *RESTServer) SetConfigDeliveryHandler(handler configdelivery.RestHandler
 	}
 	s.configDeliveryHandler = handler
 
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	api.HandleFunc("/provisioning/config", handler.FetchConfig).Methods(http.MethodPost)
-	api.HandleFunc("/provisioning/config/nonce", handler.GetNonce).Methods(http.MethodGet)
-	api.HandleFunc("/provisioning/sign", handler.SignDigest).Methods(http.MethodPost)
-	api.HandleFunc("/provisioning/sessions", handler.ListSessions).Methods(http.MethodGet)
-	api.HandleFunc("/provisioning/sessions/{sessionID}", handler.GetSession).Methods(http.MethodGet)
-	api.HandleFunc("/provisioning/sessions/{sessionID}/poll", handler.PollSession).Methods(http.MethodGet)
-	api.HandleFunc("/provisioning/sessions/{sessionID}/fulfill", handler.FulfillSession).Methods(http.MethodPost)
+	s.mountOwned(func(api *mux.Router) {
+		api.HandleFunc("/provisioning/config", handler.FetchConfig).Methods(http.MethodPost)
+		api.HandleFunc("/provisioning/config/nonce", handler.GetNonce).Methods(http.MethodGet)
+		api.HandleFunc("/provisioning/sign", handler.SignDigest).Methods(http.MethodPost)
+		api.HandleFunc("/provisioning/sessions", handler.ListSessions).Methods(http.MethodGet)
+		api.HandleFunc("/provisioning/sessions/{sessionID}", handler.GetSession).Methods(http.MethodGet)
+		api.HandleFunc("/provisioning/sessions/{sessionID}/poll", handler.PollSession).Methods(http.MethodGet)
+		api.HandleFunc("/provisioning/sessions/{sessionID}/fulfill", handler.FulfillSession).Methods(http.MethodPost)
+	})
 
 	s.logger.Info("Provisioning config delivery routes registered")
 }
@@ -326,27 +398,28 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	}
 	s.bmcHandler = handler
 
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerAction).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.SetBootDevice).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.GetBootDevice).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.MountISO).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.UnmountISO).Methods(http.MethodDelete)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.VirtualMediaStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/sensors", handler.GetSensors).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", handler.GetSystemInfo).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.Provision).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", handler.EnrollBMC).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", handler.RestoreBMC).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.GetWebCertificate).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.ReplaceWebCertificate).Methods(http.MethodPut)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.ListUsers).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.CreateUser).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", handler.DeleteUser).Methods(http.MethodDelete)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", handler.SetUserPassword).Methods(http.MethodPut)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
+	s.mountOwned(func(api *mux.Router) {
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerAction).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerStatus).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.SetBootDevice).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.GetBootDevice).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.MountISO).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.UnmountISO).Methods(http.MethodDelete)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.VirtualMediaStatus).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/sensors", handler.GetSensors).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", handler.GetSystemInfo).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.Provision).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", handler.EnrollBMC).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", handler.RestoreBMC).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.GetWebCertificate).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.ReplaceWebCertificate).Methods(http.MethodPut)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.ListUsers).Methods(http.MethodGet)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.CreateUser).Methods(http.MethodPost)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", handler.DeleteUser).Methods(http.MethodDelete)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", handler.SetUserPassword).Methods(http.MethodPut)
+		api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
+	})
 
 	s.logger.Info("BMC management routes registered")
 }
@@ -362,7 +435,7 @@ func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer, guard *r
 		return
 	}
 	handlers := restapi.NewNTPHandlers(server, guard, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("NTP REST routes registered")
 }
 
@@ -388,7 +461,7 @@ func (s *RESTServer) SetVPNHandlers(server platformv1.VPNServiceServer, guard *r
 		return
 	}
 	handlers := restapi.NewVPNHandlers(server, guard, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("VPN REST routes registered")
 }
 
@@ -416,7 +489,7 @@ func (s *RESTServer) SetGatewayControlPlane(cp *restgateway.ControlPlane) {
 // refuses every route.
 func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, guard *restapi.ScopeGuard) {
 	handlers := restapi.NewAppServiceHandlers(servers, guard, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("Application service REST routes registered")
 }
 
@@ -444,7 +517,7 @@ func (s *RESTServer) SetDeviceHandlers(
 		opts = append(opts, restapi.WithDeviceAttestService(attestSvc))
 	}
 	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger, opts...)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("Device REST routes registered", "attestation", attestSvc != nil)
 }
 
@@ -470,7 +543,7 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 		restapi.WithTenantGuard(guard),
 		restapi.WithTenantSystemTenant(systemTenantID),
 	)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("Tenant REST routes registered")
 }
 
@@ -484,7 +557,7 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 		return
 	}
 	handlers := restapi.NewKMSHandlers(service, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("KMS REST routes registered")
 }
 
@@ -496,7 +569,7 @@ func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer,
 	if compute == nil {
 		return
 	}
-	restapi.NewComputeHandlers(compute, guard, s.logger).RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(restapi.NewComputeHandlers(compute, guard, s.logger).RegisterRoutes)
 }
 
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST
@@ -509,7 +582,7 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
 		return
 	}
 	handlers := restapi.NewOverlayHandlers(svc, s.logger)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("Overlay REST routes registered")
 }
 
@@ -540,14 +613,14 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 		}
 	}
 	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
-	handlers.RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(handlers.RegisterRoutes)
 	s.logger.Info("CA REST routes registered")
 
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). These share the same CA instance as the CA handlers so
 	// certificate issuance goes through the live platform CA.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
-	authFactorHandlers.RegisterRoutes(s.router)
+	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger).WithScopeGuard(guard)
+	s.mountOwnedAbsolute(authFactorHandlers.RegisterRoutes)
 	s.logger.Info("Auth factor REST routes registered")
 }
 
@@ -561,7 +634,7 @@ func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, guard *rest
 	if tpm == nil {
 		return
 	}
-	restapi.NewTPMHandlers(s.logger).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(s.router)
+	s.mountOwnedAbsolute(restapi.NewTPMHandlers(s.logger).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes)
 }
 
 // applyMiddleware wraps the router with middleware handlers
@@ -1197,8 +1270,7 @@ func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
 		return
 	}
 	h := newCeremonyRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerCeremonyRoutes(api)
+	s.mountOwned(h.registerCeremonyRoutes)
 	s.logger.Info("Ceremony REST routes registered")
 }
 
@@ -1208,8 +1280,7 @@ func (s *RESTServer) SetPIVService(svc *PIVService) {
 		return
 	}
 	h := newPIVRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerPIVRoutes(api)
+	s.mountOwned(h.registerPIVRoutes)
 	s.logger.Info("PIV REST routes registered")
 }
 
@@ -1219,8 +1290,7 @@ func (s *RESTServer) SetLUKSService(svc *LUKSService) {
 		return
 	}
 	h := newLUKSRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerLUKSRoutes(api)
+	s.mountOwned(h.registerLUKSRoutes)
 	s.logger.Info("LUKS REST routes registered")
 }
 
@@ -1230,8 +1300,7 @@ func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
 		return
 	}
 	h := newFIDO2RESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerFIDO2Routes(api)
+	s.mountOwned(h.registerFIDO2Routes)
 	s.logger.Info("FIDO2 REST routes registered")
 }
 
@@ -1241,8 +1310,7 @@ func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
 // underlying coordinator is missing (HTTP 503 + Unavailable code).
 func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer) {
 	h := newClusterRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerClusterRoutes(api)
+	s.mountOwned(h.registerClusterRoutes)
 	if svc == nil {
 		s.logger.Info("Cluster REST routes registered (no backend; will return 503)")
 		return

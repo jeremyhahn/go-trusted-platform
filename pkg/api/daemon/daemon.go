@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
 
@@ -1481,7 +1483,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	// Create REST server if enabled and not overridden by option
-	if config.EnableREST && daemon.restServer == nil {
+	switch {
+	case config.EnableREST && daemon.restServer == nil:
 		restServer, restErr := newRESTServer(config, service, logger.Slog())
 		if restErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: restErr}
@@ -1492,7 +1495,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer = restServer
 		restServer.SetIDevIDService(idevidService)
 		logger.Info("REST server created", "addr", config.RESTListenAddr)
-	} else if !config.EnableREST {
+	case !config.EnableREST && config.RESTRoutesOnly:
+		// Build the route table only: no listener starts, and the
+		// webservice listener mounts the daemon-owned groups through
+		// MountRESTRoutes (docs/daemon/architecture.md). daemon.restServer
+		// stays nil so Start, Stop and IsRESTEnabled see no REST listener.
+		restServer, restErr := newRESTServer(config, service, logger.Slog())
+		if restErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: restErr}
+			logger.Error(constructErr, "component", "rest_routes")
+			return nil, constructErr
+		}
+		daemon.concreteRestServer = restServer
+		restServer.SetIDevIDService(idevidService)
+		logger.Info("REST route table created without a listener")
+	case !config.EnableREST:
 		logger.Info("REST server not enabled")
 	}
 
@@ -3217,9 +3234,28 @@ func (d *Daemon) TenantGRPCServer() *TenantGRPCServer {
 }
 
 // RESTServer returns the REST server for direct access.
-// Returns nil if REST is not enabled or if a mock was injected.
+// Returns nil if REST is not enabled or if a mock was injected. A route
+// table built for RESTRoutesOnly has no listener and is reached through
+// MountRESTRoutes instead.
 func (d *Daemon) RESTServer() *RESTServer {
+	if !d.config.EnableREST {
+		return nil
+	}
 	return d.concreteRestServer
+}
+
+// MountRESTRoutes registers the daemon-owned REST route groups (health,
+// version, services, protocols, BMC, ceremony, PIV, LUKS, FIDO2 and
+// cluster) on api, a router rooted at /api/v1. platformd serve calls it
+// through the webservice when a webservices: section replaces the daemon
+// REST listener; the caller owns the authentication in front of api. It
+// returns ErrRESTRoutesUnavailable when the daemon built no REST route
+// table or api is nil.
+func (d *Daemon) MountRESTRoutes(api *mux.Router) error {
+	if d.concreteRestServer == nil || api == nil {
+		return ErrRESTRoutesUnavailable{}
+	}
+	return d.concreteRestServer.MountOwnedRoutes(api)
 }
 
 // IsRESTEnabled returns true if REST is enabled and the server is available
@@ -3680,8 +3716,9 @@ func (d *Daemon) registerHealthCheckers() {
 		}
 	}
 
-	// Register REST server health checker if available
-	if d.concreteRestServer != nil {
+	// Register REST server health checker if available. A RESTRoutesOnly
+	// route table never starts a listener, so it has no health to report.
+	if d.concreteRestServer != nil && d.config.EnableREST {
 		checker := NewRESTServiceHealthChecker(d.concreteRestServer)
 		if checker != nil {
 			if err := d.healthRegistry.Register(checker); err != nil {

@@ -2,8 +2,9 @@
 #
 # Minimal production-style config for integration tests.
 # Used by run-integration-tests.sh to start a real platformd instance.
-# No webservices section (daemon-only mode with all protocol APIs). The
-# daemon REST server also mounts the gatewayd-facing control-plane routes.
+# The webservices section puts platformd on the runWithWebservices path, the
+# one production runs: REST is served by the webservice on 8443, gRPC, QUIC,
+# MCP and the Unix socket by the daemon (docs/daemon/architecture.md).
 
 debug: true
 debug-secrets: true
@@ -11,6 +12,12 @@ platform-dir: /tmp/platformd-integration
 config-dir: /etc/trusted-platform
 log-dir: /tmp/platformd-integration/log
 ca-dir: /tmp/platformd-integration/ca
+# The firstboot admin account the console claim enrols its passkey against
+# (pkg/app/app.go AdminEmail). The webservice registry builds the
+# /api/v1/admin/claim routes only when it is set, and the admin session the
+# REST adapters open starts there (docs/test/integration.md, "Admin session").
+# The address is in the harness DNS zone below; IAM requires a dotted domain.
+admin-email: admin@integration.internal
 
 # Domain for test certificates
 domain: localhost
@@ -210,9 +217,9 @@ argon2:
 # dns suite's REST, QUIC, MCP, Unix and CLI adapters reach real zone and
 # record storage. CoreDNS listens on an unprivileged port; the suite creates
 # and deletes its own zones, so the configured zone only seeds the server.
-# DNSSEC and DANE stay off, and with no webservices nothing would publish
-# TLSA records anyway; the bootstrap suite, whose DANE tests need them, is
-# out of the runner's default set for that reason.
+# DNSSEC and DANE stay off, so the webservice certificate is never published
+# as a TLSA record; the bootstrap suite, whose DANE tests need one, is out of
+# the runner's default set for that reason.
 
 dns:
   default-ttl: 300
@@ -303,3 +310,56 @@ sdn:
     underlay-interface: lo
     # A single-node test overlay: the loopback VTEP is explicit (#93).
     vtep-address: 127.0.0.1
+
+# =============================================================================
+# WEB SERVICES
+# =============================================================================
+# REST is served here, not by the daemon: a webservices section puts
+# platformd on runWithWebservices, which mounts the webservice routers the
+# REST adapters call (docs/daemon/architecture.md). Without it platformd runs
+# daemon-only and every webservice route answers 404.
+#
+# TLS on 8443 only (port 0 opens no plaintext listener). The server
+# certificate is issued by the platform CA, so the ca-bundle.crt the adapters
+# trust verifies it, and their client-bundle.pem completes the TLS handshake
+# (both under <platform-dir>/tls). It is no session for the admin-gated
+# routes, which take a platform-minted bearer token
+# (docs/auth/architecture.md §6c). The REST adapters get that bearer from
+# helpers.NewAdminHTTPClient, which claims the platform console once through
+# /api/v1/admin/claim and registers a test-side passkey against the
+# webauthn relying party below (docs/test/integration.md, "Admin session").
+# The key is sealed with the TPM platform policy, which the swtpm
+# platform-srk above provides.
+
+webservices:
+  - name: integration
+    home: /tmp/platformd-integration/www
+    index: index.html
+    port: 0
+    tls-port: 8443
+    jwt:
+      expiration: 60
+      issuer: trusted-platform
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "123456"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: localhost
+        organization: Trusted Platform Integration Tests
+        country: US
+      sans:
+        dns:
+          - localhost
+    webauthn:
+      display-name: Trusted Platform Integration Tests
+      id: localhost
+      origins:
+        - https://localhost:8443

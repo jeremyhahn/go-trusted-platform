@@ -26,7 +26,7 @@ func (s *RESTServer) SetVTPMService(svc vtpm.VTPMService) {
 		// Create vTPM REST handlers and register routes on the existing router.
 		// The vtpm.VTPMService interface satisfies rest.VTPMServiceInterface.
 		vtpmHandlers := rest.NewVTPMHandlers(svc, s.logger)
-		vtpmHandlers.RegisterRoutes(s.router)
+		s.mountOwnedAbsolute(vtpmHandlers.RegisterRoutes)
 		s.logger.Info("vTPM REST routes registered")
 	}
 }

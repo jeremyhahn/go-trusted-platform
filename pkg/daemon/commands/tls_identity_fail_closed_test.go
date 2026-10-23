@@ -112,6 +112,25 @@ func TestApplyDaemonTLSIdentity_MCPHTTPOnlyRequiresIdentity(t *testing.T) {
 	}
 }
 
+// A webservice-only daemon hands its REST routes to the webservice
+// listener (RESTRoutesOnly). That listener terminates TLS for them and the
+// routes verify clients against the daemon's roots, so the identity must be
+// provisioned even with every daemon transport off.
+func TestApplyDaemonTLSIdentity_RESTRoutesOnlyRequiresIdentity(t *testing.T) {
+	cfg := daemon.DefaultConfig()
+	cfg.EnableREST = false
+	cfg.EnableGRPCTCP = false
+	cfg.EnableQUIC = false
+	cfg.EnableMCP = false
+	cfg.RESTRoutesOnly = true
+
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{PlatformDir: t.TempDir()}, cfg, false)
+	var typed ErrProvisionMissingCA
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected ErrProvisionMissingCA for REST-routes-only mode, got %T (%v)", err, err)
+	}
+}
+
 // TestApplyDaemonTLSIdentity_MCPStdioOnlySkips asserts stdio MCP binds no
 // network listener and so, like UDS, needs no TLS identity.
 func TestApplyDaemonTLSIdentity_MCPStdioOnlySkips(t *testing.T) {

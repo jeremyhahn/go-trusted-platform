@@ -223,7 +223,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Delete EK
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_ek_delete",
-		Description: "Flush the Endorsement Key (EK) handle from the TPM",
+		Description: "Evict the Endorsement Key (EK) from its persistent handle",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -258,7 +258,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Delete SRK
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_srk_delete",
-		Description: "Flush the Storage Root Key (SRK) handle from the TPM",
+		Description: "Evict the Shared Storage Root Key (SRK) from its persistent handle",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

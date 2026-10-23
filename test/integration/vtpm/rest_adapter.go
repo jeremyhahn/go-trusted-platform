@@ -70,11 +70,7 @@ func NewRESTAdapter() *RESTAdapter {
 
 	return &RESTAdapter{
 		endpoint: endpoint,
-		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
-			},
-		},
+		client:   helpers.NewAdminHTTPClient(0),
 	}
 }
 

@@ -57,7 +57,7 @@ func NewSDNRESTAdapter() *SDNRESTAdapter {
 	baseURL = strings.TrimRight(baseURL, "/")
 	return &SDNRESTAdapter{
 		baseURL:    baseURL,
-		httpClient: helpers.NewHTTPClient(30 * time.Second),
+		httpClient: helpers.NewAdminHTTPClient(30 * time.Second),
 	}
 }
 

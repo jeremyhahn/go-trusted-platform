@@ -364,6 +364,32 @@ func (e ErrRESTServerNotRunning) Error() string {
 	return "REST server is not running"
 }
 
+// ErrRESTRoutesUnavailable is returned by Daemon.MountRESTRoutes when the
+// daemon built no REST route table (EnableREST and RESTRoutesOnly both off),
+// or when it is given no router to mount on.
+type ErrRESTRoutesUnavailable struct{}
+
+func (e ErrRESTRoutesUnavailable) Error() string {
+	return "daemon REST routes are unavailable: no route table or no target router"
+}
+
+// ErrOwnedRouteNotReplayable is returned by MountOwnedRoutes when a daemon
+// REST route has no path below /api/v1, so it cannot be registered on the
+// router the webservice hands it.
+type ErrOwnedRouteNotReplayable struct {
+	Template string
+	Cause    error
+}
+
+func (e ErrOwnedRouteNotReplayable) Error() string {
+	if e.Cause != nil {
+		return "daemon REST route " + e.Template + " cannot be replayed: " + e.Cause.Error()
+	}
+	return "daemon REST route " + e.Template + " is not below " + restBasePath
+}
+
+func (e ErrOwnedRouteNotReplayable) Unwrap() error { return e.Cause }
+
 // ErrRESTServerAlreadyRunning is returned when attempting to start an already running REST server
 type ErrRESTServerAlreadyRunning struct{}
 

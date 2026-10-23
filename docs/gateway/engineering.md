@@ -866,7 +866,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
-| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists, and a `memory.swap.max` the leaf carries reset to `max` (the class table sets no swap limit) |
+| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists, and a `memory.swap.max` the leaf carries reset to `max` (the class table sets no swap limit); `Remove` waits for `populated 0` in the leaf's `cgroup.events` before the rmdir, and `Memory` reads `memory.current`, `memory.peak` and the `memory.events` counters |
 | `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
@@ -1209,6 +1209,19 @@ whose restart budget ran out has no child left, and the teardown still has to
 run: the cgroup leaf outlives the child that was born into it, and the crash
 history has to go so a later start is not judged by the previous run's budget.
 
+**A leaf is removed only once the kernel reports it empty.** A reaped child is
+not yet out of its leaf: the kernel unlinks an exiting task from its cgroup
+after the task's last context switch, which can come after the parent's wait
+returns, and an rmdir in that window fails with `EBUSY`. That is how the proxy
+suite's teardown found a populated leaf under the parent it removed (#955).
+`CgroupManager.Remove` watches the leaf's `cgroup.events` (the kernel raises a
+modify event on it when `populated` changes) and removes the directory at
+`populated 0`. The wait is bounded by `StopTimeout`; a leaf still populated
+then holds a process that outlived its child, and the supervisor logs it
+rather than kill it. Before the removal the supervisor logs the leaf's
+accounting (`process memory`); every `process down, restarting` line carries
+the same fields, so an OOM kill is on record next to the restart it caused.
+
 **An ambiguous datapath is refused, not resolved.** `Apply` and `Snapshot` go
 to the kernel-class process through `datapathClient()`. The class table has one
 today, but it is data rather than a type: two would make map iteration order
@@ -1436,7 +1449,10 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
   the child was never killed, not that the relaunch was slow. The test writes
   through a raw blocking descriptor: `os.OpenFile` leaves a kernfs file
   `O_NONBLOCK`, and since Linux 6.16 a non-blocking `memory.max` write sets
-  the limit and returns without reclaim or the OOM kill;
+  the limit and returns without reclaim or the OOM kill. The leaf's
+  `memory.current`, `memory.peak` and `memory.events` are logged before the
+  limit drops and once the write returns, so the job log shows how far over
+  1 MiB the child was;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);
@@ -1456,6 +1472,10 @@ The devcontainer harness delegates `+memory +cpu` at the container's cgroup
 root before the suite runs (`prepare_gatewayd_supervision`). This works the
 way a systemd host does: the root's processes first move to an `init` leaf,
 because a cgroup holding processes cannot enable controllers for its children.
+Every test's teardown logs each running child's leaf accounting before it
+stops gatewayd, the measured basis for the class `MemoryMax` values. It then
+waits, through `CgroupManager.Remove`, for any leaf gatewayd left to report
+`populated 0` before it removes the test's cgroup parent.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
@@ -1463,7 +1483,9 @@ choice, not a documented contract. The supervisor dials a child's socket
 right after exec, before the child listens. With gRPC's default reconnect
 backoff (1s, growing 1.6x) a child that listened a few seconds late was not
 reached until the next retry at 2.6s, 5.2s or 9.3s, which is how the
-datapath relaunch overran this bound (#955). `ipc.Dial` retries a refused
+datapath relaunch in `TestGatewaydSupervisorKillUnderLoad`, and the successor's
+bridge adoption in `TestGatewaydSupervisorDeathLeavesTheDatapath`, overran this
+bound on a run whose head predates the fix (#955). `ipc.Dial` retries a refused
 local socket within 200ms instead
 (`TestDial_ReachesASocketThatListensAfterARefusedConnect`), and the
 supervisor logs `process answering` with the time each child took to

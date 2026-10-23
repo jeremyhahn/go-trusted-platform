@@ -202,8 +202,8 @@ declare -A TARGET_NO_DAEMON=(
 # is out of the default set: platformd builds its PXE service with no
 # backend, so every PXE call answers SERVICE_NOT_CONFIGURED. bootstrap stays
 # runnable by name but is out of the default set too: its DANE tests need TLSA
-# records for _8443._tcp.localhost., and the shared daemon-only platformd
-# publishes none (no webservices, DANE off, no zone holds localhost.).
+# records for _8443._tcp.localhost., and the shared platformd publishes none
+# (DANE off, no zone holds localhost.).
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
@@ -1068,6 +1068,14 @@ setup_env_vars() {
     export PLATFORM_TENANT_CLIENT_CERT="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
     export PLATFORM_TENANT_CLIENT_KEY="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
 
+    # Admin console session (docs/test/integration.md, "Admin session"). The
+    # REST adapters claim the platform console once with the firstboot admin
+    # bundle the embedded quicbaas server writes under <quicbaas data-dir>/admin
+    # (quicbaas.data-dir in test/integration/config.yaml), and cache the
+    # bearer the claim mints in the session file for every later test binary.
+    export PLATFORM_ADMIN_BUNDLE_DIR="/tmp/platformd-integration/quicbaas/admin"
+    export PLATFORM_ADMIN_SESSION_FILE="/tmp/platformd-integration/admin-session.json"
+
     # REST endpoint (mTLS requires HTTPS)
     export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
     export PLATFORM_REST_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
@@ -1121,6 +1129,8 @@ setup_env_vars() {
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
     echo "  PLATFORM_TENANT_CLIENT_CERT=$PLATFORM_TENANT_CLIENT_CERT (bundle)"
     echo "  PLATFORM_TENANT_CLIENT_KEY=$PLATFORM_TENANT_CLIENT_KEY (bundle)"
+    echo "  PLATFORM_ADMIN_BUNDLE_DIR=$PLATFORM_ADMIN_BUNDLE_DIR"
+    echo "  PLATFORM_ADMIN_SESSION_FILE=$PLATFORM_ADMIN_SESSION_FILE"
     echo "  PLATFORM_REST_ENDPOINT=$PLATFORM_REST_ENDPOINT"
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"

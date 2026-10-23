@@ -41,7 +41,10 @@ func NewRESTAdapter() *RESTAdapter { return &RESTAdapter{} }
 // Name returns "REST".
 func (r *RESTAdapter) Name() string { return "REST" }
 
-// Setup constructs the HTTPS client targeting the harness REST port.
+// Setup constructs the HTTPS client targeting the harness REST port. The
+// client carries no admin bearer: the harness admin session is bound to the
+// shared PLATFORM_REST_ENDPOINT daemon, which the cold-start runner never
+// starts (AGENTS.md), and the probes here target the dedicated harness.
 func (r *RESTAdapter) Setup(ctx context.Context, h *Harness) error {
 	r.baseURL = GetServiceEndpoints(h.Config()).REST
 	r.client = helpers.NewHTTPClient(15 * time.Second)

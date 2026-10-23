@@ -98,6 +98,7 @@ type testHandlerRegistry struct {
 	tpm            xkmssdk.TrustedPlatformModule
 	vtpmService    vtpm.VTPMService
 	responseWriter response.HttpWriter
+	daemonRoutes   DaemonRESTRoutes
 
 	// Services the route-authorization audit wires so their routers
 	// actually register. Left nil by the older tests, which only assert
@@ -348,6 +349,7 @@ func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateSto
 }
 
 func (r *testHandlerRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink { return nil }
+func (r *testHandlerRegistry) DaemonRESTRoutes() DaemonRESTRoutes         { return r.daemonRoutes }
 
 // Tests
 

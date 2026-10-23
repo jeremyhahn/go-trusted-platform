@@ -81,6 +81,13 @@ type Config struct {
 	RESTTLSKeyFile  string
 	RESTConfig      RESTServerConfig
 
+	// RESTRoutesOnly builds the REST route table without a listener when
+	// EnableREST is false, so the webservice listener can mount the
+	// daemon-owned REST groups (Daemon.MountRESTRoutes). platformd serve
+	// sets it whenever a webservices: section replaces the daemon REST
+	// listener (docs/daemon/architecture.md).
+	RESTRoutesOnly bool
+
 	// Daemon behavior
 	ShutdownTimeout   time.Duration
 	EnableMetrics     bool

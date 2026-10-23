@@ -95,7 +95,7 @@ func NewRESTAdapter() *RESTAdapter {
 	// host:port gets https://) and present the runner's client certificate.
 	return &RESTAdapter{
 		baseURL:    helpers.RESTBaseURL(endpoint),
-		httpClient: helpers.NewHTTPClient(30 * time.Second),
+		httpClient: helpers.NewAdminHTTPClient(30 * time.Second),
 	}
 }
 

@@ -52,7 +52,7 @@ func NewRESTAdapter() *RESTAdapter {
 
 	return &RESTAdapter{
 		baseURL:    helpers.RESTBaseURL(endpoint),
-		httpClient: helpers.NewHTTPClient(30 * time.Second),
+		httpClient: helpers.NewAdminHTTPClient(30 * time.Second),
 	}
 }
 

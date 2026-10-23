@@ -255,12 +255,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	}
 	r.baseURL = endpoint
 
-	r.httpClient = &http.Client{
-		Timeout: DefaultRESTTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: helpers.TLSConfigOrInsecure(),
-		},
-	}
+	r.httpClient = helpers.NewAdminHTTPClient(DefaultRESTTimeout)
 
 	// Verify connectivity with the CA info endpoint
 	_, err := r.Info(ctx)

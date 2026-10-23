@@ -72,7 +72,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	}
 
 	// The REST listener is mTLS: present the runner's client certificate.
-	r.httpClient = helpers.NewHTTPClient(30 * time.Second)
+	r.httpClient = helpers.NewAdminHTTPClient(30 * time.Second)
 
 	// Verify connectivity by checking a basic endpoint
 	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)

@@ -170,11 +170,51 @@ func startVTEP(t *testing.T, routerID string) *server.BgpServer {
 // already run. Routes in the RIB before the dial ride that dump. A route added
 // after the session has delivered an UPDATE is safe, because GoBGP reads
 // UPDATEs only once the peer is marked established.
-func connectVTEP(t *testing.T, v *server.BgpServer, source string, rrPort int32) {
+func connectVTEP(t *testing.T, rr, v *server.BgpServer, source string, rrPort int32) {
 	t.Helper()
 	events := peerEvents(t, v)
 	require.NoError(t, v.AddPeer(context.Background(), &api.AddPeerRequest{Peer: vtepToRR(source, rrPort)}))
 	waitForState(t, events, gobgp.BGP_FSM_ESTABLISHED)
+	t.Cleanup(func() { disconnectVTEP(t, rr, v, source) })
+}
+
+// disconnectVTEP takes v's session to the route reflector down and waits
+// until the RR has stopped the dynamic neighbor, so the RR handles one
+// PeerDown at a time. GoBGP v4.9.0 publishes a neighbor's config by pointer
+// (pConfAccess.Update, server.go:1655), then overwrites that published struct
+// in its PeerDown handling (handleFSMMessage, server.go:1687) while another
+// peer's FSM goroutine reads it without the lock
+// (propagateUpdateToNeighbors, server.go:1474). VTEPs stopped back to back
+// by their cleanups take the RR through two PeerDowns at once and race there.
+func disconnectVTEP(t *testing.T, rr, v *server.BgpServer, source string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	neighbor := netip.MustParseAddr(source)
+	stopped := make(chan struct{}, 1)
+	// The RR broadcasts IDLE for a dynamic neighbor only from stopNeighbor,
+	// after its PeerDown handling is done.
+	require.NoError(t, rr.WatchEvent(ctx, server.WatchEventMessageCallbacks{
+		OnPeerUpdate: func(ev *apiutil.WatchEventMessage_PeerEvent, _ time.Time) {
+			if ev.Type != apiutil.PEER_EVENT_STATE || ev.Peer.State.NeighborAddress != neighbor ||
+				ev.Peer.State.SessionState != gobgp.BGP_FSM_IDLE {
+				return
+			}
+			select {
+			case stopped <- struct{}{}:
+			default:
+			}
+		},
+	}, server.WatchPeer()))
+	require.NoError(t, v.DeletePeer(context.Background(), &api.DeletePeerRequest{Address: rrAddress}))
+
+	deadline := time.NewTimer(waitDeadline)
+	defer deadline.Stop()
+	select {
+	case <-stopped:
+	case <-deadline.C:
+		t.Fatalf("the route reflector never stopped the dynamic neighbor %s", source)
+	}
 }
 
 func vtepToRR(source string, rrPort int32) *api.Peer {
@@ -324,9 +364,9 @@ func TestRealGoBGP_RTConstrainFiltersEVPN(t *testing.T) {
 	originateIMET(t, a, "127.0.0.2", 100)
 	originateIMET(t, a, "127.0.0.2", 200)
 
-	connectVTEP(t, a, "127.0.0.2", rrPort)
-	connectVTEP(t, b, "127.0.0.3", rrPort)
-	connectVTEP(t, c, "127.0.0.4", rrPort)
+	connectVTEP(t, rr, a, "127.0.0.2", rrPort)
+	connectVTEP(t, rr, b, "127.0.0.3", rrPort)
+	connectVTEP(t, rr, c, "127.0.0.4", rrPort)
 
 	awaitVNI(t, cVNIs, 200, 100)
 	awaitVNI(t, bVNIs, 100, 200)
@@ -369,7 +409,7 @@ func TestRealGoBGP_DynamicNeighborsAdmitOnlyTheFabric(t *testing.T) {
 
 	joinVNI(t, inside, "127.0.0.2", 300)
 	originateIMET(t, inside, "127.0.0.2", 300)
-	connectVTEP(t, inside, "127.0.0.2", rrPort)
+	connectVTEP(t, rr, inside, "127.0.0.2", rrPort)
 	awaitVNI(t, rrVNIs, 300)
 
 	// A dynamic peer carries its address in State only: GoBGP's

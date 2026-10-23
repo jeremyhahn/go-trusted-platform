@@ -101,6 +101,14 @@ check every claim against a built table (#452):
   `daemonDivergentClaims` ledger with its reason until the choice of server
   is made.
 
+When `platformd serve` runs with a `webservices:` section the daemon has no
+REST listener, and this router mounts the daemon's own route groups — BMC,
+ceremony, cluster, FIDO2, LUKS, PIV, version, health, services and protocols —
+from `RegistryParams.DaemonRESTRoutes`, behind a verified-client-certificate
+gate (`pkg/webservice/v1/daemon_routes.go`). `/api/v1/proxy` and the gateway
+and KMS rows above are not in that set, so they are served only by a daemon
+REST listener.
+
 ## Authorization
 
 **Scope: this document describes the `pkg/webservice/v1` router.**

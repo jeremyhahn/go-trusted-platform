@@ -399,7 +399,7 @@ Kept out of the runner, or out of its default set:
 | Directory | Why | How it runs |
 |-----------|-----|-------------|
 | `pxe` | platformd constructs its PXE service with a nil backend (`pkg/api/daemon/daemon.go:979`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
-| `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
+| `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` issues the webservice certificate but leaves DANE off. Even with DANE on, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
 | `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` and `sdn-stress` keys' packages; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
@@ -464,6 +464,34 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
 | `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
 | `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
+| `PLATFORM_ADMIN_BUNDLE_DIR` | `/tmp/platformd-integration/quicbaas/admin` | Firstboot admin bundle (`admin.crt`, `admin.key`) the admin session claims the console with |
+| `PLATFORM_ADMIN_SESSION_FILE` | `/tmp/platformd-integration/admin-session.json` | Cached console bearer, shared by every test binary of the run |
+
+#### Admin session
+
+Admin-gated webservice routes take a platform console bearer, not the client
+certificate. The REST adapters build their client with
+`helpers.NewAdminHTTPClient`, whose transport adds `Authorization: Bearer`
+from `helpers.HarnessAdminSession` (`test/integration/helpers/admin_session.go`).
+The first request of the run claims the console through
+`/api/v1/admin/claim` (docs/auth/architecture.md §6b): status, challenge,
+verify (the challenge signed with `admin.key`), then passkey begin and finish
+with a test-side software authenticator (ES256, "none" attestation) against
+the `webauthn` relying party in `test/integration/config.yaml`. The webservice
+registry builds those routes only when the config names the firstboot admin
+account: `admin-email: admin@integration.internal` in
+`test/integration/config.yaml` (an address in the harness DNS zone; IAM refuses
+one without a dotted domain). Without it platformd logs
+`adminclaim: admin email is required`, leaves the routes unregistered, and
+every REST leg fails its first call with a 404 on `/api/v1/admin/claim/status`.
+`TestIntegrationConfig_RunMode` (`pkg/app/integration_config_test.go`) fails
+when the harness config loses it. The minted
+bearer is written to `PLATFORM_ADMIN_SESSION_FILE` (mode 0600); later binaries
+reuse it, refresh it through `/api/v1/login/refresh` when less than 30 minutes
+remain, and claim again only when the cache is for another webservice or the
+daemon is fresh. The claim closes once taken, so an expired cache on a
+claimed daemon fails with `ErrAdminAlreadyClaimed`; every platformd start wipes
+`/tmp/platformd-integration`, cache included.
 
 The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
 writes both on first start (`pkg/daemon/commands/harness_admin_bundle_integration.go`,
@@ -514,6 +542,31 @@ The Makefile automatically handles:
 - Cleaning up test artifacts
 
 **Test Configuration:**
+- Harness mode: platformd runs with webservices, the path production runs
+  (`docs/daemon/architecture.md`). The config's `webservices:` section serves
+  REST on 8443 (TLS only, certificate CN and SAN `localhost`, issued by the
+  platform CA in `ca-bundle.crt`), mounting the webservice routers the REST
+  adapters call. gRPC (10443), QUIC (9444), MCP (9445) and the Unix socket stay
+  on the daemon. `platformd serve` takes `runWithWebservices`
+  (`pkg/daemon/commands/serve.go`): `leaveRESTToWebservice` sets
+  `RESTRoutesOnly`, so the daemon opens no REST listener and the webservice
+  mounts the daemon's REST routes (`daemonRESTRoutes`) and the gatewayd-facing
+  control plane on 8443. The Unix socket binds in the daemon's `Start`, after
+  the CA and the webservice certificate and before the webservice listener.
+  A daemon-only harness answers 404 on every webservice route.
+  `TestIntegrationConfig_RunMode` (`pkg/app`) pins the mode of both configs:
+  this one serves REST from one webservice on the runner's
+  `PLATFORMD_REST_PORT`, and `test/integration/barrier_gate/config.yaml` stays
+  daemon-only (that suite starts its own platformd on its own ports).
+  `TestIntegrationConfig_ServesRESTThroughWebservice` checks the section's
+  listener, certificate and key, and the `restroutes`
+  smoke suite fails on a bare router 404, when the public
+  `/api/v1/platform/service-registry` does not answer 200, or when the
+  admin-gated `/api/v1/platform/health` or `/api/v1/dns/zones` does not answer
+  the gate's 401. The harness client certificate authenticates the TLS
+  handshake only: the webservice admin gate takes a session from a bearer token
+  the platform minted (`docs/auth/architecture.md` §6c), and the harness mints
+  none, so no suite reaches an admin-gated webservice route's handler.
 - Config file: `test/integration/config.yaml`. Its `dns:` section gives
   platformd an internal CoreDNS server on port 9053 seeded with zone
   `integration.internal.`, so the daemon builds a DNS backend and the dns
@@ -893,6 +946,10 @@ recognises as initialized and does not take its recovery path, which no
 shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting
 the daemons on a TPM without an EK.
+
+`TestIntegrationConfig_EKCertificateAtHarnessIndex` in `pkg/app` also holds
+both configs to the index the provisioning script writes, read from the
+script's `swtpm_setup` flags.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any

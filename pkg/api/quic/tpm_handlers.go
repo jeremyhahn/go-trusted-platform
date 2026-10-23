@@ -574,18 +574,15 @@ func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *quicw
 	})
 }
 
-// handleDeleteEK deletes (flushes) the Endorsement Key handle.
+// handleDeleteEK evicts the persisted Endorsement Key (tpmek.Delete).
 func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *quicwire.Response {
-	ekAttrs, err := h.tpm.EKAttributes()
-	if err != nil {
+	if _, err := tpmek.Delete(h.tpm); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	h.tpm.Flush(ekAttrs.TPMAttributes.Handle)
-
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   "EK handle flushed",
+		Message:   "EK evicted",
 		Timestamp: time.Now().Unix(),
 	})
 }
@@ -662,34 +659,28 @@ func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *quicwir
 
 // handleCreateSRK creates a Storage Root Key.
 func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(h.tpm)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	if err := h.tpm.CreateSRK(srkAttrs); err != nil {
-		return h.tpmErrorResponse(err)
-	}
-
-	return h.encodeResponse(&TPM2StatusResponse{
-		Success:   true,
-		Message:   fmt.Sprintf("SRK created at handle 0x%08X", srkAttrs.TPMAttributes.Handle),
+	return h.encodeResponse(&TPM2KeyResponse{
+		Handle:    uint32(srkAttrs.TPMAttributes.Handle),
+		PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
+		Algorithm: srkAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().Unix(),
 	})
 }
 
-// handleDeleteSRK deletes (flushes) the Storage Root Key handle.
+// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete).
 func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
-	if err != nil {
+	if _, err := tpmsrk.Delete(h.tpm); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	h.tpm.Flush(srkAttrs.TPMAttributes.Handle)
-
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   "SRK handle flushed",
+		Message:   "SRK evicted",
 		Timestamp: time.Now().Unix(),
 	})
 }

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/gorilla/mux"
 	"net/http"
 	"time"
 
@@ -203,9 +204,7 @@ type DeviceAttributesRESTResponse struct {
 // =============================================================================
 
 // registerIDevIDRoutes registers IDevID/IAK REST endpoints.
-func (s *RESTServer) registerIDevIDRoutes() {
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-
+func (s *RESTServer) registerIDevIDRoutes(api *mux.Router) {
 	// IDevID operations - paths match test adapter expectations
 	api.HandleFunc("/tpm/idevid", s.handleIDevIDInfo).Methods(http.MethodGet)
 	api.HandleFunc("/tpm/idevid/exists", s.handleHasIDevID).Methods(http.MethodGet)
@@ -233,7 +232,7 @@ func (s *RESTServer) registerIDevIDRoutes() {
 	s.logger.Info("IDevID/IAK REST routes registered")
 
 	// LDevID (802.1AR) issuance route.
-	s.registerLDevIDRoutes()
+	s.registerLDevIDRoutes(api)
 }
 
 // =============================================================================
