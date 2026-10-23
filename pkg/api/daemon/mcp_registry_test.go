@@ -21,6 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
@@ -442,6 +445,32 @@ func TestMCPServiceProvider_RegistryInspect_Error(t *testing.T) {
 	p := newProviderWithRegistry(svc)
 	if _, err := p.RegistryInspect(context.Background(), "x", "latest", "", false, false); !errors.Is(err, want) {
 		t.Errorf("expected upstream error, got %v", err)
+	}
+}
+
+// TestMCPServiceProvider_RegistryInspect_InvalidReference pins that a
+// reference outside the OCI grammar reaches the MCP tool layer as
+// InvalidArgument (JSON-RPC invalid params), not Internal.
+func TestMCPServiceProvider_RegistryInspect_InvalidReference(t *testing.T) {
+	cause := grpcapi.ErrInvalidArtifactReference{Reference: "MCP-1:latest", Reason: "invalid format"}
+	p := newProviderWithRegistry(&fakeRegistryService{inspectErr: cause})
+
+	_, err := p.RegistryInspect(context.Background(), "MCP-1", "latest", "", false, false)
+
+	if code := status.Code(err); code != codes.InvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument (err %v)", code, err)
+	}
+}
+
+// TestMCPServiceProvider_RegistryInspect_InternalFailure pins the other side
+// of the classification: a service fault stays Internal.
+func TestMCPServiceProvider_RegistryInspect_InternalFailure(t *testing.T) {
+	p := newProviderWithRegistry(&fakeRegistryService{inspectErr: errors.New("disk full")})
+
+	_, err := p.RegistryInspect(context.Background(), "mcp-1", "latest", "", false, false)
+
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("code = %s, want Internal (err %v)", code, err)
 	}
 }
 

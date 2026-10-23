@@ -22,6 +22,9 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
@@ -111,6 +114,53 @@ func TestGRPCAdapter_PushRefusesAnExistingTagWithoutOverwrite(t *testing.T) {
 			var exists grpcapi.ErrArtifactAlreadyExists
 			if !errors.As(err, &exists) {
 				t.Fatalf("second PushStream error = %v, want ErrArtifactAlreadyExists", err)
+			}
+		})
+	}
+}
+
+// TestGRPCAdapter_ReferenceGrammar pins that a reference outside the OCI
+// distribution-spec grammar is a caller error on every operation: the
+// adapter returns ErrInvalidArtifactReference and the shared gRPC/MCP
+// classifier answers it InvalidArgument, not Internal.
+func TestGRPCAdapter_ReferenceGrammar(t *testing.T) {
+	ctx := context.Background()
+	a := NewGRPCAdapter(newTestRegistry(t))
+
+	valid := &grpcapi.RegistryPushMetadata{Repository: "grpc-1792717075-push-basic", Tag: "v1"}
+	if _, err := a.PushStream(ctx, valid, bytes.NewReader(pushEnvelope(t, []byte("one")))); err != nil {
+		t.Fatalf("PushStream(%s) = %v, want success", valid.Repository, err)
+	}
+
+	const repository = "gRPC-1792717075-push-basic"
+	operations := map[string]func() error{
+		"push": func() error {
+			metadata := &grpcapi.RegistryPushMetadata{Repository: repository, Tag: "v1"}
+			_, err := a.PushStream(ctx, metadata, bytes.NewReader(pushEnvelope(t, []byte("one"))))
+			return err
+		},
+		"pull": func() error {
+			_, err := a.Pull(ctx, &grpcapi.RegistryPullRequest{Repository: repository, Reference: "v1"})
+			return err
+		},
+		"inspect": func() error {
+			_, err := a.Inspect(ctx, &grpcapi.RegistryInspectRequest{Repository: repository, Reference: "v1"})
+			return err
+		},
+		"delete": func() error {
+			_, err := a.Delete(ctx, &grpcapi.RegistryDeleteRequest{Repository: repository, Reference: "v1"})
+			return err
+		},
+	}
+	for name, operation := range operations {
+		t.Run(name, func(t *testing.T) {
+			err := operation()
+			var invalid grpcapi.ErrInvalidArtifactReference
+			if !errors.As(err, &invalid) {
+				t.Fatalf("error = %v, want ErrInvalidArtifactReference", err)
+			}
+			if code := status.Code(grpcapi.RegistryErrorStatus(err)); code != codes.InvalidArgument {
+				t.Errorf("gRPC code = %s, want InvalidArgument", code)
 			}
 		})
 	}

@@ -114,7 +114,7 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 		if errors.As(err, &ErrImageAlreadyExists{}) {
 			return nil, grpcapi.ErrArtifactAlreadyExists{Repository: metadata.Repository, Reference: metadata.Tag}
 		}
-		return nil, err
+		return nil, mapReferenceError(err)
 	}
 	return &grpcapi.RegistryPushResponse{
 		Artifact:      a.manifestToArtifact(metadata.Repository, metadata.Tag, img.Manifest),
@@ -236,7 +236,7 @@ func (a *GRPCAdapter) Delete(ctx context.Context, req *grpcapi.RegistryDeleteReq
 		return nil, grpcapi.ErrMissingReference{}
 	}
 	if err := a.registry.Delete(ctx, ref); err != nil {
-		return nil, err
+		return nil, mapReferenceError(err)
 	}
 	return &grpcapi.RegistryDeleteResponse{
 		Digest:    req.Digest,
@@ -312,6 +312,18 @@ func (a *GRPCAdapter) mapPullError(repository, reference string, err error) erro
 	var notFound ErrImageNotFound
 	if errors.As(err, &notFound) {
 		return grpcapi.ErrArtifactNotFound{Repository: repository, Reference: reference}
+	}
+	return mapReferenceError(err)
+}
+
+// mapReferenceError converts a malformed-reference Registry error into the
+// artifact-shaped caller error, so every transport answers it as an invalid
+// argument (gRPC InvalidArgument, MCP invalid params, REST 400) rather than
+// an internal failure.
+func mapReferenceError(err error) error {
+	var invalid ErrInvalidImageRef
+	if errors.As(err, &invalid) {
+		return grpcapi.ErrInvalidArtifactReference{Reference: invalid.Reference, Reason: invalid.Reason}
 	}
 	return err
 }

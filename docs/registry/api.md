@@ -212,7 +212,10 @@ REST route returns 503 with a structured "not configured" envelope rather than
 says `FailedPrecondition`), a missing `repository` or `reference` is
 `InvalidArgument`, and a service error, wrapped in `ErrRegistryServiceFailed`,
 takes the code `grpcapi.RegistryErrorStatus` gives it on gRPC — an unknown
-artifact is `NotFound`.
+artifact is `NotFound`, and a reference outside the OCI distribution-spec
+grammar (`ErrInvalidImageRef`, carried across the adapter as
+`grpcapi.ErrInvalidArtifactReference`) is `InvalidArgument` on gRPC, Unix and
+MCP (JSON-RPC invalid params) and 400 on REST.
 
 **A `/v2` path no route claims returns a JSON 404, not the web console.** The
 SPA catch-all declines the whole `/v2/` namespace along with the other API

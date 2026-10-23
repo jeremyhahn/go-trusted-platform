@@ -427,6 +427,17 @@ func (e ErrInvalidArtifactDigest) Error() string {
 	return "invalid artifact digest: " + e.Digest
 }
 
+// ErrInvalidArtifactReference is returned when a repository or tag does not
+// follow the OCI distribution-spec reference grammar. It is a caller error.
+type ErrInvalidArtifactReference struct {
+	Reference string
+	Reason    string
+}
+
+func (e ErrInvalidArtifactReference) Error() string {
+	return "invalid artifact reference " + e.Reference + ": " + e.Reason
+}
+
 // ErrStreamClosed is returned when a stream is unexpectedly closed.
 type ErrStreamClosed struct{}
 
