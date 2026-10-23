@@ -96,15 +96,16 @@ func TestScopeGuardRequireCaller(t *testing.T) {
 
 // grantingPeers admits any verified chain with scopes, or fails with err.
 type grantingPeers struct {
-	scopes []string
-	err    error
+	scopes   []string
+	tenantID string
+	err      error
 }
 
 func (p grantingPeers) AuthenticatePeer(_ context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &platformtoken.AuthorizedContext{Subject: chain[0].Subject.CommonName, Scopes: p.scopes}, nil
+	return &platformtoken.AuthorizedContext{Subject: chain[0].Subject.CommonName, TenantID: p.tenantID, Scopes: p.scopes}, nil
 }
 
 // guardedRoute is one daemon REST route and the scope it requires.
@@ -248,10 +249,15 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			for _, route := range group.routes {
-				router := guardedRouter(NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{
-					"granted": {route.scope},
-					"missing": {group.other},
-				}}, nil, nil))
+				// The granted caller is a member of t1, the tenant every
+				// tenant-naming route below asks for.
+				router := guardedRouter(NewScopeGuard(&scopedAuthorizer{
+					scopes: map[string][]string{
+						"granted": {route.scope},
+						"missing": {group.other},
+					},
+					tenants: map[string]string{"granted": "t1"},
+				}, nil, nil))
 
 				granted := serveWithToken(router, route, "granted")
 				assert.Equal(t, http.StatusServiceUnavailable, granted.Code,
@@ -270,10 +276,38 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 	}
 }
 
+// TestScopeGuard_OrchestratorTenantRoutesNeedTheCallersTenant pins the
+// tenant rule (tenant.AuthorizeTenantAccess, docs/tenant/api.md): a route
+// naming a tenant serves that tenant's callers only. A caller holding the
+// scope but no tenant owns none, so it is refused 403 before the handler.
+func TestScopeGuard_OrchestratorTenantRoutesNeedTheCallersTenant(t *testing.T) {
+	for _, route := range orchestratorRouteScopes {
+		if !strings.Contains(route.path, "/tenants/") {
+			continue
+		}
+		router := guardedRouter(NewScopeGuard(&scopedAuthorizer{
+			scopes:  map[string][]string{"untenanted": {route.scope}, "other": {route.scope}},
+			tenants: map[string]string{"other": "t2"},
+		}, nil, nil))
+
+		untenanted := serveWithToken(router, route, "untenanted")
+		assert.Equal(t, http.StatusForbidden, untenanted.Code,
+			"%s %s from a caller with no tenant must be refused", route.method, route.path)
+
+		other := serveWithToken(router, route, "other")
+		assert.Equal(t, http.StatusForbidden, other.Code,
+			"%s %s from another tenant's caller must be refused", route.method, route.path)
+	}
+}
+
 func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
-	router := guardedRouter(NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{
-		"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read", "orchestrator:read"},
-	}}, nil, nil))
+	// The reader is a member of t1, the tenant every tenant-naming route asks for.
+	router := guardedRouter(NewScopeGuard(&scopedAuthorizer{
+		scopes: map[string][]string{
+			"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read", "orchestrator:read"},
+		},
+		tenants: map[string]string{"reader": "t1"},
+	}, nil, nil))
 	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
 		recorder := serveWithToken(router, route, "reader")
 		if strings.HasSuffix(route.scope, ":read") {
@@ -329,7 +363,8 @@ func certificateRequest(method, target, cn string) *http.Request {
 }
 
 func TestScopeGuard_VerifiedClientCertificateIsTheCredential(t *testing.T) {
-	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil))
+	// The peer is a member of t1, the tenant every tenant-naming route asks for.
+	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}, tenantID: "t1"}, nil))
 	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, certificateRequest(route.method, route.path, "operator"))

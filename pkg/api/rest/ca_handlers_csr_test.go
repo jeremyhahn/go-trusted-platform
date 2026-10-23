@@ -77,6 +77,9 @@ func postJSONAs(t *testing.T, router *mux.Router, path, token string, body any) 
 // any other token. It records the scope it was asked for.
 type scopedAuthorizer struct {
 	scopes   map[string][]string
+	// tenants is the tenant each token is a member of; a token absent
+	// here has none.
+	tenants  map[string]string
 	asked    string
 	askedHTU string
 }
@@ -87,7 +90,7 @@ func (a *scopedAuthorizer) AuthorizeToken(_ context.Context, token, requiredPerm
 	if !ok {
 		return nil, errors.New("token invalid")
 	}
-	return &platformtoken.AuthorizedContext{Subject: token, Scopes: scopes}, nil
+	return &platformtoken.AuthorizedContext{Subject: token, TenantID: a.tenants[token], Scopes: scopes}, nil
 }
 
 // signCSRRouter routes to CA handlers whose KMS holds "rpi/fleet" as key,
