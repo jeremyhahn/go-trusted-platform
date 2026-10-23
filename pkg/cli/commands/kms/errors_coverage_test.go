@@ -36,6 +36,7 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrDEKServiceUnavailable", ErrDEKServiceUnavailable{}, "DEK service is not available"},
 		{"ErrDEKClearSafetyNotConfirmed", ErrDEKClearSafetyNotConfirmed{Path: "/t/a"}, "pass --force"},
 		{"ErrInvalidDEKLimit", ErrInvalidDEKLimit{Limit: -1}, "invalid --limit -1"},
+		{"ErrInvalidDEKWarnPercent", ErrInvalidDEKWarnPercent{Percent: 101}, "invalid --warn-percent 101"},
 
 		// key_algorithms.go
 

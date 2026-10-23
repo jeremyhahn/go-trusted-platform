@@ -234,6 +234,102 @@ func sdkDEKStatus(client dekclient.Client) dekStatusSource {
 	}
 }
 
+// ErrInvalidDEKWarnPercent is returned when --warn-percent is not a percentage.
+type ErrInvalidDEKWarnPercent struct {
+	Percent int
+}
+
+func (e ErrInvalidDEKWarnPercent) Error() string {
+	return fmt.Sprintf("invalid --warn-percent %d: must be between 0 and 100", e.Percent)
+}
+
+// dekSafetyClient is the default and safety-limit calls `kms dek set-default`,
+// `set-safety` and `clear-safety` make. dekclient.Client carries them, and so
+// does platformDEKSafety over platformd's DEKManagement service.
+type dekSafetyClient interface {
+	SetDefaultDEK(ctx context.Context, path string) (*dekclient.SetDefaultDEKResponse, error)
+	SetDEKSafety(ctx context.Context, req *dekclient.SetDEKSafetyRequest) error
+	ClearDEKSafety(ctx context.Context, path string) error
+}
+
+// dekSafetyClientFactory builds the client the default and safety commands use.
+type dekSafetyClientFactory func(base *cli.BaseCommand) (dekSafetyClient, error)
+
+// activeDEKSafetyClientFactory is the seam unit tests replace with a fake client.
+var activeDEKSafetyClientFactory dekSafetyClientFactory = defaultDEKSafetyClientFactory
+
+// platformDEKSafetyProtocols are the platform transports on which the default
+// and safety commands use platformd's DEKManagement service: the pinned SDK DEK
+// client cannot send SetDefaultDEK, SetDEKSafety or ClearDEKSafety over its
+// gRPC and Unix transports. QUIC keeps the SDK client, which carries them.
+var platformDEKSafetyProtocols = map[platform.Protocol]bool{
+	platform.ProtocolGRPC: true,
+	platform.ProtocolUnix: true,
+}
+
+func defaultDEKSafetyClientFactory(base *cli.BaseCommand) (dekSafetyClient, error) {
+	return dekSafetyClientFor(base.Client(), func() (dekclient.Client, error) {
+		return activeDEKClientFactory(base)
+	})
+}
+
+// dekSafetyClientFor picks the default and safety client for client's platform
+// transport; sdkClient opens the SDK DEK client for the transports that keep it.
+func dekSafetyClientFor(client platform.Client, sdkClient func() (dekclient.Client, error)) (dekSafetyClient, error) {
+	if platformDEKSafetyProtocols[client.Protocol()] {
+		dek := client.DEK()
+		if dek == nil {
+			return nil, ErrDEKServiceUnavailable{}
+		}
+		return platformDEKSafety{client: dek}, nil
+	}
+	sdk, err := sdkClient()
+	if err != nil {
+		return nil, err
+	}
+	return sdk, nil
+}
+
+// setDEKSafetyClientFactory replaces the default and safety client factory and
+// returns a restore func.
+func setDEKSafetyClientFactory(f dekSafetyClientFactory) func() {
+	prev := activeDEKSafetyClientFactory
+	activeDEKSafetyClientFactory = f
+	return func() { activeDEKSafetyClientFactory = prev }
+}
+
+// platformDEKSafety makes the default and safety calls on platformd's
+// DEKManagement service (DEKServerAdapter in pkg/api/daemon).
+type platformDEKSafety struct {
+	client kmspb.DEKManagementClient
+}
+
+func (p platformDEKSafety) SetDefaultDEK(ctx context.Context, path string) (*dekclient.SetDefaultDEKResponse, error) {
+	resp, err := p.client.SetDefaultDEK(ctx, &kmspb.SetDefaultDEKRequest{Path: path})
+	if err != nil {
+		return nil, err
+	}
+	return &dekclient.SetDefaultDEKResponse{Path: resp.GetPath(), PreviousDefault: resp.GetPreviousDefault()}, nil
+}
+
+func (p platformDEKSafety) SetDEKSafety(ctx context.Context, req *dekclient.SetDEKSafetyRequest) error {
+	if req.WarningPercent < 0 || req.WarningPercent > 100 {
+		return ErrInvalidDEKWarnPercent{Percent: req.WarningPercent}
+	}
+	_, err := p.client.SetDEKSafety(ctx, &kmspb.SetDEKSafetyRequest{
+		Path:           req.Path,
+		MaxOperations:  req.MaxOperations,
+		MaxBytes:       req.MaxBytes,
+		WarningPercent: int32(req.WarningPercent),
+	})
+	return err
+}
+
+func (p platformDEKSafety) ClearDEKSafety(ctx context.Context, path string) error {
+	_, err := p.client.ClearDEKSafety(ctx, &kmspb.ClearDEKSafetyRequest{Path: path})
+	return err
+}
+
 // dekOutput is the JSON shape of one DEK. Times are RFC 3339, empty when unset.
 type dekOutput struct {
 	Path           string `json:"path"`
@@ -429,6 +525,22 @@ func runDEK(flags *cli.CommonFlags, action dekAction) error {
 	return action(base.Context(), client, base.Printer())
 }
 
+// runDEKSafety runs a default or safety action on the client
+// activeDEKSafetyClientFactory picks for the connection's transport.
+func runDEKSafety(flags *cli.CommonFlags, action func(ctx context.Context, client dekSafetyClient, printer *cli.Printer) error) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	client, err := activeDEKSafetyClientFactory(base)
+	if err != nil {
+		return err
+	}
+	return action(base.Context(), client, base.Printer())
+}
+
 func newDEKCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var limits dekSafetyOptions
 	cmd := &cobra.Command{
@@ -610,14 +722,14 @@ func newDEKSetDefaultCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Make a DEK the default for its path level",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDEK(getFlags(), func(ctx context.Context, client dekclient.Client, printer *cli.Printer) error {
+			return runDEKSafety(getFlags(), func(ctx context.Context, client dekSafetyClient, printer *cli.Printer) error {
 				return executeDEKSetDefault(ctx, client, printer, args[0])
 			})
 		},
 	}
 }
 
-func executeDEKSetDefault(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string) error {
+func executeDEKSetDefault(ctx context.Context, client dekSafetyClient, printer *cli.Printer, path string) error {
 	resp, err := client.SetDefaultDEK(ctx, path)
 	if err != nil {
 		return ErrDEKOperationFailed{Verb: "set-default", Path: path, Err: err}
@@ -639,7 +751,7 @@ func newDEKSetSafetyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Set DEK AEAD safety limits",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDEK(getFlags(), func(ctx context.Context, client dekclient.Client, printer *cli.Printer) error {
+			return runDEKSafety(getFlags(), func(ctx context.Context, client dekSafetyClient, printer *cli.Printer) error {
 				return executeDEKSetSafety(ctx, client, printer, args[0], opts)
 			})
 		},
@@ -656,7 +768,7 @@ func bindDEKSafetyFlags(cmd *cobra.Command, opts *dekSafetyOptions, warnPercentD
 	cmd.Flags().Int32Var(&opts.WarningPercent, "warn-percent", warnPercentDefault, "warning threshold percentage")
 }
 
-func executeDEKSetSafety(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string, opts dekSafetyOptions) error {
+func executeDEKSetSafety(ctx context.Context, client dekSafetyClient, printer *cli.Printer, path string, opts dekSafetyOptions) error {
 	err := client.SetDEKSafety(ctx, &dekclient.SetDEKSafetyRequest{
 		Path:           path,
 		MaxOperations:  opts.MaxOperations,
@@ -677,7 +789,7 @@ func newDEKClearSafetyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Clear DEK AEAD safety limits (requires --force)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDEK(getFlags(), func(ctx context.Context, client dekclient.Client, printer *cli.Printer) error {
+			return runDEKSafety(getFlags(), func(ctx context.Context, client dekSafetyClient, printer *cli.Printer) error {
 				return executeDEKClearSafety(ctx, client, printer, args[0], force)
 			})
 		},
@@ -686,7 +798,7 @@ func newDEKClearSafetyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	return cmd
 }
 
-func executeDEKClearSafety(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string, force bool) error {
+func executeDEKClearSafety(ctx context.Context, client dekSafetyClient, printer *cli.Printer, path string, force bool) error {
 	if !force {
 		return ErrDEKClearSafetyNotConfirmed{Path: path}
 	}

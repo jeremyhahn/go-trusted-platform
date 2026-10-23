@@ -57,9 +57,7 @@ platformctl kms
         batch encrypt | batch decrypt       works
     dek
         create | get | list | delete | rotate            works
-        status | set-default | set-safety | clear-safety works over REST, QUIC
-                                                         and MCP; exit 1 over
-                                                         gRPC and Unix (§7)
+        status | set-default | set-safety | clear-safety works (§7)
     secrets
         store | get | list | delete | rotate | version | versions
         rollback | status enable | status disable
@@ -586,9 +584,9 @@ and omitted when unset.
 | `dek delete` | `<path>` | `--force` (bool, bypass deletion protection) | `DeleteDEK` | `path`, `deleted` |
 | `dek rotate` | `<path>` | none | `RotateDEK` (foreground) | `path`, `old_version`, `new_version` |
 | `dek status` | `<path>` | none | `GetDEKStatus` (platformd's `quicbaas.kms.v1.DEKManagement` on gRPC, Unix and QUIC; the SDK DEK client otherwise) | the DEK plus `reencryption` when present |
-| `dek set-default` | `<path>` | none | `SetDefaultDEK` | `path`, `previous_default` |
-| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) | `SetDEKSafety` | success line |
-| `dek clear-safety` | `<path>` | `--force` (bool, required) | `ClearDEKSafety` | success line |
+| `dek set-default` | `<path>` | none | `SetDefaultDEK` (platformd's `DEKManagement` on gRPC and Unix; the SDK DEK client otherwise) | `path`, `previous_default` |
+| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) | `SetDEKSafety` (as `set-default`) | success line |
+| `dek clear-safety` | `<path>` | `--force` (bool, required) | `ClearDEKSafety` (as `set-default`) | success line |
 
 The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
 `created_at`, `rotated_at`, `usage_count`, `bytes_used`, `max_usage_count`,
@@ -603,14 +601,15 @@ The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
   services, through the platform SDK's `Client.DEK()` on the same
   connection; on REST and MCP it uses the SDK DEK client. A response without
   DEK metadata exits 1 with `ErrDEKStatusEmpty`.
-- `dek set-default`, `dek set-safety` and `dek clear-safety` work over the
-  REST, QUIC and MCP SDK transports. Over gRPC and Unix they exit 1 with
-  `ErrDEKOperationFailed` wrapping `UNIMPLEMENTED`: the pinned go-quicbaas SDK
-  (v0.12.0-alpha) gRPC transport has no handler for `SetDefaultDEK`,
-  `SetDEKSafety` or `ClearDEKSafety` (`transport/grpc/kms_handler.go`), and
-  its Unix transport delegates to the gRPC one, so the embedded-daemon setup
-  in §3 (`quicbaas_transport: grpc`) gets this refusal. Set limits on a new
-  DEK with `dek create` instead.
+- `dek set-default`, `dek set-safety` and `dek clear-safety` over the gRPC
+  and Unix platform transports call platformd's
+  `quicbaas.kms.v1.DEKManagement` service through `Client.DEK()`, as
+  `dek status` does. The pinned go-quicbaas SDK (v0.12.0-alpha) gRPC
+  transport has no handler for these three calls
+  (`transport/grpc/kms_handler.go`) and its Unix transport delegates to the
+  gRPC one, so the SDK DEK client is not used there. On QUIC, REST and MCP
+  they use the SDK DEK client. On the platform path `--warn-percent` outside
+  0-100 exits 1 with `ErrInvalidDEKWarnPercent` and makes no call.
 - `dek list --cursor` exits 1 with `ErrDEKSDKGap`: the SDK's
   `ListDEKsRequest` has no cursor, so `ListDEKs` cannot page.
 - `dek set-default` takes no version. `SetDefaultDEK(path)` makes the DEK at

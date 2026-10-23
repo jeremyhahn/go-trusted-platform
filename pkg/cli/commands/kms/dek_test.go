@@ -611,6 +611,147 @@ func TestExecuteDEKClearSafety(t *testing.T) {
 	})
 }
 
+// fakeDEKSafetyRPC records the default and safety calls platformDEKSafety makes
+// on platformd's DEKManagement service and answers them, or fails with err.
+type fakeDEKSafetyRPC struct {
+	kmspb.DEKManagementClient
+	err         error
+	lastDefault *kmspb.SetDefaultDEKRequest
+	lastSafety  *kmspb.SetDEKSafetyRequest
+	lastClear   *kmspb.ClearDEKSafetyRequest
+}
+
+func (f *fakeDEKSafetyRPC) SetDefaultDEK(_ context.Context, in *kmspb.SetDefaultDEKRequest, _ ...grpc.CallOption) (*kmspb.SetDefaultDEKResponse, error) {
+	f.lastDefault = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &kmspb.SetDefaultDEKResponse{Path: in.GetPath(), PreviousDefault: "/t/old"}, nil
+}
+
+func (f *fakeDEKSafetyRPC) SetDEKSafety(_ context.Context, in *kmspb.SetDEKSafetyRequest, _ ...grpc.CallOption) (*kmspb.SetDEKSafetyResponse, error) {
+	f.lastSafety = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &kmspb.SetDEKSafetyResponse{Path: in.GetPath()}, nil
+}
+
+func (f *fakeDEKSafetyRPC) ClearDEKSafety(_ context.Context, in *kmspb.ClearDEKSafetyRequest, _ ...grpc.CallOption) (*kmspb.ClearDEKSafetyResponse, error) {
+	f.lastClear = in
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &kmspb.ClearDEKSafetyResponse{Path: in.GetPath()}, nil
+}
+
+func TestPlatformDEKSafety(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SendsEachCallToDEKManagement", func(t *testing.T) {
+		rpc := &fakeDEKSafetyRPC{}
+		client := platformDEKSafety{client: rpc}
+
+		def, err := client.SetDefaultDEK(ctx, "/t/app")
+		require.NoError(t, err)
+		assert.Equal(t, "/t/app", rpc.lastDefault.GetPath())
+		assert.Equal(t, &dekclient.SetDefaultDEKResponse{Path: "/t/app", PreviousDefault: "/t/old"}, def)
+
+		require.NoError(t, client.SetDEKSafety(ctx, &dekclient.SetDEKSafetyRequest{
+			Path: "/t/app", MaxOperations: 1000, MaxBytes: 4096, WarningPercent: 75,
+		}))
+		assert.Equal(t, "/t/app", rpc.lastSafety.GetPath())
+		assert.Equal(t, uint64(1000), rpc.lastSafety.GetMaxOperations())
+		assert.Equal(t, uint64(4096), rpc.lastSafety.GetMaxBytes())
+		assert.Equal(t, int32(75), rpc.lastSafety.GetWarningPercent())
+
+		require.NoError(t, client.ClearDEKSafety(ctx, "/t/app"))
+		assert.Equal(t, "/t/app", rpc.lastClear.GetPath())
+	})
+
+	t.Run("WarnPercentOutsideZeroToHundredIsRefused", func(t *testing.T) {
+		for _, percent := range []int{-1, 101} {
+			rpc := &fakeDEKSafetyRPC{}
+			err := platformDEKSafety{client: rpc}.SetDEKSafety(ctx, &dekclient.SetDEKSafetyRequest{Path: "/t/app", WarningPercent: percent})
+			assert.Equal(t, ErrInvalidDEKWarnPercent{Percent: percent}, err)
+			assert.Nil(t, rpc.lastSafety, "an invalid percentage must not reach platformd")
+		}
+	})
+
+	t.Run("ServiceErrorIsReturned", func(t *testing.T) {
+		rpcErr := errors.New("DEK not found")
+		client := platformDEKSafety{client: &fakeDEKSafetyRPC{err: rpcErr}}
+
+		_, err := client.SetDefaultDEK(ctx, "/t/app")
+		assert.ErrorIs(t, err, rpcErr)
+		assert.ErrorIs(t, client.SetDEKSafety(ctx, &dekclient.SetDEKSafetyRequest{Path: "/t/app"}), rpcErr)
+		assert.ErrorIs(t, client.ClearDEKSafety(ctx, "/t/app"), rpcErr)
+	})
+}
+
+func TestDEKSafetyClientFor(t *testing.T) {
+	noSDK := func() (dekclient.Client, error) {
+		t.Fatal("the SDK DEK client must not be opened on a transport that uses platformd's DEKManagement")
+		return nil, nil
+	}
+
+	for _, protocol := range []platform.Protocol{platform.ProtocolGRPC, platform.ProtocolUnix} {
+		t.Run("PlatformServiceOver"+protocol.String(), func(t *testing.T) {
+			rpc := &fakeDEKSafetyRPC{}
+			client, err := dekSafetyClientFor(fakeStatusPlatformClient{protocol: protocol, dek: rpc}, noSDK)
+			require.NoError(t, err)
+
+			require.NoError(t, client.ClearDEKSafety(context.Background(), "/t/app"))
+			assert.Equal(t, "/t/app", rpc.lastClear.GetPath())
+		})
+	}
+
+	t.Run("NoPlatformConnectionIsUnavailable", func(t *testing.T) {
+		_, err := dekSafetyClientFor(fakeStatusPlatformClient{protocol: platform.ProtocolGRPC}, noSDK)
+		assert.ErrorIs(t, err, ErrDEKServiceUnavailable{})
+	})
+
+	for _, protocol := range []platform.Protocol{platform.ProtocolQUIC, platform.ProtocolREST, platform.ProtocolMCP} {
+		t.Run("SDKClientOver"+protocol.String(), func(t *testing.T) {
+			sdk := &fakeDEKClient{}
+			client, err := dekSafetyClientFor(fakeStatusPlatformClient{protocol: protocol},
+				func() (dekclient.Client, error) { return sdk, nil })
+			require.NoError(t, err)
+			assert.Same(t, sdk, client)
+		})
+	}
+
+	t.Run("SDKClientErrorStopsTheCommand", func(t *testing.T) {
+		sdkErr := errors.New("quicbaas not configured")
+		_, err := dekSafetyClientFor(fakeStatusPlatformClient{protocol: platform.ProtocolREST},
+			func() (dekclient.Client, error) { return nil, sdkErr })
+		assert.ErrorIs(t, err, sdkErr)
+	})
+}
+
+func TestSetDEKSafetyClientFactory(t *testing.T) {
+	t.Run("OverrideAndRestore", func(t *testing.T) {
+		fake := &fakeDEKClient{}
+		restore := setDEKSafetyClientFactory(func(*cli.BaseCommand) (dekSafetyClient, error) { return fake, nil })
+
+		client, err := activeDEKSafetyClientFactory(nil)
+		require.NoError(t, err)
+		assert.Same(t, fake, client)
+
+		restore()
+		assert.NotNil(t, activeDEKSafetyClientFactory)
+	})
+
+	t.Run("FactoryErrorStopsTheCommand", func(t *testing.T) {
+		factoryErr := errors.New("no daemon")
+		restore := setDEKSafetyClientFactory(func(*cli.BaseCommand) (dekSafetyClient, error) { return nil, factoryErr })
+		defer restore()
+
+		_, err := activeDEKSafetyClientFactory(nil)
+		assert.ErrorIs(t, err, factoryErr)
+	})
+}
+
 func TestSetDEKClientFactory(t *testing.T) {
 	t.Run("OverrideAndRestore", func(t *testing.T) {
 		fake := &fakeDEKClient{}
