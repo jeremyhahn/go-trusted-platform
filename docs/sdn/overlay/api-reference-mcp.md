@@ -9,6 +9,7 @@
 |----------|-------|
 | Transport | MCP (stdio / HTTPS, port 9445) |
 | Tool source | `pkg/api/mcp/overlay_tools.go` |
+| Result | `CallToolResult`; the tool's JSON output is its text block ([daemon api.md](../../daemon/api.md) §1 "MCP tool results") |
 
 The overlay MCP tools mirror the overlay CLI/gRPC surface. Every tool answers
 from the overlay controller the gRPC, REST and QUIC overlay services use

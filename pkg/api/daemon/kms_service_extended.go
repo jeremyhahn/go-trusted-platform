@@ -70,6 +70,9 @@ func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMet
 	if err != nil {
 		return nil, status.Errorf(errclass.Code(err), "get key metadata failed: %v", err)
 	}
+	if meta == nil {
+		return nil, ErrKMSNilMetadata{}
+	}
 
 	return &pb.GetKeyMetadataResponse{
 		Metadata:  sdkKeyMetadataToPb(meta),
@@ -97,6 +100,9 @@ func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.Update
 	if err != nil {
 		return nil, status.Errorf(errclass.Code(err), "key metadata update failed: %v", err)
 	}
+	if meta == nil {
+		return nil, ErrKMSNilMetadata{}
+	}
 
 	return &pb.UpdateKeyMetadataResponse{
 		Metadata:  sdkKeyMetadataToPb(meta),
@@ -117,7 +123,10 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 		return nil, status.Error(codes.InvalidArgument, "policy is required")
 	}
 
-	policy := pbKeyPolicyToSDK(req.GetPolicy())
+	policy, err := pbKeyPolicyToSDK(req.GetPolicy())
+	if err != nil {
+		return nil, err
+	}
 	policy.KeyID = req.GetKeyId()
 
 	if err := a.client.SetKeyPolicy(ctx, &kms.SetKeyPolicyRequest{
@@ -127,10 +136,20 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 		return nil, status.Errorf(errclass.Code(err), "key policy update failed: %v", err)
 	}
 
+	// The KMS stamps the stored policy with a new version, but the SDK
+	// SetKeyPolicy call returns only an error, so the version is read back.
+	stored, err := a.client.GetKeyPolicy(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "key policy read-back failed: %v", err)
+	}
+	if stored == nil {
+		return nil, status.Error(codes.Internal, "key policy read-back returned no policy")
+	}
+
 	return &pb.SetKeyPolicyResponse{
 		KeyId:         req.GetKeyId(),
-		PolicyVersion: req.GetPolicy().GetVersion(),
-		Timestamp:     time.Now().Unix(),
+		PolicyVersion: uint64(stored.Version),
+		Timestamp:     stored.UpdatedAt.Unix(),
 	}, nil
 }
 
@@ -219,7 +238,7 @@ func (a *SecretsServerAdapter) SetRotationPolicy(ctx context.Context, req *pb.Se
 		SecretID: req.GetSecretId(),
 		Policy:   pbSecretRotationPolicyToSDK(req.GetPolicy()),
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "rotation policy update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "rotation policy update failed: %v", err)
 	}
 
 	return &pb.SetRotationPolicyResponse{
@@ -241,7 +260,7 @@ func (a *SecretsServerAdapter) GetRotationPolicy(ctx context.Context, req *pb.Ge
 
 	policy, err := a.client.GetRotationPolicy(ctx, req.GetSecretId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "rotation policy not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get rotation policy failed: %v", err)
 	}
 
 	return &pb.GetRotationPolicyResponse{
@@ -347,15 +366,17 @@ func sdkKeyMetadataToPb(meta *kms.KeyMetadataResponse) *pb.KeyMetadata {
 }
 
 // pbKeyPolicyToSDK converts a protobuf KeyPolicy to the SDK KeyPolicy.
-// A nil input yields a nil output.
-func pbKeyPolicyToSDK(p *pb.KeyPolicy) *kms.KeyPolicy {
-	if p == nil {
-		return nil
+// An allowed operation the SDK has no usage for is refused with
+// ErrKMSUnsupportedValue. The caller rejects a nil policy first.
+func pbKeyPolicyToSDK(p *pb.KeyPolicy) (*kms.KeyPolicy, error) {
+	allowed, err := pbUsagesToSDK(p.GetAllowedOperations())
+	if err != nil {
+		return nil, err
 	}
 	policy := &kms.KeyPolicy{
 		KeyID:             p.GetKeyId(),
 		Version:           int(p.GetVersion()),
-		AllowedOperations: pbUsagesToSDK(p.GetAllowedOperations()),
+		AllowedOperations: allowed,
 		AllowedPrincipals: p.GetAllowedPrincipals(),
 		DeniedPrincipals:  p.GetDeniedPrincipals(),
 		RotationRequired:  p.GetRotationRequired(),
@@ -365,7 +386,7 @@ func pbKeyPolicyToSDK(p *pb.KeyPolicy) *kms.KeyPolicy {
 	if p.GetExpiresAt() > 0 {
 		policy.ExpiresAt = time.Unix(p.GetExpiresAt(), 0)
 	}
-	return policy
+	return policy, nil
 }
 
 // sdkKeyPolicyToPb converts an SDK KeyPolicy to the protobuf KeyPolicy.

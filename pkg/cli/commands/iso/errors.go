@@ -13,17 +13,10 @@
 
 package iso
 
-import "fmt"
-
-// ErrDaemonConnectionRequired is returned when a command requires daemon connection
-// but dual-mode is not yet implemented.
-type ErrDaemonConnectionRequired struct {
-	Command string
-}
-
-func (e ErrDaemonConnectionRequired) Error() string {
-	return fmt.Sprintf("daemon connection required for '%s' command - dual-mode will be added later", e.Command)
-}
+import (
+	"fmt"
+	"time"
+)
 
 // ErrInvalidArchitecture is returned when an invalid architecture is specified.
 type ErrInvalidArchitecture struct {
@@ -52,6 +45,79 @@ type ErrISONotFound struct {
 
 func (e ErrISONotFound) Error() string {
 	return fmt.Sprintf("ISO file not found: %s", e.Path)
+}
+
+// ErrVMTimeout is returned when a test VM is still running when the
+// test's --timeout expires: the guest never powered off, so QEMU was
+// killed and the software TPM stopped.
+type ErrVMTimeout struct {
+	Timeout time.Duration
+}
+
+func (e ErrVMTimeout) Error() string {
+	return fmt.Sprintf("the VM did not power off within --timeout %s; QEMU and the software TPM were stopped", e.Timeout)
+}
+
+// ErrInstallDiskNotWritten is returned when the install guest powered off
+// but left its disk at MinSize bytes or less. The autoinstaller powers off
+// after a failed install too, so a clean exit alone is not an install.
+type ErrInstallDiskNotWritten struct {
+	Disk    string
+	Size    int64
+	MinSize int64
+}
+
+func (e ErrInstallDiskNotWritten) Error() string {
+	return fmt.Sprintf("the install guest powered off but %s holds %d bytes (an install writes over %d): the install failed; the installer console says why",
+		e.Disk, e.Size, e.MinSize)
+}
+
+// ErrBootTimeout is returned when `iso test boot` (or `firstboot`) is still
+// running when its --timeout expires. ConsoleTail holds the last lines of
+// the guest serial console log, so the failure shows where the boot stopped.
+// It unwraps to ErrVMTimeout.
+type ErrBootTimeout struct {
+	Timeout     time.Duration
+	Elapsed     time.Duration
+	ConsoleLog  string
+	ConsoleTail string
+}
+
+func (e ErrBootTimeout) Error() string {
+	return fmt.Sprintf("the guest did not power off within --timeout %s (ran %s); %s",
+		e.Timeout, e.Elapsed.Round(time.Second), consoleReport(e.ConsoleLog, e.ConsoleTail))
+}
+
+func (e ErrBootTimeout) Unwrap() error {
+	return ErrVMTimeout{Timeout: e.Timeout}
+}
+
+// ErrBootFailed is returned when QEMU fails during `iso test boot` (or
+// `firstboot`). Like ErrBootTimeout it carries the console tail.
+type ErrBootFailed struct {
+	Err         error
+	ConsoleLog  string
+	ConsoleTail string
+}
+
+func (e *ErrBootFailed) Error() string {
+	return fmt.Sprintf("QEMU boot failed: %v; %s", e.Err, consoleReport(e.ConsoleLog, e.ConsoleTail))
+}
+
+func (e *ErrBootFailed) Unwrap() error {
+	return e.Err
+}
+
+// consoleReport describes what a boot error knows about the guest console.
+func consoleReport(consoleLog, tail string) string {
+	switch {
+	case consoleLog == "":
+		return "the guest console was on the terminal"
+	case tail == "":
+		return fmt.Sprintf("the console log %s is missing or empty: the guest wrote nothing to its serial port", consoleLog)
+	default:
+		return fmt.Sprintf("last console lines from %s:\n%s", consoleLog, tail)
+	}
 }
 
 // ErrDirectoryNotFound is returned when a directory is not found.

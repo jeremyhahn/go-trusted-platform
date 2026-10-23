@@ -698,6 +698,8 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.IAMSubTenantList:   iamRead,
 		quicwire.IAMSubTenantUpdate: iamWrite,
 		quicwire.IAMSubTenantDelete: iamDelete,
+		quicwire.IAMSubGroupUpdate:  iamWrite,
+		quicwire.IAMSubRoleUpdate:   iamWrite,
 
 		// Invitations. GetByToken and Accept are preAuthSubOpcodes.
 		quicwire.InvitationSubCreate: invitationWrite,
@@ -896,6 +898,9 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.KMSSubGetDEKStatus:           kmsRead,
 		quicwire.KMSSubRotateDEK:              kmsWrite,
 		quicwire.KMSSubDeleteDEK:              kmsDelete,
+		quicwire.KMSSubSetDefaultDEK:          kmsWrite,
+		quicwire.KMSSubSetDEKSafety:           kmsWrite,
+		quicwire.KMSSubClearDEKSafety:         kmsWrite,
 	},
 
 	quicwire.OpSecretsCategory: {
@@ -941,8 +946,13 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubDisable:             deviceWrite,
 		quicwire.DeviceSubEnable:              deviceWrite,
 		quicwire.DeviceSubTemplateCreate:      deviceWrite,
+		quicwire.DeviceSubTemplateGet:         deviceRead,
+		quicwire.DeviceSubTemplateList:        deviceRead,
+		quicwire.DeviceSubTemplateUpdate:      deviceWrite,
+		quicwire.DeviceSubTemplateDelete:      deviceDelete,
 		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
 		quicwire.DeviceSubFindMatchingProfile: deviceRead,
+		quicwire.DeviceSubFindConfigForDevice: deviceRead,
 
 		// The PXEService methods without a direct opcode, scoped as on gRPC.
 		quicwire.PXESubGetDeviceByMAC:    pxeRead,

@@ -297,6 +297,10 @@ func (s *stubOVSClient) SetBridgeProtocols(_ context.Context, _ string, _ []stri
 func (s *stubOVSClient) AddPort(_ context.Context, _, name string) (*ovs.Port, error) {
 	return &ovs.Port{UUID: "stub-" + name, Name: name}, nil
 }
+
+func (s *stubOVSClient) AddPortWithType(ctx context.Context, bridgeName, portName, _ string) (*ovs.Port, error) {
+	return s.AddPort(ctx, bridgeName, portName)
+}
 func (s *stubOVSClient) DeletePort(_ context.Context, _, _ string) error { return nil }
 func (s *stubOVSClient) GetPort(_ context.Context, name string) (*ovs.Port, error) {
 	return &ovs.Port{UUID: "stub-" + name, Name: name}, nil

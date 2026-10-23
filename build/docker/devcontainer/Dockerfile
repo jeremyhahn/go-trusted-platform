@@ -114,7 +114,15 @@ ENV GOTOOLCHAIN=local \
 # cpio: pkg/diskimage/netboot repacks its installer initramfs with it.
 # libssl-dev: go-tpm-tools' simulator compiles the reference TPM against
 # OpenSSL (#149).
+# APT_REFRESH keys the apt layer, which BuildKit would otherwise cache forever.
+# `make docker-build` (CI's image job) passes the UTC day, so the layer is
+# rebuilt daily and `apt-get upgrade` takes Debian's fixes before `trivy image`
+# scans for them (libexpat CVE-2025-59375 / CVE-2026-77214, PR #991). The dated
+# default applies only to a build that passes nothing. A new key rebuilds this
+# layer and, through FROM base, every apt layer of toolchain and integration.
+ARG APT_REFRESH=2026-10-22
 RUN set -eu; \
+    echo "apt refresh: ${APT_REFRESH}"; \
     apt-get update; \
     apt-get upgrade -y; \
     apt-get install -y --no-install-recommends \

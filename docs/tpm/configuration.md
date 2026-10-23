@@ -85,6 +85,14 @@ tpm:
 
 #### Certificate handles
 
+**`ek.cert-handle`** is the NV index the EK certificate is read from. Set it to
+the index the TPM manufacturer wrote the certificate to: `0x01C00002` for an
+RSA 2048 EK, `0x01C0000A` for an ECC P256 EK (the Low Range of the TCG EK
+Credential Profile v2.1 §2.2.1.4). go-xkms reads the configured index first,
+then those two. Left unset (`0`), the EK certificate is looked up only in the
+platform certificate store and NV is never read, so a manufacturer certificate
+in NV is not found.
+
 **`iak.cert-handle` and `idevid.cert-handle` are currently IGNORED.** Both are
 cleared at startup (`applyCertHandleNVInterim`, `pkg/app/tpm_cert_nv.go`), and the IAK and IDevID certificates are kept in the platform
 certificate store instead of TPM NVRAM. A warning naming the ignored handle is
@@ -206,9 +214,7 @@ From `pkg/cli/commands/tpm/`.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--algorithm` | `RSA-2048`, `RSA-3072`, `ECDSA-P256` or `ECDSA-P384` | `RSA-2048` |
-| `--handle` | Persistent handle | EK `0x81010001`, SRK `0x81000001` |
-| `--persistent` | Make the key persistent | `true` |
-| `--password` | Key password | - |
+| `--persistent` | Make the key persistent at the configured `tpm.ek.handle` / `tpm.ssrk.handle` | `true` |
 | `--parent` | (`srk create` only) parent handle | `0x81010001` |
 | `--parent-password` | (`srk create` only) parent password | - |
 

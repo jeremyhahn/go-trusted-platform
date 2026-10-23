@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -173,6 +174,7 @@ type TPM2InfoResponse struct {
 	IsSimulator  bool              `codec:"is_simulator"`
 	FIPSMode     bool              `codec:"fips_mode"`
 	MaxNVRAMSize uint32            `codec:"max_nvram_size"`
+	PCRBanks     []string          `codec:"pcr_banks"`
 	Properties   map[string]string `codec:"properties"`
 	Timestamp    int64             `codec:"timestamp"`
 }
@@ -401,7 +403,8 @@ func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *quicwire.
 
 	resp := &TPM2InfoResponse{
 		Info:       info,
-		Version:    "2.0",
+		Version:    tpmattrs.Version,
+		PCRBanks:   tpmattrs.ActivePCRBanks(h.tpm),
 		Properties: tpmsrk.InfoProperties(h.tpm),
 		Timestamp:  time.Now().Unix(),
 	}
@@ -558,34 +561,28 @@ func (h *TPM2Handler) handleActivateCredential(ctx context.Context, payload []by
 
 // handleCreateEK creates an Endorsement Key.
 func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *quicwire.Response {
-	ekAttrs, err := h.tpm.EKAttributes()
+	ekAttrs, err := tpmek.Create(h.tpm)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	if err := h.tpm.CreateEK(ekAttrs); err != nil {
-		return h.tpmErrorResponse(err)
-	}
-
-	return h.encodeResponse(&TPM2StatusResponse{
-		Success:   true,
-		Message:   fmt.Sprintf("EK created at handle 0x%08X", ekAttrs.TPMAttributes.Handle),
+	return h.encodeResponse(&TPM2KeyResponse{
+		Handle:    uint32(ekAttrs.TPMAttributes.Handle),
+		PublicKey: ekAttrs.TPMAttributes.PublicKeyBytes,
+		Algorithm: ekAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().Unix(),
 	})
 }
 
-// handleDeleteEK deletes (flushes) the Endorsement Key handle.
+// handleDeleteEK evicts the persisted Endorsement Key (tpmek.Delete).
 func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *quicwire.Response {
-	ekAttrs, err := h.tpm.EKAttributes()
-	if err != nil {
+	if _, err := tpmek.Delete(h.tpm); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	h.tpm.Flush(ekAttrs.TPMAttributes.Handle)
-
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   "EK handle flushed",
+		Message:   "EK evicted",
 		Timestamp: time.Now().Unix(),
 	})
 }
@@ -662,34 +659,28 @@ func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *quicwir
 
 // handleCreateSRK creates a Storage Root Key.
 func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(h.tpm)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	if err := h.tpm.CreateSRK(srkAttrs); err != nil {
-		return h.tpmErrorResponse(err)
-	}
-
-	return h.encodeResponse(&TPM2StatusResponse{
-		Success:   true,
-		Message:   fmt.Sprintf("SRK created at handle 0x%08X", srkAttrs.TPMAttributes.Handle),
+	return h.encodeResponse(&TPM2KeyResponse{
+		Handle:    uint32(srkAttrs.TPMAttributes.Handle),
+		PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
+		Algorithm: srkAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().Unix(),
 	})
 }
 
-// handleDeleteSRK deletes (flushes) the Storage Root Key handle.
+// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete).
 func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
-	if err != nil {
+	if _, err := tpmsrk.Delete(h.tpm); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	h.tpm.Flush(srkAttrs.TPMAttributes.Handle)
-
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   "SRK handle flushed",
+		Message:   "SRK evicted",
 		Timestamp: time.Now().Unix(),
 	})
 }

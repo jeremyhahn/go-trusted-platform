@@ -96,6 +96,74 @@ func (e ErrCLIOutputParseFailed) Error() string {
 	return fmt.Sprintf("failed to parse CLI output for %s: %v (output: %s)", e.Operation, e.Err, e.Output)
 }
 
+// ErrCLIFieldDecodeFailed is returned when a field of the CLI's JSON output
+// is not in its documented encoding (base64, Unix seconds or RFC 3339).
+type ErrCLIFieldDecodeFailed struct {
+	Operation string
+	Field     string
+	Value     string
+	Err       error
+}
+
+func (e ErrCLIFieldDecodeFailed) Error() string {
+	return fmt.Sprintf("failed to decode %s.%s %q: %v", e.Operation, e.Field, e.Value, e.Err)
+}
+
+func (e ErrCLIFieldDecodeFailed) Unwrap() error {
+	return e.Err
+}
+
+const (
+	// cliOutputEnv selects platformctl's output format (docs/kms/cli.md §3).
+	cliOutputEnv = "PLATFORMCTL_OUTPUT"
+
+	// cliTimestampUnset is the crypto verbs' timestamp when the server set
+	// none.
+	cliTimestampUnset = "-"
+
+	// cliDEKAlgorithm is the one algorithm kms dek create makes
+	// (docs/kms/cli.md §7).
+	cliDEKAlgorithm = "AES-256-GCM"
+)
+
+// decodeCLIBase64 decodes a base64 field of the CLI's JSON output.
+func decodeCLIBase64(operation, field, value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, ErrCLIFieldDecodeFailed{Operation: operation, Field: field, Value: value, Err: err}
+	}
+	return decoded, nil
+}
+
+// parseCLIUnixTimestamp reads a crypto verb's timestamp: Unix seconds, or
+// "-" when unset, which reads as the zero time.
+func parseCLIUnixTimestamp(operation, value string) (time.Time, error) {
+	if value == "" || value == cliTimestampUnset {
+		return time.Time{}, nil
+	}
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return time.Time{}, ErrCLIFieldDecodeFailed{Operation: operation, Field: "timestamp", Value: value, Err: err}
+	}
+	return time.Unix(seconds, 0), nil
+}
+
+// parseCLIRFC3339 reads a metadata or policy timestamp: RFC 3339, or empty
+// when unset, which reads as the zero time.
+func parseCLIRFC3339(operation, field, value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, ErrCLIFieldDecodeFailed{Operation: operation, Field: field, Value: value, Err: err}
+	}
+	return parsed, nil
+}
+
 // ErrCLIBinaryNotFound is returned when the platformctl binary cannot be found.
 type ErrCLIBinaryNotFound struct {
 	Path string
@@ -200,8 +268,8 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // runVerifyCommand runs a verify verb and checks that its exit status matches
 // the verdict it printed. A failed verification prints the verdict and exits
 // non-zero, so it is returned as a result rather than as a command failure.
-func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, result any, valid func() bool, args ...string) error {
-	stdout, runErr := c.runCommandStdout(ctx, args...)
+func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, stdin []byte, result any, valid func() bool, args ...string) error {
+	stdout, runErr := c.runCommandInput(ctx, stdin, args...)
 	if err := json.Unmarshal(stdout, result); err != nil {
 		if runErr != nil {
 			return runErr
@@ -217,6 +285,15 @@ func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, res
 // runCommandStdout runs the CLI and returns its stdout even when the command
 // fails, alongside ErrCLICommandFailed.
 func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]byte, error) {
+	return c.runCommandInput(ctx, nil, args...)
+}
+
+// runCommandInput runs platformctl with stdin as the command's standard
+// input (none when nil) and returns its stdout. JSON is selected through
+// PLATFORMCTL_OUTPUT, never --output: the crypto verbs declare their own
+// -o/--output (an output file) that shadows the global flag
+// (docs/kms/cli.md §3).
+func (c *CLIAdapter) runCommandInput(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	// Create context with timeout if not already set
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -224,13 +301,9 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 		defer cancel()
 	}
 
-	// Build command with common flags
-	fullArgs := []string{
-		"--output", "json",
-	}
-
 	// platformctl has no --socket flag; the harness socket reaches it through
 	// the config file Setup wrote (#540).
+	var fullArgs []string
 	if c.configPath != "" {
 		fullArgs = append(fullArgs, "--config", c.configPath)
 	}
@@ -238,6 +311,10 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
+	cmd.Env = append(os.Environ(), cliOutputEnv+"=json")
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -264,12 +341,30 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 // Key Management Commands
 // =============================================================================
 
+// cliKeyAlgorithms maps the suite's protocol-neutral AES names to the
+// spellings platformctl documents (docs/kms/cli.md §5): the CLI names an AES
+// key by its size alone and rejects "AES-256-GCM". Every other suite name is
+// already a spelling the CLI accepts, in any case.
+var cliKeyAlgorithms = map[string]string{
+	"AES-128-GCM": "aes-128",
+	"AES-192-GCM": "aes-192",
+	"AES-256-GCM": "aes-256",
+}
+
+// cliKeyAlgorithm returns the platformctl spelling of a suite algorithm name.
+func cliKeyAlgorithm(algorithm string) string {
+	if spelling, ok := cliKeyAlgorithms[algorithm]; ok {
+		return spelling
+	}
+	return algorithm
+}
+
 // KeyGenerate generates a new cryptographic key via CLI.
 func (c *CLIAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
 	args := []string{"kms", "key", "generate", opts.KeyID}
 
 	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
+		args = append(args, "--algorithm", cliKeyAlgorithm(opts.Algorithm))
 	}
 
 	if opts.Purpose != "" {
@@ -382,11 +477,8 @@ func (c *CLIAdapter) KeyDelete(ctx context.Context, keyID string, opts KeyDelete
 
 // KeyRotate rotates an existing key via CLI.
 func (c *CLIAdapter) KeyRotate(ctx context.Context, keyID string, retainOldVersion bool) (*KeyRotateResult, error) {
-	args := []string{"kms", "key", "rotate", keyID}
-
-	if retainOldVersion {
-		args = append(args, "--retain-old")
-	}
+	// --retain-old defaults to true, so the value is always spelled out.
+	args := []string{"kms", "key", "rotate", keyID, "--retain-old=" + strconv.FormatBool(retainOldVersion)}
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
@@ -428,16 +520,15 @@ func (c *CLIAdapter) KeyVersions(ctx context.Context, keyID string, opts KeyVers
 
 // KeyStatus updates the status of a key via CLI.
 func (c *CLIAdapter) KeyStatus(ctx context.Context, keyID string, version uint64, enabled bool) (*KeyStatusResult, error) {
-	args := []string{"kms", "key", "status", keyID}
+	action := "disable"
+	if enabled {
+		action = "enable"
+	}
+
+	args := []string{"kms", "key", "status", action, keyID}
 
 	if version > 0 {
 		args = append(args, "--version", strconv.FormatUint(version, 10))
-	}
-
-	if enabled {
-		args = append(args, "--enable")
-	} else {
-		args = append(args, "--disable")
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -461,17 +552,22 @@ func (c *CLIAdapter) KeyRevoke(ctx context.Context, keyID string, reason string)
 		args = append(args, "--reason", reason)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// revoke prints only a success line (docs/kms/cli.md §5), so the
+	// resulting status is read back from the key's metadata.
+	if _, err := c.runCommand(ctx, args...); err != nil {
+		return nil, err
+	}
+
+	metadata, err := c.KeyMetadata(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliKeyRevokeResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "KeyRevoke", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &KeyRevokeResult{
+		KeyID:     metadata.KeyID,
+		Status:    metadata.Status,
+		RevokedAt: metadata.UpdatedAt,
+	}, nil
 }
 
 // KeyMetadata retrieves key metadata via CLI.
@@ -488,7 +584,7 @@ func (c *CLIAdapter) KeyMetadata(ctx context.Context, keyID string) (*KeyMetadat
 		return nil, ErrCLIOutputParseFailed{Operation: "KeyMetadata", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // KeyMetadataUpdate updates key metadata via CLI.
@@ -511,17 +607,23 @@ func (c *CLIAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts K
 		args = append(args, "--remove-tag", tag)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// update prints a success line ahead of its JSON, so the stored
+	// metadata is read back with `metadata get` instead.
+	if _, err := c.runCommand(ctx, args...); err != nil {
+		return nil, err
+	}
+
+	metadata, err := c.KeyMetadata(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliKeyMetadataUpdateResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "KeyMetadataUpdate", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &KeyMetadataUpdateResult{
+		KeyID:     metadata.KeyID,
+		Name:      metadata.Name,
+		UpdatedAt: metadata.UpdatedAt,
+		Tags:      metadata.Tags,
+	}, nil
 }
 
 // KeyPolicy retrieves key policy via CLI.
@@ -538,7 +640,7 @@ func (c *CLIAdapter) KeyPolicy(ctx context.Context, keyID string) (*KeyPolicyRes
 		return nil, ErrCLIOutputParseFailed{Operation: "KeyPolicy", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // KeyPolicySet sets key policy via CLI.
@@ -566,24 +668,29 @@ func (c *CLIAdapter) KeyPolicySet(ctx context.Context, keyID string, opts KeyPol
 	}
 
 	if opts.MaxUsageCount > 0 {
-		args = append(args, "--max-usage-count", strconv.FormatUint(opts.MaxUsageCount, 10))
+		args = append(args, "--max-usage", strconv.FormatUint(opts.MaxUsageCount, 10))
 	}
 
 	if opts.RequireMFA {
 		args = append(args, "--require-mfa")
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// policy set prints only a success line (docs/kms/cli.md §5), so the
+	// stored policy is read back with `policy get`.
+	if _, err := c.runCommand(ctx, args...); err != nil {
+		return nil, err
+	}
+
+	policy, err := c.KeyPolicy(ctx, keyID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliKeyPolicySetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "KeyPolicySet", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &KeyPolicySetResult{
+		KeyID:         policy.KeyID,
+		PolicyVersion: policy.Version,
+		UpdatedAt:     policy.UpdatedAt,
+	}, nil
 }
 
 // KeyAlgorithms lists supported algorithms via CLI.
@@ -611,21 +718,16 @@ func (c *CLIAdapter) KeyAlgorithms(ctx context.Context) (*KeyAlgorithmsResult, e
 func (c *CLIAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOptions) (*CryptoEncryptResult, error) {
 	args := []string{"kms", "crypto", "encrypt", "--key-id", opts.KeyID}
 
-	// Encode plaintext as base64 for CLI input
-	plaintext := base64.StdEncoding.EncodeToString(opts.Plaintext)
-	args = append(args, "--data", plaintext, "--base64")
-
 	if len(opts.Context) > 0 {
-		aad := base64.StdEncoding.EncodeToString(opts.Context)
-		args = append(args, "--aad", aad)
+		args = append(args, "--context", string(opts.Context))
 	}
 
 	if len(opts.Nonce) > 0 {
-		nonce := base64.StdEncoding.EncodeToString(opts.Nonce)
-		args = append(args, "--nonce", nonce)
+		args = append(args, "--nonce", base64.StdEncoding.EncodeToString(opts.Nonce))
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The plaintext travels raw on stdin.
+	output, err := c.runCommandInput(ctx, opts.Plaintext, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -642,25 +744,21 @@ func (c *CLIAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOption
 func (c *CLIAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOptions) (*CryptoDecryptResult, error) {
 	args := []string{"kms", "crypto", "decrypt", "--key-id", opts.KeyID}
 
-	// Encode ciphertext as base64 for CLI input
-	ciphertext := base64.StdEncoding.EncodeToString(opts.Ciphertext)
-	args = append(args, "--data", ciphertext, "--base64")
-
 	if len(opts.Nonce) > 0 {
-		nonce := base64.StdEncoding.EncodeToString(opts.Nonce)
-		args = append(args, "--nonce", nonce)
+		args = append(args, "--nonce", base64.StdEncoding.EncodeToString(opts.Nonce))
 	}
 
 	if len(opts.Context) > 0 {
-		aad := base64.StdEncoding.EncodeToString(opts.Context)
-		args = append(args, "--aad", aad)
+		args = append(args, "--context", string(opts.Context))
 	}
 
 	if opts.KeyVersion > 0 {
-		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
+		args = append(args, "--key-version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The ciphertext travels base64 on stdin (--base64-input defaults on).
+	ciphertext := []byte(base64.StdEncoding.EncodeToString(opts.Ciphertext))
+	output, err := c.runCommandInput(ctx, ciphertext, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -677,15 +775,12 @@ func (c *CLIAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOption
 func (c *CLIAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*CryptoSignResult, error) {
 	args := []string{"kms", "crypto", "sign", "--key-id", opts.KeyID}
 
-	// Encode message as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	args = append(args, "--data", message, "--base64")
-
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The message travels raw on stdin.
+	output, err := c.runCommandInput(ctx, opts.Message, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -700,43 +795,37 @@ func (c *CLIAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*C
 
 // CryptoVerify verifies a signature via CLI.
 func (c *CLIAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions) (*CryptoVerifyResult, error) {
-	args := []string{"kms", "crypto", "verify", "--key-id", opts.KeyID}
-
-	// Encode message and signature as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	signature := base64.StdEncoding.EncodeToString(opts.Signature)
-	args = append(args, "--data", message, "--signature", signature, "--base64")
+	args := []string{"kms", "crypto", "verify", "--key-id", opts.KeyID,
+		"--signature", base64.StdEncoding.EncodeToString(opts.Signature)}
 
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
 	if opts.KeyVersion > 0 {
-		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
+		args = append(args, "--key-version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
+	// The message travels raw on stdin.
 	var result cliCryptoVerifyResponse
 	valid := func() bool { return result.Valid }
-	if err := c.runVerifyCommand(ctx, "CryptoVerify", &result, valid, args...); err != nil {
+	if err := c.runVerifyCommand(ctx, "CryptoVerify", opts.Message, &result, valid, args...); err != nil {
 		return nil, err
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // CryptoHash computes a cryptographic hash via CLI.
 func (c *CLIAdapter) CryptoHash(ctx context.Context, data []byte, algorithm string) (*CryptoHashResult, error) {
-	args := []string{"kms", "crypto", "hash"}
-
-	// Encode data as base64 for CLI input
-	encoded := base64.StdEncoding.EncodeToString(data)
-	args = append(args, "--data", encoded, "--base64")
+	args := []string{"kms", "crypto", "hash", "--format", "base64"}
 
 	if algorithm != "" {
 		args = append(args, "--algorithm", algorithm)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The data travels raw on stdin.
+	output, err := c.runCommandInput(ctx, data, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -753,15 +842,12 @@ func (c *CLIAdapter) CryptoHash(ctx context.Context, data []byte, algorithm stri
 func (c *CLIAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*CryptoHMACResult, error) {
 	args := []string{"kms", "crypto", "hmac", "generate", "--key-id", opts.KeyID}
 
-	// Encode message as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	args = append(args, "--data", message, "--base64")
-
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	// The message travels raw on stdin.
+	output, err := c.runCommandInput(ctx, opts.Message, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -776,28 +862,25 @@ func (c *CLIAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*C
 
 // CryptoVerifyHMAC verifies an HMAC via CLI.
 func (c *CLIAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMACOptions) (*CryptoVerifyHMACResult, error) {
-	args := []string{"kms", "crypto", "hmac", "verify", "--key-id", opts.KeyID}
-
-	// Encode message and HMAC as base64 for CLI input
-	message := base64.StdEncoding.EncodeToString(opts.Message)
-	hmac := base64.StdEncoding.EncodeToString(opts.HMAC)
-	args = append(args, "--data", message, "--hmac", hmac, "--base64")
+	args := []string{"kms", "crypto", "hmac", "verify", "--key-id", opts.KeyID,
+		"--hmac", base64.StdEncoding.EncodeToString(opts.HMAC)}
 
 	if opts.HashAlgorithm != "" {
 		args = append(args, "--hash", opts.HashAlgorithm)
 	}
 
 	if opts.KeyVersion > 0 {
-		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
+		args = append(args, "--key-version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
+	// The message travels raw on stdin.
 	var result cliCryptoVerifyHMACResponse
 	valid := func() bool { return result.Valid }
-	if err := c.runVerifyCommand(ctx, "CryptoVerifyHMAC", &result, valid, args...); err != nil {
+	if err := c.runVerifyCommand(ctx, "CryptoVerifyHMAC", opts.Message, &result, valid, args...); err != nil {
 		return nil, err
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // CryptoRandom generates random bytes via CLI.
@@ -823,15 +906,16 @@ func (c *CLIAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRan
 
 // DEKCreate creates a new DEK via CLI.
 func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEKCreateResult, error) {
-	args := []string{"kms", "dek", "create", opts.Path}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
+	// kms dek create has no algorithm or description flags (docs/kms/cli.md
+	// §7): it always creates AES-256-GCM. The limits travel on create.
+	if opts.Algorithm != "" && opts.Algorithm != cliDEKAlgorithm {
+		return nil, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--algorithm"}
 	}
-
 	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
+		return nil, ErrCLINoFlag{Operation: "DEKCreate", Flag: "--description"}
 	}
+
+	args := []string{"kms", "dek", "create", opts.Path}
 
 	if opts.MaxOperations > 0 {
 		args = append(args, "--max-operations", strconv.FormatUint(opts.MaxOperations, 10))
@@ -842,7 +926,7 @@ func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEK
 	}
 
 	if opts.WarningPercent > 0 {
-		args = append(args, "--warning-percent", strconv.FormatInt(int64(opts.WarningPercent), 10))
+		args = append(args, "--warn-percent", strconv.FormatInt(int64(opts.WarningPercent), 10))
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -850,33 +934,36 @@ func (c *CLIAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEK
 		return nil, err
 	}
 
-	var result cliDEKCreateResponse
-	if err := json.Unmarshal(output, &result); err != nil {
+	var dek cliDEK
+	if err := json.Unmarshal(output, &dek); err != nil {
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKCreate", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return dek.toCreateResult()
 }
 
 // DEKGet retrieves DEK metadata via CLI.
 func (c *CLIAdapter) DEKGet(ctx context.Context, path string) (*DEKGetResult, error) {
-	args := []string{"kms", "dek", "get", path}
-
-	output, err := c.runCommand(ctx, args...)
+	output, err := c.runCommand(ctx, "kms", "dek", "get", path)
 	if err != nil {
 		return nil, err
 	}
 
-	var result cliDEKGetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
+	var dek cliDEK
+	if err := json.Unmarshal(output, &dek); err != nil {
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKGet", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return dek.toGetResult("DEKGet")
 }
 
 // DEKList lists DEKs via CLI.
 func (c *CLIAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKListResult, error) {
+	// kms dek list --cursor refuses with ErrDEKSDKGap (docs/kms/cli.md §7).
+	if opts.Cursor != "" {
+		return nil, ErrCLINoFlag{Operation: "DEKList", Flag: "--cursor"}
+	}
+
 	args := []string{"kms", "dek", "list"}
 
 	if opts.Prefix != "" {
@@ -891,10 +978,6 @@ func (c *CLIAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKList
 		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
 	}
 
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
-	}
-
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -905,19 +988,19 @@ func (c *CLIAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKList
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKList", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // DEKDelete deletes a DEK via CLI.
 func (c *CLIAdapter) DEKDelete(ctx context.Context, path string, opts DEKDeleteOptions) (*DEKDeleteResult, error) {
+	if opts.MigrateTo != "" {
+		return nil, ErrCLINoFlag{Operation: "DEKDelete", Flag: "--migrate-to"}
+	}
+
 	args := []string{"kms", "dek", "delete", path}
 
 	if opts.Force {
 		args = append(args, "--force")
-	}
-
-	if opts.MigrateTo != "" {
-		args = append(args, "--migrate-to", opts.MigrateTo)
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -935,13 +1018,12 @@ func (c *CLIAdapter) DEKDelete(ctx context.Context, path string, opts DEKDeleteO
 
 // DEKRotate rotates a DEK via CLI.
 func (c *CLIAdapter) DEKRotate(ctx context.Context, path string, background bool) (*DEKRotateResult, error) {
-	args := []string{"kms", "dek", "rotate", path}
-
+	// kms dek rotate always rotates in the foreground (docs/kms/cli.md §7).
 	if background {
-		args = append(args, "--background")
+		return nil, ErrCLINoFlag{Operation: "DEKRotate", Flag: "--background"}
 	}
 
-	output, err := c.runCommand(ctx, args...)
+	output, err := c.runCommand(ctx, "kms", "dek", "rotate", path)
 	if err != nil {
 		return nil, err
 	}
@@ -956,9 +1038,7 @@ func (c *CLIAdapter) DEKRotate(ctx context.Context, path string, background bool
 
 // DEKStatus retrieves DEK status via CLI.
 func (c *CLIAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResult, error) {
-	args := []string{"kms", "dek", "status", path}
-
-	output, err := c.runCommand(ctx, args...)
+	output, err := c.runCommand(ctx, "kms", "dek", "status", path)
 	if err != nil {
 		return nil, err
 	}
@@ -968,226 +1048,151 @@ func (c *CLIAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResu
 		return nil, ErrCLIOutputParseFailed{Operation: "DEKStatus", Output: string(output), Err: err}
 	}
 
-	return result.toResult(), nil
+	return result.toResult()
 }
 
 // =============================================================================
 // Secrets Commands
 // =============================================================================
 
-// SecretsStore stores a secret via CLI.
+// secrets runs the kms secrets verbs through this adapter's platformctl.
+func (c *CLIAdapter) secrets() helpers.SecretsCLI {
+	return helpers.SecretsCLI{Run: c.runCommand}
+}
+
+// refuseSecretsNoFlag refuses the Secrets options platformctl kms secrets has
+// no flag for, so a leaf that relies on one fails visibly.
+func refuseSecretsNoFlag(operation string, tenantID, keyID, algorithm string) error {
+	switch {
+	case tenantID != "":
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--tenant-id"}
+	case keyID != "":
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--key-id"}
+	case algorithm != "":
+		return helpers.ErrCLINoFlag{Operation: operation, Flag: "--algorithm"}
+	}
+	return nil
+}
+
+// SecretsStore stores a secret via CLI. The CLI has no flag for a tenant, a
+// key or an algorithm.
 func (c *CLIAdapter) SecretsStore(ctx context.Context, opts SecretsStoreOptions) (*SecretsStoreResult, error) {
-	args := []string{"kms", "secrets", "store", opts.Name}
-
-	// Encode data as base64 for CLI input
-	data := base64.StdEncoding.EncodeToString(opts.Data)
-	args = append(args, "--data", data, "--base64")
-
-	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
+	if err := refuseSecretsNoFlag("kms secrets store", opts.TenantID, opts.KeyID, opts.Algorithm); err != nil {
+		return nil, err
 	}
-
-	if opts.TenantID != "" {
-		args = append(args, "--tenant-id", opts.TenantID)
-	}
-
-	if opts.KeyID != "" {
-		args = append(args, "--key-id", opts.KeyID)
-	}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
-	}
-
-	output, err := c.runCommand(ctx, args...)
+	stored, err := c.secrets().Store(ctx, opts.Name, opts.Data, opts.Description, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsStoreResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsStore", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &SecretsStoreResult{SecretID: stored.Name, Version: stored.Version}, nil
 }
 
 // SecretsGet retrieves a secret via CLI.
 func (c *CLIAdapter) SecretsGet(ctx context.Context, name string) (*SecretsGetResult, error) {
-	args := []string{"kms", "secrets", "get", name}
-
-	output, err := c.runCommand(ctx, args...)
+	secret, err := c.secrets().Get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsGetResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsGet", Output: string(output), Err: err}
-	}
-
-	return result.toResult()
+	return &SecretsGetResult{
+		SecretID:  secret.Name,
+		Version:   secret.Version,
+		Data:      secret.Value,
+		Metadata:  secret.Metadata,
+		CreatedAt: secret.CreatedAt,
+	}, nil
 }
 
-// SecretsList lists secrets via CLI.
+// SecretsList lists secrets via CLI; the CLI pages by --limit only.
 func (c *CLIAdapter) SecretsList(ctx context.Context, opts SecretsListOptions) (*SecretsListResult, error) {
-	args := []string{"kms", "secrets", "list"}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
 	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
+		return nil, helpers.ErrCLINoFlag{Operation: "kms secrets list", Flag: "--cursor"}
 	}
-
-	output, err := c.runCommand(ctx, args...)
+	list, err := c.secrets().List(ctx, opts.Limit)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsListResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsList", Output: string(output), Err: err}
+	summaries := make([]SecretSummary, 0, len(list.Secrets))
+	for _, name := range list.Secrets {
+		summaries = append(summaries, SecretSummary{Name: name})
 	}
-
-	return result.toResult(), nil
+	return &SecretsListResult{
+		Secrets:    summaries,
+		TotalCount: int32(len(summaries)),
+		HasMore:    list.HasMore,
+	}, nil
 }
 
-// SecretsDelete deletes a secret via CLI.
+// SecretsDelete deletes a secret via CLI. The CLI, like REST, has one delete
+// that removes every version, so permanent changes nothing.
 func (c *CLIAdapter) SecretsDelete(ctx context.Context, name string, permanent bool) (*SecretsDeleteResult, error) {
-	args := []string{"kms", "secrets", "delete", name}
-
-	if permanent {
-		args = append(args, "--permanent")
-	}
-
-	output, err := c.runCommand(ctx, args...)
+	deleted, err := c.secrets().Delete(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsDeleteResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsDelete", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &SecretsDeleteResult{SecretID: deleted.Name, Deleted: deleted.Deleted}, nil
 }
 
-// SecretsRotate rotates a secret via CLI.
+// SecretsRotate rotates a secret to new data via CLI. The CLI has no flag for
+// a tenant, a key or an algorithm.
 func (c *CLIAdapter) SecretsRotate(ctx context.Context, opts SecretsRotateOptions) (*SecretsRotateResult, error) {
-	args := []string{"kms", "secrets", "rotate", opts.Name}
-
-	// Encode new data as base64 for CLI input
-	data := base64.StdEncoding.EncodeToString(opts.NewData)
-	args = append(args, "--data", data, "--base64")
-
-	if opts.TenantID != "" {
-		args = append(args, "--tenant-id", opts.TenantID)
+	if err := refuseSecretsNoFlag("kms secrets rotate", opts.TenantID, opts.KeyID, opts.Algorithm); err != nil {
+		return nil, err
 	}
-
-	if opts.KeyID != "" {
-		args = append(args, "--key-id", opts.KeyID)
-	}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
-	}
-
-	output, err := c.runCommand(ctx, args...)
+	rotated, err := c.secrets().Rotate(ctx, opts.Name, opts.NewData)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsRotateResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsRotate", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &SecretsRotateResult{SecretID: rotated.Name, OldVersion: rotated.OldVersion, NewVersion: rotated.NewVersion}, nil
 }
 
-// SecretsVersions lists secret versions via CLI.
+// SecretsVersions lists every version of a secret via CLI.
 func (c *CLIAdapter) SecretsVersions(ctx context.Context, name string, opts SecretsVersionsOptions) (*SecretsVersionsResult, error) {
-	args := []string{"kms", "secrets", "versions", name}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
 	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
+		return nil, helpers.ErrCLINoFlag{Operation: "kms secrets versions", Flag: "--cursor"}
 	}
-
-	output, err := c.runCommand(ctx, args...)
+	listed, err := c.secrets().Versions(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsVersionsResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsVersions", Output: string(output), Err: err}
+	versions := make([]SecretVersionInfo, 0, len(listed.Versions))
+	for _, v := range listed.Versions {
+		versions = append(versions, SecretVersionInfo{Version: v.Version, CreatedAt: v.CreatedAt, CreatedBy: v.CreatedBy})
 	}
-
-	return result.toResult(), nil
+	return &SecretsVersionsResult{SecretID: listed.Name, Versions: versions}, nil
 }
 
-// SecretsVersion retrieves a specific secret version via CLI.
+// SecretsVersion retrieves one version of a secret via CLI.
 func (c *CLIAdapter) SecretsVersion(ctx context.Context, name string, version uint64) (*SecretsVersionResult, error) {
-	args := []string{"kms", "secrets", "version", name, strconv.FormatUint(version, 10)}
-
-	output, err := c.runCommand(ctx, args...)
+	secret, err := c.secrets().Version(ctx, name, version)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsVersionResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsVersion", Output: string(output), Err: err}
-	}
-
-	return result.toResult()
+	return &SecretsVersionResult{
+		SecretID:  secret.Name,
+		Version:   secret.Version,
+		Data:      secret.Value,
+		Metadata:  secret.Metadata,
+		CreatedAt: secret.CreatedAt,
+		CreatedBy: secret.CreatedBy,
+	}, nil
 }
 
 // SecretsRollback rolls back a secret to a previous version via CLI.
 func (c *CLIAdapter) SecretsRollback(ctx context.Context, name string, targetVersion uint64) (*SecretsRollbackResult, error) {
-	args := []string{"kms", "secrets", "rollback", name, strconv.FormatUint(targetVersion, 10)}
-
-	output, err := c.runCommand(ctx, args...)
+	rolledBack, err := c.secrets().Rollback(ctx, name, targetVersion)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsRollbackResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsRollback", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &SecretsRollbackResult{SecretID: rolledBack.Name, NewVersion: rolledBack.NewVersion}, nil
 }
 
 // SecretsStatus updates secret status via CLI.
 func (c *CLIAdapter) SecretsStatus(ctx context.Context, name string, enabled bool) (*SecretsStatusResult, error) {
-	args := []string{"kms", "secrets", "status", name}
-
-	if enabled {
-		args = append(args, "--enable")
-	} else {
-		args = append(args, "--disable")
-	}
-
-	output, err := c.runCommand(ctx, args...)
+	status, err := c.secrets().SetStatus(ctx, name, enabled)
 	if err != nil {
 		return nil, err
 	}
-
-	var result cliSecretsStatusResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "SecretsStatus", Output: string(output), Err: err}
-	}
-
-	return result.toResult(), nil
+	return &SecretsStatusResult{SecretID: status.Name, Status: status.Status}, nil
 }
 
 // =============================================================================
@@ -1369,47 +1374,40 @@ func (r *cliKeyStatusResponse) toResult() *KeyStatusResult {
 	}
 }
 
-type cliKeyRevokeResponse struct {
-	KeyID     string `json:"key_id,omitempty"`
-	Status    string `json:"status,omitempty"`
-	RevokedAt int64  `json:"revoked_at,omitempty"`
-}
-
-func (r *cliKeyRevokeResponse) toResult() *KeyRevokeResult {
-	return &KeyRevokeResult{
-		KeyID:     r.KeyID,
-		Status:    r.Status,
-		RevokedAt: time.Unix(r.RevokedAt, 0),
-	}
-}
-
+// cliKeyMetadataResponse mirrors `kms key metadata get`; its timestamps
+// are RFC 3339 strings and it carries no rotation policy.
 type cliKeyMetadataResponse struct {
-	KeyID              string             `json:"key_id,omitempty"`
-	Name               string             `json:"name,omitempty"`
-	Description        string             `json:"description,omitempty"`
-	Algorithm          string             `json:"algorithm,omitempty"`
-	Status             string             `json:"status,omitempty"`
-	Version            uint64             `json:"version,omitempty"`
-	Exportable         bool               `json:"exportable,omitempty"`
-	DeletionProtection bool               `json:"deletion_protection,omitempty"`
-	Usage              []string           `json:"usage,omitempty"`
-	Owner              string             `json:"owner,omitempty"`
-	CreatedAt          int64              `json:"created_at,omitempty"`
-	UpdatedAt          int64              `json:"updated_at,omitempty"`
-	LastUsedAt         int64              `json:"last_used_at,omitempty"`
-	Tags               map[string]string  `json:"tags,omitempty"`
-	RotationPolicy     *cliRotationPolicy `json:"rotation_policy,omitempty"`
+	KeyID              string            `json:"key_id,omitempty"`
+	Name               string            `json:"name,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Algorithm          string            `json:"algorithm,omitempty"`
+	Status             string            `json:"status,omitempty"`
+	Version            uint64            `json:"version,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	Usage              []string          `json:"usage,omitempty"`
+	Owner              string            `json:"owner,omitempty"`
+	CreatedAt          string            `json:"created_at,omitempty"`
+	UpdatedAt          string            `json:"updated_at,omitempty"`
+	LastUsedAt         string            `json:"last_used_at,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
 }
 
-type cliRotationPolicy struct {
-	Enabled         bool  `json:"enabled,omitempty"`
-	IntervalSeconds int64 `json:"interval_seconds,omitempty"`
-	NextRotation    int64 `json:"next_rotation,omitempty"`
-	RetainVersions  int32 `json:"retain_versions,omitempty"`
-}
-
-func (r *cliKeyMetadataResponse) toResult() *KeyMetadataResult {
-	result := &KeyMetadataResult{
+func (r *cliKeyMetadataResponse) toResult() (*KeyMetadataResult, error) {
+	const operation = "KeyMetadata"
+	createdAt, err := parseCLIRFC3339(operation, "created_at", r.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseCLIRFC3339(operation, "updated_at", r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	lastUsedAt, err := parseCLIRFC3339(operation, "last_used_at", r.LastUsedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &KeyMetadataResult{
 		KeyID:              r.KeyID,
 		Name:               r.Name,
 		Description:        r.Description,
@@ -1420,78 +1418,50 @@ func (r *cliKeyMetadataResponse) toResult() *KeyMetadataResult {
 		DeletionProtection: r.DeletionProtection,
 		Usage:              r.Usage,
 		Owner:              r.Owner,
-		CreatedAt:          time.Unix(r.CreatedAt, 0),
-		UpdatedAt:          time.Unix(r.UpdatedAt, 0),
-		LastUsedAt:         time.Unix(r.LastUsedAt, 0),
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
+		LastUsedAt:         lastUsedAt,
 		Tags:               r.Tags,
-	}
-	if r.RotationPolicy != nil {
-		result.RotationPolicy = &RotationPolicy{
-			Enabled:         r.RotationPolicy.Enabled,
-			IntervalSeconds: r.RotationPolicy.IntervalSeconds,
-			NextRotation:    time.Unix(r.RotationPolicy.NextRotation, 0),
-			RetainVersions:  r.RotationPolicy.RetainVersions,
-		}
-	}
-	return result
+	}, nil
 }
 
-type cliKeyMetadataUpdateResponse struct {
-	KeyID     string            `json:"key_id,omitempty"`
-	Name      string            `json:"name,omitempty"`
-	UpdatedAt int64             `json:"updated_at,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
-}
-
-func (r *cliKeyMetadataUpdateResponse) toResult() *KeyMetadataUpdateResult {
-	return &KeyMetadataUpdateResult{
-		KeyID:     r.KeyID,
-		Name:      r.Name,
-		UpdatedAt: time.Unix(r.UpdatedAt, 0),
-		Tags:      r.Tags,
-	}
-}
-
+// cliKeyPolicyResponse mirrors `kms key policy get`; its timestamps are
+// RFC 3339 strings.
 type cliKeyPolicyResponse struct {
 	KeyID             string   `json:"key_id,omitempty"`
 	Version           int32    `json:"version,omitempty"`
 	AllowedOperations []string `json:"allowed_operations,omitempty"`
 	AllowedPrincipals []string `json:"allowed_principals,omitempty"`
 	DeniedPrincipals  []string `json:"denied_principals,omitempty"`
-	ExpiresAt         int64    `json:"expires_at,omitempty"`
+	ExpiresAt         string   `json:"expires_at,omitempty"`
 	RotationRequired  bool     `json:"rotation_required,omitempty"`
 	MaxUsageCount     uint64   `json:"max_usage_count,omitempty"`
 	RequireMFA        bool     `json:"require_mfa,omitempty"`
-	UpdatedAt         int64    `json:"updated_at,omitempty"`
+	UpdatedAt         string   `json:"updated_at,omitempty"`
 }
 
-func (r *cliKeyPolicyResponse) toResult() *KeyPolicyResult {
+func (r *cliKeyPolicyResponse) toResult() (*KeyPolicyResult, error) {
+	const operation = "KeyPolicy"
+	expiresAt, err := parseCLIRFC3339(operation, "expires_at", r.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseCLIRFC3339(operation, "updated_at", r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
 	return &KeyPolicyResult{
 		KeyID:             r.KeyID,
 		Version:           r.Version,
 		AllowedOperations: r.AllowedOperations,
 		AllowedPrincipals: r.AllowedPrincipals,
 		DeniedPrincipals:  r.DeniedPrincipals,
-		ExpiresAt:         time.Unix(r.ExpiresAt, 0),
+		ExpiresAt:         expiresAt,
 		RotationRequired:  r.RotationRequired,
 		MaxUsageCount:     r.MaxUsageCount,
 		RequireMFA:        r.RequireMFA,
-		UpdatedAt:         time.Unix(r.UpdatedAt, 0),
-	}
-}
-
-type cliKeyPolicySetResponse struct {
-	KeyID         string `json:"key_id,omitempty"`
-	PolicyVersion int32  `json:"policy_version,omitempty"`
-	UpdatedAt     int64  `json:"updated_at,omitempty"`
-}
-
-func (r *cliKeyPolicySetResponse) toResult() *KeyPolicySetResult {
-	return &KeyPolicySetResult{
-		KeyID:         r.KeyID,
-		PolicyVersion: r.PolicyVersion,
-		UpdatedAt:     time.Unix(r.UpdatedAt, 0),
-	}
+		UpdatedAt:         updatedAt,
+	}, nil
 }
 
 type cliKeyAlgorithmsResponse struct {
@@ -1511,47 +1481,51 @@ type cliCryptoEncryptResponse struct {
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Ciphertext string `json:"ciphertext,omitempty"`
 	Nonce      string `json:"nonce,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoEncryptResponse) toResult() (*CryptoEncryptResult, error) {
-	ciphertext, err := base64.StdEncoding.DecodeString(r.Ciphertext)
+	const operation = "CryptoEncrypt"
+	ciphertext, err := decodeCLIBase64(operation, "ciphertext", r.Ciphertext)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode ciphertext: %w", err)
+		return nil, err
 	}
-	var nonce []byte
-	if r.Nonce != "" {
-		nonce, err = base64.StdEncoding.DecodeString(r.Nonce)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode nonce: %w", err)
-		}
+	nonce, err := decodeCLIBase64(operation, "nonce", r.Nonce)
+	if err != nil {
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoEncryptResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
 		Ciphertext: ciphertext,
 		Nonce:      nonce,
-		Timestamp:  time.Unix(r.Timestamp, 0),
+		Timestamp:  timestamp,
 	}, nil
 }
 
+// cliCryptoDecryptResponse carries the plaintext raw, not base64
+// (docs/kms/cli.md §6).
 type cliCryptoDecryptResponse struct {
 	KeyID      string `json:"key_id,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Plaintext  string `json:"plaintext,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoDecryptResponse) toResult() (*CryptoDecryptResult, error) {
-	plaintext, err := base64.StdEncoding.DecodeString(r.Plaintext)
+	timestamp, err := parseCLIUnixTimestamp("CryptoDecrypt", r.Timestamp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode plaintext: %w", err)
+		return nil, err
 	}
 	return &CryptoDecryptResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
-		Plaintext:  plaintext,
-		Timestamp:  time.Unix(r.Timestamp, 0),
+		Plaintext:  []byte(r.Plaintext),
+		Timestamp:  timestamp,
 	}, nil
 }
 
@@ -1560,20 +1534,25 @@ type cliCryptoSignResponse struct {
 	KeyVersion    uint64 `json:"key_version,omitempty"`
 	Signature     string `json:"signature,omitempty"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-	Timestamp     int64  `json:"timestamp,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoSignResponse) toResult() (*CryptoSignResult, error) {
-	signature, err := base64.StdEncoding.DecodeString(r.Signature)
+	const operation = "CryptoSign"
+	signature, err := decodeCLIBase64(operation, "signature", r.Signature)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode signature: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoSignResult{
 		KeyID:         r.KeyID,
 		KeyVersion:    r.KeyVersion,
 		Signature:     signature,
 		HashAlgorithm: r.HashAlgorithm,
-		Timestamp:     time.Unix(r.Timestamp, 0),
+		Timestamp:     timestamp,
 	}, nil
 }
 
@@ -1581,33 +1560,62 @@ type cliCryptoVerifyResponse struct {
 	KeyID      string `json:"key_id,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Valid      bool   `json:"valid,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
-func (r *cliCryptoVerifyResponse) toResult() *CryptoVerifyResult {
+func (r *cliCryptoVerifyResponse) toResult() (*CryptoVerifyResult, error) {
+	timestamp, err := parseCLIUnixTimestamp("CryptoVerify", r.Timestamp)
+	if err != nil {
+		return nil, err
+	}
 	return &CryptoVerifyResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
 		Valid:      r.Valid,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
+		Timestamp:  timestamp,
+	}, nil
 }
 
 type cliCryptoHashResponse struct {
 	Algorithm string `json:"algorithm,omitempty"`
 	Hash      string `json:"hash,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// cliHashAlgorithmNames maps the SHA-2 spellings platformctl prints (the
+// SDK's kms.HashAlgorithm values, "SHA-256") to the suite's protocol-neutral
+// names, the ones every wire adapter reports ("SHA256"). The SHA-3 names are
+// spelled the same on both sides.
+var cliHashAlgorithmNames = map[string]string{
+	"SHA-1":   "SHA1",
+	"SHA-256": "SHA256",
+	"SHA-384": "SHA384",
+	"SHA-512": "SHA512",
+}
+
+// cliHashAlgorithmName returns the suite name of a hash algorithm platformctl
+// printed.
+func cliHashAlgorithmName(algorithm string) string {
+	if name, ok := cliHashAlgorithmNames[algorithm]; ok {
+		return name
+	}
+	return algorithm
 }
 
 func (r *cliCryptoHashResponse) toResult() (*CryptoHashResult, error) {
-	hash, err := base64.StdEncoding.DecodeString(r.Hash)
+	const operation = "CryptoHash"
+	hash, err := decodeCLIBase64(operation, "hash", r.Hash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode hash: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoHashResult{
-		Algorithm: r.Algorithm,
+		Algorithm: cliHashAlgorithmName(r.Algorithm),
 		Hash:      hash,
-		Timestamp: time.Unix(r.Timestamp, 0),
+		Timestamp: timestamp,
 	}, nil
 }
 
@@ -1616,20 +1624,25 @@ type cliCryptoHMACResponse struct {
 	KeyVersion    uint64 `json:"key_version,omitempty"`
 	HMAC          string `json:"hmac,omitempty"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-	Timestamp     int64  `json:"timestamp,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoHMACResponse) toResult() (*CryptoHMACResult, error) {
-	hmac, err := base64.StdEncoding.DecodeString(r.HMAC)
+	const operation = "CryptoHMAC"
+	hmac, err := decodeCLIBase64(operation, "hmac", r.HMAC)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode HMAC: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoHMACResult{
 		KeyID:         r.KeyID,
 		KeyVersion:    r.KeyVersion,
 		HMAC:          hmac,
 		HashAlgorithm: r.HashAlgorithm,
-		Timestamp:     time.Unix(r.Timestamp, 0),
+		Timestamp:     timestamp,
 	}, nil
 }
 
@@ -1637,126 +1650,139 @@ type cliCryptoVerifyHMACResponse struct {
 	KeyID      string `json:"key_id,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Valid      bool   `json:"valid,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
-func (r *cliCryptoVerifyHMACResponse) toResult() *CryptoVerifyHMACResult {
+func (r *cliCryptoVerifyHMACResponse) toResult() (*CryptoVerifyHMACResult, error) {
+	timestamp, err := parseCLIUnixTimestamp("CryptoVerifyHMAC", r.Timestamp)
+	if err != nil {
+		return nil, err
+	}
 	return &CryptoVerifyHMACResult{
 		KeyID:      r.KeyID,
 		KeyVersion: r.KeyVersion,
 		Valid:      r.Valid,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
+		Timestamp:  timestamp,
+	}, nil
 }
 
 type cliCryptoRandomResponse struct {
 	RandomBytes string `json:"random_bytes,omitempty"`
-	Timestamp   int64  `json:"timestamp,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
 }
 
 func (r *cliCryptoRandomResponse) toResult() (*CryptoRandomResult, error) {
-	randomBytes, err := base64.StdEncoding.DecodeString(r.RandomBytes)
+	const operation = "CryptoRandom"
+	randomBytes, err := decodeCLIBase64(operation, "random_bytes", r.RandomBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode random bytes: %w", err)
+		return nil, err
+	}
+	timestamp, err := parseCLIUnixTimestamp(operation, r.Timestamp)
+	if err != nil {
+		return nil, err
 	}
 	return &CryptoRandomResult{
 		RandomBytes: randomBytes,
-		Timestamp:   time.Unix(r.Timestamp, 0),
+		Timestamp:   timestamp,
 	}, nil
 }
 
 // DEK response types
 
-type cliDEKCreateResponse struct {
-	DEK *cliDEKInfo `json:"dek,omitempty"`
-}
-
-type cliDEKInfo struct {
-	Path        string `json:"path,omitempty"`
-	Algorithm   string `json:"algorithm,omitempty"`
-	Version     uint64 `json:"version,omitempty"`
-	Status      string `json:"status,omitempty"`
-	IsDefault   bool   `json:"is_default,omitempty"`
-	CreatedAt   int64  `json:"created_at,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-func (r *cliDEKCreateResponse) toResult() *DEKCreateResult {
-	result := &DEKCreateResult{}
-	if r.DEK != nil {
-		result.Path = r.DEK.Path
-		result.Algorithm = r.DEK.Algorithm
-		result.Version = r.DEK.Version
-		result.CreatedAt = time.Unix(r.DEK.CreatedAt, 0)
-		result.Description = r.DEK.Description
-	}
-	return result
-}
-
-type cliDEKGetResponse struct {
-	DEK *cliDEKDetailInfo `json:"dek,omitempty"`
-}
-
-type cliDEKDetailInfo struct {
-	Path           string `json:"path,omitempty"`
-	Algorithm      string `json:"algorithm,omitempty"`
-	Version        uint64 `json:"version,omitempty"`
-	Status         string `json:"status,omitempty"`
-	IsDefault      bool   `json:"is_default,omitempty"`
-	CreatedAt      int64  `json:"created_at,omitempty"`
-	RotatedAt      int64  `json:"rotated_at,omitempty"`
+// cliDEK is a DEK as the kms dek verbs print it (docs/kms/cli.md §7): flat
+// snake_case fields, with RFC 3339 times omitted when unset.
+type cliDEK struct {
+	Path           string `json:"path"`
+	Algorithm      string `json:"algorithm"`
+	Version        uint64 `json:"version"`
+	Status         string `json:"status"`
+	IsDefault      bool   `json:"is_default"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	RotatedAt      string `json:"rotated_at,omitempty"`
+	UsageCount     uint64 `json:"usage_count"`
+	BytesUsed      uint64 `json:"bytes_used"`
+	MaxUsageCount  uint64 `json:"max_usage_count"`
+	MaxBytesUsed   uint64 `json:"max_bytes_used"`
+	WarningPercent int32  `json:"warning_percent"`
 	Description    string `json:"description,omitempty"`
 	BackendType    string `json:"backend_type,omitempty"`
-	UsageCount     uint64 `json:"usage_count,omitempty"`
-	BytesUsed      uint64 `json:"bytes_used,omitempty"`
-	MaxUsageCount  uint64 `json:"max_usage_count,omitempty"`
-	MaxBytesUsed   uint64 `json:"max_bytes_used,omitempty"`
-	WarningPercent int32  `json:"warning_percent,omitempty"`
 }
 
-func (r *cliDEKGetResponse) toResult() *DEKGetResult {
-	result := &DEKGetResult{}
-	if r.DEK != nil {
-		result.Path = r.DEK.Path
-		result.Algorithm = r.DEK.Algorithm
-		result.Version = r.DEK.Version
-		result.Status = r.DEK.Status
-		result.IsDefault = r.DEK.IsDefault
-		result.CreatedAt = time.Unix(r.DEK.CreatedAt, 0)
-		result.RotatedAt = time.Unix(r.DEK.RotatedAt, 0)
-		result.Description = r.DEK.Description
-		result.BackendType = r.DEK.BackendType
-		result.UsageCount = r.DEK.UsageCount
-		result.BytesUsed = r.DEK.BytesUsed
-		result.MaxUsageCount = r.DEK.MaxUsageCount
-		result.MaxBytesUsed = r.DEK.MaxBytesUsed
-		result.WarningPercent = r.DEK.WarningPercent
+// times parses the DEK's created_at and rotated_at.
+func (d *cliDEK) times(operation string) (createdAt, rotatedAt time.Time, err error) {
+	createdAt, err = parseCLIRFC3339(operation, "created_at", d.CreatedAt)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
 	}
-	return result
+	rotatedAt, err = parseCLIRFC3339(operation, "rotated_at", d.RotatedAt)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return createdAt, rotatedAt, nil
 }
 
+func (d *cliDEK) toCreateResult() (*DEKCreateResult, error) {
+	createdAt, _, err := d.times("DEKCreate")
+	if err != nil {
+		return nil, err
+	}
+	return &DEKCreateResult{
+		Path:        d.Path,
+		Algorithm:   d.Algorithm,
+		Version:     d.Version,
+		CreatedAt:   createdAt,
+		Description: d.Description,
+	}, nil
+}
+
+func (d *cliDEK) toGetResult(operation string) (*DEKGetResult, error) {
+	createdAt, rotatedAt, err := d.times(operation)
+	if err != nil {
+		return nil, err
+	}
+	return &DEKGetResult{
+		Path:           d.Path,
+		Algorithm:      d.Algorithm,
+		Version:        d.Version,
+		Status:         d.Status,
+		IsDefault:      d.IsDefault,
+		CreatedAt:      createdAt,
+		RotatedAt:      rotatedAt,
+		Description:    d.Description,
+		BackendType:    d.BackendType,
+		UsageCount:     d.UsageCount,
+		BytesUsed:      d.BytesUsed,
+		MaxUsageCount:  d.MaxUsageCount,
+		MaxBytesUsed:   d.MaxBytesUsed,
+		WarningPercent: d.WarningPercent,
+	}, nil
+}
+
+// cliDEKListResponse is kms dek list's output. The CLI does not page, so
+// there is no has_more or next cursor.
 type cliDEKListResponse struct {
-	DEKs       []cliDEKInfo `json:"deks,omitempty"`
-	HasMore    bool         `json:"has_more,omitempty"`
-	NextCursor string       `json:"next_cursor,omitempty"`
+	DEKs       []cliDEK `json:"deks"`
+	TotalCount int      `json:"total_count"`
 }
 
-func (r *cliDEKListResponse) toResult() *DEKListResult {
-	result := &DEKListResult{
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
-	}
-	for _, d := range r.DEKs {
+func (r *cliDEKListResponse) toResult() (*DEKListResult, error) {
+	result := &DEKListResult{}
+	for i := range r.DEKs {
+		d := &r.DEKs[i]
+		createdAt, _, err := d.times("DEKList")
+		if err != nil {
+			return nil, err
+		}
 		result.DEKs = append(result.DEKs, DEKSummary{
 			Path:      d.Path,
 			Algorithm: d.Algorithm,
 			Version:   d.Version,
 			Status:    d.Status,
 			IsDefault: d.IsDefault,
-			CreatedAt: time.Unix(d.CreatedAt, 0),
+			CreatedAt: createdAt,
 		})
 	}
-	return result
+	return result, nil
 }
 
 type cliDEKDeleteResponse struct {
@@ -1785,246 +1811,54 @@ func (r *cliDEKRotateResponse) toResult() *DEKRotateResult {
 	}
 }
 
+// cliDEKReencryption is the reencryption object of kms dek status.
+type cliDEKReencryption struct {
+	InProgress    bool   `json:"in_progress"`
+	TotalKeys     int64  `json:"total_keys"`
+	ProcessedKeys int64  `json:"processed_keys"`
+	FailedKeys    int64  `json:"failed_keys"`
+	StartedAt     string `json:"started_at,omitempty"`
+}
+
+// cliDEKStatusResponse is kms dek status's output: the DEK plus its
+// reencryption progress when there is any. The CLI prints no estimated
+// completion time.
 type cliDEKStatusResponse struct {
-	Path                   string `json:"path,omitempty"`
-	Algorithm              string `json:"algorithm,omitempty"`
-	Version                uint64 `json:"version,omitempty"`
-	Status                 string `json:"status,omitempty"`
-	IsDefault              bool   `json:"is_default,omitempty"`
-	CreatedAt              int64  `json:"created_at,omitempty"`
-	RotatedAt              int64  `json:"rotated_at,omitempty"`
-	Description            string `json:"description,omitempty"`
-	BackendType            string `json:"backend_type,omitempty"`
-	UsageCount             uint64 `json:"usage_count,omitempty"`
-	BytesUsed              uint64 `json:"bytes_used,omitempty"`
-	MaxUsageCount          uint64 `json:"max_usage_count,omitempty"`
-	MaxBytesUsed           uint64 `json:"max_bytes_used,omitempty"`
-	WarningPercent         int32  `json:"warning_percent,omitempty"`
-	ReencryptionInProgress bool   `json:"reencryption_in_progress,omitempty"`
-	ProcessedKeys          int64  `json:"processed_keys,omitempty"`
-	TotalKeys              int64  `json:"total_keys,omitempty"`
-	FailedKeys             int64  `json:"failed_keys,omitempty"`
-	ReencryptionStartedAt  int64  `json:"reencryption_started_at,omitempty"`
-	EstimatedCompletion    int64  `json:"estimated_completion,omitempty"`
+	cliDEK
+	Reencryption *cliDEKReencryption `json:"reencryption,omitempty"`
 }
 
-func (r *cliDEKStatusResponse) toResult() *DEKStatusResult {
-	return &DEKStatusResult{
-		Path:                   r.Path,
-		Algorithm:              r.Algorithm,
-		Version:                r.Version,
-		Status:                 r.Status,
-		IsDefault:              r.IsDefault,
-		CreatedAt:              time.Unix(r.CreatedAt, 0),
-		RotatedAt:              time.Unix(r.RotatedAt, 0),
-		Description:            r.Description,
-		BackendType:            r.BackendType,
-		UsageCount:             r.UsageCount,
-		BytesUsed:              r.BytesUsed,
-		MaxUsageCount:          r.MaxUsageCount,
-		MaxBytesUsed:           r.MaxBytesUsed,
-		WarningPercent:         r.WarningPercent,
-		ReencryptionInProgress: r.ReencryptionInProgress,
-		ProcessedKeys:          r.ProcessedKeys,
-		TotalKeys:              r.TotalKeys,
-		FailedKeys:             r.FailedKeys,
-		ReencryptionStartedAt:  time.Unix(r.ReencryptionStartedAt, 0),
-		EstimatedCompletion:    time.Unix(r.EstimatedCompletion, 0),
-	}
-}
-
-// Secrets response types
-
-type cliSecretsStoreResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Version   uint64 `json:"version,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsStoreResponse) toResult() *SecretsStoreResult {
-	return &SecretsStoreResult{
-		SecretID:  r.SecretID,
-		Version:   r.Version,
-		Timestamp: time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliSecretsGetResponse struct {
-	SecretID      string            `json:"secret_id,omitempty"`
-	Version       uint64            `json:"version,omitempty"`
-	Data          string            `json:"data,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	Algorithm     string            `json:"algorithm,omitempty"`
-	KeyIdentifier string            `json:"key_identifier,omitempty"`
-	CreatedAt     int64             `json:"created_at,omitempty"`
-	Timestamp     int64             `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsGetResponse) toResult() (*SecretsGetResult, error) {
-	data, err := base64.StdEncoding.DecodeString(r.Data)
+func (r *cliDEKStatusResponse) toResult() (*DEKStatusResult, error) {
+	dek, err := r.toGetResult("DEKStatus")
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode secret data: %w", err)
+		return nil, err
 	}
-	return &SecretsGetResult{
-		SecretID:      r.SecretID,
-		Version:       r.Version,
-		Data:          data,
-		Metadata:      r.Metadata,
-		Algorithm:     r.Algorithm,
-		KeyIdentifier: r.KeyIdentifier,
-		CreatedAt:     time.Unix(r.CreatedAt, 0),
-		Timestamp:     time.Unix(r.Timestamp, 0),
-	}, nil
-}
-
-type cliSecretsListResponse struct {
-	Secrets    []cliSecretSummary `json:"secrets,omitempty"`
-	TotalCount int32              `json:"total_count,omitempty"`
-	HasMore    bool               `json:"has_more,omitempty"`
-	NextCursor string             `json:"next_cursor,omitempty"`
-}
-
-type cliSecretSummary struct {
-	Name           string `json:"name,omitempty"`
-	CurrentVersion uint64 `json:"current_version,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Owner          string `json:"owner,omitempty"`
-	CreatedAt      int64  `json:"created_at,omitempty"`
-	UpdatedAt      int64  `json:"updated_at,omitempty"`
-}
-
-func (r *cliSecretsListResponse) toResult() *SecretsListResult {
-	result := &SecretsListResult{
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
+	result := &DEKStatusResult{
+		Path:           dek.Path,
+		Algorithm:      dek.Algorithm,
+		Version:        dek.Version,
+		Status:         dek.Status,
+		IsDefault:      dek.IsDefault,
+		CreatedAt:      dek.CreatedAt,
+		RotatedAt:      dek.RotatedAt,
+		Description:    dek.Description,
+		BackendType:    dek.BackendType,
+		UsageCount:     dek.UsageCount,
+		BytesUsed:      dek.BytesUsed,
+		MaxUsageCount:  dek.MaxUsageCount,
+		MaxBytesUsed:   dek.MaxBytesUsed,
+		WarningPercent: dek.WarningPercent,
 	}
-	for _, s := range r.Secrets {
-		result.Secrets = append(result.Secrets, SecretSummary{
-			Name:           s.Name,
-			CurrentVersion: s.CurrentVersion,
-			Description:    s.Description,
-			Owner:          s.Owner,
-			CreatedAt:      time.Unix(s.CreatedAt, 0),
-			UpdatedAt:      time.Unix(s.UpdatedAt, 0),
-		})
+	if r.Reencryption != nil {
+		startedAt, err := parseCLIRFC3339("DEKStatus", "reencryption.started_at", r.Reencryption.StartedAt)
+		if err != nil {
+			return nil, err
+		}
+		result.ReencryptionInProgress = r.Reencryption.InProgress
+		result.TotalKeys = r.Reencryption.TotalKeys
+		result.ProcessedKeys = r.Reencryption.ProcessedKeys
+		result.FailedKeys = r.Reencryption.FailedKeys
+		result.ReencryptionStartedAt = startedAt
 	}
-	return result
-}
-
-type cliSecretsDeleteResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Deleted   bool   `json:"deleted,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsDeleteResponse) toResult() *SecretsDeleteResult {
-	return &SecretsDeleteResult{
-		SecretID:  r.SecretID,
-		Deleted:   r.Deleted,
-		Timestamp: time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliSecretsRotateResponse struct {
-	SecretID   string `json:"secret_id,omitempty"`
-	OldVersion uint64 `json:"old_version,omitempty"`
-	NewVersion uint64 `json:"new_version,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsRotateResponse) toResult() *SecretsRotateResult {
-	return &SecretsRotateResult{
-		SecretID:   r.SecretID,
-		OldVersion: r.OldVersion,
-		NewVersion: r.NewVersion,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliSecretsVersionsResponse struct {
-	SecretID   string                 `json:"secret_id,omitempty"`
-	Versions   []cliSecretVersionInfo `json:"versions,omitempty"`
-	HasMore    bool                   `json:"has_more,omitempty"`
-	NextCursor string                 `json:"next_cursor,omitempty"`
-}
-
-type cliSecretVersionInfo struct {
-	Version   uint64 `json:"version,omitempty"`
-	CreatedAt int64  `json:"created_at,omitempty"`
-	CreatedBy string `json:"created_by,omitempty"`
-	ExpiresAt int64  `json:"expires_at,omitempty"`
-}
-
-func (r *cliSecretsVersionsResponse) toResult() *SecretsVersionsResult {
-	result := &SecretsVersionsResult{
-		SecretID:   r.SecretID,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
-	}
-	for _, v := range r.Versions {
-		result.Versions = append(result.Versions, SecretVersionInfo{
-			Version:   v.Version,
-			CreatedAt: time.Unix(v.CreatedAt, 0),
-			CreatedBy: v.CreatedBy,
-			ExpiresAt: time.Unix(v.ExpiresAt, 0),
-		})
-	}
-	return result
-}
-
-type cliSecretsVersionResponse struct {
-	SecretID  string            `json:"secret_id,omitempty"`
-	Version   uint64            `json:"version,omitempty"`
-	Data      string            `json:"data,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	CreatedAt int64             `json:"created_at,omitempty"`
-	CreatedBy string            `json:"created_by,omitempty"`
-	ExpiresAt int64             `json:"expires_at,omitempty"`
-	Timestamp int64             `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsVersionResponse) toResult() (*SecretsVersionResult, error) {
-	data, err := base64.StdEncoding.DecodeString(r.Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode secret data: %w", err)
-	}
-	return &SecretsVersionResult{
-		SecretID:  r.SecretID,
-		Version:   r.Version,
-		Data:      data,
-		Metadata:  r.Metadata,
-		CreatedAt: time.Unix(r.CreatedAt, 0),
-		CreatedBy: r.CreatedBy,
-		ExpiresAt: time.Unix(r.ExpiresAt, 0),
-		Timestamp: time.Unix(r.Timestamp, 0),
-	}, nil
-}
-
-type cliSecretsRollbackResponse struct {
-	SecretID   string `json:"secret_id,omitempty"`
-	NewVersion uint64 `json:"new_version,omitempty"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsRollbackResponse) toResult() *SecretsRollbackResult {
-	return &SecretsRollbackResult{
-		SecretID:   r.SecretID,
-		NewVersion: r.NewVersion,
-		Timestamp:  time.Unix(r.Timestamp, 0),
-	}
-}
-
-type cliSecretsStatusResponse struct {
-	SecretID  string `json:"secret_id,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
-}
-
-func (r *cliSecretsStatusResponse) toResult() *SecretsStatusResult {
-	return &SecretsStatusResult{
-		SecretID:  r.SecretID,
-		Status:    r.Status,
-		Timestamp: time.Unix(r.Timestamp, 0),
-	}
+	return result, nil
 }

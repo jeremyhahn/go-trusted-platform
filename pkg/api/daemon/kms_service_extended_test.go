@@ -28,6 +28,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
 // extKMSClientMock embeds mockSDKKMSClient and overrides the key-lifecycle
@@ -137,11 +138,11 @@ func (m *extSecretsClientMock) Ensure(ctx context.Context, req *secrets.EnsureSe
 }
 
 func (m *extSecretsClientMock) GetVersion(ctx context.Context, req *secrets.GetSecretVersionRequest) (*secrets.SecretVersionInfo, error) {
-	return nil, errKMSLifecycleMock{method: "GetVersion"}
+	return nil, sdkerrors.NewNotFound("GetVersion", "secret not found")
 }
 
 func (m *extSecretsClientMock) ListVersions(ctx context.Context, secretID string) (*secrets.ListSecretVersionsResponse, error) {
-	return nil, errKMSLifecycleMock{method: "ListVersions"}
+	return nil, sdkerrors.NewNotFound("ListVersions", "secret not found")
 }
 
 func (m *extSecretsClientMock) Rotate(ctx context.Context, req *secrets.RotateSecretRequest) (*secrets.RotateSecretResponse, error) {
@@ -169,7 +170,7 @@ func (m *extSecretsClientMock) GetRotationPolicy(ctx context.Context, secretID s
 	if m.getRotationPolicyFn != nil {
 		return m.getRotationPolicyFn(ctx, secretID)
 	}
-	return nil, errKMSLifecycleMock{method: "GetRotationPolicy"}
+	return nil, sdkerrors.NewNotFound("GetRotationPolicy", "rotation policy not found")
 }
 
 // requireGRPCCode asserts err is a gRPC status error with the given code.
@@ -284,6 +285,18 @@ func TestKMSServerAdapterGetKeyMetadata(t *testing.T) {
 		_, err := adapter.GetKeyMetadata(ctx, &pb.GetKeyMetadataRequest{KeyId: "missing"})
 		requireGRPCCode(t, err, codes.NotFound)
 	})
+
+	t.Run("NilMetadata", func(t *testing.T) {
+		mock := &extKMSClientMock{
+			getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+				return nil, nil
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+		_, err := adapter.GetKeyMetadata(ctx, &pb.GetKeyMetadataRequest{KeyId: "key-1"})
+		require.ErrorAs(t, err, new(ErrKMSNilMetadata))
+		requireGRPCCode(t, err, codes.Internal)
+	})
 }
 
 func TestKMSServerAdapterUpdateKeyMetadata(t *testing.T) {
@@ -330,6 +343,18 @@ func TestKMSServerAdapterUpdateKeyMetadata(t *testing.T) {
 		_, err := adapter.UpdateKeyMetadata(ctx, &pb.UpdateKeyMetadataRequest{KeyId: "key-1"})
 		requireGRPCCode(t, err, codes.Internal)
 	})
+
+	t.Run("NilMetadata", func(t *testing.T) {
+		mock := &extKMSClientMock{
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return nil, nil
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+		_, err := adapter.UpdateKeyMetadata(ctx, &pb.UpdateKeyMetadataRequest{KeyId: "key-1"})
+		require.ErrorAs(t, err, new(ErrKMSNilMetadata))
+		requireGRPCCode(t, err, codes.Internal)
+	})
 }
 
 // =============================================================================
@@ -340,8 +365,12 @@ func TestKMSServerAdapterSetKeyPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Success", func(t *testing.T) {
+		updated := time.Unix(1700000000, 0)
 		mock := &extKMSClientMock{
 			setKeyPolicyFn: func(ctx context.Context, req *kms.SetKeyPolicyRequest) error { return nil },
+			getKeyPolicyFn: func(ctx context.Context, keyID string) (*kms.KeyPolicy, error) {
+				return &kms.KeyPolicy{KeyID: keyID, Version: 3, UpdatedAt: updated}, nil
+			},
 		}
 		adapter := NewKMSServerAdapter(mock, slog.Default())
 
@@ -361,7 +390,9 @@ func TestKMSServerAdapterSetKeyPolicy(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "key-1", resp.KeyId)
-		assert.Equal(t, uint64(2), resp.PolicyVersion)
+		// The version is the one the KMS stored, not the request's.
+		assert.Equal(t, uint64(3), resp.PolicyVersion)
+		assert.Equal(t, updated.Unix(), resp.Timestamp)
 
 		require.NotNil(t, mock.lastSetPolicyReq)
 		policy := mock.lastSetPolicyReq.Policy
@@ -390,6 +421,26 @@ func TestKMSServerAdapterSetKeyPolicy(t *testing.T) {
 
 	t.Run("BackendError", func(t *testing.T) {
 		adapter := NewKMSServerAdapter(&extKMSClientMock{}, slog.Default())
+		_, err := adapter.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{KeyId: "key-1", Policy: &pb.KeyPolicy{}})
+		requireGRPCCode(t, err, codes.Internal)
+	})
+
+	t.Run("ReadBackError", func(t *testing.T) {
+		mock := &extKMSClientMock{
+			setKeyPolicyFn: func(ctx context.Context, req *kms.SetKeyPolicyRequest) error { return nil },
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
+		_, err := adapter.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{KeyId: "key-1", Policy: &pb.KeyPolicy{}})
+		requireGRPCCode(t, err, codes.Internal)
+		assert.Contains(t, err.Error(), "read-back")
+	})
+
+	t.Run("ReadBackNoPolicy", func(t *testing.T) {
+		mock := &extKMSClientMock{
+			setKeyPolicyFn: func(ctx context.Context, req *kms.SetKeyPolicyRequest) error { return nil },
+			getKeyPolicyFn: func(ctx context.Context, keyID string) (*kms.KeyPolicy, error) { return nil, nil },
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
 		_, err := adapter.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{KeyId: "key-1", Policy: &pb.KeyPolicy{}})
 		requireGRPCCode(t, err, codes.Internal)
 	})

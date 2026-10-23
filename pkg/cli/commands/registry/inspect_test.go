@@ -14,10 +14,58 @@
 package registry
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
+
+// TestConvertInspectDomainResponse_OSAndArchitecture checks that inspect's
+// JSON document carries the artifact's os and architecture
+// (docs/registry/cli.md §5).
+func TestConvertInspectDomainResponse_OSAndArchitecture(t *testing.T) {
+	detail := &regsvc.ArtifactDetail{
+		Artifact: &regsvc.Artifact{Repository: "apps/api", Tag: "1.0", OS: "linux", Architecture: "amd64"},
+	}
+
+	out, err := json.Marshal(convertInspectDomainResponse(detail, "apps/api:1.0"))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var doc struct {
+		Manifest map[string]any `json:"manifest"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Manifest["os"] != "linux" {
+		t.Errorf("os = %v, want linux", doc.Manifest["os"])
+	}
+	if doc.Manifest["architecture"] != "amd64" {
+		t.Errorf("architecture = %v, want amd64", doc.Manifest["architecture"])
+	}
+}
+
+// TestConvertInspectDomainResponse_NoArtifact checks that a detail without
+// an artifact omits os and architecture rather than printing empty values.
+func TestConvertInspectDomainResponse_NoArtifact(t *testing.T) {
+	out, err := json.Marshal(convertInspectDomainResponse(&regsvc.ArtifactDetail{}, "apps/api:1.0"))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var doc struct {
+		Manifest map[string]any `json:"manifest"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"os", "architecture"} {
+		if _, ok := doc.Manifest[key]; ok {
+			t.Errorf("%s present without an artifact", key)
+		}
+	}
+}
 
 func TestNewInspectCommand(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {

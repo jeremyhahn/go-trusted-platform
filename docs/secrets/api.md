@@ -48,11 +48,10 @@ in [`docs/kms/api.md`](../kms/api.md) — not here.
 
 **`MISSING` — by design** is not a `docs/13` gap. Exposing config-secret
 resolution over a transport would create a credential oracle; the absence is the
-control. No status service will be built either (owner ruling, 2026-10-17):
-reporting resolution status stays the local `secrets status` command.
+control. There is no status service either: reporting resolution status stays
+the local `secrets status` command.
 
-The other rows are by design for these reasons, accepted by the owner on
-2026-10-17:
+The other rows are by design for these reasons:
 
 - **Classify a string, expand a short `kms://` path:** computable client-side.
   Both are pure functions of their arguments, so a client computes them itself
@@ -76,7 +75,7 @@ scope.
 **not this feature**: the secret store's CRUD lives on the KMS surface
 ([`docs/kms/api.md`](../kms/api.md)) and on the platform-wide QUIC
 `OpSecretsCategory` (`0xCE`) documented in
-[`docs/daemon/api.md`](../daemon/api.md) §4. Its six MCP `secret_*` tools and
+[`docs/daemon/api.md`](../daemon/api.md) §4. Its MCP `secret_*` tools and
 the `secrets:*` scope each requires (#304) are listed in
 [`docs/kms/api.md`](../kms/api.md) §4 and §6.
 

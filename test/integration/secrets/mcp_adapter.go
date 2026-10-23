@@ -27,13 +27,15 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -135,18 +137,6 @@ type mcpServerInfo struct {
 type mcpCallToolRequest struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
-}
-
-// mcpCallToolResult is the MCP tools/call response payload.
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-// mcpContentItem represents a content item in a tool result.
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
 }
 
 // =============================================================================
@@ -362,35 +352,21 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 		Arguments: args,
 	}
 
-	var toolResult mcpCallToolResult
-	if err := m.sendRequest(ctx, "tools/call", toolReq, &toolResult); err != nil {
+	var rawResult json.RawMessage
+	if err := m.sendRequest(ctx, "tools/call", toolReq, &rawResult); err != nil {
 		return err
 	}
 
-	if toolResult.IsError {
-		// Extract error message from content
-		var errMsg string
-		for _, item := range toolResult.Content {
-			if item.Type == "text" {
-				errMsg = item.Text
-				break
-			}
-		}
-		return ErrMCPToolCallFailed{Tool: toolName, Code: jsonRPCInternalError, Message: errMsg}
+	// The tool output is JSON in the CallToolResult's text block.
+	var err error
+	if result == nil {
+		_, err = mcpwire.ToolOutputJSON(rawResult)
+	} else {
+		err = mcpwire.DecodeToolOutput(rawResult, result)
 	}
-
-	// Parse the text content as JSON into the result
-	if result != nil && len(toolResult.Content) > 0 {
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if err := json.Unmarshal([]byte(item.Text), result); err != nil {
-					return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
-				}
-				break
-			}
-		}
+	if err != nil {
+		return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
 	}
-
 	return nil
 }
 
@@ -402,22 +378,10 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 // (kms_tools_exec.go) with their snake_case arguments, and decodes each
 // result into the go-quicbaas SDK type, or the map shape, that
 // pkg/api/daemon.MCPServiceProvider returns for that tool.
-const (
-	// mcpTransport names this transport in surface.ErrNoSurface declarations.
-	mcpTransport = "MCP"
 
-	// mcpNoSecretLifecycleTool explains why rotate, version listing, rollback
-	// and status leave the MCP matrix.
-	mcpNoSecretLifecycleTool = "the MCP tool registry has no secret rotate, version listing, rollback or status tool (MISSING)"
-
-	// mcpNoSecretPrefixTool explains why Prefix leaves the MCP matrix.
-	mcpNoSecretPrefixTool = "the MCP tool registry has no secret prefix listing tool (MISSING)"
-)
-
-// mcpNoSurface declares an operation the MCP tool registry does not expose.
-func mcpNoSurface(operation, reason string) error {
-	return surface.ErrNoSurface{Transport: mcpTransport, Operation: operation, Reason: reason}
-}
+// mcpPrefixDataKey names each secret's bytes in a secret_get_by_prefix
+// answer, the key the gRPC GetSecretsByPrefix uses.
+const mcpPrefixDataKey = "data"
 
 // mcpDeleteResult is the map secret_delete returns.
 type mcpDeleteResult struct {
@@ -526,14 +490,58 @@ func (m *MCPAdapter) Delete(ctx context.Context, name string, _ bool) (*DeleteRe
 	return &DeleteResult{SecretID: resp.SecretID, Deleted: resp.Success}, nil
 }
 
-// Rotate has no MCP surface.
-func (m *MCPAdapter) Rotate(_ context.Context, _ string, _ []byte) (*RotateResult, error) {
-	return nil, mcpNoSurface("Rotate", mcpNoSecretLifecycleTool)
+// Rotate calls secret_rotate, which takes the new data base64-encoded.
+func (m *MCPAdapter) Rotate(ctx context.Context, name string, newData []byte) (*RotateResult, error) {
+	args := map[string]interface{}{
+		"secret_id": name,
+		"new_data":  base64.StdEncoding.EncodeToString(newData),
+	}
+
+	var resp baasservice.RotateSecretResponse
+	if err := m.callTool(ctx, "secret_rotate", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &RotateResult{
+		SecretID:   resp.SecretID,
+		OldVersion: resp.OldVersion,
+		NewVersion: resp.NewVersion,
+		Timestamp:  resp.Timestamp,
+	}, nil
 }
 
-// Versions has no MCP surface.
-func (m *MCPAdapter) Versions(_ context.Context, _ string) (*VersionsResult, error) {
-	return nil, mcpNoSurface("Versions", mcpNoSecretLifecycleTool)
+// Versions calls secret_list_versions.
+func (m *MCPAdapter) Versions(ctx context.Context, name string) (*VersionsResult, error) {
+	var resp baasservice.ListSecretVersionsResponse
+	if err := m.callTool(ctx, "secret_list_versions", map[string]interface{}{"secret_id": name}, &resp); err != nil {
+		return nil, err
+	}
+
+	versions := make([]VersionInfo, 0, len(resp.Versions))
+	for _, version := range resp.Versions {
+		if version == nil {
+			continue
+		}
+		info := VersionInfo{
+			Version:   version.Version,
+			CreatedAt: version.CreatedAt,
+			CreatedBy: version.CreatedBy,
+		}
+		if version.ExpiresAt != nil {
+			info.ExpiresAt = *version.ExpiresAt
+		}
+		if version.DeletedAt != nil {
+			info.DeletedAt = *version.DeletedAt
+		}
+		versions = append(versions, info)
+	}
+
+	return &VersionsResult{
+		SecretID:   name,
+		Versions:   versions,
+		HasMore:    resp.HasMore,
+		NextCursor: resp.NextCursor,
+	}, nil
 }
 
 // Version calls secret_get for one version.
@@ -555,14 +563,38 @@ func (m *MCPAdapter) Version(ctx context.Context, name string, version int) (*Ve
 	}, nil
 }
 
-// Rollback has no MCP surface.
-func (m *MCPAdapter) Rollback(_ context.Context, _ string, _ int) (*RollbackResult, error) {
-	return nil, mcpNoSurface("Rollback", mcpNoSecretLifecycleTool)
+// Rollback calls secret_rollback.
+func (m *MCPAdapter) Rollback(ctx context.Context, name string, targetVersion int) (*RollbackResult, error) {
+	args := map[string]interface{}{"secret_id": name, "target_version": targetVersion}
+
+	var resp baasservice.RollbackSecretResponse
+	if err := m.callTool(ctx, "secret_rollback", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &RollbackResult{SecretID: resp.SecretID, NewVersion: resp.NewVersion, Timestamp: resp.Timestamp}, nil
 }
 
-// Status has no MCP surface.
-func (m *MCPAdapter) Status(_ context.Context, _ string, _ bool) (*StatusResult, error) {
-	return nil, mcpNoSurface("Status", mcpNoSecretLifecycleTool)
+// Status calls secret_update_status. The tool answers the lower-case status
+// ("disabled"); the result carries the upper-case form the REST and gRPC
+// adapters report.
+func (m *MCPAdapter) Status(ctx context.Context, name string, enabled bool) (*StatusResult, error) {
+	status := baasservice.SecretStatusDisabled
+	if enabled {
+		status = baasservice.SecretStatusEnabled
+	}
+	args := map[string]interface{}{"secret_id": name, "status": string(status)}
+
+	var resp baasservice.UpdateSecretStatusResponse
+	if err := m.callTool(ctx, "secret_update_status", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &StatusResult{
+		SecretID:  resp.SecretID,
+		Status:    strings.ToUpper(string(resp.NewStatus)),
+		Timestamp: resp.Timestamp,
+	}, nil
 }
 
 // Policy calls secret_get_rotation_policy.
@@ -601,9 +633,31 @@ func (m *MCPAdapter) PolicySet(ctx context.Context, name string, opts PolicySetO
 	return &PolicySetResult{SecretID: resp.SecretID, Timestamp: resp.Timestamp}, nil
 }
 
-// Prefix has no MCP surface.
-func (m *MCPAdapter) Prefix(_ context.Context, _ string, _ bool) (*PrefixResult, error) {
-	return nil, mcpNoSurface("Prefix", mcpNoSecretPrefixTool)
+// Prefix calls secret_get_by_prefix, which answers what the gRPC
+// GetSecretsByPrefix answers: each secret's bytes sit under data key "data".
+func (m *MCPAdapter) Prefix(ctx context.Context, prefix string, includeData bool) (*PrefixResult, error) {
+	args := map[string]interface{}{"prefix": prefix, "include_data": includeData}
+
+	var resp pb.GetSecretsByPrefixResponse
+	if err := m.callTool(ctx, "secret_get_by_prefix", args, &resp); err != nil {
+		return nil, err
+	}
+
+	secrets := make(map[string]PrefixSecretData, len(resp.Secrets))
+	for name, secret := range resp.Secrets {
+		secrets[name] = PrefixSecretData{
+			Data:     secret.GetData()[mcpPrefixDataKey],
+			Metadata: secret.GetMetadata(),
+			Version:  secret.GetVersion(),
+		}
+	}
+
+	return &PrefixResult{
+		Secrets:    secrets,
+		TotalCount: resp.TotalCount,
+		HasMore:    resp.HasMore,
+		NextCursor: resp.NextCursor,
+	}, nil
 }
 
 // =============================================================================

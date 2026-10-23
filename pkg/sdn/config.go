@@ -253,6 +253,16 @@ func (c *Config) ZoneIndex() map[zone.Zone]zone.ZoneConfig {
 	return idx
 }
 
+// GatewayDatapathSocket returns the gateway section's datapath-socket, or
+// empty when the SDN config, the gateway section or the socket is unset.
+// It is safe on a nil *Config.
+func (c *Config) GatewayDatapathSocket() string {
+	if c == nil || c.Gateway == nil {
+		return ""
+	}
+	return c.Gateway.DatapathSocket
+}
+
 // Validate checks the SDN configuration for internal consistency and derives
 // the network plan. On success ResolvedZones() and Plan() are populated.
 func (c *Config) Validate() error {
@@ -571,6 +581,14 @@ type OverlayConfig struct {
 type GatewayConfig struct {
 	// Enabled controls whether gateway functionality is active.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// DatapathSocket is the control socket of gatewayd's datapath child
+	// (`<process.runtime-dir>/datapath.sock`, normally
+	// /run/gatewayd/datapath.sock). platformd serves the load-balancer,
+	// NAT64 and perf verbs from it over live IPC (#660). Empty leaves the
+	// load-balancer and NAT64 verbs unavailable and perf on platformd's
+	// local OVS connection.
+	DatapathSocket string `yaml:"datapath-socket,omitempty" json:"datapath_socket,omitempty" mapstructure:"datapath-socket"`
 }
 
 // ManagementVPNConfig configures the admin VPN on the gateway.

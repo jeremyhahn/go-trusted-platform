@@ -13,7 +13,7 @@
 
 There is no `AuthService` on gRPC, no `/api/v1/auth/*` route group, no QUIC
 opcode category, and no `platform_auth_*` MCP tool. `pkg/auth` is a library
-consumed in-process by interceptors and by `pkg/proxy`. Verified 2026-08-18.
+consumed in-process by interceptors and by `pkg/proxy`.
 
 What this folder's API surface *is*, is two disjoint things:
 
@@ -213,8 +213,8 @@ is listed in the architecture).
 ### Registration model — iam.self_service_registration
 
 Whether an uninvited user may register is governed by the canonical
-stack-wide flag (docs/08-bootstrap-auth-contract.md §Registration model,
-amended 2026-09-01). Platform YAML carrier:
+stack-wide flag (docs/08-bootstrap-auth-contract.md §Registration model).
+Platform YAML carrier:
 `quicbaas.self-service-registration.enabled` — **default false,
 invite-only**; the value also passes through to the embedded server's
 `iam.self_service_registration`. When disabled,
@@ -407,7 +407,7 @@ returns every distinct scope the MCP tool permission catalog
 authorization checker enforces the same catalog, so the advertised list is
 exactly the enforced vocabulary — a scope cannot be required by a tool without
 being advertised, or advertised without a tool requiring it. Open tools (empty
-permission) contribute nothing. As of 2026-10-14:
+permission) contribute nothing. The set the catalog derives today:
 
 ```
 attestation:read|write,

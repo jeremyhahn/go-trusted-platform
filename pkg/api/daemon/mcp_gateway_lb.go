@@ -22,20 +22,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 )
 
-// SetGatewayLoadBalancer wires the gateway load balancer backend into the
-// MCP service provider. A nil backend leaves every gateway_lb_* tool
-// returning ErrServiceNotAvailable.
-func (m *MCPServiceProvider) SetGatewayLoadBalancer(lb GatewayLoadBalancerInterface) {
-	m.gatewayLB = lb
-}
-
 // requireGatewayLB returns the load balancer backend or the typed
 // service-unavailable error.
 func (m *MCPServiceProvider) requireGatewayLB() (GatewayLoadBalancerInterface, error) {
-	if m.gatewayLB == nil {
+	if m.gatewayBackends == nil || m.gatewayBackends.LoadBalancer() == nil {
 		return nil, ErrServiceNotAvailable{Service: "load-balancer"}
 	}
-	return m.gatewayLB, nil
+	return m.gatewayBackends.LoadBalancer(), nil
 }
 
 // mcpLBTarget parses the protocol/address/port triple of keyed VIP tools.

@@ -36,6 +36,63 @@ func TestWriteLocalCLIConfigSelectsTheHarnessSocket(t *testing.T) {
 		t.Fatalf("WriteLocalCLIConfig: %v", err)
 	}
 
+	local := loadHarnessLocalContext(t, path)
+	if local.SocketPath != socketPath {
+		t.Errorf("socket path = %q, want the harness socket %q", local.SocketPath, socketPath)
+	}
+	if local.GRPCAddr != grpcAddr {
+		t.Errorf("gRPC address = %q, want %q", local.GRPCAddr, grpcAddr)
+	}
+}
+
+// TestWriteLocalCLIConfigPointsQuicBaaSAtPlatformdOverTLS verifies the
+// quicbaas connection goes to platformd's gRPC listener with the harness
+// mTLS files: the quicbaas SDK refuses every transport without TLS, and
+// platformd's Unix socket serves none.
+func TestWriteLocalCLIConfigPointsQuicBaaSAtPlatformdOverTLS(t *testing.T) {
+	t.Setenv(EnvCACert, "/certs/ca.crt")
+	t.Setenv(EnvClientCert, "/certs/client.crt")
+	t.Setenv(EnvClientKey, "/certs/client.key")
+	grpcAddr := "localhost:10443"
+
+	path, err := WriteLocalCLIConfig(t.TempDir(), "/tmp/platformd-test.sock", grpcAddr)
+	if err != nil {
+		t.Fatalf("WriteLocalCLIConfig: %v", err)
+	}
+
+	local := loadHarnessLocalContext(t, path)
+	if local.QuicBaaSAddr != grpcAddr || local.QuicBaaSTransport != "grpc" {
+		t.Errorf("quicbaas = %q over %q, want %q over grpc", local.QuicBaaSAddr, local.QuicBaaSTransport, grpcAddr)
+	}
+	if local.QuicBaaSCACert != "/certs/ca.crt" ||
+		local.QuicBaaSClientCert != "/certs/client.crt" ||
+		local.QuicBaaSClientKey != "/certs/client.key" {
+		t.Errorf("quicbaas TLS files = %q, %q, %q, want the harness mTLS files",
+			local.QuicBaaSCACert, local.QuicBaaSClientCert, local.QuicBaaSClientKey)
+	}
+}
+
+// TestWriteLocalCLIConfigLeavesQuicBaaSUnsetWithoutGRPCAddr verifies an
+// empty gRPC address writes no quicbaas connection and no TLS files, so the
+// context does not point quicbaas at an empty address.
+func TestWriteLocalCLIConfigLeavesQuicBaaSUnsetWithoutGRPCAddr(t *testing.T) {
+	t.Setenv(EnvCACert, "/certs/ca.crt")
+
+	path, err := WriteLocalCLIConfig(t.TempDir(), "/tmp/platformd-test.sock", "")
+	if err != nil {
+		t.Fatalf("WriteLocalCLIConfig: %v", err)
+	}
+
+	local := loadHarnessLocalContext(t, path)
+	if local.QuicBaaSAddr != "" || local.QuicBaaSTransport != "" || local.QuicBaaSCACert != "" {
+		t.Errorf("quicbaas = %q over %q (ca %q), want none", local.QuicBaaSAddr, local.QuicBaaSTransport, local.QuicBaaSCACert)
+	}
+}
+
+// loadHarnessLocalContext loads the config at path through platformctl's own
+// loader and returns its current context, which must be the local harness one.
+func loadHarnessLocalContext(t *testing.T, path string) *cli.LocalContext {
+	t.Helper()
 	config, err := cli.LoadConfig(path)
 	if err != nil {
 		t.Fatalf("platformctl cannot load the written config: %v", err)
@@ -50,12 +107,7 @@ func TestWriteLocalCLIConfigSelectsTheHarnessSocket(t *testing.T) {
 	if current.Type != cli.ContextTypeLocal || current.Local == nil {
 		t.Fatalf("current context is %q (local=%v), want a local context", current.Type, current.Local)
 	}
-	if current.Local.SocketPath != socketPath {
-		t.Errorf("socket path = %q, want the harness socket %q", current.Local.SocketPath, socketPath)
-	}
-	if current.Local.GRPCAddr != grpcAddr {
-		t.Errorf("gRPC address = %q, want %q", current.Local.GRPCAddr, grpcAddr)
-	}
+	return current.Local
 }
 
 func TestWriteLocalCLIConfigFailsForAMissingDirectory(t *testing.T) {

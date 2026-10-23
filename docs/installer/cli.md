@@ -50,7 +50,7 @@ to `--verbose` and `-p` to `--path`. **Use long forms in scripts.**
 | `install system`, `install uki`, `install uki-rebuild` | **No.** They run entirely locally — on install media, or on the node itself. |
 | `wipe` | **No.** |
 | `iso create`, `iso test *`, `iso module-signing-key` | **No.** They run locally. |
-| `iso download`, `iso extract`, `iso customize`, `iso build`, `iso profile *` | **They currently do nothing.** See §4. |
+| `iso download`, `iso extract`, `iso customize`, `iso build`, `iso profile *` | **No.** They run locally through `pkg/iso` and `pkg/installer`. See §4. |
 | `platform-initrd boot`, `platform-initrd recovery` | **No.** They run before userspace exists. |
 
 ---
@@ -295,6 +295,13 @@ Two ways to proceed:
 media, air-gapped and PXE installs. `--pre-fetch=false` is only safe when the
 install network is known to permit outbound HTTPS to the Alpine CDN.
 
+The pre-fetched repository is `apks-prefetch/<arch>/` on the media. The
+autoinstall script installs offline, from `/media/cdrom/apks` and
+`/media/cdrom/apks-prefetch`, only when the booted CD carries
+`apks-prefetch`: the stock Alpine `apks` lacks `lvm2`, `parted` and the rest
+of what the install adds. Without it the script takes `platform_apk_mirror=`
+from the kernel command line, else the public Alpine mirror.
+
 **`--platform-apk-dir`** adds `trusted-platform-strongswan`,
 `trusted-platform-strongswan-openrc`, `trusted-platform-p11-host`,
 `trusted-platform-p11-host-openrc` (from the directory, signed by the builder's
@@ -348,6 +355,7 @@ Flags shared by `install`, `firstboot`, `boot` and `all`:
 | `--u2f-device` | string | `""` | Host hidraw device for U2F passthrough |
 | `--qemu-binary` | string | `""` | Custom QEMU binary |
 | `--network` | string | `""` | `user`, `bridge`, `none`; empty auto-detects |
+| `--timeout` | duration | `0` (none) | Bound on each VM run (e.g. `45m`); see below |
 
 `--work-dir` holds the artefacts (disk, NVRAM, TPM state, logs) and may be as
 deep as you like. The VM's runtime unix sockets (QMP, console) do **not** live
@@ -358,6 +366,9 @@ its own socket the same way. A socket path that is still over the limit (a long
 `$TMPDIR`, or a path set explicitly) fails before QEMU starts with
 `ErrSocketPathTooLong`, naming the path and the limit.
 
+`firstboot` and `boot` additionally take `--expect` (a serial-console
+milestone that ends the test; see below).
+
 `install` and `all` additionally take `--iso` (default: resolved as
 `trusted-alpine-<VERSION>-x86_64.iso`, then the `-fips` variant).
 
@@ -367,9 +378,52 @@ platformctl iso test firstboot --disk alpine-platform-installed.qcow2
 platformctl iso test all
 ```
 
-**`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
-script reboots, QEMU exits non-zero, and the harness treats that as success if
-the disk exists and exceeds 100 MB.
+**`iso test install` succeeds only when the disk was written.** Whether the
+guest powers off (QEMU exits zero) or reboots (QEMU exits non-zero), the run
+counts as an install only if the disk exists and exceeds 100 MB. The
+autoinstaller powers off after a failed install too, so a clean exit that left
+the disk empty fails with `ErrInstallDiskNotWritten`, naming the disk and its
+size.
+
+**A VM test waits until the guest powers off.** Interactively you end it with
+Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
+QEMU, stops the software TPM and fails with `ErrVMTimeout`, naming the
+timeout. A run cut off this way never counts as an install, whatever the disk
+size. A guest with no autoinstaller (a stock Alpine ISO) sits at its login
+prompt and never powers off, so it always ends at the timeout. The iso
+integration suite's VM tests therefore boot an ISO they customize before they
+build it (`ensureBuiltISO`, `test/integration/iso/multiprotocol_test.go`): its
+autoinstaller's inittab ends with `/sbin/poweroff -f`, so the guest powers off
+whether the install passes or fails.
+
+**A headless `iso test boot` / `firstboot` reports where the boot stopped.**
+With `--timeout` set, the guest serial console goes to
+`<work-dir>/boot-serial.log` instead of the terminal. When the timeout expires
+the verb fails with `ErrBootTimeout` (which is also an `ErrVMTimeout`); when
+QEMU fails it returns `ErrBootFailed`. Both carry the last 60 lines of that log
+(the last bootloader, kernel or init line), or say the log is missing or empty
+when the guest wrote nothing to its serial port. Without `--timeout` the console
+stays on the terminal.
+
+**An installed node never powers off, so `--expect` ends its boot test.**
+`iso test boot` and `firstboot` take `--expect <line>`: the test passes as
+soon as that line appears in `<work-dir>/boot-serial.log`, and the verb then
+stops the VM. It needs `--timeout` (without it the console is on the terminal
+and there is no log to watch), and fails before any VM setup otherwise. Each headless boot first removes the
+log an earlier boot in the same `--work-dir` left, so that boot's milestone is
+never taken for this one's. When the
+timeout comes first, the verb fails with `ErrBootTimeout` and the console tail,
+as above. Without `--expect` the test still ends only when the guest powers off.
+
+The milestone for an installed node is `login:`. The installed kernel command
+line ends with the hardware quirk's `console=ttyS0,115200n8` (`pkg/quirks`,
+`Default`), so kernel, initrd and OpenRC output reaches the serial port, and the
+installed `/etc/inittab` (`pkg/installer/alpine.go`, `configureConsole`) runs
+`openrc default` as a `wait` entry before the getty on the SOL port prints its
+login prompt. `login:` therefore means the default runlevel, platformd
+included, has finished. The iso integration suite's `TestBoot` passes
+`--expect login:` with a `--timeout` inside its own deadline, so a boot that
+never gets there fails with that tail.
 
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them
@@ -440,44 +494,82 @@ platformctl iso module-signing-key --out /secure/keys/module-signing-key.pem
 kernels that were already built. The key lives outside the repository and
 outside any build context; back it up.
 
-### 3.4 The verbs that are stubs
+### 3.4 The step verbs
 
-`download`, `extract`, `customize`, `build`, and all four `profile` verbs parse
-their flags and then return
-`ErrDaemonConnectionRequired{Command: "iso <verb>"}` —
-*"daemon connection required for '…' command - dual-mode will be added later"*.
-Their flags are documented in §4 because they define the intended surface and
-because a reader will otherwise assume the commands work.
+`download`, `extract`, `customize` and `build` are the four steps `iso create`
+runs, exposed one at a time; the four `profile` verbs read and render the
+built-in installation profiles. All eight run locally — no daemon, no
+network beyond the Alpine mirror `download` fetches from. Their flags and
+output are in §4.
 
 ---
 
-## 4. Stub verbs — flags as declared
+## 4. Step and profile verbs
 
-These commands do not execute today. Recorded so the eventual implementation
-does not quietly change the surface. See [api.md](api.md) §4.
+Each verb prints one result object in the selected `--output` format and exits
+non-zero on failure (§7). Stdout carries only that object: progress lines and
+the output of the tools a verb runs (`7z`, `bsdtar`, `xorriso`, the build
+container) go to stderr.
 
-**`iso download`** — `--url` (`""`), `--version` (`3.22.2`), `--mirror`
-(`http://mirror.cs.odu.edu/alpine`), `--arch` (`x86_64`), `--force` (`false`),
-`--verify` (**`true`**), `--resume` (**`true`**), plus `--config`, `--work-dir`
-(`work`), `--debug`, `--verbose`.
+**`--output` is shadowed on three verbs.** `iso create --output` and
+`iso build --output` (the ISO path) and `iso profile generate --output` / `-o`
+(the config file) replace the global `--output` / `-o`, so those verbs always
+print in the default format — `table`, which renders a result object as YAML.
+Parse their output as YAML. `iso create` prints `success`, `output_iso`,
+`sha256`, `size_bytes` and `message`.
 
-**`iso extract`** — `--iso` (**required**), `--output-dir` (`""` → `work/iso`),
-`--force`, plus the common four.
+**`iso download`** — `--url` (`""`; must name an ISO file and overrides
+`--version`/`--mirror`/`--arch`), `--version` (`3.22.2`), `--mirror`
+(`http://mirror.cs.odu.edu/alpine`), `--arch` (`x86_64` or `aarch64`),
+`--force` (`false`; removes the existing ISO first), `--verify` (**`true`**),
+`--resume` (**`true`**), `--work-dir` (`work`; the ISO lands here), `--debug`.
+Prints `success`, `iso_path`, `sha256`, `size_bytes`, `verified`, `message`.
+
+**`iso extract`** — `--iso` (**required**), `--output-dir` (`""` →
+`<work-dir>/iso`), `--force` (`false`; without it a non-empty output directory
+is refused), `--work-dir` (`work`), `--debug`. Prints `success`, `output_dir`,
+`file_count`, `message`.
 
 **`iso customize`** — `--iso-dir` (**required**), `--overlay`, `--keys-dir`,
-`--platformd-binary`, `--autoinstall` (`false`), `--modify-initramfs` (`false`),
-plus the common four.
+`--platformd-binary` (`""` → `platformd` beside `platformctl`),
+`--platform-config` (platform config baked into the ISO; **required** unless
+the `--config` file names a config server), `--config` (ISO build
+configuration file), `--work-dir` (`work`), `--pre-fetch` (**`true`**, as on
+`iso create`; the flag's value replaces the `--config` file's `pre-fetch`),
+`--debug`. `platform-initrd` and
+`gatewayd` are taken from beside `platformd`; `gatewayd` is required when the
+platform config enables the gateway role, as
+`configs/platform/templates/single-node/default.yaml` does. Prints `success`,
+`iso_dir`, `message`.
 
 **`iso build`** — `--iso-dir` (**required**), `--output` (**required**),
-`--label` (`TRUSTED_PLATFORM`, max 32 chars), `--checksum` (**`true`**), plus
-the common four.
+`--label` (`TRUSTED_PLATFORM`; longer than 32 characters is refused),
+`--checksum` (**`true`**; writes `<output>.sha256`), `--debug`. Prints
+`success`, `output_iso`, `sha256`, `size_bytes`, `checksum_file` (omitted
+without `--checksum`), `message`. On a customized tree `--label` must be the
+label `iso customize` baked into the EFI GRUB, which finds its root with
+`search --label`: the `--config` file's `output-label`, `TRUSTED_PLATFORM`
+without one. Any other label leaves the guest at the GRUB menu with
+`no such device` and no kernel to load.
 
-**`iso profile`** — group persistent flag `--no-color`. Verbs: `list` (alias
-`ls`), `show <profile-name>`, `validate <config-file>`, `generate`. `generate`
-takes `--profile` / `-p` (**required**), `--output` / `-o` (default stdout),
-`--device` (override the disk device), `--interactive` / `-i` (marked *future*
-in the flag help). The four built-in profile names are `dev`, `production`,
-`production-hs`, `fips` ([engineering.md](engineering.md) §2).
+**`iso profile`** — verbs `list` (alias `ls`), `show <profile-name>`,
+`validate <config-file>`, `generate`. The four built-in profile names are
+`dev`, `production`, `production-hs`, `fips` ([engineering.md](engineering.md)
+§2); every Secure Boot profile carries the canonical platform PK/KEK/DB key
+URIs (`kms://platform/secureboot/{pk,kek,db}`,
+[docs/firmware/secure-boot.md](../firmware/secure-boot.md)), so a generated
+config validates as-is.
+
+- `list` prints `success`, `profiles` (each `name`, `description`,
+  `secure_boot`, `tpm_unseal`, `luks`, `fips`, `lockdown`), `message`.
+- `show` prints `success`, `profile` (the same summary), `yaml` (the rendered
+  install config), `message`. An unknown name fails.
+- `validate` loads the file as an install config and prints `success`,
+  `valid`, `errors`, `message`. An invalid config prints `valid: false` with
+  its errors **and** exits non-zero; a missing file fails without a result.
+- `generate` takes `--profile` / `-p` (**required**), `--output` / `-o`
+  (`""`: the YAML is printed only) and `--device` (overrides the disk device).
+  It prints `success`, `output_file`, `yaml`, `message`.
 
 ---
 
@@ -512,7 +604,7 @@ ioctl is what tells the firmware to release them. Leave it on.
 
 ```
 platform-initrd boot        Unlock the encrypted root filesystem
-platform-initrd recovery    Recovery mode with fallback and reseal
+platform-initrd recovery    Recovery mode with fallback unlock
 platform-initrd version     Print version information
 ```
 
@@ -548,7 +640,7 @@ platform-initrd boot --diskless --root-mount /sysroot
 |---|---|---|---|---|
 | `--device` | `-d` | string | — (**required**) | LUKS device path |
 | `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
-| `--reseal-pcrs` | | bool | **`true`** | Reseal to current PCRs after unlock |
+| `--reseal-pcrs` | | bool | `true` | Recorded but not read; recovery does not reseal (below) |
 | `--fido2` | | bool | **`true`** | Enable FIDO2 authenticator unlock |
 | `--interactive` | | bool | `false` | Interactive recovery menu |
 | `--tpm-path` | | string | `/dev/tpmrm0` | TPM device |
@@ -565,8 +657,14 @@ platform-initrd recovery --device /dev/sda2 --interactive
 
 **Recovery hard-codes its PCR selection to `0,1,2,3,7`** and its timeout to 300
 seconds with 5 retries (`pkg/boot/commands/recovery.go`). It does **not** honour
-a `--pcrs` flag — there isn't one. If your seal uses a different PCR set,
-recovery's automatic reseal will produce a seal against `0,1,2,3,7`.
+a `--pcrs` flag — there isn't one.
+
+**Recovery does not reseal.** The TPM-PCR unlock reads its seal from
+`tpm2/seal-platform.pub` / `.priv` on the ESP, which only first boot writes; the
+initrd has no writer for them. Option 4 of the `--interactive` menu ("Attempt to
+reseal TPM keys") therefore refuses with *"the resealed data cannot be stored"*,
+naming the TPM-PCR slot, before it unseals anything. It never reports success.
+Unlock, boot, and reseal from the running system.
 
 ---
 

@@ -18,6 +18,8 @@ package iso
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +68,31 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformUnix: "/run/platformd.sock",
 		PlatformCTL:  "platformctl",
 	}
+}
+
+// PlatformConfigTemplate is the platform configuration `iso customize` bakes
+// into the ISO: the single-node default template docs/installer/iso-building.md
+// names, relative to this package's directory, which is go test's working
+// directory.
+const PlatformConfigTemplate = "../../../configs/platform/templates/single-node/default.yaml"
+
+// PlatformBinaryDir returns the directory of the platformctl the suite drives,
+// with symlinks resolved. `iso customize` takes platformd from there by default
+// and stages platform-initrd and gatewayd from beside platformd.
+func PlatformBinaryDir() (string, error) {
+	binaryPath := os.Getenv(EnvPlatformCTL)
+	if binaryPath == "" {
+		binaryPath = GetServiceEndpoints().PlatformCTL
+	}
+	resolved, err := exec.LookPath(binaryPath)
+	if err != nil {
+		return "", ErrBinaryNotFound{Name: "platformctl", Path: binaryPath, Err: err}
+	}
+	resolved, err = filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", ErrBinaryNotFound{Name: "platformctl", Path: binaryPath, Err: err}
+	}
+	return filepath.Dir(resolved), nil
 }
 
 // VM tool paths the devcontainer image installs (qemu-system-x86 and swtpm
@@ -159,6 +186,17 @@ func (e ErrISONotFound) Error() string {
 	return fmt.Sprintf("ISO file not found: %s", e.Path)
 }
 
+// ErrOfflineRepositoryMissing reports a customized ISO tree without the
+// pre-fetched APK repository. The autoinstall script installs lvm2, parted
+// and the rest from it on a CD boot; the stock Alpine apks do not carry them.
+type ErrOfflineRepositoryMissing struct {
+	Index string
+}
+
+func (e ErrOfflineRepositoryMissing) Error() string {
+	return fmt.Sprintf("customized ISO tree has no offline APK repository index at %s: the install would fail in the guest", e.Index)
+}
+
 // ErrProfileNotFound indicates a profile was not found.
 type ErrProfileNotFound struct {
 	ProfileName string
@@ -175,6 +213,24 @@ type ErrDiskNotFound struct {
 
 func (e ErrDiskNotFound) Error() string {
 	return fmt.Sprintf("disk image not found: %s", e.Path)
+}
+
+// ErrBinaryNotFound indicates a binary the suite hands to platformctl was not found.
+type ErrBinaryNotFound struct {
+	Name string
+	Path string
+	Err  error
+}
+
+func (e ErrBinaryNotFound) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s binary not found at %s: %v", e.Name, e.Path, e.Err)
+	}
+	return fmt.Sprintf("%s binary not found at %s", e.Name, e.Path)
+}
+
+func (e ErrBinaryNotFound) Unwrap() error {
+	return e.Err
 }
 
 // ErrDirectoryNotFound indicates a directory was not found.
@@ -217,6 +273,23 @@ func (e ErrGRUBMenuNoBoot) Error() string {
 	return fmt.Sprintf("guest stopped at the GRUB menu: no kernel boot line on the serial console %s after the menu appeared; last serial lines:\n%s",
 		e.Waited, strings.Join(e.LastLines, "\n"))
 }
+
+// ErrVerbFailed reports a platformctl verb that exited non-zero or printed no
+// result, with the stderr it wrote.
+type ErrVerbFailed struct {
+	Stderr string
+	Err    error
+}
+
+func (e ErrVerbFailed) Error() string {
+	if e.Err == nil {
+		return e.Stderr
+	}
+	return e.Err.Error() + ": " + e.Stderr
+}
+
+// Unwrap returns the process error.
+func (e ErrVerbFailed) Unwrap() error { return e.Err }
 
 // =============================================================================
 // Test Helper Functions

@@ -93,6 +93,33 @@ but it is only reachable after unseal and carries the `ceremony` scope on every
 token-gated listener, so it cannot bootstrap a fresh platform — `platformctl
 init` does not use it.
 
+### MCP tool results (#973)
+
+A successful `tools/call` answers an MCP 2024-11-05 `CallToolResult`. The
+tool's output, the JSON object each feature's `api-reference-mcp.md` lists, is
+encoded as the text of the one `text` content block
+(`mcpwire.NewCallToolResult`, `pkg/api/mcp/server.go`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {"type": "text", "text": "{\"zones\":[\"example.internal.\"]}"}
+    ]
+  }
+}
+```
+
+A client parses the first text block as JSON to get the output. The SDK does
+this in `mcpwire.Client.CallTool`, through `mcpwire.ToolOutput`;
+`ToolOutputJSON` and `DecodeToolOutput` do it for a raw `result`. A result
+that is not a `CallToolResult`, has no text block, or whose text is not JSON
+is `ErrToolResultShape`. A result with `isError` set is `ErrToolFailed`, but
+platformd never sends one: a failed call is a JSON-RPC error carrying the
+error class (below). Before #973 the server put the bare output in `result`.
+
 ### Error classes on MCP (#505)
 
 The platform's error classes are the gRPC codes. gRPC and Unix carry them
@@ -275,6 +302,12 @@ changing, validate before applying, roll back if wrong.
 | `0x0A` | `StatusUnavailable` | 503 |
 | `0x0B` | `StatusNotImplemented` | 501 |
 
+A typed refusal carries its error text as the response payload, as the gRPC
+status message and the REST body do, so a client tells one refusal from another
+with the same status byte. The ceremony, PIV, LUKS and FIDO2 category handlers
+share one table for this (`phase35QUICRefusals`, `pkg/api/daemon/phase35_quic.go`);
+an untyped failure is `StatusInternalError` with no payload.
+
 ### Category opcodes — read this before writing any QUIC client
 
 The opcode is a **single byte** with a **two-level extension**: certain values
@@ -289,7 +322,7 @@ distinct values, twenty-three names:
 | `0x2F` | `OpProxyCategory` | **An alias of `OpGatewayCategory`**, not a separate value |
 | `0x3F` | `OpIPAMCategory` | IPAM |
 | `0x50` | `OpNTPCategory` | Time synchronisation |
-| `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB`. `InvitationService` on `InvitationSub*` `0x10`–`0x16` ([docs/tenant/api.md](../tenant/api.md) §10) |
+| `0x51` | `OpIAMCategory` | IAM tenant records, sub-opcodes `IAMSubTenant*` `0x01`–`0x05`, group update, `IAMSubGroupUpdate` `0x06`, and role update, `IAMSubRoleUpdate` `0x07`. Not the platform tenancy opcodes `0xDB`–`0xEB`. `InvitationService` on `InvitationSub*` `0x10`–`0x16` ([docs/tenant/api.md](../tenant/api.md) §10) |
 | `0x52` | `OpVPNCategory` | VPN control plane; sub-opcodes `VPNSub*` `0x01`–`0x08`, scopes `vpn:read`/`vpn:write`/`vpn:admin` ([docs/vpn/api.md](../vpn/api.md)) |
 | `0x53` | `OpCacheCategory` | Cache through the composed go-quicbaas SDK; sub-opcodes `CacheSub*` `0x01`–`0x04`, scopes `cache:read`/`cache:write`/`cache:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |

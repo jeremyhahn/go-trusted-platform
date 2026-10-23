@@ -80,7 +80,7 @@ func loadProjectedServeConfig(t *testing.T, projected []byte) *ServeConfig {
 // the end-to-end guard for the platform anchor on a gateway node.
 //
 // The anchor authenticates gatewayd's session to the platform secret store,
-// so it stands behind every kms:// and secret:// reference a gateway
+// so it stands behind every kms:// reference a gateway
 // configuration carries — the BGP neighbour passwords, the TCP-AO master
 // keys, the ipsec and wireguard keys — as well as the proxy's client CAs and
 // the platformd grpc dial. gatewayd runs no CA, so its anchor is the platform
@@ -135,8 +135,15 @@ func TestShippedGatewayTemplates_PlatformAnchorResolvesInAGatewaydAssembly(t *te
 			}
 
 			// And the consumer that motivated it: the secret store assembles
-			// against the same anchor.
+			// against the same anchor, presenting the node identity the
+			// template names for the control plane (#658). The pair is
+			// relocated like the bundle above.
 			if cfg.Secrets != nil {
+				require.NotNil(t, cfg.ControlPlane,
+					"a template with secret-store: must name the node identity under control-plane:")
+				require.NotEmpty(t, cfg.ControlPlane.CertFile, "the template names no control-plane cert-file")
+				require.NotEmpty(t, cfg.ControlPlane.KeyFile, "the template names no control-plane key-file")
+				cfg.ControlPlane.CertFile, cfg.ControlPlane.KeyFile, _ = writeKeypairFixtures(t, bundle, bundle.ClientCert, "client")
 				host, err := buildHostRuntime(cfg, anchor, testLogger())
 				require.NoError(t, err)
 				require.NotNil(t, host.SecretResolver,

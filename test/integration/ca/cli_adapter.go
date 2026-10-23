@@ -23,9 +23,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -141,18 +142,11 @@ func (c *CLIAdapter) createTestConfig() error {
 	}
 	c.configDir = tmpDir
 
-	configPath := filepath.Join(tmpDir, "config.yaml")
-
-	configContent := fmt.Sprintf(`current_context: integration-test
-contexts:
-  - name: integration-test
-    type: local
-    local:
-      socket_path: %s
-      grpc_addr: %s
-`, c.socketPath, c.grpcEndpoint)
-
-	if writeErr := os.WriteFile(configPath, []byte(configContent), 0600); writeErr != nil {
+	// The kms verbs the CA suite runs (`kms key csr`) open the CLI's
+	// quicbaas client. The shared harness config points it at platformd's
+	// gRPC listener with the harness mTLS files (docs/kms/cli.md §3).
+	configPath, writeErr := helpers.WriteLocalCLIConfig(tmpDir, c.socketPath, c.grpcEndpoint)
+	if writeErr != nil {
 		return ErrCLIConfigCreationFailed{Cause: writeErr}
 	}
 
@@ -832,6 +826,10 @@ func (c *CLIAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 			Reason:         parseRevocationReasonString(entry.Reason),
 			RevocationTime: entry.RevocationTime,
 		})
+	}
+
+	if err := result.setIssuerFromData("CLI"); err != nil {
+		return nil, err
 	}
 
 	return result, nil

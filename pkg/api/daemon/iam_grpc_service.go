@@ -91,12 +91,15 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -199,10 +202,20 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
+	// The request names roles ("admin"); the SDK takes role IDs.
+	roleIDs, err := restiam.ResolveRoleIDs(ctx, s.iamClient.Role(), req.GetTenantId(), req.GetRoles())
+	if err != nil {
+		s.logger.Error("failed to resolve user roles", "error", err, "tenant_id", req.GetTenantId())
+		return nil, s.roleResolveError(err)
+	}
+
+	// The request carries no username; the SDK refuses an empty one, so it
+	// is derived from the email exactly as the REST handler derives it.
 	sdkReq := &sdkiam.CreateUserRequest{
+		Username:    restiam.UsernameFromEmail(req.GetEmail()),
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
-		Roles:       req.GetRoles(),
+		Roles:       roleIDs,
 		Groups:      req.GetGroups(),
 		Metadata:    req.GetAttributes(),
 	}
@@ -336,6 +349,13 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
+
+	// The SDK's update carries no roles; roles are replaced first, so an unknown
+	// role refuses the whole update before anything is written.
+	if err := restiam.SetUserRoles(ctx, s.iamClient, req.GetTenantId(), req.GetUserId(), req.GetRoles()); err != nil {
+		s.logger.Error("failed to set user roles", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId())
+		return nil, s.roleResolveError(err)
+	}
 
 	sdkReq := &sdkiam.UpdateUserRequest{
 		Email:       req.GetEmail(),
@@ -635,7 +655,14 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	err := s.iamClient.User().AssignRole(ctx, req.GetTenantId(), req.GetUserId(), req.GetRoleId())
+	// role_id may name the role ("admin"); the SDK takes its ID.
+	roleID, err := restiam.ResolveRoleID(ctx, s.iamClient.Role(), req.GetTenantId(), req.GetRoleId())
+	if err != nil {
+		s.logger.Error("failed to resolve role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
+		return nil, s.roleResolveError(err)
+	}
+
+	err = s.iamClient.User().AssignRole(ctx, req.GetTenantId(), req.GetUserId(), roleID)
 	if err != nil {
 		s.logger.Error("failed to assign role", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId(), "role_id", req.GetRoleId())
 		return nil, s.wrapError(err)
@@ -676,7 +703,14 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	err := s.iamClient.User().RevokeRole(ctx, req.GetTenantId(), req.GetUserId(), req.GetRoleId())
+	// role_id may name the role ("admin"); the SDK takes its ID.
+	roleID, err := restiam.ResolveRoleID(ctx, s.iamClient.Role(), req.GetTenantId(), req.GetRoleId())
+	if err != nil {
+		s.logger.Error("failed to resolve role", "error", err, "tenant_id", req.GetTenantId(), "role_id", req.GetRoleId())
+		return nil, s.roleResolveError(err)
+	}
+
+	err = s.iamClient.User().RevokeRole(ctx, req.GetTenantId(), req.GetUserId(), roleID)
 	if err != nil {
 		s.logger.Error("failed to revoke role", "error", err, "tenant_id", req.GetTenantId(), "user_id", req.GetUserId(), "role_id", req.GetRoleId())
 		return nil, s.wrapError(err)
@@ -2016,6 +2050,30 @@ var sdkErrorCodes = map[sdkerrors.ErrorCode]codes.Code{
 //
 // A gRPC status keeps its code and message; a QuicBaaS SDK error takes the
 // code of its category (sdkErrorCodes); anything else is Internal.
+// roleResolveError maps a restiam.ResolveRoleIDs or restiam.SetUserRoles
+// failure to its gRPC status: a role the tenant does not hold is NotFound, an
+// empty role reference is InvalidArgument, and a failed role read or role
+// change keeps the IAM client's own code, as does any other IAM client error.
+func (s *IAMGRPCService) roleResolveError(err error) error {
+	var notFound restiam.ErrRoleNotFound
+	if errors.As(err, &notFound) {
+		return status.Error(codes.NotFound, err.Error())
+	}
+	var missing restiam.ErrMissingRole
+	if errors.As(err, &missing) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	var listFailed restiam.ErrRoleListFailed
+	if errors.As(err, &listFailed) {
+		return s.wrapError(listFailed.Err)
+	}
+	var syncFailed restiam.ErrUserRolesSyncFailed
+	if errors.As(err, &syncFailed) {
+		return s.wrapError(syncFailed.Err)
+	}
+	return s.wrapError(err)
+}
+
 func (s *IAMGRPCService) wrapError(err error) error {
 	if st, ok := status.FromError(err); ok {
 		return status.Error(st.Code(), st.Message())
@@ -2023,7 +2081,64 @@ func (s *IAMGRPCService) wrapError(err error) error {
 	if code, ok := sdkErrorCodes[sdkerrors.Code(err)]; ok {
 		return status.Error(code, err.Error())
 	}
+	if code, ok := upstreamErrorCode(err); ok {
+		return status.Error(code, err.Error())
+	}
 	return status.Error(codes.Internal, err.Error())
+}
+
+// upstreamErrorCodes maps the code name a QuicBaaS server error carries to its
+// gRPC code, by the same categories as sdkErrorCodes.
+var upstreamErrorCodes = map[string]codes.Code{
+	"invalid_input":       codes.InvalidArgument,
+	"validation":          codes.InvalidArgument,
+	"out_of_range":        codes.OutOfRange,
+	"not_found":           codes.NotFound,
+	"already_exists":      codes.AlreadyExists,
+	"conflict":            codes.Aborted,
+	"unauthorized":        codes.Unauthenticated,
+	"forbidden":           codes.PermissionDenied,
+	"not_allowed":         codes.PermissionDenied,
+	"cross_tenant_access": codes.PermissionDenied,
+	"precondition_failed": codes.FailedPrecondition,
+	"rate_limited":        codes.ResourceExhausted,
+	"resource_exhausted":  codes.ResourceExhausted,
+	"unavailable":         codes.Unavailable,
+	"timeout":             codes.DeadlineExceeded,
+	"deadline_exceeded":   codes.DeadlineExceeded,
+	"canceled":            codes.Canceled,
+	"unimplemented":       codes.Unimplemented,
+	"not_implemented":     codes.Unimplemented,
+}
+
+// upstreamErrorCode classifies an error the embedded SDK transport hands
+// through untranslated: the in-process QuicBaaS server answers with its own
+// structured error ("api.create role: invalid_input: ..."), not an SDK
+// QBError, so sdkerrors.Code reports CodeUnknown for it. The platform may not
+// import that error type (SDK Consumption Invariant), so the code is read from
+// the exported Code field every error in the chain may carry, by its name.
+func upstreamErrorCode(err error) (codes.Code, bool) {
+	for ; err != nil; err = errors.Unwrap(err) {
+		value := reflect.ValueOf(err)
+		if value.Kind() == reflect.Pointer {
+			value = value.Elem()
+		}
+		if value.Kind() != reflect.Struct {
+			continue
+		}
+		field := value.FieldByName("Code")
+		if !field.IsValid() || !field.CanInterface() {
+			continue
+		}
+		name, ok := field.Interface().(fmt.Stringer)
+		if !ok {
+			continue
+		}
+		if code, ok := upstreamErrorCodes[name.String()]; ok {
+			return code, true
+		}
+	}
+	return codes.Unknown, false
 }
 
 // =============================================================================

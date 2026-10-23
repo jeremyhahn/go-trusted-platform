@@ -446,8 +446,27 @@ func TestRunContextAddLocal(t *testing.T) {
 	err := runContextAdd(getConfig, "test-local", "local", "",
 		"/run/test.sock", "", "", "", "", "")
 	if err != nil {
-		t.Errorf("runContextAdd failed: %v", err)
+		t.Fatalf("runContextAdd failed: %v", err)
 	}
+
+	added, err := reloadConfig(t, configPath).GetContext("test-local")
+	if err != nil {
+		t.Fatalf("added context must be in the --config file: %v", err)
+	}
+	if added.Local == nil || added.Local.SocketPath != "/run/test.sock" {
+		t.Errorf("added context local = %+v, want socket /run/test.sock", added.Local)
+	}
+}
+
+// reloadConfig reads configPath back from disk, proving a command saved to
+// the file it loaded rather than to the default path.
+func reloadConfig(t *testing.T, configPath string) *cli.Config {
+	t.Helper()
+	cfg, err := cli.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload %s: %v", configPath, err)
+	}
+	return cfg
 }
 
 func TestRunContextAddRemote(t *testing.T) {
@@ -560,7 +579,11 @@ func TestRunContextUse(t *testing.T) {
 
 	err := runContextUse(getConfig, "context2")
 	if err != nil {
-		t.Errorf("runContextUse failed: %v", err)
+		t.Fatalf("runContextUse failed: %v", err)
+	}
+
+	if got := reloadConfig(t, configPath).CurrentContext; got != "context2" {
+		t.Errorf("current context in the --config file = %q, want context2", got)
 	}
 }
 
@@ -631,7 +654,12 @@ func TestRunContextDelete(t *testing.T) {
 
 	err := runContextDelete(getConfig, "context2")
 	if err != nil {
-		t.Errorf("runContextDelete failed: %v", err)
+		t.Fatalf("runContextDelete failed: %v", err)
+	}
+
+	reloaded := reloadConfig(t, configPath)
+	if _, err := reloaded.GetContext("context2"); err == nil {
+		t.Error("deleted context must be gone from the --config file")
 	}
 }
 

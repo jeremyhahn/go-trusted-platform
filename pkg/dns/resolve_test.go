@@ -167,6 +167,5 @@ func TestService_Resolve_AnswersOnlyTheQueriedOwner(t *testing.T) {
 	assert.Equal(t, []string{"10.0.1.2"}, nested)
 
 	_, err = svc.Resolve(context.Background(), "www.example.org.", "A")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no records found")
+	assert.ErrorIs(t, err, ErrRecordNotFound)
 }

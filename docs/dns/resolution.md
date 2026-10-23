@@ -206,7 +206,7 @@ Two things disqualify an NS RRset from being a delegation:
 | Not a delegation | Why |
 |---|---|
 | An owner outside the zone (`name: com.` in an `example.com.` zone) | Nothing constrains the stored owner today; honouring it would refer every name in the zone away |
-| An owner that also holds ordinary data — an address, alias, MX, TXT, SRV, CAA or TLSA record | Authoritative data and a cut cannot share an owner (RFC 2181 §6.1). This shape is a zone's own NS RRset stored under a hostname instead of the apex, which resolved before this change because NS matched no owner at all; zones seeded from templates older than 2026-09-02 still carry it, and referring that name would stop a control plane answering its own hostname. |
+| An owner that also holds ordinary data — an address, alias, MX, TXT, SRV, CAA or TLSA record | Authoritative data and a cut cannot share an owner (RFC 2181 §6.1). This shape is a zone's own NS RRset stored under a hostname instead of the apex; zones seeded from older templates carry it, and referring that name would stop a control plane answering its own hostname. |
 
 ### Other response flags
 
@@ -247,8 +247,9 @@ delegations or synthesise SOA authority the way the wire plugin does.
 
 `Service.Resolve`, the value-list form that the MCP `dns_resolve` tool and the
 `pkg/api/quic` and `pkg/api/rest` handlers call (the daemon's QUIC and Unix
-resolve go through gRPC `Resolve`), returns the record values and serves A, AAAA, CNAME,
-MX, NS and TXT; an empty answer is an error there ("no records found").
+resolve go through gRPC `Resolve`), returns the record values and serves A, AAAA,
+CNAME, MX, NS, TXT, SRV, CAA and TLSA. SRV, CAA and TLSA values are their RDATA in zone-file form, the form
+`Service.AddRecord` takes. An empty answer is an error there (`ErrRecordNotFound`).
 
 > **Changed 2026-10-14 (#452).** The resolve API used to look up the queried
 > name as a zone and return every record of the type in it, whatever its

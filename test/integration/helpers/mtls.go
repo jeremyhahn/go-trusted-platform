@@ -208,6 +208,23 @@ func GRPCUnixCredentials() grpc.DialOption {
 // An explicit scheme is kept as given, so a negative test can still dial
 // http:// and assert the refusal.
 func MCPBaseURL(endpoint string) string {
+	return httpsBaseURL(endpoint)
+}
+
+// RESTBaseURL returns the REST API base URL for endpoint. platformd serves
+// REST over mTLS, and the harness exports PLATFORM_REST_ENDPOINT with its
+// https:// scheme, so an endpoint is taken with or without one: a bare
+// host:port gets https://, an explicit scheme is kept as given. Prepending a
+// scheme to the exported value dialled http://https://localhost:8443 and left
+// every REST subtest unreachable. A trailing slash is dropped so callers can
+// append paths that start with one.
+func RESTBaseURL(endpoint string) string {
+	return strings.TrimRight(httpsBaseURL(endpoint), "/")
+}
+
+// httpsBaseURL keeps an explicit http:// or https:// scheme on endpoint and
+// gives https:// to one without a scheme.
+func httpsBaseURL(endpoint string) string {
 	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
 		return endpoint
 	}

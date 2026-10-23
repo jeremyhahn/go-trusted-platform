@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -495,9 +496,18 @@ func (p *MCPServiceProvider) SecretRotate(ctx context.Context, req *mcp.SecretRo
 	return resp, nil
 }
 
+// SetSecretsServer wires the gRPC SecretsManagement adapter, the one the
+// QUIC secrets opcodes call, behind the secret_rollback tool.
+func (p *MCPServiceProvider) SetSecretsServer(svc SecretsServiceInterface) {
+	p.secretsServer = svc
+}
+
 // SecretRollback makes an earlier version's data the secret's newest version.
+// It calls the gRPC SecretsManagement adapter, as the QUIC, Unix and gRPC
+// transports do, so the tool answers the version the rollback wrote.
+// The quicbaas secrets service answers the target version plus one instead.
 func (p *MCPServiceProvider) SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error) {
-	if p.secretsService == nil {
+	if p.secretsServer == nil {
 		return nil, ErrServiceNotAvailable{Service: "secrets"}
 	}
 	if secretID == "" {
@@ -507,16 +517,20 @@ func (p *MCPServiceProvider) SecretRollback(ctx context.Context, secretID string
 		return nil, ErrKMSInvalidParameter{Parameter: "target_version", Reason: "target version is required"}
 	}
 
-	resp, err := p.secretsService.RollbackSecret(ctx, &baasservice.RollbackSecretRequest{
-		SecretID:      secretID,
+	resp, err := p.secretsServer.RollbackSecret(ctx, &pb.RollbackSecretRequest{
+		SecretId:      secretID,
 		TargetVersion: targetVersion,
 	})
 	if err != nil {
 		return nil, ErrSecretsOperationFailed{Operation: "RollbackSecret", Cause: err}
 	}
 
-	p.logger.Info("secret rolled back", "secret_id", secretID, "target_version", targetVersion)
-	return resp, nil
+	p.logger.Info("secret rolled back", "secret_id", secretID, "target_version", targetVersion, "new_version", resp.GetNewVersion())
+	return &baasservice.RollbackSecretResponse{
+		SecretID:   resp.GetSecretId(),
+		NewVersion: resp.GetNewVersion(),
+		Timestamp:  time.Unix(resp.GetTimestamp(), 0),
+	}, nil
 }
 
 // SecretUpdateStatus enables, disables or soft-deletes a secret.

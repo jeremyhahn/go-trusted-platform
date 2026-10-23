@@ -129,11 +129,11 @@ func (r *RESTAdapter) ClaimCertBegin(ctx context.Context, req *ceremonysdk.Claim
 
 // ClaimCertComplete invokes POST /api/v1/ceremony/claim-cert/complete.
 func (r *RESTAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.ClaimCertCompleteRequest) (*ceremonysdk.ClaimCertCompleteResponse, error) {
-	resp := &ceremonysdk.ClaimCertCompleteResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/claim-cert/complete", req, resp); err != nil {
+	var wire issuedCertWire
+	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/claim-cert/complete", req, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/ceremony/claim-cert/complete", Err: err}
 	}
-	return resp, nil
+	return &ceremonysdk.ClaimCertCompleteResponse{Certificate: wire.CertificatePEM, Chain: wire.ChainPEM}, nil
 }
 
 // ClaimShareBegin invokes POST /api/v1/ceremony/claim-share/begin.
@@ -156,11 +156,11 @@ func (r *RESTAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.C
 
 // SignCSR invokes POST /api/v1/ceremony/sign-csr.
 func (r *RESTAdapter) SignCSR(ctx context.Context, req *ceremonysdk.SignCSRRequest) (*ceremonysdk.SignCSRResponse, error) {
-	resp := &ceremonysdk.SignCSRResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/sign-csr", req, resp); err != nil {
+	var wire issuedCertWire
+	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/sign-csr", req, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/ceremony/sign-csr", Err: err}
 	}
-	return resp, nil
+	return &ceremonysdk.SignCSRResponse{Certificate: wire.CertificatePEM, Chain: wire.ChainPEM}, nil
 }
 
 var _ CeremonyCommands = (*RESTAdapter)(nil)

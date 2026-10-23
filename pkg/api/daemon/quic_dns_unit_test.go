@@ -127,6 +127,11 @@ func TestDNSDeleteRecord_Delegated(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mock := NewMockDNSService()
+		mock.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			return &entities.Zone{ID: 1, Name: zoneName, TTL: 3600, RecordSet: entities.RecordSet{
+				ARecords: []*entities.ARecord{{Name: "www", Value: "192.0.2.10", TTL: 3600}},
+			}}, nil
+		}
 		handler := createDNSUnitTestHandler(mock)
 		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{
 			ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www",

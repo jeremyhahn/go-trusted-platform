@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"strings"
+	"time"
 )
 
 // forkLatest stands in for the latest version of a replace onto a different
@@ -18,7 +19,16 @@ type finding struct {
 	Unused bool
 	// Lookup is set when the latest version could not be looked up.
 	Lookup *LookupError
+	// Fresh is set when Latest was released less than freshWindow ago:
+	// an undocumented lag behind it is reported, not failed.
+	Fresh bool
+	// Released is when Latest was released; zero when unknown.
+	Released time.Time
 }
+
+// freshWindow is how long a new release may go unadopted before a lag
+// behind it, with no go.mod reason comment, fails the check.
+const freshWindow = 7 * 24 * time.Hour
 
 // assess judges one dependency against its `go list` entry. listed is false
 // when the listing has no entry for the module at all.
@@ -29,7 +39,10 @@ type finding struct {
 // third-party require it is the go command's own Update answer, which
 // prefers releases and skips retractions. A replace has no Update of its
 // own, so for it the latest is the highest release in Versions.
-func assess(dep dependency, mod listedModule, listed bool, firstParty string) finding {
+//
+// now is the clock the release age is measured against. Only the Update
+// answer carries a release time; a latest version without one is old.
+func assess(dep dependency, mod listedModule, listed bool, firstParty string, now time.Time) finding {
 	f := finding{Dep: dep}
 	switch {
 	case !listed:
@@ -51,7 +64,20 @@ func assess(dep dependency, mod listedModule, listed bool, firstParty string) fi
 	}
 	f.Latest = latestVersion(dep, mod, strings.HasPrefix(dep.Path, firstParty))
 	f.Behind = isBehind(dep.Version, f.Latest, mod.Versions)
+	if f.Behind && mod.Update != nil && mod.Update.Version == f.Latest {
+		f.Released = mod.Update.Time
+		f.Fresh = isFresh(f.Released, now)
+	}
 	return f
+}
+
+// isFresh reports whether a release at released is younger than
+// freshWindow at now. An unknown (zero) release time is never fresh.
+func isFresh(released, now time.Time) bool {
+	if released.IsZero() {
+		return false
+	}
+	return now.Sub(released) < freshWindow
 }
 
 func latestVersion(dep dependency, mod listedModule, firstParty bool) string {

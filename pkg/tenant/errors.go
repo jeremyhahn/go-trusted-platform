@@ -16,7 +16,10 @@
 package tenant
 
 import (
+	"errors"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 )
 
 // ErrTenantExists is returned when attempting to create a tenant that already exists.
@@ -94,6 +97,15 @@ type ErrQuotaExceeded struct {
 func (e ErrQuotaExceeded) Error() string {
 	return fmt.Sprintf("quota exceeded for tenant %s: resource=%s, requested=%d, available=%d",
 		e.TenantID, e.Resource, e.Requested, e.Available)
+}
+
+// IsQuotaExceeded reports whether err refuses a request for lack of quota,
+// whether it came from the tenant entity's limits or the quota enforcer.
+// A quota check answers such an error as "not allowed" rather than failing.
+func IsQuotaExceeded(err error) bool {
+	var entityExceeded ErrQuotaExceeded
+	var enforcerExceeded quota.ErrQuotaExceeded
+	return errors.As(err, &entityExceeded) || errors.As(err, &enforcerExceeded)
 }
 
 // ErrResourceLimitReached is returned when the maximum resource limit is reached.

@@ -161,8 +161,8 @@ type HostRuntime struct {
 	// carries — the bgp: section's neighbor passwords and keychain master
 	// keys, and the tunnels: section's ipsec/wireguard keys (the tunnel
 	// manager built here adapts it as its KeyProvider). The daemon supplies
-	// pkg/sdn/gateway/secrets.Store.Resolve (kms:// and secret:// through
-	// the SDK secret store). Nil means a service that references a secret
+	// pkg/sdn/gateway/secrets.Store.Resolve (kms:// through the SDK secret
+	// SPI and the SDK secret store). Nil means a service that references a secret
 	// cannot start.
 	SecretResolver bgp.SecretResolver
 	// Logger receives service lifecycle logs.

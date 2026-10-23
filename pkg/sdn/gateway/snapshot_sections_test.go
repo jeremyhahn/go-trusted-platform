@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
@@ -225,6 +226,37 @@ func TestSnapshot_ServicesNotRunningContributeNoSection(t *testing.T) {
 	assert.False(t, dhcp.Active)
 	assert.False(t, dhcp.Healthy)
 	assert.Contains(t, dhcp.RefusedReason, "IPAM allocator")
+}
+
+// statusOnlyOverlay is a running overlay service that reports a fixed status
+// and no admitted VTEPs.
+type statusOnlyOverlay struct {
+	status *modes.OverlayModeStatus
+}
+
+func (o *statusOnlyOverlay) Start(context.Context) error      { return nil }
+func (o *statusOnlyOverlay) Stop(context.Context) error       { return nil }
+func (o *statusOnlyOverlay) Active() bool                     { return true }
+func (o *statusOnlyOverlay) Healthy() bool                    { return true }
+func (o *statusOnlyOverlay) Status() *modes.OverlayModeStatus { return o.status }
+func (o *statusOnlyOverlay) ListAdmittedVTEPs(context.Context) ([]AdmittedVTEP, error) {
+	return nil, nil
+}
+
+func TestSnapshot_OverlayCarriesItsRefusalCounters(t *testing.T) {
+	gw, err := NewGateway(validConfig())
+	require.NoError(t, err)
+	handler := newBackedServiceHandler(gw, ServiceOverlay, nil)
+	handler.svc = &statusOnlyOverlay{status: &modes.OverlayModeStatus{Running: true, RefusedBindings: 3, RefusedReplays: 4}}
+	gw.mu.Lock()
+	gw.serviceHandlers[ServiceOverlay] = handler
+	gw.mu.Unlock()
+
+	overlay := gw.collectOverlay(context.Background())
+
+	require.NotNil(t, overlay)
+	assert.Equal(t, uint64(3), overlay.RefusedBindings)
+	assert.Equal(t, uint64(4), overlay.RefusedReplays, "a VTEP the sweep keeps failing to replay shows in the snapshot")
 }
 
 func TestSnapshot_UnreadableSectionsAreOmittedNotFabricated(t *testing.T) {

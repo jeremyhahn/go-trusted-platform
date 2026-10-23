@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -25,6 +26,11 @@ import (
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
+
+// wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
+func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
+	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+}
 
 // memIAMCreated is the creation time of every record memIAM stores, so two
 // runs of the same calls produce the same answers.
@@ -93,10 +99,15 @@ type memUsers struct {
 }
 
 func (u memUsers) Create(_ context.Context, tenantID string, req *sdkiam.CreateUserRequest) (*sdkiam.User, error) {
+	// The real SDK refuses a create without a username
+	// (INVALID_INPUT: iam.user.Create: username is required); so does the fake.
+	if req.Username == "" {
+		return nil, errMemUsernameRequired{}
+	}
 	u.m.mu.Lock()
 	defer u.m.mu.Unlock()
 	user := &sdkiam.User{
-		ID: req.Email, TenantID: tenantID, Email: req.Email, DisplayName: req.DisplayName,
+		ID: req.Email, TenantID: tenantID, Username: req.Username, Email: req.Email, DisplayName: req.DisplayName,
 		Roles: req.Roles, Groups: req.Groups, Metadata: req.Metadata,
 		CreatedAt: memIAMCreated, UpdatedAt: memIAMCreated,
 	}
@@ -105,12 +116,38 @@ func (u memUsers) Create(_ context.Context, tenantID string, req *sdkiam.CreateU
 	return &copied, nil
 }
 
+// errMemUsernameRequired is the fake's refusal of a create with no username.
+type errMemUsernameRequired struct{}
+
+func (errMemUsernameRequired) Error() string { return "iam.user.Create: username is required" }
+
 func (u memUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
 	u.m.mu.Lock()
 	defer u.m.mu.Unlock()
 	user, err := memFind(u.m.users, "iam.user.get", tenantID, userID)
 	if err != nil {
 		return nil, err
+	}
+	copied := *user
+	return &copied, nil
+}
+
+// Update applies the non-empty fields, as the SDK's partial update does.
+func (u memUsers) Update(_ context.Context, tenantID, userID string, req *sdkiam.UpdateUserRequest) (*sdkiam.User, error) {
+	u.m.mu.Lock()
+	defer u.m.mu.Unlock()
+	user, err := memFind(u.m.users, "iam.user.update", tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Email != "" {
+		user.Email = req.Email
+	}
+	if req.DisplayName != "" {
+		user.DisplayName = req.DisplayName
+	}
+	if req.Metadata != nil {
+		user.Metadata = req.Metadata
 	}
 	copied := *user
 	return &copied, nil
@@ -186,6 +223,27 @@ func (r memRoles) Get(_ context.Context, tenantID, roleID string) (*sdkiam.Role,
 	return &copied, nil
 }
 
+// Update applies the non-empty fields, as the SDK's partial update does.
+func (r memRoles) Update(_ context.Context, tenantID, roleID string, req *sdkiam.UpdateRoleRequest) (*sdkiam.Role, error) {
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	role, err := memFind(r.m.roles, "iam.role.update", tenantID, roleID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != "" {
+		role.Name = req.Name
+	}
+	if req.Description != "" {
+		role.Description = req.Description
+	}
+	if req.Permissions != nil {
+		role.Permissions = req.Permissions
+	}
+	copied := *role
+	return &copied, nil
+}
+
 func (r memRoles) Delete(_ context.Context, tenantID, roleID string) error {
 	r.m.mu.Lock()
 	defer r.m.mu.Unlock()
@@ -226,6 +284,24 @@ func (g memGroups) Get(_ context.Context, tenantID, groupID string) (*sdkiam.Gro
 	group, err := memFind(g.m.groups, "iam.group.get", tenantID, groupID)
 	if err != nil {
 		return nil, err
+	}
+	copied := *group
+	return &copied, nil
+}
+
+// Update applies the non-empty fields, as the SDK's partial update does.
+func (g memGroups) Update(_ context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error) {
+	g.m.mu.Lock()
+	defer g.m.mu.Unlock()
+	group, err := memFind(g.m.groups, "iam.group.update", tenantID, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != "" {
+		group.Name = req.Name
+	}
+	if req.Description != "" {
+		group.Description = req.Description
 	}
 	copied := *group
 	return &copied, nil

@@ -52,6 +52,9 @@ type IAMClient interface {
 	GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
 	ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
 	UpdateUser(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
+	// SetUserRoles replaces the user's roles with the referenced ones (role
+	// names or IDs); no references leaves them alone.
+	SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error
 	DeleteUser(ctx context.Context, tenantID, userID string) error
 	AssignRole(ctx context.Context, tenantID, userID, roleID string) error
 	RevokeRole(ctx context.Context, tenantID, userID, roleID string) error
@@ -363,11 +366,7 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// only supplies an email. The IAM SDK rejects empty usernames.
 	username := req.Username
 	if username == "" {
-		if at := strings.IndexByte(req.Email, '@'); at > 0 {
-			username = req.Email[:at]
-		} else {
-			username = req.Email
-		}
+		username = UsernameFromEmail(req.Email)
 	}
 	sdkReq := &iamsdk.CreateUserRequest{
 		Username:    username,
@@ -478,6 +477,13 @@ func (h *IAMHandlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := h.createContext()
 	defer cancel()
+
+	// The SDK's update carries no roles; roles are replaced first, so an unknown
+	// role refuses the whole update before anything is written.
+	if err := h.iamClient.SetUserRoles(ctx, tenantID, userID, req.Roles); err != nil {
+		h.handleError(w, r, err)
+		return
+	}
 
 	sdkReq := &iamsdk.UpdateUserRequest{
 		Email:       req.Email,

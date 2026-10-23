@@ -14,9 +14,11 @@
 package registry
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 func TestNewStatusCommand(t *testing.T) {
@@ -639,5 +641,73 @@ func TestRegistryStatus_ZeroValues(t *testing.T) {
 
 	if status.Uptime != 0 {
 		t.Errorf("expected Uptime 0, got %d", status.Uptime)
+	}
+}
+
+func TestConvertStatusDomainResponse_StorageBackend(t *testing.T) {
+	resp := &regsvc.RegistryStatusResult{
+		Health:    regsvc.HealthStatusHealthy,
+		Version:   "1.2.3",
+		StartedAt: 100,
+		Timestamp: 160,
+		Storage:   &regsvc.StorageStats{ArtifactCount: 4},
+		Components: []*regsvc.ComponentStatus{{
+			Name:    "storage",
+			Status:  regsvc.HealthStatusHealthy,
+			Details: map[string]string{"backend": "quicbaas"},
+		}},
+	}
+
+	result := convertStatusDomainResponse(resp)
+
+	if !result.Status.Healthy || result.Status.Version != "1.2.3" || result.Status.Uptime != 60 {
+		t.Fatalf("status = %+v, want healthy 1.2.3 with 60 s uptime", result.Status)
+	}
+	storage := result.Status.Storage
+	if storage.Backend != "quicbaas" || !storage.Healthy || storage.ImageCount != 4 {
+		t.Fatalf("storage = %+v, want healthy quicbaas with 4 images", storage)
+	}
+
+	// platformctl prints the flat status document with -o json: the backend
+	// is in the storage object and repeated as storage_backend.
+	out, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var printed struct {
+		Status         string `json:"status"`
+		StorageBackend string `json:"storage_backend"`
+		Storage        struct {
+			Backend string `json:"backend"`
+		} `json:"storage"`
+	}
+	if err := json.Unmarshal(out, &printed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if printed.Status != registryStateRunning {
+		t.Fatalf("printed status = %q, want %q in %s", printed.Status, registryStateRunning, out)
+	}
+	if printed.Storage.Backend != "quicbaas" || printed.StorageBackend != "quicbaas" {
+		t.Fatalf("printed backend = %q / %q, want quicbaas in %s", printed.Storage.Backend, printed.StorageBackend, out)
+	}
+}
+
+func TestConvertStatusDomainResponse_UnhealthyStorageWithoutBackend(t *testing.T) {
+	resp := &regsvc.RegistryStatusResult{
+		Health: regsvc.HealthStatusUnhealthy,
+		Components: []*regsvc.ComponentStatus{{
+			Name:   "storage",
+			Status: regsvc.HealthStatusUnhealthy,
+		}},
+	}
+
+	result := convertStatusDomainResponse(resp)
+
+	if result.Status.Healthy {
+		t.Fatal("unhealthy registry reported healthy")
+	}
+	storage := result.Status.Storage
+	if storage == nil || storage.Healthy || storage.Backend != "" {
+		t.Fatalf("storage = %+v, want unhealthy with no backend", storage)
 	}
 }

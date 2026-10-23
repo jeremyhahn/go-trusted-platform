@@ -64,7 +64,7 @@ the first thing that costs someone a minute.
 | `--cpus` | | uint | `2` | vCPU cores |
 | `--memory` | | uint | `2048` | Memory in MB |
 | `--disk-size` | | uint | `20` | Boot disk size in GB |
-| `--firmware` | | string | `uefi` | `bios`, `uefi`, `uefi-secure-boot` |
+| `--firmware` | | string | `uefi` | `uefi`, `uefi-secure-boot`; the daemon refuses `bios` |
 | `--secure-boot` | | bool | `false` | Enable UEFI Secure Boot |
 | `--tpm` | | bool | `true` | Attach a virtual TPM 2.0 (vTPM); `--tpm=false` creates the VM without one |
 | `--boot-device` | | string | `disk` | `disk`, `cdrom`, `network` |
@@ -191,6 +191,7 @@ platformctl compute migrate web-01 --destination worker-02.example.com:9443 --li
 | `--cmd` | | string array | | Command to run |
 | `--workdir` | `-w` | string | | Working directory |
 | `--tpm-access` | | bool | `false` | **Mount the host TPM device into the container** |
+| `--attest` | | bool | `false` | Measure the container into the TPM event log on create |
 | `--start` | | bool | `false` | Start immediately after creation |
 
 **`--privileged` and `--tpm-access` are the two to think about.** `--privileged`

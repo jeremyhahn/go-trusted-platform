@@ -6,6 +6,8 @@
 > 2026-08-18. Flags mentioned only in a command's help text but never registered
 > are listed in §6 as defects, not documented as if they worked.
 
+Replaces `docs/man/tpm/*.md` and `docs/man/platform/*.md`, removed in 3ddd4fa19 (`git show 3ddd4fa19^:<path>`).
+
 ---
 
 ## 1. Command group
@@ -168,6 +170,10 @@ immediately. Use it when the TPM is in DA lockout or its hierarchy auth is
 unknown — the two cases where `TPM2_Clear` cannot work. If the auto-reboot
 fails it tells you to reboot manually; the clear is already scheduled either way.
 
+`TPM2_Clear` is TPM 2.0 Library Part 3; the hierarchy and provisioning model is
+the TCG TPM v2.0 Provisioning Guidance. Both are in
+[docs/reference/tpm2/](../reference/tpm2/).
+
 ---
 
 ## 4. Keys
@@ -259,7 +265,6 @@ the daemon (`ErrCertifyFailed`).
 | `--pcrs` | int slice | none | PCR indices to bind to, comma-separated |
 | `--pcr-bank` | string | `sha256` | `sha1`, `sha256`, `sha384`, `sha512` |
 | `--overwrite` | bool | `false` | Replace existing sealed data with this CN |
-| `--policy` | bool | `true` | **Parsed and discarded — see §6** |
 
 **`unseal`**
 

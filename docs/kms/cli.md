@@ -41,12 +41,12 @@ platformctl kms
         metadata update <key-id>            works
         policy get <key-id>                 works
         policy set <key-id>                 works
+        versions <key-id>                   works
+        status enable <key-id>              works
+        status disable <key-id>             works
         import <key-id>                     not implemented
         export <key-id>                     not implemented
         unwrap                              not implemented
-        versions <key-id>                   not implemented
-        status enable <key-id>              not implemented
-        status disable <key-id>             not implemented
         backend-test                        not implemented
     crypto
         encrypt | decrypt | rewrap          works
@@ -56,12 +56,13 @@ platformctl kms
         datakey generate | datakey wrapped  works
         batch encrypt | batch decrypt       works
     dek
-        create | get | list | delete | rotate | status
-        set-default | set-safety | clear-safety          not implemented
+        create | get | list | delete | rotate            works
+        status | set-default | set-safety | clear-safety works (§7)
     secrets
         store | get | list | delete | rotate | version | versions
-        rollback | status | policy get | policy set
-        prefix list | watch                               not implemented
+        rollback | status enable | status disable
+        policy get | policy set | prefix list            works
+        watch                                            SDK gap (typed refusal)
 ```
 
 `kms`, `key`, `crypto`, `dek`, `secrets` and every nested group (`metadata`,
@@ -88,10 +89,30 @@ and exits 0.
 | `--no-color` | | `false` | `NO_COLOR` |
 
 `--transport` takes `unix`, `grpc`, `rest`, `quic`, `mcp` or `embedded`. Every
-implemented verb opens an SDK client on that transport and fails with exit 1
-when no daemon is reachable — including `crypto hash` and `crypto random`, which
-run server-side. No implemented verb works offline. The not-implemented verbs
-never open a client.
+implemented verb opens an SDK client and fails with exit 1 when no daemon is
+reachable — including `crypto hash` and `crypto random`, which run server-side.
+No implemented verb works offline. The not-implemented verbs never open a
+client.
+
+**Two connections.** Most verbs call platformd's `KeyManagementService` on the
+`--transport` connection (`Client.KMS()`). The verbs that platform service has
+no RPC for open the CLI's quicbaas client (`Client.QuicBaaS()`) instead: `kms
+status`, `key algorithms`, `key csr` (its public key; the signature goes
+through platformd), `key policy`, `key metadata`, `key revoke` and `key status`
+(platformd's `UpdateKeyStatus` RPC reaches the embedded quicbaas transport with a
+request type it refuses), plus `key generate --name` for the display name.
+`--transport` does not select that connection. Its address and transport
+follow the rules in [barrier cli.md §2](../barrier/cli.md#2-where-the-verbs-go):
+a local context dials `/run/quicbaas.sock` unless `quicbaas_addr` or
+`PLATFORMCTL_QUICBAAS_ADDR` says otherwise. Under embedded quicbaas (the daemon
+default) there is no quicbaasd and nothing serves that socket; platformd serves
+the `quicbaas.kms.v1` services on its own TCP and Unix listeners
+([api.md §1](api.md#1-the-six-transports)). The quicbaas SDK requires TLS on
+every transport, its Unix one included, and platformd's Unix socket is plaintext
+gRPC authenticated by peer credentials, so the two cannot meet there. Point
+`quicbaas_addr` at platformd's TCP gRPC listener with `quicbaas_transport: grpc`
+and give the context the TLS files that verify it (`quicbaas_ca_cert`, and for
+mTLS `quicbaas_client_cert` and `quicbaas_client_key`).
 
 **Output format.** `--output` selects `table`, `json` or `yaml`. Verbs that
 declare their own `-o, --output` (an output *file*) shadow it: on `crypto
@@ -137,7 +158,10 @@ Generate a key.
 
 `<key-id>` travels as the generate request's `name` and becomes the key's ID
 (`api.md` §2). `--name` is a display name, not the ID: the generate request
-has no display-name field, so set it with `key metadata update <key-id> --name`.
+has no display-name field, so once the key exists the command sets it as key
+metadata, as `key metadata update <key-id> --name` does, and prints it. If that
+update fails the key still exists and the command exits non-zero; rerun
+`key metadata update` to set the name.
 
 Algorithms: `aes-128`, `aes-192`, `aes-256`, `chacha20-poly1305`, `rsa-2048`,
 `rsa-3072`, `rsa-4096`, `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
@@ -289,6 +313,44 @@ platformctl kms key policy set tenant-a-kek --operation encrypt --operation decr
     --allow-principal role:admin
 ```
 
+### `key versions <key-id>`
+
+List one page of the key's versions.
+
+| Flag | Short | Type | Default |
+|---|---|---|---|
+| `--limit` | `-l` | int32 | `50` |
+| `--cursor` | | string | first page |
+
+`--output json` prints `key_id`, `versions`, `has_more` and `next_cursor`; pass
+`next_cursor` to `--cursor` while `has_more` is true. Each version carries
+`version`, `algorithm` and `status` (the protobuf enum names, e.g.
+`KMS_KEY_ALGORITHM_AES_256`, `KEY_STATUS_ENABLED`), `created_at` and
+`disabled_at` (Unix seconds, `0` when never disabled).
+
+```bash
+platformctl kms key versions tenant-a-kek --output json
+```
+
+### `key status enable <key-id>` and `key status disable <key-id>`
+
+Enable or disable the key, or one version of it. A disabled key or version
+refuses every cryptographic operation until it is enabled again.
+
+| Flag | Short | Type | Default |
+|---|---|---|---|
+| `--version` | | uint64 | `0` — every version |
+
+The verbs use the quicbaas client (§3, "Two connections"). `--output json` prints `key_id`,
+`version` and `status` (`ENABLED` or `DISABLED`). There is no `updated_at`:
+the quicbaas response carries no timestamp, so read it with
+`key metadata get <key-id>`.
+
+```bash
+platformctl kms key status disable tenant-a-kek --version 1
+platformctl kms key status enable tenant-a-kek
+```
+
 ### Not implemented under `kms key`
 
 Each exits 1 with the error shown, after argument and flag parsing.
@@ -298,9 +360,6 @@ Each exits 1 with the error shown, after argument and flag parsing.
 | `import <key-id>` | `-a/--algorithm` (`aes-256-gcm`), `-p/--purpose` (`encrypt`), `-e/--exportable`, `--deletion-protection`, `-n/--name`, `-d/--description`, `--wrapping-key`, `-f/--key-file`, `-m/--material` (base64) | `ErrKeyImportNotImplemented` |
 | `export <key-id>` | `--wrapping-key`, `--wrapping-algorithm` (`aes-kw`), `--format` (`raw`; `jwk`, `pem`), `--version` (`0`), `--output-file` | `ErrKeyExportNotImplemented` |
 | `unwrap` | `--key-id`, `--wrapping-key`, `--wrapping-algorithm` (`aes-kw`), `-a/--algorithm`, `-n/--name`, `-d/--description`, `-f/--input-file`, `-m/--material` | `ErrKeyUnwrapNotImplemented` |
-| `versions <key-id>` | `-l/--limit` (`50`), `--cursor` | `ErrKeyVersionsNotImplemented` |
-| `status enable <key-id>` | `--version` (`0` = all) | `ErrKeyStatusNotImplemented` |
-| `status disable <key-id>` | `--version` (`0` = all) | `ErrKeyStatusNotImplemented` |
 | `backend-test` | none | `ErrBackendTestNotImplemented` |
 
 The help text marks `--wrapping-key`, `--key-id` and `--algorithm` "required"
@@ -509,49 +568,124 @@ platformctl kms crypto batch encrypt --key-id tenant-a-kek --input items.json -o
 
 ---
 
-## 7. `kms dek` and `kms secrets` — not implemented
+## 7. `kms dek` and `kms secrets`
 
-Every leaf under both groups exits 1 with `ErrDEKNotImplemented` or
-`ErrSecretsNotImplemented` after parsing. Arguments are enforced (exit 1 on the
-wrong count). The `dek` help points at `kms crypto datakey`, which works; the
-`secrets` help points at `kms crypto encrypt|decrypt`.
+### `kms dek`
 
-| Verb | Arguments | Flags declared (type, default) |
-|---|---|---|
-| `dek create` | `<path>` | none |
-| `dek get` | `<path>` | none |
-| `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`), `--cursor` |
-| `dek delete` | `<path>` | `--force` (bool) |
-| `dek rotate` | `<path>` | none |
-| `dek status` | `<path>` | none |
-| `dek set-default` | `<path> <version>` | none |
-| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) |
-| `dek clear-safety` | `<path>` | `--force` (bool) |
-| `secrets store` | `<name>` | `--value`, `--description` |
-| `secrets get` | `<name>` | `--version` (int64, `0`) |
-| `secrets list` | — | `--prefix`, `--limit` (int32, `100`), `--cursor` |
-| `secrets delete` | `<name>` | `--force` (bool) |
-| `secrets rotate` | `<name>` | `--value` |
-| `secrets version` | `<name> <version>` | none |
-| `secrets versions` | `<name>` | `-l/--limit` (int32, `100`), `--cursor` |
-| `secrets rollback` | `<name> <version>` | none |
-| `secrets status` | `<name>` | none |
-| `secrets policy get` | `<name>` | none |
-| `secrets policy set` | `<name>` | none |
-| `secrets prefix list` | `<prefix>` | none |
-| `secrets watch` | `<name>` | none |
+**`kms dek` calls platformd** through the go-quicbaas SDK DEK client
+(`Security().DEK()`). `-o json` prints snake_case fields; times are RFC 3339
+and omitted when unset.
 
-The help shows `[path]` and `[name]`, but each argument is required.
+| Verb | Arguments | Flags (type, default) | SDK call | JSON |
+|---|---|---|---|---|
+| `dek create` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `0`); `0` leaves a limit to the server default | `CreateDEK`, algorithm `AES-256-GCM` (the transports' default) | the DEK |
+| `dek get` | `<path>` | none | `GetDEK` | the DEK |
+| `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`, must be > 0), `--cursor` | `ListDEKs` | `deks`, `total_count` |
+| `dek delete` | `<path>` | `--force` (bool, bypass deletion protection) | `DeleteDEK` | `path`, `deleted` |
+| `dek rotate` | `<path>` | none | `RotateDEK` (foreground) | `path`, `old_version`, `new_version` |
+| `dek status` | `<path>` | none | `GetDEKStatus` (platformd's `quicbaas.kms.v1.DEKManagement` on gRPC, Unix and QUIC; the SDK DEK client otherwise) | the DEK plus `reencryption` when present |
+| `dek set-default` | `<path>` | none | `SetDefaultDEK` (platformd's `DEKManagement` on gRPC, Unix and QUIC; the SDK DEK client otherwise) | `path`, `previous_default` |
+| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) | `SetDEKSafety` (as `set-default`) | success line |
+| `dek clear-safety` | `<path>` | `--force` (bool, required) | `ClearDEKSafety` (as `set-default`) | success line |
 
-**REST has both surfaces.** Secrets (`/api/v1/kms/secrets`, with versions,
-rotate, rollback, status and rotation policy) and DEKs (`/api/v1/kms/deks`) are
-routed in `pkg/webservice/v1/rest/kms/router.go`; see [api.md](api.md). Until
-the CLI catches up, use REST:
+The DEK fields are `path`, `algorithm`, `version`, `status`, `is_default`,
+`created_at`, `rotated_at`, `usage_count`, `bytes_used`, `max_usage_count`,
+`max_bytes_used`, `warning_percent`, `description`, `backend_type`.
+
+- `dek create` has no algorithm or description flags. It sends its limit
+  flags in `CreateDEK`, which every SDK transport serves; the gRPC, QUIC, MCP
+  and REST transports accept the same fields on create (see [api.md](api.md)
+  §4).
+- `dek status` over the gRPC, Unix and QUIC platform transports calls the
+  `quicbaas.kms.v1.DEKManagement` service platformd registers beside its own
+  services, through the platform SDK's `Client.DEK()` on the same
+  connection; on REST and MCP it uses the SDK DEK client. A response without
+  DEK metadata exits 1 with `ErrDEKStatusEmpty`.
+- `dek set-default`, `dek set-safety` and `dek clear-safety` over the gRPC,
+  Unix and QUIC platform transports call platformd's
+  `quicbaas.kms.v1.DEKManagement` service through `Client.DEK()`, as
+  `dek status` does; QUIC carries them as `OpKMSExtendedCategory`
+  sub-opcodes `0x0E`, `0x0F` and `0x10` (`kms:write`). The pinned
+  go-quicbaas SDK (v0.12.0-alpha) gRPC transport has no handler for these
+  three calls (`transport/grpc/kms_handler.go`) and its Unix transport
+  delegates to the gRPC one, so the SDK DEK client is not used there. On
+  REST and MCP they use the SDK DEK client. On the platform path `--warn-percent` outside
+  0-100 exits 1 with `ErrInvalidDEKWarnPercent` and makes no call.
+- `dek list --cursor` exits 1 with `ErrDEKSDKGap`: the SDK's
+  `ListDEKsRequest` has no cursor, so `ListDEKs` cannot page.
+- `dek set-default` takes no version. `SetDefaultDEK(path)` makes the DEK at
+  `<path>` the default for its level; the SDK has no per-version call.
+- `dek clear-safety` without `--force` exits 1 with
+  `ErrDEKClearSafetyNotConfirmed` and makes no call.
+- An SDK failure is `ErrDEKOperationFailed{Verb, Path, Err}`.
 
 ```bash
-curl -s -X POST https://platform.example.com/api/v1/kms/secrets \
-     -d '{"name":"api-token","value":"..."}'
-curl -s https://platform.example.com/api/v1/kms/secrets/api-token
+platformctl kms dek create /tenant/myapp/default --max-operations 1000000 -o json
+platformctl kms dek list --prefix /tenant/myapp --recursive -o json
+```
+
+### `kms secrets`
+
+Every verb calls the go-quicbaas SDK secrets client
+(`quicbaas.SDK().Security().Secrets()`) through the same platformd connection
+the `key` and `crypto` verbs use. `store` writes the value and description into
+the secret's data map under `value` and `description` and the tags as its
+metadata, exactly as `POST /api/v1/kms/secrets` does, so the CLI and REST read
+each other's secrets. Each verb prints JSON or YAML with `-o json|yaml`;
+`value` is base64 there.
+
+`get` (and `prefix list --include-data`) returns the bytes that were stored.
+The go-quicbaas Secrets client JSON-encodes the data map, so a stored value
+comes back from the SDK as its base64 text; the CLI and `GET
+/api/v1/kms/secrets/{name}` decode it in one shared place
+(`common.DecodeSecretValue`). A stored value that is not base64 text exits 1
+with `ErrSecretOperationFailed` wrapping `ErrMalformedSecretValue`. `get`
+prints the `<name>` it was given and each `prefix list` `data` entry the name
+the listing returned: the SDK gRPC transport answers `Get` with the server's
+secret ID as the path, which need not be that name.
+
+| Verb | Arguments | Flags (type, default) | SDK call | JSON output |
+|---|---|---|---|---|
+| `secrets store` | `<name>` | `--value` (required), `--base64` (bool: `--value` is base64), `--description`, `--tag key=value` (repeatable) | `Store` | `name`, `version` |
+| `secrets get` | `<name>` | `--version` (int, `0` = current) | `Get` | `name`, `version`, `value`, `description`, `metadata`, `created_at` |
+| `secrets list` | — | `--prefix`, `--limit` (int, `100`; `0` = all) | `List` | `prefix`, `secrets` (names), `has_more` |
+| `secrets delete` | `<name>` | none | `Delete` | `name`, `deleted` |
+| `secrets rotate` | `<name>` | `--value` (required), `--base64` (bool) | `Rotate` | `name`, `old_version`, `new_version` |
+| `secrets version` | `<name> <version>` | none | `GetVersion` | as `get`, plus `created_by` |
+| `secrets versions` | `<name>` | none | `ListVersions` | `name`, `versions` (no values) |
+| `secrets rollback` | `<name> <version>` | none | `Rollback` | `name`, `new_version` |
+| `secrets status enable`, `secrets status disable` | `<name>` | none | `UpdateStatus` | `name`, `status` |
+| `secrets policy get` | `<name>` | none | `GetRotationPolicy` | `name`, `enabled`, `interval_seconds`, `next_rotation`, `retain_versions`, `rotation_lambda` |
+| `secrets policy set` | `<name>` | `--enabled` (bool, `true`), `--interval` (duration), `--retain-versions` (int), `--rotation-lambda` | `SetRotationPolicy` | as `policy get` |
+| `secrets prefix list` | `<prefix>` | `--include-data` (bool: also `Get` each secret) | `List` (+ `Get`) | as `list`, plus `data` |
+| `secrets watch` | `<name>` | none | **none — SDK gap** | exits 1 with `ErrSecretsSDKGap` naming `SecretsClient.Watch` |
+
+`<version>` must be a positive integer (`ErrInvalidSecretVersion`, exit 1,
+before any connection). The SDK `List` returns every name at once, so `list`
+has no `--cursor`: `--limit` caps what is printed and `has_more` reports the
+rest. `list` and `prefix list` print only the names that begin with the prefix,
+and `--include-data` reads only those. The go-quicbaas gRPC client does not
+send the prefix to the server, so the SDK can answer with every secret in the
+tenant; the CLI filters that answer itself. The SDK `Delete` removes a secret with all its versions; there is no soft
+delete and no `--force`. A client error exits 1 with `ErrSecretOperationFailed`
+naming the operation and the secret. A call the SDK transport refuses as
+unimplemented exits 1 with `ErrSecretsSDKGap` instead, naming the verb and the
+SDK method and wrapping the refusal: `kms secrets <verb>: the go-quicbaas SDK
+does not serve SecretsClient.<Method>: <refusal>`. Every verb maps its failure
+in one place (`secretOperationError`).
+
+**Server coverage.** The pinned go-quicbaas embedded transport serves
+`Store`, `Get`, `List` and `Delete` only. Against an embedded platformd,
+`rotate`, `version`, `versions`, `rollback`, `status` and `policy` exit 1 with
+`embedded: unknown method: quicbaas.Secrets.*` until go-quicbaas #1619 lands.
+The SDK gRPC transport has no `SecretsManagement` proto method for
+`GetVersion`, `GetRotationPolicy` or `SetRotationPolicy`: over it, `version`,
+`policy get` and `policy set` exit 1 with `ErrSecretsSDKGap` wrapping
+`UNIMPLEMENTED: ... method not exposed by SecretsManagement gRPC proto`.
+
+```bash
+platformctl kms secrets store api-token --value "s3cret" --tag env=prod -o json
+platformctl kms secrets get api-token -o json
 ```
 
 ---
@@ -565,22 +699,18 @@ A verb is not implemented when its `RunE` returns one of the package's
 grep -rn --include='*.go' --exclude='*_test.go' 'NotImplemented{}' pkg/cli/commands/kms/
 ```
 
-On 2026-10-11 that names exactly these leaves:
+On 2026-10-21 that names exactly these leaves (`kms secrets watch` is not a
+stub: it refuses with `ErrSecretsSDKGap`, an SDK gap, §7):
 
 | Error | Verbs |
 |---|---|
-| `ErrSecretsNotImplemented` | every `kms secrets` leaf (§7) |
-| `ErrDEKNotImplemented` | every `kms dek` leaf (§7) |
 | `ErrKeyImportNotImplemented` | `kms key import` |
 | `ErrKeyExportNotImplemented` | `kms key export` |
 | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
-| `ErrKeyVersionsNotImplemented` | `kms key versions` |
-| `ErrKeyStatusNotImplemented` | `kms key status enable`, `kms key status disable` |
 | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
 Counting the string `(not yet implemented)` instead overcounts: it also appears
-in the `Short` text of the groups (`dek`, `secrets`, `key status`, `secrets
-policy`, `secrets prefix`) and in test files.
+in test files.
 
 ---
 

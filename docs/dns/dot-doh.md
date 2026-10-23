@@ -1,9 +1,9 @@
 # DNS over TLS / DNS over HTTPS
 
-> **Status: NORMATIVE** · Scope: planned DNS over TLS and DNS over HTTPS; not implemented
+> **Status: NORMATIVE** · Scope: planned DNS over TLS and DNS over HTTPS; not implemented · Last verified: 2026-10-18
 > Conflicts with this document are defects. Fix them here first.
 
-This document describes the planned architecture and configuration for DNS over TLS (DoT) and DNS over HTTPS (DoH) support in the Trusted Platform DNS subsystem. Implementation is scheduled for a future release.
+This document describes the planned architecture and configuration for DNS over TLS (DoT) and DNS over HTTPS (DoH) support in the Trusted Platform DNS subsystem. Nothing in `pkg/dns` implements either, no `dns:` key below exists yet, and neither feature is in [docs/SPEC.md](../SPEC.md) or [ROADMAP.md](../../ROADMAP.md). Today the platform serves plain DNS only, on the public (`DefaultPublicPort`, 8053) and internal (`DefaultInternalPort`, 9053) listeners (`pkg/dns/config.go:30-35`).
 
 ## Overview
 
@@ -78,7 +78,7 @@ DNS over TLS (DoT) and DNS over HTTPS (DoH) provide encrypted transport for DNS 
 |                                                                       |
 |  +------------------+    +------------------+    +-----------------+  |
 |  |  DoT Listener    |    |  DoH Listener    |    | Standard DNS    |  |
-|  |  Port 853        |    |  Port 443        |    | Port 53/8053    |  |
+|  |  Port 853        |    |  Port 443        |    | Port 8053/9053  |  |
 |  +--------+---------+    +--------+---------+    +--------+--------+  |
 |           |                       |                       |           |
 |           +----------+------------+-----------+-----------+           |
@@ -117,6 +117,11 @@ DNS over TLS (DoT) and DNS over HTTPS (DoH) provide encrypted transport for DNS 
 | **Zone Resolver** | Resolve queries against local zones |
 | **Forwarder** | Forward queries to upstream resolvers |
 | **Cache** | Cache responses for performance |
+
+Today the zone resolver is the CoreDNS plugin (`pkg/dns/plugin.go`) and the
+forwarder is the dnsmasq local forwarder (`pkg/dns/resolver.go`). The
+platform's DNS server keeps no cache; the only one is dnsmasq's
+([api.md](api.md#2-capability-matrix)).
 
 ## TLS Configuration
 
@@ -488,7 +493,9 @@ The platform CA automatically:
 
 ### DANE Integration
 
-Automatic TLSA record generation for DoT/DoH services:
+Automatic TLSA record generation for DoT/DoH services. `services` is a
+proposed key: today `dns.dane` publishes TLSA records for webservice and BMC
+certificates at one `default-port` ([dane.md](dane.md)).
 
 ```yaml
 dns:
@@ -508,19 +515,12 @@ dns:
 
 Access control for encrypted DNS (PROPOSED - Not yet implemented):
 
-> **Note:** IAM policy integration is a planned feature. The configuration shown below is a proposed format.
+> **Note:** IAM policy integration is a planned feature, with no proposed format yet.
 
-```yaml
-# PROPOSED - Future IAM policy configuration
-# Currently, access control is managed through mTLS client certificates
-# configured in the webservices section
-
-webservices:
-  - name: dns-api
-    mtls:
-      enabled: true
-      client-ca: /etc/platform/certs/client-ca.crt
-```
+Today the DNS listeners authenticate no client, and the webservice
+configuration (`pkg/webservice/v1/config.go`) has no client-certificate key.
+Access to the DNS management API is described in
+[api.md](api.md#4-authorization).
 
 ## Implementation Roadmap
 
@@ -580,6 +580,8 @@ webservices:
 | Performance tuning | Optimization and benchmarks | Planned |
 
 ## CLI Commands (Planned)
+
+There is no `platformctl dns` command group today (#954).
 
 ### Server Management
 

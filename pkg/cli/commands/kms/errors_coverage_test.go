@@ -30,7 +30,13 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrInvalidKeyUsage", ErrInvalidKeyUsage{Usage: "bad"}, "bad"},
 
 		// dek.go
-		{"ErrDEKNotImplemented", ErrDEKNotImplemented{}, "not yet implemented"},
+		{"ErrDEKOperationFailed", ErrDEKOperationFailed{Verb: "get", Path: "/t/a", Err: errors.New("boom")}, "dek get /t/a failed: boom"},
+		{"ErrDEKOperationFailed no path", ErrDEKOperationFailed{Verb: "list", Err: errors.New("boom")}, "dek list failed: boom"},
+		{"ErrDEKSDKGap", ErrDEKSDKGap{Option: "list --cursor", Missing: "ListDEKsRequest.Cursor"}, "no ListDEKsRequest.Cursor"},
+		{"ErrDEKServiceUnavailable", ErrDEKServiceUnavailable{}, "DEK service is not available"},
+		{"ErrDEKClearSafetyNotConfirmed", ErrDEKClearSafetyNotConfirmed{Path: "/t/a"}, "pass --force"},
+		{"ErrInvalidDEKLimit", ErrInvalidDEKLimit{Limit: -1}, "invalid --limit -1"},
+		{"ErrInvalidDEKWarnPercent", ErrInvalidDEKWarnPercent{Percent: 101}, "invalid --warn-percent 101"},
 
 		// key_algorithms.go
 
@@ -63,7 +69,6 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrRevocationReasonRequired", ErrRevocationReasonRequired{}, "reason"},
 
 		// key_status.go
-		{"ErrKeyStatusNotImplemented", ErrKeyStatusNotImplemented{}, "not yet implemented"},
 		{"ErrUpdateKeyStatusFailed", ErrUpdateKeyStatusFailed{KeyID: "k9", Err: errors.New("fail")}, "k9"},
 		{"ErrInvalidKeyStatus", ErrInvalidKeyStatus{Status: "bad"}, "bad"},
 
@@ -78,14 +83,15 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrReadWrappedMaterialFailed", ErrReadWrappedMaterialFailed{Path: "/tmp/wrap", Err: errors.New("read")}, "/tmp/wrap"},
 
 		// key_versions.go
-		{"ErrKeyVersionsNotImplemented", ErrKeyVersionsNotImplemented{}, "not yet implemented"},
 		{"ErrListKeyVersionsFailed", ErrListKeyVersionsFailed{KeyID: "k11", Err: errors.New("fail")}, "k11"},
 
 		// secrets.go
-		{"ErrSecretsNotImplemented", ErrSecretsNotImplemented{}, "not yet implemented"},
 		{"ErrSecretNameRequired", ErrSecretNameRequired{}, "name"},
 		{"ErrSecretValueRequired", ErrSecretValueRequired{}, "value"},
-		{"ErrSecretsClientNotInitialized", ErrSecretsClientNotInitialized{}, "client"},
+		{"ErrInvalidSecretValue", ErrInvalidSecretValue{Err: errors.New("bad b64")}, "bad b64"},
+		{"ErrInvalidSecretVersion", ErrInvalidSecretVersion{Value: "x9"}, "x9"},
+		{"ErrSecretOperationFailed", ErrSecretOperationFailed{Operation: "get", Name: "s1", Err: errors.New("fail")}, "s1"},
+		{"ErrSecretsSDKGap", ErrSecretsSDKGap{Verb: "watch", Method: "SecretsClient.Watch"}, "SecretsClient.Watch"},
 
 		// status.go
 		{"ErrKMSClientNotInitialized", ErrKMSClientNotInitialized{}, "client"},

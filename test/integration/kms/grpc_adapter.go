@@ -304,6 +304,9 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GenerateKey", Err: err}
 	}
+	if resp.Key == nil || resp.Metadata == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GenerateKey", Field: "key"}
+	}
 
 	result := &KeyGenerateResult{
 		KeyID:              resp.Key.KeyId,
@@ -332,6 +335,9 @@ func (g *GRPCAdapter) KeyGet(ctx context.Context, keyID string, version uint64) 
 	resp, err := g.kms.GetKey(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetKey", Err: err}
+	}
+	if resp.Key == nil || resp.Metadata == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GetKey", Field: "key"}
 	}
 
 	return &KeyGetResult{
@@ -509,6 +515,9 @@ func (g *GRPCAdapter) KeyMetadata(ctx context.Context, keyID string) (*KeyMetada
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetKeyMetadata", Err: err}
 	}
+	if resp.Metadata == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GetKeyMetadata", Field: "metadata"}
+	}
 
 	var rotationPolicy *RotationPolicy
 	if resp.Metadata.RotationPolicy != nil {
@@ -553,6 +562,9 @@ func (g *GRPCAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts 
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "UpdateKeyMetadata", Err: err}
 	}
+	if resp.Metadata == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "UpdateKeyMetadata", Field: "metadata"}
+	}
 
 	return &KeyMetadataUpdateResult{
 		KeyID:     resp.Metadata.KeyId,
@@ -571,6 +583,9 @@ func (g *GRPCAdapter) KeyPolicy(ctx context.Context, keyID string) (*KeyPolicyRe
 	resp, err := g.kms.GetKeyPolicy(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetKeyPolicy", Err: err}
+	}
+	if resp.Policy == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GetKeyPolicy", Field: "policy"}
 	}
 
 	return &KeyPolicyResult{
@@ -1069,6 +1084,9 @@ func (g *GRPCAdapter) SecretsVersion(ctx context.Context, name string, version u
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetSecretVersion", Err: err}
 	}
+	if resp.Version == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GetSecretVersion", Field: "version"}
+	}
 
 	return &SecretsVersionResult{
 		SecretID:  name,
@@ -1160,4 +1178,16 @@ func (e ErrGRPCCallFailed) Error() string {
 
 func (e ErrGRPCCallFailed) Unwrap() error {
 	return e.Err
+}
+
+// ErrGRPCMissingInResponse is returned when a successful gRPC response
+// omits a message the adapter reads, so the suite reports the field
+// instead of panicking on a nil dereference.
+type ErrGRPCMissingInResponse struct {
+	Method string
+	Field  string
+}
+
+func (e ErrGRPCMissingInResponse) Error() string {
+	return "gRPC " + e.Method + " response carries no " + e.Field
 }

@@ -29,8 +29,8 @@ type ImageListItem struct {
 	Size        int64             `json:"size" yaml:"size"`
 	Encrypted   bool              `json:"encrypted" yaml:"encrypted"`
 	Signed      bool              `json:"signed" yaml:"signed"`
-	CreatedAt   int64             `json:"created_at" yaml:"created_at"`
-	PushedAt    int64             `json:"pushed_at" yaml:"pushed_at"`
+	CreatedAt   unixSeconds       `json:"created_at" yaml:"created_at"`
+	PushedAt    unixSeconds       `json:"pushed_at" yaml:"pushed_at"`
 	Platform    string            `json:"platform,omitempty" yaml:"platform,omitempty"`
 	LayerCount  int               `json:"layer_count" yaml:"layer_count"`
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
@@ -144,7 +144,7 @@ func runList(flags *cli.CommonFlags, repository, prefix string, limit int32, cur
 				formatBytes(img.Size),
 				formatBool(img.Encrypted),
 				formatBool(img.Signed),
-				formatTimestamp(img.PushedAt),
+				formatTimestamp(int64(img.PushedAt)),
 			)
 		}
 
@@ -180,8 +180,8 @@ func convertListDomainResponse(resp *regsvc.ListArtifactsResult) *ListResult {
 			Size:        artifact.Size,
 			Annotations: artifact.Annotations,
 			LayerCount:  artifact.LayerCount,
-			CreatedAt:   artifact.CreatedAt,
-			PushedAt:    artifact.PushedAt,
+			CreatedAt:   unixSeconds(artifact.CreatedAt),
+			PushedAt:    unixSeconds(artifact.PushedAt),
 		}
 
 		if artifact.OS != "" || artifact.Architecture != "" {

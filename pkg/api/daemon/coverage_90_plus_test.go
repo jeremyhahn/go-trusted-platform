@@ -1180,7 +1180,7 @@ func TestMCPServiceProvider_VTPMStart(t *testing.T) {
 	provider := &MCPServiceProvider{}
 	ctx := context.Background()
 
-	err := provider.VTPMStart(ctx, "vtpm-1")
+	_, err := provider.VTPMStart(ctx, "vtpm-1")
 	assert.Error(t, err)
 }
 

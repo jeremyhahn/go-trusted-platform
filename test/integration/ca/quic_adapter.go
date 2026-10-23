@@ -900,6 +900,10 @@ func (q *QUICAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 		}
 	}
 
+	if err := result.setIssuerFromData("QUIC"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 

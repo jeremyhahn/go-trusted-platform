@@ -429,17 +429,12 @@ func (c *CLIAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRK
 	if opts.Algorithm != "" {
 		args = append(args, "--algorithm", opts.Algorithm)
 	}
-	if opts.Handle != 0 {
-		args = append(args, "--handle", fmt.Sprintf("0x%08X", opts.Handle))
+	args = append(args, fmt.Sprintf("--persistent=%t", opts.Persistent))
+	if opts.Parent != 0 {
+		args = append(args, "--parent", fmt.Sprintf("0x%08X", opts.Parent))
 	}
-	if opts.Password != "" {
-		args = append(args, "--password", opts.Password)
-	}
-	if opts.Persistent {
-		args = append(args, "--persistent")
-	}
-	if opts.Policy {
-		args = append(args, "--policy")
+	if opts.ParentPassword != "" {
+		args = append(args, "--parent-password", opts.ParentPassword)
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -605,14 +600,8 @@ func (c *CLIAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // =============================================================================
 
 // EventLog reads the TPM event log via CLI.
-func (c *CLIAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
-	args := []string{"tpm", "eventlog", "-o", "json"}
-
-	if path != "" {
-		args = append(args, "--path", path)
-	}
-
-	output, err := c.runCommand(ctx, args...)
+func (c *CLIAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
+	output, err := c.runCommand(ctx, "tpm", "eventlog", "-o", "json")
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "tpm eventlog", Err: err}
 	}

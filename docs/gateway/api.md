@@ -56,7 +56,9 @@ nothing. The document's sections and their provenance are in
 The overlay section of the snapshot includes the local VTEP, underlay bridge,
 OpenFlow table ids, admitted VTEPs, and the neighbor-discovery counters the
 gatewayd overlay handler maintains: punted, answered, meter-dropped,
-queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
+queue-dropped, and fell-through. It also counts the routes refused for
+claiming the anycast gateway's address (`refused_bindings`) and the replays of
+a refused VTEP's routes that failed (`refused_replays`). The admitted-VTEP read/list verbs are backed
 by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
 the SDK/CLI; they return `NotFound` for an address that is not currently
 admitted, and `Unavailable` (REST 503) on a gateway with no overlay section.
@@ -188,8 +190,8 @@ and port on every transport. The add body is
 set-backends takes `{backends: [...]}` and replaces the whole set. A VIP read
 returns its `ct_zone`, `group_id` and per-backend `healthy` flag.
 
-A production `platformd` does not wire the load balancer backend yet (see
-§5a), so these verbs answer "not configured" on a live platform.
+On a live platform these verbs reach the load balancer in `gatewayd` over
+live IPC (see §5a); without a datapath socket they answer "not configured".
 
 ---
 
@@ -199,21 +201,29 @@ A production `platformd` does not wire the load balancer backend yet (see
 |---|---|---|---|---|---|
 | NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`sdk/go/wire/quicwire/gateway_nat64.go`) | `gateway_nat64_status` | ✅ |
 
-> **Production status: routed, not yet backed.** The translator runs in
-> `gatewayd`. Today `platformd` does not reach it: it builds the gateway
-> service with no NAT64 backend on any transport. On a live platform every
-> transport answers "not configured": `Unavailable` on gRPC and Unix, 503 on
-> REST, `StatusUnavailable` on QUIC, and "service not available" from MCP.
-> That holds even while the `nat64:` section is running and healthy.
+> **Production status: served over live IPC (#660).** The translator, the
+> load balancer (§5) and perf (§6) run in `gatewayd`'s datapath child.
+> `platformd` reaches them by dialling that child's control socket directly,
+> `sdn.gateway.datapath-socket` in platformd's configuration (normally
+> gatewayd's `<process.runtime-dir>/datapath.sock`; see [user.md](user.md)), and builds the gateway service on an IPC client
+> (`pkg/api/daemon/gateway_backends.go`). Every read and control action is a
+> live call to `GatewayServicesService` (`pkg/sdn/gateway/ipc/proto/ipc.proto`);
+> nothing is served from the telemetry snapshot, which stays telemetry.
 >
-> Connecting the control plane to gatewayd-resident services is planned and
-> awaits a design decision: live IPC over the supervisor seam, or the
-> telemetry snapshot. The load balancer (§5) and perf (§6) verbs share the
-> same gap. Until it lands, read translator health from `gatewayd` itself
-> or from the telemetry snapshot's `nat64` section.
+> - **Child unreachable.** The dial is lazy, so `platformd` starts before
+>   `gatewayd`. A call that cannot reach the child answers "not configured"
+>   on every transport: `Unavailable` on gRPC and Unix, 503 on REST,
+>   `StatusUnavailable` on QUIC, and "service not available" from MCP.
+> - **No datapath socket (single-process mode).** The load balancer and
+>   NAT64 answer "not configured"; perf falls back to `platformd`'s local OVS
+>   perf service.
+> - **Access.** The child admits `platformd`'s uid to these methods only
+>   through `process.platform-uids` (`pkg/sdn/gateway/ipc/policy.go`).
 >
-> What is proven today:
+> What is proven:
 > - The verb is routed on every transport (`TestNAT64StatusMultiProtocol`).
+> - The production wiring serves all three backends from a real IPC server
+>   (`TestNew_ServesGatewayBackendsOverIPC`).
 > - The translator itself works end to end (`make integration-test-nat64`).
 
 Read-only by design: the translator has no runtime verbs. Its `pool6`,
@@ -284,9 +294,9 @@ and why its MCP tool needs `sdn:write` while the two read verbs need
 
 The perf sub-opcodes are served by the same shared perf service as the other
 transports; when the perf backend is not wired, they return
-`StatusUnavailable` rather than failing as unknown opcodes. A production
-`platformd` does not wire the perf backend yet (see §5a), so on a live
-platform that is what every transport answers.
+`StatusUnavailable` rather than failing as unknown opcodes. On a live
+platform perf is measured by `gatewayd`'s datapath child over live IPC (see
+§5a); in single-process mode it is `platformd`'s local OVS perf service.
 
 ---
 
@@ -329,6 +339,18 @@ consumed by gateways:
 | PUT | `/api/v1/gateway/vpn-leases/{id}` | Gateway records a management VPN lease it admitted or renewed ([docs/vpn/api.md](../vpn/api.md) §6) | `{id}` **must equal** the client certificate CN |
 | DELETE | `/api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | Gateway releases a lease it revoked | `{id}` **must equal** the client certificate CN |
 
+**Both REST servers carry the four gatewayd-facing routes.** With a
+`webservices:` listener they are on the webservice router
+(`pkg/webservice/v1/router.go`) beside the operator `state` routes. A
+daemon-only control plane — no `webservices:` section, so the daemon's own
+REST server on 8443 is the REST listener — mounts the same four on that server
+(`RESTServer.SetGatewayControlPlane`, wired by `wireGatewayControlPlane` in
+`pkg/daemon/commands/gateway_control_init.go`), backed by the same telemetry
+store and desired-configuration source. The operator `state` routes are not
+mounted there; the snapshot is read through `GetGatewaySnapshot` on every
+transport (§2). The certificate binding below is the same handler code on
+both.
+
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
 
@@ -343,7 +365,7 @@ The response payload is `{"gateway_id": …, "config": <DesiredConfig>}`, where
   "load_balancer": {"vips": [{"address": "10.0.200.10", "port": 443, "protocol": "tcp",
                              "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}]}]},
   "nat": {"snat_internal_cidr": "10.0.100.0/24",
-          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2222", "internal": "10.0.100.5:22"}]}
+          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2022", "internal": "10.0.100.5:22"}]}
 }
 ```
 
@@ -464,9 +486,8 @@ and it is enforced by `ControlPlane.RegisterRoutes` versus
 `ControlPlane.RegisterGatewayFacingRoutes`, asserted exactly and for
 disjointness in that package's tests.
 
-Which operator authorization the `/gateway/state` routes should carry was
-previously left open in the code as an owner decision. #165 answers it with the
-same RBAC role guard #159 established for the rest of the API.
+The `/gateway/state` routes carry the same RBAC role guard as the rest of the
+API (#159, #165).
 
 This changes the REST position only. The gRPC, Unix, MCP and embedded
 positions described above are unchanged. See

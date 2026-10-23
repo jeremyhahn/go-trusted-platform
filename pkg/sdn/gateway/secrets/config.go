@@ -25,7 +25,7 @@ const DefaultTimeout = 10 * time.Second
 
 // Config is the gatewayd `secret-store:` section: where the platform
 // secret store (quicbaasd's KMS secrets service) is and how to reach it.
-// The section is optional; without it every kms:// and secret:// reference
+// The section is optional; without it every kms:// reference
 // in the configuration fails closed at service start. It is deliberately
 // not called `secrets:` — that key is platformd's resolver switchboard and
 // a gateway node's configuration file carries both.

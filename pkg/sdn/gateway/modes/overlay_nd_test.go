@@ -922,6 +922,33 @@ func TestOverlayNDHoldDownResetsAfterAQuietPeriod(t *testing.T) {
 		"suppression that held for the quiet period starts the back-off over")
 }
 
+func TestOverlayNDHoldDownStartsAtTheConfiguredBase(t *testing.T) {
+	const base = 2 * time.Second
+	f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.NDFallbackHoldDown = base }).withVNI(t)
+	ctx := context.Background()
+	require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ndTargetIP))
+	now := time.Now()
+
+	require.Equal(t, base, ndFallBackAt(t, f, now), "the first fallback holds down for the configured base")
+	now = now.Add(base)
+	f.handler.ndTick(ctx, now)
+	require.True(t, f.handler.GetStatus().NDSuppression.Suppressing)
+	assert.Equal(t, 2*base, ndFallBackAt(t, f, now.Add(time.Second)), "a recent fallback doubles the configured base")
+}
+
+func TestOverlayNDHoldDownCapAllowsTheMaximumBase(t *testing.T) {
+	f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.NDFallbackHoldDown = overlayNDFallbackHoldDownMax }).withVNI(t)
+	ctx := context.Background()
+	require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ndTargetIP))
+	now := time.Now()
+
+	require.Equal(t, overlayNDFallbackHoldDownMax, ndFallBackAt(t, f, now))
+	now = now.Add(overlayNDFallbackHoldDownMax)
+	f.handler.ndTick(ctx, now)
+	require.True(t, f.handler.GetStatus().NDSuppression.Suppressing)
+	assert.Equal(t, overlayNDFallbackHoldDownMax, ndFallBackAt(t, f, now.Add(time.Second)), "the back-off never passes its cap")
+}
+
 func TestOverlayNDFallbackPuntsExpireWhenTheDeleteFails(t *testing.T) {
 	f := newOverlayFixture(t, nil).withVNI(t)
 	ctx := context.Background()

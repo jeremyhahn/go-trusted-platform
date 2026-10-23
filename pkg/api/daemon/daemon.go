@@ -45,6 +45,7 @@ import (
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -217,9 +218,10 @@ type Daemon struct {
 	invitationService            platformservice.InvitationServicer
 	invitationGRPCService        *InvitationGRPCService
 	gatewayGRPCService           *GatewayService
-	// gatewayPerfService is the shared OVS-backed perf backend behind the
-	// gateway perf operations on every transport; nil without OVS access.
-	gatewayPerfService GatewayPerfInterface
+	// gatewayIPC is the live IPC client to gatewayd's datapath child behind
+	// the gateway load-balancer, NAT64 and perf backends (#660); nil when no
+	// datapath socket is configured. Closed by Stop.
+	gatewayIPC *ipc.Client
 	// proxyGRPCService is the shared reverse-proxy configuration service
 	// backing the gRPC, REST, QUIC and MCP proxy transports.
 	proxyGRPCService   *grpccreds.ProxyGRPCService
@@ -526,11 +528,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Production deployments replace this with a QuicBaaS-backed allocator.
 	defaultIPAM := ipambackends.NewMemoryBackend()
 
-	// Build the gateway perf backend when the daemon has OVS access. The
-	// perf service measures REAL flow programming (timed install/teardown
-	// on a live bridge) and reads live ovs-vswitchd counters via
-	// ovs-appctl. Without OVS it stays nil and every transport reports
-	// Unavailable for the perf operations.
+	// Build the local gateway perf backend when the daemon has OVS access.
+	// The perf service measures REAL flow programming (timed
+	// install/teardown on a live bridge) and reads live ovs-vswitchd
+	// counters via ovs-appctl. A configured gatewayd datapath socket
+	// replaces it below; with neither, every transport reports Unavailable
+	// for the perf operations.
 	var gatewayPerf GatewayPerfInterface
 	if sdnService != nil && sdnService.OVSClient() != nil {
 		perfDeps := perf.Deps{OVS: sdnService.OVSClient()}
@@ -547,10 +550,18 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	// Create Gateway gRPC service (always available - gracefully handles nil dependencies)
-	gatewayService := NewGatewayService(WithIPAMAllocator(defaultIPAM))
-	if gatewayPerf != nil {
-		gatewayService.SetPerf(gatewayPerf)
+	// The load-balancer, NAT64 and perf backends live in gatewayd and are
+	// served over live IPC when the datapath socket is configured (#660).
+	gatewayOpts, gatewayIPC, gatewayIPCErr := gatewayBackendOptions(config.GatewayDatapathSocket, gatewayPerf)
+	if gatewayIPCErr != nil {
+		logger.Error(gatewayIPCErr, "component", "gateway_ipc")
+		return nil, gatewayIPCErr
 	}
+	if gatewayIPC != nil {
+		logger.Info("Gateway LB, NAT64 and perf served from gatewayd over IPC",
+			"socket", config.GatewayDatapathSocket)
+	}
+	gatewayService := NewGatewayService(append(gatewayOpts, WithIPAMAllocator(defaultIPAM))...)
 	if grpcServer != nil {
 		platformv1.RegisterGatewayServiceServer(grpcServer, gatewayService)
 	}
@@ -1247,6 +1258,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Debug("Compute gRPC service set for QUIC handler")
 		}
 		quicHandler.SetAttestationGRPCService(attestationService)
+		quicHandler.SetAttestationService(newAttestationQUICAdapter(attestationService))
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
 		// Even without concrete service implementations, having these handlers
@@ -1265,14 +1277,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// 0x08, 0x0C-0x0F) and zone operations (0x10-0x14) are both served over QUIC.
 		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
 		// be nil — zone methods degrade to StatusUnavailable in that case.
-		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService, gatewayService, gatewayService)
+		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService, gatewayService, gatewayService, gatewayService)
 		gatewayQUICHandler := quic.NewGatewayHandler(quicLogger, quicGatewaySvc)
-		// Wire the perf backend so the perf sub-opcodes (0x36-0x38) are
-		// served over QUIC by the same shared perf service as the other
-		// transports; nil leaves them returning StatusUnavailable.
-		if gatewayPerf != nil {
-			gatewayQUICHandler.SetPerfService(newGatewayPerfQUICAdapter(gatewayPerf))
-		}
+		// The perf sub-opcodes (0x36-0x38) read the shared gateway service's
+		// perf backend like every other transport; with none wired they
+		// return StatusUnavailable.
+		gatewayQUICHandler.SetPerfService(newGatewayPerfQUICAdapter(gatewayService))
 		quicHandler.SetGatewayHandler(gatewayQUICHandler)
 
 		// Wire the proxy handler so the proxy sub-opcodes (0x20-0x2D)
@@ -1360,8 +1370,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// gRPC (TCP and UDS), QUIC and the embedded transport through
 	// iamGRPCService, MCP through createMCPServer. Servers start in Start(),
 	// so wiring it here is race-free.
-	iamTokenService := newIAMTokenService(
-		selectIAMTokenVerifier(platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
+	iamTokenService := newIAMTokenService(iamTokenVerifierFor(
+		config, logger, platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
 	if iamGRPCService != nil {
 		iamGRPCService.SetTokenService(iamTokenService)
 	}
@@ -1406,7 +1416,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		eabDelivery:                  eabDeliveryServicer,
 		eabGRPCService:               eabGRPCService,
 		gatewayGRPCService:           gatewayService,
-		gatewayPerfService:           gatewayPerf,
+		gatewayIPC:                   gatewayIPC,
 		proxyGRPCService:             proxyService,
 		overlayGRPCService:           overlayService,
 		overlayCtrl:                  overlayCtrl,
@@ -1590,7 +1600,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator(), daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewayBGPService(daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
+		daemon.concreteRestServer.SetGatewayBackends(daemon.gatewayGRPCService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
 
@@ -1963,7 +1973,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		EABDelivery:           d.eabDelivery,
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
-		GatewayPerf:           d.gatewayPerfService,
+		GatewayBackends:       d.gatewayGRPCService,
 		GatewaySnapshots:      d.gatewayGRPCService,
 		GatewayStatus:         d.gatewayGRPCService,
 		GatewayBGP:            d.gatewayGRPCService,
@@ -2017,8 +2027,16 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	if d.kmsService != nil {
 		if initErr := d.kmsService.initializeServers(); initErr != nil {
 			d.logger.Warn("KMS service MCP initialization failed", "error", initErr)
-		} else if d.kmsService.DEKServer() != nil {
-			serviceProvider.SetDEKService(d.kmsService.DEKServer())
+		} else {
+			if d.kmsService.DEKServer() != nil {
+				serviceProvider.SetDEKService(d.kmsService.DEKServer())
+			}
+			// secret_get_by_prefix and secret_rollback call the gRPC
+			// SecretsManagement adapter.
+			if d.kmsService.SecretsServer() != nil {
+				serviceProvider.SetSecretsPrefixService(d.kmsService.SecretsServer())
+				serviceProvider.SetSecretsServer(d.kmsService.SecretsServer())
+			}
 		}
 	}
 
@@ -2819,6 +2837,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	// Detach overlay IPsec from charon; its fail-closed floor stays.
 	d.overlayIPsec.stop()
 
+	d.closeGatewayIPC()
+
 	// Disconnect SDN service if available
 	if d.sdnService != nil {
 		_ = d.sdnService.Disconnect()
@@ -2908,6 +2928,8 @@ func (d *Daemon) ForceStop() error {
 
 	// Detach overlay IPsec from charon; its fail-closed floor stays.
 	d.overlayIPsec.stop()
+
+	d.closeGatewayIPC()
 
 	// Disconnect SDN service if available
 	if d.sdnService != nil {

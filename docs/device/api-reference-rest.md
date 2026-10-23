@@ -61,7 +61,9 @@ Response — the verdict, reporting each check rather than a single flag:
 
 A quote that fails verification is `200` with `verified: false` — the caller
 asked whether the device attests and "no" is a successful answer. `400`,
-`404` and `503` are reserved for requests that could not be evaluated. The
+`404` and `503` are reserved for requests that could not be evaluated:
+evidence that is not JSON or lacks `quote`, `signature`, `nonce` or `pcrs` is
+`400` (`INVALID_ARGUMENT` on gRPC), never `500`. The
 route is registered only when the daemon has a verifier wired, so a `404`
 means attestation is not configured on this node, never that it silently
 passed.
@@ -147,6 +149,13 @@ The Go SDK reaches both routes as `DeviceService/CreateTemplate` and
 (`sdk/go/transport/rest/device_template.go`), which renders the pb messages
 in this shape and refuses the fields it has no place for
 ([api.md §4](api.md#4-device-templates)).
+
+It reaches `GET`, `PUT` and `DELETE /device/templates/{id}` and
+`GET /device/templates` as `DeviceService/GetTemplate`, `UpdateTemplate`,
+`DeleteTemplate` and `ListTemplates`. Get and update answer the bare
+template; delete answers `204`; the list takes `page` and `page_size` query
+parameters and answers `{"templates": [...], "pagination": {page, page_size,
+total, total_pages, has_more}}`.
 
 ## Device Operations
 

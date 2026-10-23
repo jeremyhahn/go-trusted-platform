@@ -280,6 +280,28 @@ func TestBuildTPMInfoOutput(t *testing.T) {
 		assert.Equal(t, true, output["is_simulator"])
 	})
 
+	t.Run("carries the structured fields", func(t *testing.T) {
+		resp := &tpmsvc.InfoResponse{
+			Version: tpmsvc.TPMVersion20,
+			Manufacturer: &tpmsvc.Manufacturer{
+				Name: "IFX", ID: 0x49465800, Model: "SLB9670", FirmwareVersion: "7.85",
+			},
+			PCRBanks:     []tpmsvc.PCRBank{tpmsvc.PCRBankSHA1, tpmsvc.PCRBankSHA256},
+			FIPSMode:     true,
+			MaxNVRAMSize: 2048,
+		}
+
+		output := buildTPMInfoOutput(resp)
+
+		assert.Equal(t, "2.0", output["version"])
+		assert.Equal(t, []string{"sha1", "sha256"}, output["pcr_banks"])
+		assert.Equal(t, true, output["fips_mode"])
+		assert.Equal(t, uint32(2048), output["max_nvram_size"])
+		assert.Equal(t, map[string]interface{}{
+			"name": "IFX", "id": uint32(0x49465800), "model": "SLB9670", "firmware_version": "7.85",
+		}, output["manufacturer"])
+	})
+
 	t.Run("missing info string", func(t *testing.T) {
 		resp := &tpmsvc.InfoResponse{
 			IsSimulator: false,
@@ -289,5 +311,7 @@ func TestBuildTPMInfoOutput(t *testing.T) {
 
 		assert.Equal(t, "", output["info"])
 		assert.Equal(t, false, output["is_simulator"])
+		assert.Equal(t, []string{}, output["pcr_banks"], "no banks render as an empty list, not null")
+		assert.NotContains(t, output, "manufacturer", "an unreported manufacturer is omitted, not rendered empty")
 	})
 }

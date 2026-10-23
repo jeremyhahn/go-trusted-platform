@@ -14,6 +14,7 @@
 package container
 
 import (
+	"errors"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"testing"
 	"time"
@@ -81,6 +82,7 @@ func TestNewCreateCommand_Flags(t *testing.T) {
 		{"workdir", "w", ""},
 		{"tpm-access", "", "false"},
 		{"start", "", "false"},
+		{"attest", "", "false"},
 	}
 
 	for _, tt := range tests {
@@ -222,4 +224,56 @@ func TestPrintContainerDetails_MinimalConfig(t *testing.T) {
 
 	// Should not panic
 	printContainerDetails(printer, container)
+}
+
+// A daemon that answers no container must yield a typed error, not a panic in
+// the table output (the MCP create path once answered a nil container).
+func TestPrintCreatedContainer(t *testing.T) {
+	created := &computesvc.Container{
+		ID:     "test-container-id",
+		State:  computesvc.ContainerStateCreated,
+		Config: &computesvc.ContainerConfig{Name: "web", Image: "nginx"},
+	}
+	printer := cli.NewPrinter(cli.OutputFormatTable, true)
+
+	err := printCreatedContainer(printer, cli.OutputFormatTable, "web", nil)
+	var missing ErrContainerMissingFromResponse
+	if !errors.As(err, &missing) || missing.Operation != "create" || missing.ID != "web" {
+		t.Fatalf("nil container: got %v, want ErrContainerMissingFromResponse{create, web}", err)
+	}
+
+	if err := printCreatedContainer(printer, cli.OutputFormatTable, "web", created); err != nil {
+		t.Fatalf("table output: unexpected error: %v", err)
+	}
+
+	err = printCreatedContainer(printer, cli.OutputFormat("xml"), "web", created)
+	if !errors.As(err, new(cli.ErrInvalidOutputFormat)) {
+		t.Fatalf("unknown format: got %v, want cli.ErrInvalidOutputFormat", err)
+	}
+}
+
+func TestCreateFailed_NamesTheCreatedContainer(t *testing.T) {
+	cause := &computesvc.ErrContainerCreateIncomplete{ID: "c-9", Message: "attestation failed"}
+	err := createFailed("web", &computesvc.Container{ID: "c-9"}, cause)
+
+	var failed ErrContainerOperationFailed
+	if !errors.As(err, &failed) || failed.Operation != "create" || failed.ID != "c-9" {
+		t.Fatalf("error = %v, want a create failure naming container c-9", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("error %v does not wrap the SDK cause", err)
+	}
+}
+
+func TestCreateFailed_WithoutAContainerNamesTheRequestedName(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := createFailed("web", nil, cause)
+
+	var failed ErrContainerOperationFailed
+	if !errors.As(err, &failed) || failed.ID != "web" {
+		t.Fatalf("error = %v, want a create failure naming web", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("error %v does not wrap the cause", err)
+	}
 }

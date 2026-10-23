@@ -277,6 +277,29 @@ func TestGenericDAO_Page(t *testing.T) {
 		assert.False(t, result.HasMore)
 	})
 
+	t.Run("an unset page and size take the defaults", func(t *testing.T) {
+		storage := newMemoryStorage()
+		require.NoError(t, storage.Start(context.Background()))
+		dao := NewGenericDAO[*entities.Role](
+			storage, "Role", func() *entities.Role { return &entities.Role{} }, logging.DefaultLogger(),
+		)
+		ctx := context.Background()
+		for i := 0; i < 3; i++ {
+			require.NoError(t, dao.Save(ctx, &entities.Role{ID: uint64(i + 1), Name: "role"}))
+		}
+
+		// Page 0 once sliced from -PageSize and panicked (MCP device_list).
+		result, err := dao.Page(ctx, datastore.PageQuery{Page: 0, PageSize: 2})
+		require.NoError(t, err)
+		assert.Len(t, result.Entities, 2)
+		assert.Equal(t, 1, result.Page)
+
+		result, err = dao.Page(ctx, datastore.PageQuery{Page: -1, PageSize: -5})
+		require.NoError(t, err)
+		assert.Len(t, result.Entities, 3)
+		assert.Equal(t, datastore.NewPageQuery().PageSize, result.PageSize)
+	})
+
 	t.Run("handles corrupt entity gracefully", func(t *testing.T) {
 		storage := newMemoryStorage()
 		require.NoError(t, storage.Start(context.Background()))

@@ -1,5 +1,8 @@
 # Consensus and Coordinator Election
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
+
 ## Overview
 
 The Coordinator Election and Consensus protocol enables the go-trusted-platform network to select a committee of trusted coordinators for managing distributed operations (DKG, FROST signing, key rotation) without introducing single points of failure or centralized trust.

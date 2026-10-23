@@ -32,6 +32,8 @@ tool's scope is refused before the tool runs.
   JSON mapping under the proto field names: `value` and `checksum` are
   base64, 64-bit integers (`object_id`, `version`, `size`, the `*_unix_ms`
   times) are strings, and `tags` is a JSON object.
+- The response is the text of the `CallToolResult`'s one `text` block
+  ([daemon api.md](../daemon/api.md) §1 "MCP tool results").
 - An argument the request does not have is refused as invalid.
 - A gRPC status becomes the JSON-RPC error code of its class
   (`sdk/go/wire/mcpwire`), and the SDK maps it back. A daemon whose MCP

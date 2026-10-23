@@ -23,6 +23,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
@@ -347,6 +348,55 @@ func TestExecuteKeyMetadataUpdate(t *testing.T) {
 		err := executeKeyMetadataUpdate(ctx, &fakeKMSClient{}, newTestKMSPrinter(), "key-1", "name", "", nil, nil)
 		var updateErr ErrUpdateKeyMetadataFailed
 		assert.ErrorAs(t, err, &updateErr)
+	})
+}
+
+func TestApplyGeneratedKeyName(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SetsTheDisplayNameOnTheGeneratedKey", func(t *testing.T) {
+		var captured *kms.UpdateKeyMetadataRequest
+		client := &fakeKMSClient{
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				captured = req
+				return &kms.KeyMetadataResponse{KeyID: req.KeyID, Name: req.Name}, nil
+			},
+		}
+		// The generate response names the key by its ID, as the daemon does.
+		generated := &kmssvc.GenerateKeyResult{
+			Key:      &kmssvc.KeyInfo{KeyID: "tenant-a-kek"},
+			Metadata: &kmssvc.KeyMetadata{Name: "tenant-a-kek"},
+		}
+
+		err := applyGeneratedKeyName(ctx, client, generated, "Tenant A KEK")
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		assert.Equal(t, "tenant-a-kek", captured.KeyID)
+		assert.Equal(t, "Tenant A KEK", captured.Name)
+		assert.Equal(t, "Tenant A KEK", generated.Metadata.Name)
+	})
+
+	t.Run("RecordsTheNameWhenTheResponseHasNoMetadata", func(t *testing.T) {
+		client := &fakeKMSClient{
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{KeyID: req.KeyID, Name: req.Name}, nil
+			},
+		}
+		generated := &kmssvc.GenerateKeyResult{Key: &kmssvc.KeyInfo{KeyID: "k1"}}
+
+		require.NoError(t, applyGeneratedKeyName(ctx, client, generated, "Display"))
+		require.NotNil(t, generated.Metadata)
+		assert.Equal(t, "Display", generated.Metadata.Name)
+	})
+
+	t.Run("BackendError", func(t *testing.T) {
+		generated := &kmssvc.GenerateKeyResult{Key: &kmssvc.KeyInfo{KeyID: "k1"}}
+
+		err := applyGeneratedKeyName(ctx, &fakeKMSClient{}, generated, "Display")
+		var updateErr ErrUpdateKeyMetadataFailed
+		require.ErrorAs(t, err, &updateErr)
+		assert.Equal(t, "k1", updateErr.KeyID)
+		assert.Nil(t, generated.Metadata)
 	})
 }
 

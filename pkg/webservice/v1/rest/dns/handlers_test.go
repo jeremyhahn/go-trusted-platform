@@ -740,6 +740,38 @@ func TestListZones_Pagination(t *testing.T) {
 	assert.Equal(t, int32(5), payload.Offset)
 }
 
+// TestListZones_LimitBoundsThePage is the regression for the handler that
+// echoed limit and offset but answered every zone.
+func TestListZones_LimitBoundsThePage(t *testing.T) {
+	service := newMockDNSService()
+	for _, name := range []string{"a.com.", "b.com.", "c.com."} {
+		service.zones[name] = createTestZone(name)
+	}
+	handlers, writer := newTestHandlers(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=2", nil)
+	handlers.ListZones(httptest.NewRecorder(), req)
+
+	payload, ok := writer.lastPayload.(ListZonesResponse)
+	require.True(t, ok)
+	assert.Len(t, payload.Zones, 2)
+	assert.Equal(t, int64(3), payload.Total)
+}
+
+func TestListZones_OffsetPastTheEndAnswersAnEmptyPage(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = createTestZone("example.com.")
+	handlers, writer := newTestHandlers(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=10&offset=5", nil)
+	handlers.ListZones(httptest.NewRecorder(), req)
+
+	payload, ok := writer.lastPayload.(ListZonesResponse)
+	require.True(t, ok)
+	assert.Empty(t, payload.Zones)
+	assert.Equal(t, int64(1), payload.Total)
+}
+
 // Test AddRecord
 
 func TestAddRecord_ARecord_Success(t *testing.T) {

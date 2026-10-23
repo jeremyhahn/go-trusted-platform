@@ -39,6 +39,7 @@ import (
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -112,36 +113,22 @@ func TestEnrollmentWithRealTPM(t *testing.T) {
 // testDeviceAttestationFlow verifies the device attestation and certificate issuance flow
 func testDeviceAttestationFlow(t *testing.T, ctx context.Context, env *testEnvironment) {
 	logger := env.logger
+	serial := env.deviceSerialPrefix + "ATTEST"
 
 	logger.Info("Testing device attestation flow",
-		"serial", env.deviceSerial,
+		"serial", serial,
 		"model", env.deviceModel)
 
-	// Step 1: Device generates keys (simulated - in real flow this would be TPM-bound)
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err, "Failed to generate device key")
-
-	// Step 2: Device creates CSR with attestation data
-	csr := createAttestationCSR(t, privateKey, env.deviceSerial, env.deviceModel)
-	require.NotNil(t, csr, "CSR should not be nil")
-
-	// Step 3: Simulate server verifying TPM attestation
-	attestationValid := verifyMockAttestation(t, csr)
-	assert.True(t, attestationValid, "Attestation should be valid")
-
-	// Step 4: Server issues IDevID certificate
-	cert := issueMockCertificate(t, env, csr, privateKey.Public())
-	require.NotNil(t, cert, "Certificate should be issued")
+	// Steps 1-4: the device generates its key and an attested CSR, the
+	// server verifies the attestation and issues the IDevID certificate
+	device := issueDeviceCertificate(t, env, serial)
+	cert := device.certificate
 
 	// Verify certificate properties
-	assert.Equal(t, env.deviceSerial, cert.Subject.SerialNumber,
+	assert.Equal(t, serial, cert.Subject.SerialNumber,
 		"Certificate serial should match device serial")
 	assert.Contains(t, cert.Subject.CommonName, env.deviceModel,
 		"Certificate CN should contain device model")
-
-	// Store certificate for later tests
-	env.deviceCertificate = cert
-	env.devicePrivateKey = privateKey
 
 	logger.Info("Device attestation flow completed successfully",
 		"serial", cert.SerialNumber,
@@ -154,32 +141,13 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 
 	logger.Info("Testing certificate-based network access")
 
-	require.NotNil(t, env.deviceCertificate, "Device must have certificate")
-
-	// Step 1: Enrollment event
-	enrollmentEvent := &policy.EnrollmentEvent{
-		Context:             ctx,
-		Certificate:         env.deviceCertificate,
-		CertificatePEM:      pemEncodeCertificate(env.deviceCertificate),
-		ClientIP:            env.clientIP,
-		IsTCGCSR:            true,
-		ProductModel:        env.deviceModel,
-		ProductSerial:       env.deviceSerial,
-		PermanentIdentifier: env.deviceSerial,
-	}
-
-	// Step 2: Process enrollment
-	err := env.enrollmentHook.OnEnrollmentComplete(enrollmentEvent)
-	require.NoError(t, err, "Enrollment hook should succeed")
-
-	// Step 3: Verify port state
-	portState, err := env.policyEngine.GetPortState(env.portID)
-	require.NoError(t, err)
-	assert.Equal(t, policy.PortStateEnrolled, portState)
+	// Steps 1-3: this subtest's own device is issued a certificate and
+	// enrolled, which stores its pending activation
+	device := enrollDevice(t, ctx, env, env.deviceSerialPrefix+"NETACCESS")
 
 	// Step 4: Activate device — precheck issues the plan, activation
 	// consumes it
-	plan, err := env.enrollmentHook.PrecheckActivation(env.deviceSerial)
+	plan, err := env.enrollmentHook.PrecheckActivation(device.serial)
 	require.NoError(t, err)
 	result, err := env.enrollmentHook.ActivateDevice(plan)
 	require.NoError(t, err)
@@ -188,7 +156,7 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 	assert.Equal(t, policy.ActivationStatusActivated, result.Status)
 
 	// Step 5: Verify authorized state
-	portState, err = env.policyEngine.GetPortState(env.portID)
+	portState, err := env.policyEngine.GetPortState(env.portID)
 	require.NoError(t, err)
 	assert.Equal(t, policy.PortStateAuthorized, portState)
 
@@ -200,16 +168,17 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 func testEndToEndEnrollment(t *testing.T, ctx context.Context, env *testEnvironment) {
 	logger := env.logger
 
-	require.NotNil(t, env.deviceCertificate, "Device must have certificate")
-	require.NotNil(t, env.devicePrivateKey, "Device must have private key")
+	// This subtest's own device is issued a certificate and enrolled, which
+	// stores its pending activation; no other subtest activates its serial.
+	device := enrollDevice(t, ctx, env, env.deviceSerialPrefix+"E2E")
 
 	// Create provisioning client
-	provisioningClient := createProvisioningClient(t, env)
+	provisioningClient := createProvisioningClient(t, env, device)
 
 	// Fetch profile
 	profile, err := provisioningClient.FetchProfile(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, env.deviceSerial, profile.SerialNumber)
+	assert.Equal(t, device.serial, profile.SerialNumber)
 
 	logger.Info("Device profile fetched", "vlan", profile.AdmittedNetwork.VLAN)
 
@@ -217,8 +186,73 @@ func testEndToEndEnrollment(t *testing.T, ctx context.Context, env *testEnvironm
 	activateResp, err := provisioningClient.Activate(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "activated", activateResp.Status)
+	assert.Equal(t, productionVLAN, activateResp.VLAN)
+
+	portState, err := env.policyEngine.GetPortState(env.portID)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateAuthorized, portState)
+
+	// A successful activation consumes the pending activation, so activating
+	// again is a 404, not a server fault (docs/sdn/provisioning.md, "POST
+	// /api/v1/device/activate" errors). The port stays authorized.
+	_, err = provisioningClient.Activate(ctx)
+	require.ErrorIs(t, err, provisioning.ErrServerError)
+	assert.ErrorContains(t, err, "server returned status 404")
+
+	portState, err = env.policyEngine.GetPortState(env.portID)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateAuthorized, portState)
 
 	logger.Info("Device activation completed", "vlan", activateResp.VLAN)
+}
+
+// enrollDevice issues a certificate to a new device with the given serial and
+// runs the enrollment hook for it, which stores that serial's pending
+// activation, and asserts the port is enrolled. Each caller passes its own
+// serial, so one subtest's activation never consumes another's.
+func enrollDevice(t *testing.T, ctx context.Context, env *testEnvironment, serial string) *testDevice {
+	t.Helper()
+
+	device := issueDeviceCertificate(t, env, serial)
+
+	enrollmentEvent := &policy.EnrollmentEvent{
+		Context:             ctx,
+		Certificate:         device.certificate,
+		CertificatePEM:      pemEncodeCertificate(device.certificate),
+		ClientIP:            env.clientIP,
+		IsTCGCSR:            true,
+		ProductModel:        env.deviceModel,
+		ProductSerial:       device.serial,
+		PermanentIdentifier: device.serial,
+	}
+	require.NoError(t, env.enrollmentHook.OnEnrollmentComplete(enrollmentEvent),
+		"Enrollment hook should succeed")
+
+	portState, err := env.policyEngine.GetPortState(env.portID)
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateEnrolled, portState)
+
+	return device
+}
+
+// issueDeviceCertificate runs the device side and the server side of
+// attestation for one device: the device generates its key (TPM-bound in the
+// real flow) and a CSR carrying its serial, the server verifies the
+// attestation and issues the IDevID certificate.
+func issueDeviceCertificate(t *testing.T, env *testEnvironment, serial string) *testDevice {
+	t.Helper()
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err, "Failed to generate device key")
+
+	csr := createAttestationCSR(t, privateKey, serial, env.deviceModel)
+	require.NotNil(t, csr, "CSR should not be nil")
+	require.True(t, verifyMockAttestation(t, csr), "Attestation should be valid")
+
+	cert := issueMockCertificate(t, env, csr, privateKey.Public())
+	require.NotNil(t, cert, "Certificate should be issued")
+
+	return &testDevice{serial: serial, certificate: cert, privateKey: privateKey}
 }
 
 // testEnrollmentErrorCases tests various error scenarios
@@ -271,28 +305,35 @@ func testTPMKeyBoundCertificate(t *testing.T, ctx context.Context, env *testEnvi
 // Test environment
 
 type testEnvironment struct {
-	ctx               context.Context
-	logger            *logging.Logger
-	datastore         datastore.Factory
-	policyEngine      policy.PolicyEngine
-	enrollmentHook    *policy.SDNEnrollmentHook
-	profileDAO        devicedao.DeviceProfileDAO
-	caCert            *x509.Certificate
-	caKey             crypto.PrivateKey
-	revokedCerts      map[string]bool
-	serialCounter     int64
-	deviceSerial      string
-	deviceModel       string
-	deviceCertificate *x509.Certificate
-	devicePrivateKey  crypto.PrivateKey
-	clientIP          string
-	serverURL         string
-	portID            string
-	tpm               *swtpm.SWTPM
-	tpmSocketPath     string
-	tpmStateDir       string
-	testProfile       *entities.DeviceProfile
-	cleanupFuncs      []func()
+	ctx                context.Context
+	logger             *logging.Logger
+	datastore          datastore.Factory
+	policyEngine       policy.PolicyEngine
+	enrollmentHook     *policy.SDNEnrollmentHook
+	profileDAO         devicedao.DeviceProfileDAO
+	caCert             *x509.Certificate
+	caKey              crypto.PrivateKey
+	revokedCerts       map[string]bool
+	serialCounter      int64
+	deviceSerialPrefix string
+	deviceModel        string
+	clientIP           string
+	serverURL          string
+	portID             string
+	tpm                *swtpm.SWTPM
+	tpmSocketPath      string
+	tpmStateDir        string
+	testProfile        *entities.DeviceProfile
+	cleanupFuncs       []func()
+}
+
+// testDevice is one device with the IDevID certificate the mock CA issued
+// it. Each subtest that needs a certificate issues its own under a distinct
+// serial, so no subtest depends on another having run first.
+type testDevice struct {
+	serial      string
+	certificate *x509.Certificate
+	privateKey  *ecdsa.PrivateKey
 }
 
 func setupTestEnvironment(t *testing.T, ctx context.Context) *testEnvironment {
@@ -306,11 +347,13 @@ func setupTestEnvironment(t *testing.T, ctx context.Context) *testEnvironment {
 		logger:        logger,
 		revokedCerts:  make(map[string]bool),
 		serialCounter: 1000,
-		deviceSerial:  "TEST-DEVICE-001",
-		deviceModel:   "TPM-TestDevice-v1",
-		clientIP:      "10.99.99.3",
-		serverURL:     "https://10.99.99.2:8443",
-		portID:        "port-001",
+		// Every subtest's device serial starts with this prefix, so the
+		// one test profile matches them all.
+		deviceSerialPrefix: "TEST-DEVICE-",
+		deviceModel:        "TPM-TestDevice-v1",
+		clientIP:           "10.99.99.3",
+		serverURL:          "https://10.99.99.2:8443",
+		portID:             "port-001",
 	}
 
 	setupDatastore(t, env)
@@ -353,14 +396,10 @@ func setupTestEnvironmentWithTPM(t *testing.T, ctx context.Context) *testEnviron
 }
 
 func setupDatastore(t *testing.T, env *testEnvironment) {
-	config := &quicbaas.Config{
-		StorageBackend: "memory",
-		DataDir:        t.TempDir(),
-		WALDir:         filepath.Join(t.TempDir(), "wal"),
-		NodeID:         1,
-		CacheSize:      64 * 1024 * 1024,
-		LogLevel:       "warn",
-	}
+	// MemoryTestConfig carries the SPIFFE trust domain the embedded server's
+	// first boot needs to seed IAM.
+	config := quicbaas.MemoryTestConfig(t)
+	config.Transport = quicbaas.TransportEmbedded
 	factory, err := quicbaas.NewFactory(config, env.logger, nil)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -380,7 +419,10 @@ func setupMockCA(t *testing.T, env *testEnvironment) {
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:         true,
+		// Without BasicConstraintsValid crypto/x509 emits no basicConstraints
+		// extension, and the certificate cannot sign the server leaf.
+		BasicConstraintsValid: true,
+		IsCA:                  true,
 	}
 
 	caCertDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caKey.Public(), caKey)
@@ -409,7 +451,7 @@ func setupDeviceProfile(t *testing.T, env *testEnvironment) {
 		Name: "test-device-profile",
 		Role: entities.DeviceRoleClient,
 		MatchRules: &entities.ProfileMatchRules{
-			SerialPrefix: env.deviceSerial,
+			SerialPrefix: env.deviceSerialPrefix,
 		},
 		Networks: map[string]*entities.NetworkPhaseConfig{
 			entities.DefaultPostEnrollmentNetwork: {
@@ -546,8 +588,12 @@ func (m *mockPolicyEngine) GetPortInfo(portID string) (*policy.PortInfo, error) 
 	}, nil
 }
 
+// ApplyPolicy models policy.Engine.ApplyPolicy: applying a port's policy sets
+// its VLAN and leaves the port Authorized.
 func (m *mockPolicyEngine) ApplyPolicy(portID string, pol *policy.PortPolicy) error {
 	m.policies[portID] = pol
+	m.portVLANs[portID] = pol.VLAN
+	m.portStates[portID] = policy.PortStateAuthorized
 	return nil
 }
 

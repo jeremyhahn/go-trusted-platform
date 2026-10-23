@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlog"
@@ -418,18 +419,18 @@ type gatewayStatusRequest struct{}
 
 // gatewayStatusResponse represents a gateway status response.
 type gatewayStatusResponse struct {
-	NodeID         string   `codec:"node_id"`
-	Modes          []string `codec:"modes"`
-	Tier           string   `codec:"tier"`
-	Healthy        bool     `codec:"healthy"`
-	Reputation     float64  `codec:"reputation"`
-	AgeNanos       int64    `codec:"age_nanos"`
-	UptimePct      float64  `codec:"uptime_pct"`
-	IPv6Pool       string   `codec:"ipv6_pool"`
-	IPv4Pool       string   `codec:"ipv4_pool"`
-	BGPEnabled     bool     `codec:"bgp_enabled"`
-	EVPNEnabled    bool     `codec:"evpn_enabled"`
-	TransitEnabled bool     `codec:"transit_enabled"`
+	NodeID         string  `codec:"node_id"`
+	Modes          uint32  `codec:"modes"`
+	Tier           string  `codec:"tier"`
+	Healthy        bool    `codec:"healthy"`
+	Reputation     float64 `codec:"reputation"`
+	AgeNanos       int64   `codec:"age_nanos"`
+	UptimePct      float64 `codec:"uptime_pct"`
+	IPv6Pool       string  `codec:"ipv6_pool"`
+	IPv4Pool       string  `codec:"ipv4_pool"`
+	BGPEnabled     bool    `codec:"bgp_enabled"`
+	EVPNEnabled    bool    `codec:"evpn_enabled"`
+	TransitEnabled bool    `codec:"transit_enabled"`
 }
 
 type gatewayAdmittedVTEPRequest struct {
@@ -486,14 +487,45 @@ func (v *gatewayAdmittedVTEPInfo) gatewayAdmittedVTEPInfo() GatewayAdmittedVTEPI
 }
 
 // gatewaySetModeRequest represents a gateway set mode request.
-type gatewaySetModeRequest struct {
-	Modes []string `codec:"modes"`
-}
+type gatewaySetModeRequest = quicwire.GatewaySetModeRequest
 
 // gatewaySetModeResponse represents a gateway set mode response.
-type gatewaySetModeResponse struct {
-	Modes   []string `codec:"modes"`
-	Success bool     `codec:"success"`
+type gatewaySetModeResponse = quicwire.GatewaySetModeResponse
+
+// quicGatewayModes names the GatewayModeEnum bits the QUIC wire carries, in
+// bit order.
+var quicGatewayModes = []struct {
+	name string
+	bit  uint32
+}{
+	{"overlay", quicwire.GatewayModeOverlay},
+	{"edge", quicwire.GatewayModeEdge},
+	{"transit", quicwire.GatewayModeTransit},
+}
+
+// quicGatewayModeMask is the wire bitmask of the named modes. An unknown
+// name adds no bit, as on gRPC, so the server refuses what is left.
+func quicGatewayModeMask(names []string) uint32 {
+	var mask uint32
+	for _, name := range names {
+		for _, mode := range quicGatewayModes {
+			if mode.name == name {
+				mask |= mode.bit
+			}
+		}
+	}
+	return mask
+}
+
+// quicGatewayModeNames names the modes set in a wire bitmask.
+func quicGatewayModeNames(mask uint32) []string {
+	var names []string
+	for _, mode := range quicGatewayModes {
+		if mask&mode.bit != 0 {
+			names = append(names, mode.name)
+		}
+	}
+	return names
 }
 
 // bgpStatusRequest represents a BGP status request.
@@ -1166,7 +1198,7 @@ func (q *OverlayQUICAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusR
 
 	return &GatewayStatusResult{
 		NodeID:         wireResp.NodeID,
-		Modes:          wireResp.Modes,
+		Modes:          quicGatewayModeNames(wireResp.Modes),
 		Tier:           wireResp.Tier,
 		Healthy:        wireResp.Healthy,
 		Reputation:     wireResp.Reputation,
@@ -1214,7 +1246,7 @@ func (q *OverlayQUICAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gateway
 
 // GatewaySetMode sets the gateway modes via QUIC.
 func (q *OverlayQUICAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
-	req := &gatewaySetModeRequest{Modes: opts.Modes}
+	req := &gatewaySetModeRequest{Modes: quicGatewayModeMask(opts.Modes)}
 
 	resp, err := q.sendCategoryRequest(ctx, OpCategoryGateway, SubOpGatewaySetMode, "GatewaySetMode", req)
 	if err != nil {
@@ -1226,8 +1258,12 @@ func (q *OverlayQUICAdapter) GatewaySetMode(ctx context.Context, opts GatewayMod
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "GatewaySetMode", Err: err}
 	}
 
+	var modes []string
+	if wireResp.Status != nil {
+		modes = quicGatewayModeNames(wireResp.Status.Modes)
+	}
 	return &GatewayModeResult{
-		Modes:   wireResp.Modes,
+		Modes:   modes,
 		Success: wireResp.Success,
 	}, nil
 }

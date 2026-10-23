@@ -215,9 +215,10 @@ with no identity to key on. The daemon log names which.
 
 ## Task 5 — Templates
 
-Templates are **REST-only**. There is no CLI verb and no gRPC RPC for template
-CRUD; that is a recorded design decision, not an oversight
-([api.md](api.md) §4).
+Template create, get, list, update and delete reach every transport: the
+`platformctl device template` verbs ([cli.md](cli.md) §2.8), the gRPC, Unix and
+QUIC `DeviceService` RPCs, the `device_template_*` MCP tools and the REST routes
+below ([api.md](api.md) §4). Only the lookup by name is REST-only.
 
 ```bash
 # Upload a template

@@ -1,5 +1,8 @@
 # Untrusted Node Work Assignment and Scrutiny System
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
+
 ## Overview
 
 Untrusted nodes represent participants in the Trusted DHT network that lack hardware-backed TPM attestation with whitelisted endorsement keys. While these nodes cannot earn reputation or assume privileged roles, they serve a critical function in network security by performing defensive work assignments that protect the network from malicious actors.

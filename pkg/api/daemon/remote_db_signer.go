@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -101,6 +102,8 @@ func NewRemoteDBKeySignerFromApp(application *app.App, logger *logging.Logger) (
 // reference whose path is the KMS key identifier). The hash algorithm is
 // inferred from the digest length; PreHashed instructs the KMS to sign the
 // supplied digest directly so the private key never leaves the control plane.
+// A KMS not-found (sdkerrors.IsNotFound) means the profile names a DB key the
+// KMS does not hold and returns configdelivery.ErrRemoteSignNotConfigured.
 func (s *RemoteDBKeySigner) SignDigest(ctx context.Context, keyURI string, digest []byte) ([]byte, error) {
 	keyID := stripKMSScheme(keyURI)
 	if keyID == "" {
@@ -117,6 +120,11 @@ func (s *RemoteDBKeySigner) SignDigest(ctx context.Context, keyURI string, diges
 		PreHashed: true,
 	})
 	if err != nil {
+		if sdkerrors.IsNotFound(err) {
+			return nil, configdelivery.ErrRemoteSignNotConfigured{
+				Reason: fmt.Sprintf("db key %q is not provisioned in the KMS", keyID),
+			}
+		}
 		return nil, ErrDBSign{KeyID: keyID, Cause: err}
 	}
 	if resp == nil || len(resp.Signature) == 0 {

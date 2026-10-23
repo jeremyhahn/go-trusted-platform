@@ -213,6 +213,7 @@ transport:
 | `ntp.ErrDisabled`, `daemon.ErrNTPNotConfigured` | `Unavailable` | **503** | `StatusUnavailable` (`0x0A`) |
 | `ntp.ErrControlUnavailable` (chronyd unreachable) | `Unavailable` | **503** | `StatusUnavailable` (`0x0A`) |
 | `ntp.ErrNoReachableSource` (from `Step`) | `Aborted` | **409** | `StatusAlreadyExists` (`0x06`) |
+| `ntp.ErrStepRefused` (chronyd answers `makestep` with `500 Failure`) | `Aborted` | **409** | `StatusAlreadyExists` (`0x06`) |
 | `ntp.ErrSyncTimeout` | `DeadlineExceeded` | **504** | `StatusTimeout` (`0x05`) |
 | `ntp.ErrMalformedControlOutput` | `Internal` | **500** | `StatusInternalError` (`0x04`) |
 | anything else | `Internal` | **500** | `StatusInternalError` (`0x04`) |
@@ -237,7 +238,10 @@ returns `Unimplemented`, and it never panics.
 `Aborted` is chosen specifically because it maps to Conflict in both REST
 listeners. Note that `pkg/webservice/v1/rest/ntp/router.go`'s doc comment says
 `FailedPrecondition` here; that is wrong — see
-[engineering.md](engineering.md) §7.
+[engineering.md](engineering.md) §7. The same 409 answers a step chronyd
+refuses because it does not control the clock (started with `-x`, as in the
+devcontainer, or without `CAP_SYS_TIME`): chronyd is answering, so that is not
+a 503.
 
 ## 6. Authorization
 

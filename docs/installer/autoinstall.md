@@ -230,7 +230,9 @@ First boot kills keyslot 0.
 | LUKS keys | Keyslot add, missing platform config or `installer.luks` creation fails | Aborts; uploads log; **stops in the installer**. TPM sealing is a first-boot step (§7), not an install failure |
 | UEFI boot entry | `efibootmgr --create` fails | Logs a warning and continues; firmware finds the UKI at the fallback path `EFI/BOOT/BOOTX64.EFI` |
 | Completion | UKI absent or empty on the ESP, a device refuses `blockdev --flushbufs`, or a mount survives even a lazy unmount | Aborts; uploads log; **stops in the installer** |
-| Upload | No sink resolved, or the sink is unreachable | Install continues; the log is not uploaded and is not saved to the target disk |
+| Upload | No sink resolved, or the sink is unreachable | Install continues; the log is not uploaded and is not saved to the target disk. Checkpoints behave the same way |
+| Console | The console the wrapper hands `autoinstall.sh` refuses writes | Install continues; the script's output goes to `/dev/null` and every `log` line still reaches `/tmp/autoinstall-debug.log` and the kernel log |
+| Exit trap | A command in the exit trap fails | Ignored; the script exits with the status it had before the trap ran |
 
 ### A failed install does not reboot
 

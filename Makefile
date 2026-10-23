@@ -317,6 +317,26 @@ ifeq ($(strip $(WITH_CODEC_PROTOBUF)),1)
     BUILD_TAGS += codec_protobuf
 endif
 
+# GO_BUILD_TAGS (#960). ci-template v1.21 passes the repository's tag set to
+# lint, build, coverage, security and integration-test as a space-separated
+# make variable (handbook devcontainer.md §6). It is appended here, after
+# every `+=` above and before any variable is derived from BUILD_TAGS, so each
+# consumer — print-build-tags, every `go build`/`go test`, TEST_BUILD_TAGS and
+# the integration runner — reads it from this one place. Like WITH_FIPS it is
+# additive: it never replaces the derived set. Empty or unset changes nothing.
+#
+# The analysers that do not read BUILD_TAGS (golangci-lint, gosec,
+# govulncheck) take GO_BUILD_TAGS alone, comma separated, through
+# GO_BUILD_TAGS_CSV. `make check-go-build-tags` (run by `make test`) fails if
+# any of those targets drops it.
+comma                   := ,
+empty                   :=
+space                   := $(empty) $(empty)
+GO_BUILD_TAGS_CSV       := $(subst $(space),$(comma),$(strip $(GO_BUILD_TAGS)))
+ifneq ($(GO_BUILD_TAGS_CSV),)
+    BUILD_TAGS += $(GO_BUILD_TAGS)
+endif
+
 # =============================================================================
 # Build Tag Flags
 # =============================================================================
@@ -1338,7 +1358,7 @@ softhsm-init:
 TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD|TestX10SDVBootMediaType|TestSupermicroManufacturerWideBootMediaType|TestResolveVeloCloudEDGE840
 
 .PHONY: test
-test: check-insecure-tls
+test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
 
@@ -1357,9 +1377,28 @@ test: check-insecure-tls
 # would report green while a regulated path used prohibited cryptography.
 # WITH_FIPS=1, never BUILD_TAGS="...": a command-line BUILD_TAGS replaces the
 # Makefile's tag list instead of appending to it.
+# CUSTOMIZE (ruling 125): the unit tests' output also goes to $(FIPS_LOG) and,
+# when they fail, scripts/foreignfailures -job fips is the target's verdict. It
+# passes only when every failure is a listed panic of $(FIPS_FOREIGN_BASELINE)
+# (exact test, message and stack frame, nothing else failing) AND every other
+# top-level test of each panicked package, rerun by explicit name with the same
+# environment and tags, passes. A rerun round that fails only by another
+# listed panic excludes that test too and runs the rest again, at most one
+# round per row of the package. It fails closed on anything else
+# (docs/test/integration.md "The FIPS baseline").
+test-fips: SHELL := /bin/bash
 test-fips:
 	GOFIPS140=latest GODEBUG=fips140=only go build -tags "$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)" ./...
-	GOFIPS140=latest GODEBUG=fips140=only $(MAKE) --no-print-directory test WITH_FIPS=1
+	@set -o pipefail; status=0; \
+	tags="$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)"; \
+	GOFIPS140=latest GODEBUG=fips140=only $(MAKE) --no-print-directory test WITH_FIPS=1 2>&1 | tee "$(FIPS_LOG)" || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+		echo "FIPS unit tests failed (status $$status); checking the failures against $(FIPS_FOREIGN_BASELINE) (ruling 125)"; \
+		status=0; \
+		GOFIPS140=latest GODEBUG=fips140=only $(GO) run ./scripts/foreignfailures -job fips \
+			-baseline $(FIPS_FOREIGN_BASELINE) -tags "$$tags" -skip-tests "$(TEST_SKIP)" "$(FIPS_LOG)" || status=$$?; \
+	fi; \
+	exit $$status
 
 .PHONY: test-pkg
 ## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
@@ -2031,14 +2070,26 @@ endef
 ## exit and the target exits with the suites' status. CI passes a per-run
 ## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
+## CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 (CI sets it) also writes the
+## suites' output to $(IT_LOG) and, when they fail, makes scripts/foreignfailures
+## the target's verdict: it passes only when every failure is a row of
+## $(FOREIGN_BASELINE), and fails closed on anything it cannot attribute to a
+## listed test. Unset, the target exits with the suites' own status, so a
+## developer sees every failure (docs/test/integration.md).
+integration-test: SHELL := /bin/bash
 integration-test: docker-build-it
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@status=0; \
+	@set -o pipefail; status=0; \
 	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
-		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" || status=$$?; \
+		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
 	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes; \
+	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
+		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
+		status=0; \
+		$(GO) run ./scripts/foreignfailures -job integration -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
+	fi; \
 	exit $$status
 
 .PHONY: integration-test-webservice
@@ -2057,6 +2108,12 @@ integration-test-webservice: docker-builder-load
 ## Starts OVS, swtpm, and platformd via the shared devcontainer runner.
 integration-test-sdn: build-devcontainer
 	$(call run-integration-suite,sdn)
+
+.PHONY: integration-test-sdn-stress
+## integration-test-sdn-stress: Run the SDN stress generators (test/integration/sdn/stress) in development container
+## Kept out of integration-test-sdn: they keep every CPU busy for minutes and starved the sdn package's OVS calls.
+integration-test-sdn-stress: build-devcontainer
+	$(call run-integration-suite,sdn-stress)
 
 .PHONY: integration-test-sdn-shell
 ## integration-test-sdn-shell: Start interactive shell for SDN testing
@@ -2133,6 +2190,15 @@ TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
 IT_IMAGE ?= go-trusted-platform-it:local
 IT_PROJECT ?= go-trusted-platform-it
 
+# The foreign-failure baseline (ruling 125). IT_FOREIGN_BASELINE is empty by
+# default: only `make integration-test IT_FOREIGN_BASELINE=1` consults it.
+IT_FOREIGN_BASELINE ?=
+IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
+FOREIGN_BASELINE ?= .github/foreign-failures.tsv
+# The FIPS job's sibling baseline, always consulted by `make test-fips`.
+FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
+FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
+
 # A KEY=value file with the forge credentials the module download needs
 # (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
 # reaches the build only as the gomodauth BuildKit secret, never as a layer or
@@ -2141,8 +2207,13 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 
 # The docker build arguments every devcontainer stage shares. $(comma) because a
 # literal comma inside $(if ...) would end its condition.
-comma := ,
+# The key of the image's apt layer: the UTC day, so Debian's fixes reach the
+# image within a day although BuildKit caches the layer. Pass APT_REFRESH=<key>
+# to rebuild against a fixed key.
+APT_REFRESH ?= $(shell date -u +%Y-%m-%d)
+
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
+	--build-arg APT_REFRESH=$(APT_REFRESH) \
 	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
@@ -3007,7 +3078,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # decision logic, tested over testdata fixtures with no network. Discovery
 # lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
 # unit stage.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/
+#
+# scripts/foreignfailures added 2026-10-22 (ruling 125): the foreign-failure
+# baseline checker the Integration job runs on a failed suite, and the test
+# that holds .github/foreign-failures.tsv to the ruling. Same reason as
+# depscheck: discovery would not reach it.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/ ./scripts/foreignfailures/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
@@ -3276,6 +3352,30 @@ fmt-check:
 	fi
 	@echo "$(GREEN)✓ All files are properly formatted$(RESET)"
 
+.PHONY: check-go-build-tags
+## check-go-build-tags: Fail if a target ci-template calls drops GO_BUILD_TAGS (#960)
+#
+# Dry-runs (`make -n`) each target with a probe tag and fails unless the
+# probe reaches a command line other than an `echo`: a go build/test/vet,
+# golangci-lint, gosec, govulncheck or the integration runner. Nothing
+# builds and nothing runs. `test` is itself probed and depends on this
+# target, so the probe run sets GO_BUILD_TAGS_PROBING to stop the recursion
+# (`make -n` still executes recipe lines that name $(MAKE)).
+GO_BUILD_TAGS_PROBE     := probe_tag_960
+GO_BUILD_TAGS_TARGETS   := lint build coverage security integration-test test
+check-go-build-tags:
+ifndef GO_BUILD_TAGS_PROBING
+	@echo "$(CYAN)$(BOLD)→ Checking GO_BUILD_TAGS reaches $(GO_BUILD_TAGS_TARGETS)...$(RESET)"
+	@for target in $(GO_BUILD_TAGS_TARGETS); do \
+		$(MAKE) -n --no-print-directory $$target GO_BUILD_TAGS=$(GO_BUILD_TAGS_PROBE) GO_BUILD_TAGS_PROBING=1 2>&1 \
+			| grep -v '^echo ' | grep -q -- '$(GO_BUILD_TAGS_PROBE)' || { \
+			echo "$(RED)$(BOLD)✗ make $$target GO_BUILD_TAGS=$(GO_BUILD_TAGS_PROBE) never passes the tag to a command$(RESET)"; \
+			exit 1; \
+		}; \
+	done
+	@echo "$(GREEN)✓ GO_BUILD_TAGS reaches every ci-template target$(RESET)"
+endif
+
 .PHONY: check-insecure-tls
 ## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
 check-insecure-tls:
@@ -3350,7 +3450,7 @@ lint: $(GOLANGCI_LINT) $(ACTIONLINT)
 	@$(ACTIONLINT) || { echo "$(RED)$(BOLD)✗ actionlint failed$(RESET)"; exit 1; }
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_CACHE)
-	@if $(GOLANGCI_LINT) run --allow-serial-runners --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
+	@if $(GOLANGCI_LINT) run --allow-serial-runners --timeout=$(GOLANGCI_LINT_TIMEOUT) $(if $(GO_BUILD_TAGS_CSV),--build-tags=$(GO_BUILD_TAGS_CSV)) ./...; then \
 		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
 		echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
@@ -3368,6 +3468,7 @@ gosec: $(GOSEC)
 	@mkdir -p $(BUILD_DIR)
 	@rc=0; \
 	$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		$(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) \
 		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 		-exclude-generated \
 		-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... 2>$(BUILD_DIR)/gosec-stderr.txt || rc=$$?; \
@@ -3457,7 +3558,7 @@ vuln:
 		exit 1; \
 	fi; \
 	scan() { \
-		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 ./... 2>&1); STATUS=$$?; \
+		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 $(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) ./... 2>&1); STATUS=$$?; \
 		echo "$$OUT"; \
 		if [ $$STATUS -ne 0 ] && [ $$STATUS -ne 3 ]; then \
 			echo "$(RED)✗ govulncheck -scan $$2 could not complete in $$1 (exit $$STATUS)$(RESET)"; \

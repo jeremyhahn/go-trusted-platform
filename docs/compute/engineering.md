@@ -109,9 +109,12 @@ code image, so it is also the Secure Boot code default.
 Every compute VM boots UEFI from pflash on both architectures:
 
 - unit 0 is the code, read-only;
-- unit 1 is the instance's own vars copy at `<work_dir>/<instance>/nvram/OVMF_VARS.fd`.
+- unit 1 is the instance's own vars, converted to qcow2 from the template by
+  `qemu-img convert` at `<work_dir>/<instance>/nvram/OVMF_VARS.qcow2`.
 
-The disk is qcow2 on both, because snapshots and migration need it.
+The disk is qcow2 on both, because snapshots and migration need it. The
+vars are qcow2 for the same reason: savevm refuses a VM while any writable
+drive cannot hold an internal snapshot, and a raw pflash cannot.
 
 | | `x86_64` | `aarch64` |
 |---|---|---|

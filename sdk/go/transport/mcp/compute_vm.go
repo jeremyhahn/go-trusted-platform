@@ -16,11 +16,51 @@ package mcp
 import (
 	"encoding/base64"
 	"strconv"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
+
+// mcpReplyWindows routes the methods whose reply may outlast the client's
+// timeout to the window the daemon holds that reply open for: a graceful
+// stop or reboot answers only once the guest has powered down
+// (docs/compute/api.md §2). Methods absent from this map use the client's
+// timeout.
+var mcpReplyWindows = map[string]func(args interface{}) time.Duration{
+	platformv1.ComputeService_StopVM_FullMethodName:   stopVMReplyWindow,
+	platformv1.ComputeService_RebootVM_FullMethodName: rebootVMReplyWindow,
+}
+
+// replyWindow is how long method's reply may take, or zero for the client's
+// timeout.
+func replyWindow(method string, args interface{}) time.Duration {
+	window, ok := mcpReplyWindows[method]
+	if !ok {
+		return 0
+	}
+	return window(args)
+}
+
+func stopVMReplyWindow(args interface{}) time.Duration {
+	req, ok := args.(*platformv1.StopVMRequest)
+	if !ok {
+		return 0
+	}
+	return computesvc.StopReplyWindow(req.GetForce(), req.GetTimeoutSeconds())
+}
+
+// rebootVMReplyWindow is a stop's window: a reboot's stop half takes the
+// default power-down window unless forced.
+func rebootVMReplyWindow(args interface{}) time.Duration {
+	req, ok := args.(*platformv1.RebootVMRequest)
+	if !ok {
+		return 0
+	}
+	return computesvc.StopReplyWindow(req.GetForce(), 0)
+}
 
 // vmLifecycleToolMap maps the ComputeService VM lifecycle methods to the
 // platformd vm_* tools (pkg/api/mcp/vm_lifecycle_tools.go). Each tool takes

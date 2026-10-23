@@ -80,13 +80,26 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 | Create user | `POST /api/v1/iam/users` | ✅ | `0xA9` | `iam_create_user`, `iam:write` | ✅ |
 | List users | `GET /api/v1/iam/users` | ✅ | `0xAC` | `iam_list_users`, `iam:read` | ✅ |
 | Get user | `GET /api/v1/iam/users/{id}` | ✅ | `0xAB` | `iam_get_user`, `iam:read` | ✅ |
-| Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `MISSING — docs/13 G7` | ✅ |
+| Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `iam_update_user`, `iam:write` | ✅ |
 | Delete user | `DELETE /api/v1/iam/users/{id}` | ✅ | `0xAA` | `iam_delete_user`, `iam:delete` | ✅ |
 | Assign role to user | `POST /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xB9` | `iam_assign_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Revoke role from user | `DELETE /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xBA` | `iam_revoke_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 
-`iam_update_user` does not exist — user updates are REST, gRPC, QUIC and
-embedded only.
+Update user and update group change only the fields the request sets: an
+empty email, name or description leaves the stored value as it is. Each MCP
+tool's result is the JSON of its gRPC reply message — `iam_create_user`,
+`iam_get_user` and `iam_update_user` answer `IAMUserResponse` (`{"user": ...}`),
+`iam_list_users` answers `ListIAMUsersResponse` (`{"users": [...], "total": n}`);
+the group tools likewise answer `IAMGroupResponse` and `ListIAMGroupsResponse`.
+The list tools page with `pagination.page_size`, and `iam_list_users` filters
+with `email_filter`, `role_filter` and `group_filter`.
+
+Create user takes an email and no required username. The IAM SDK refuses an
+empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it
+from the email's local part (`alice@acme.test` → `alice`), or uses the whole
+address when it has no local part (`UsernameFromEmail` in
+`pkg/webservice/v1/rest/iam/mirror.go`). REST also accepts an explicit
+`username`.
 
 ## 4. Groups
 
@@ -95,7 +108,7 @@ embedded only.
 | Create group | `POST /api/v1/iam/groups` | ✅ | `0xBB` | `iam_create_group`, `iam:write` | ✅ |
 | List groups | `GET /api/v1/iam/groups` | ✅ | `0xBE` | `iam_list_groups`, `iam:read` | ✅ |
 | Get group | `GET /api/v1/iam/groups/{id}` | ✅ | `0xBD` | `iam_get_group`, `iam:read` | ✅ |
-| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `0x51` sub `0x06` | `iam_update_group`, `iam:write` | ✅ |
 | Delete group | `DELETE /api/v1/iam/groups/{id}` | ✅ | `0xBC` | `iam_delete_group`, `iam:delete` | ✅ |
 | Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
@@ -110,7 +123,7 @@ for them — see [SPEC](../SPEC.md#interfaces).
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Role CRUD | `/api/v1/iam/roles`, `/roles/{id}` | ✅ | `0xB5` create, `0xB6` delete, `0xB7` get, `0xB8` list | `iam_create_role` `iam:write`, `iam_get_role` `iam:read`, `iam_list_roles` `iam:read`, `iam_delete_role` `iam:delete` | ✅ |
-| Update role | `PUT /api/v1/iam/roles/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Update role | `PUT /api/v1/iam/roles/{id}` | ✅ | `0x51` sub `0x07` | `iam_update_role`, `iam:write` | ✅ |
 | Policy CRUD | `/api/v1/iam/policies`, `/policies/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 | **Validate policy** | `POST /api/v1/iam/policies/validate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 | **Test policy** | `POST /api/v1/iam/policies/test` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
@@ -118,10 +131,12 @@ for them — see [SPEC](../SPEC.md#interfaces).
 | Rotate app secret | `POST /api/v1/iam/apps/{id}/rotate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 
 **Policies and applications have no MCP tools and no QUIC opcodes.**
-Twenty-five `iam_*` tools cover users, groups, roles, tenants, tokens and the
+Twenty-eight `iam_*` tools cover users, groups, roles, tenants, tokens and the
 permission check — neither the authorization policies themselves nor OAuth
-applications. QUIC has no IAM policy, application, role-update or
-group-update byte; the SDK's QUIC transport cannot reach those RPCs.
+applications. QUIC has no IAM policy or application byte; the SDK's QUIC transport cannot
+reach those RPCs. Group update and role update ride the `OpIAMCategory`
+(`0x51`) as sub-opcodes `0x06` and `0x07`, because the group bytes
+`0xBB`–`0xBF` and the role bytes `0xB5`–`0xBA` left no room for them.
 
 `/policies/validate` and `/policies/test` are registered **before**
 `/policies/{id}`, so `validate` and `test` are not swallowed as policy ids.
@@ -157,7 +172,7 @@ Every IAM byte the daemon dispatches (`handleIAMOperation`,
 | `0xF9` | `OpIAMTokenCreate` | Create token — refused, `StatusNotImplemented` |
 | `0xFA` | `OpIAMTokenRevoke` | Revoke token — refused, `StatusNotImplemented` |
 | `0xFB` | `OpIAMTokenVerify` | Verify token |
-| `0x51` | `OpIAMCategory` | Tenant records; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
+| `0x51` | `OpIAMCategory` | Tenant records, group update and role update; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete tenant; `0x06` update group; `0x07` update role. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
 
 The bytes between the IAM ranges belong to other services: `0xB0`–`0xB4` are
 SDN and `0xF0`–`0xF5` are reserved `OpDEK*` bytes the daemon does not serve
@@ -333,20 +348,20 @@ mapped** — the largest entry in the catalog, resource `iam`, actions
 their own category, `OpIAMCategory` (`0x51`): sub-opcodes `IAMSubTenantCreate`
 `0x01` and `IAMSubTenantUpdate` `0x04` need `iam:write`, `IAMSubTenantGet`
 `0x02` and `IAMSubTenantList` `0x03` need `iam:read`, `IAMSubTenantDelete`
-`0x05` needs `iam:delete`. The daemon delegates them to `IAMGRPCService`
+`0x05` needs `iam:delete`, `IAMSubGroupUpdate` `0x06` and `IAMSubRoleUpdate` `0x07` need `iam:write`. The daemon delegates them to `IAMGRPCService`
 (`pkg/api/daemon/quic_iam_category.go`). Before #767 the SDK sent these calls
 on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
 ([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,
 and the catalog could not give one byte both meanings' scopes.
 
-**Twenty-two of the 25 `iam_*` MCP tools are in the MCP authorization map
+**Twenty-five of the 28 `iam_*` MCP tools are in the MCP authorization map
 (#304)**, each with the `resource:action` of the `PlatformIAMService` method
 it answers through (`pkg/api/grpc/method_permissions.go`;
 `toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
 
 | Scope | Tools |
 |---|---|
-| `iam:write` | `iam_create_user`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
+| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_update_group`, `iam_create_role`, `iam_update_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
 | `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_group`, `iam_delete_tenant` |
 | `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_group`, `iam_list_groups`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
 
@@ -354,11 +369,15 @@ A caller without the tool's scope is denied before the tool runs. Each tool
 gives the result and error class of its gRPC method: the tool calls that
 method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `IAMGRPCService` maps an SDK error by category (invalid input to
 `InvalidArgument`, not found to `NotFound`, and so on) rather than to
-`Internal`.
+`Internal`. The embedded transport hands the in-process server's own error
+through untranslated (`api.create role: invalid_input: ...`), not as an SDK
+error; `upstreamErrorCode` classifies it by its code name into the same
+categories, so a role with a malformed permission is `InvalidArgument` on
+gRPC, Unix, QUIC and MCP alike.
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Every one of the 487 registered tools is in the map: 475 carry a
+Every one of the 525 registered tools is in the map: 513 carry a
 `resource:action` permission and 12 are classified open (`""`) (measured from
 `NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
 `TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).
@@ -415,7 +434,7 @@ runs:
 | `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_list_key_versions`, `kms_decrypt`, `kms_batch_decrypt`, `kms_verify`, `kms_hash`, `kms_verify_hmac`, `kms_random`, `dek_list`, `dek_get`, `dek_status` |
 | `kms:write` | `kms_generate_key`, `kms_import_key`, `kms_update_key_status`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_batch_encrypt`, `kms_sign`, `kms_hmac`, `kms_rewrap`, `kms_generate_data_key`, `kms_generate_wrapped_data_key`, `dek_create`, `dek_rotate` |
 | `kms:delete` | `kms_delete_key`, `dek_delete` |
-| `secrets:read` | `secret_get`, `secret_get_rotation_policy`, `secret_get_version` |
+| `secrets:read` | `secret_get`, `secret_get_rotation_policy`, `secret_get_version`, `secret_get_by_prefix` |
 | `secrets:write` | `secret_store`, `secret_set_rotation_policy`, `secret_rotate`, `secret_rollback`, `secret_update_status` |
 | `secrets:list` | `secret_list`, `secret_list_versions` |
 | `secrets:delete` | `secret_delete` |

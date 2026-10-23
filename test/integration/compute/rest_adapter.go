@@ -23,8 +23,11 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -51,6 +54,51 @@ type ErrRESTRequestFailed struct {
 func (e ErrRESTRequestFailed) Error() string {
 	return fmt.Sprintf("compute: REST error [%s]: %s (status: %d, body: %s)",
 		e.Operation, e.Message, e.StatusCode, e.Body)
+}
+
+// restStatusCodes inverts the daemon's gRPC-code-to-HTTP-status mapping
+// (pkg/webservice/v1/rest/internal/protorest.WriteError), so a REST refusal
+// carries the same gRPC code the other transports report.
+var restStatusCodes = map[int]codes.Code{
+	http.StatusBadRequest:         codes.InvalidArgument,
+	http.StatusUnauthorized:       codes.Unauthenticated,
+	http.StatusForbidden:          codes.PermissionDenied,
+	http.StatusNotFound:           codes.NotFound,
+	http.StatusConflict:           codes.AlreadyExists,
+	http.StatusTooManyRequests:    codes.ResourceExhausted,
+	http.StatusNotImplemented:     codes.Unimplemented,
+	http.StatusServiceUnavailable: codes.Unavailable,
+	http.StatusGatewayTimeout:     codes.DeadlineExceeded,
+}
+
+// GRPCStatus lets status.Code read the refusal's gRPC code through the SDK
+// client's wrapping error. A status the daemon does not emit is Unknown.
+func (e ErrRESTRequestFailed) GRPCStatus() *status.Status {
+	code, ok := restStatusCodes[e.StatusCode]
+	if !ok {
+		code = codes.Unknown
+	}
+	return status.New(code, e.Error())
+}
+
+// ErrRESTEmptyPathSegment indicates the REST route carries an empty path
+// segment (`//` or a trailing `/`) and is refused before the request leaves
+// the adapter, so it cannot be read by the router as another route.
+type ErrRESTEmptyPathSegment struct {
+	Operation string
+	Path      string
+}
+
+func (e ErrRESTEmptyPathSegment) Error() string {
+	return fmt.Sprintf("compute: REST refused %s: empty path segment in %q",
+		e.Operation, e.Path)
+}
+
+// GRPCStatus reports InvalidArgument: an empty id is the caller's argument
+// error, the same code the gRPC and MCP adapters report for a missing
+// required field, so the transport leaves hold their assertions.
+func (e ErrRESTEmptyPathSegment) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrRESTSetupFailed indicates the REST endpoint is unreachable.
@@ -124,8 +172,22 @@ func (a *RESTAdapter) Name() string {
 
 // call sends in as protobuf JSON (when non-nil) with query appended to the
 // route, and decodes a 2xx reply into out with protojson.
+// pathHasEmptySegment reports whether path carries an empty segment: `//`
+// anywhere, or a trailing `/`. Such a path is refused before it leaves the
+// adapter, because the daemon's router cleans `//` and would read the next
+// segment as, e.g., a VM id, answering 404 for a missing argument.
+func pathHasEmptySegment(path string) bool {
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	return strings.Contains(path, "//") || strings.HasSuffix(path, "/")
+}
+
 func (a *RESTAdapter) call(ctx context.Context, method, path string, query url.Values, in, out proto.Message) error {
 	operation := method + " " + path
+	if pathHasEmptySegment(path) {
+		return ErrRESTEmptyPathSegment{Operation: operation, Path: path}
+	}
 	var bodyReader io.Reader
 	if in != nil {
 		data, err := protojson.Marshal(in)
@@ -229,6 +291,9 @@ func listVMsQuery(in *pb.ListVMsRequest) url.Values {
 // that serves its RPC. ComputeCommands drives only the nine VM RPCs below; the
 // embedded interface is nil and never reached.
 type restComputeClient struct {
+	// The embedded client is nil: it only completes the interface. Every
+	// RPC a RESTAdapter method calls must have a REST method below, or the
+	// call dereferences the nil client and panics.
 	pb.ComputeServiceClient
 
 	adapter *RESTAdapter
@@ -268,6 +333,58 @@ func (c *restComputeClient) GetVM(ctx context.Context, in *pb.GetVMRequest, _ ..
 
 func (c *restComputeClient) ListVMs(ctx context.Context, in *pb.ListVMsRequest, _ ...grpc.CallOption) (*pb.ListVMsResponse, error) {
 	return restRPC[pb.ListVMsResponse](ctx, c.adapter, http.MethodGet, computeVMsPath, listVMsQuery(in), nil)
+}
+
+// computeMigrationsPath is the REST root of the migration receiver routes.
+const computeMigrationsPath = "/api/v1/compute/migrations"
+
+// snapshotPath builds /api/v1/compute/vms/{id}/snapshots[/{snapshotId}[/action]].
+func snapshotPath(vmID, snapshotID, action string) string {
+	path := vmPath(vmID, "snapshots")
+	if snapshotID != "" {
+		path += "/" + url.PathEscape(snapshotID)
+	}
+	if action != "" {
+		path += "/" + action
+	}
+	return path
+}
+
+func (c *restComputeClient) CreateSnapshot(ctx context.Context, in *pb.CreateSnapshotRequest, _ ...grpc.CallOption) (*pb.CreateSnapshotResponse, error) {
+	return restRPC[pb.CreateSnapshotResponse](ctx, c.adapter, http.MethodPost, snapshotPath(in.GetVmId(), "", ""), nil, in)
+}
+
+func (c *restComputeClient) RestoreSnapshot(ctx context.Context, in *pb.RestoreSnapshotRequest, _ ...grpc.CallOption) (*pb.RestoreSnapshotResponse, error) {
+	return restRPC[pb.RestoreSnapshotResponse](ctx, c.adapter, http.MethodPost, snapshotPath(in.GetVmId(), in.GetSnapshotId(), "restore"), nil, nil)
+}
+
+func (c *restComputeClient) DeleteSnapshot(ctx context.Context, in *pb.DeleteSnapshotRequest, _ ...grpc.CallOption) (*pb.DeleteSnapshotResponse, error) {
+	return restRPC[pb.DeleteSnapshotResponse](ctx, c.adapter, http.MethodDelete, snapshotPath(in.GetVmId(), in.GetSnapshotId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) ListSnapshots(ctx context.Context, in *pb.ListSnapshotsRequest, _ ...grpc.CallOption) (*pb.ListSnapshotsResponse, error) {
+	return restRPC[pb.ListSnapshotsResponse](ctx, c.adapter, http.MethodGet, snapshotPath(in.GetVmId(), "", ""), nil, nil)
+}
+
+func (c *restComputeClient) GetSnapshot(ctx context.Context, in *pb.GetSnapshotRequest, _ ...grpc.CallOption) (*pb.GetSnapshotResponse, error) {
+	return restRPC[pb.GetSnapshotResponse](ctx, c.adapter, http.MethodGet, snapshotPath(in.GetVmId(), in.GetSnapshotId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) PrepareMigration(ctx context.Context, in *pb.PrepareMigrationRequest, _ ...grpc.CallOption) (*pb.PrepareMigrationResponse, error) {
+	return restRPC[pb.PrepareMigrationResponse](ctx, c.adapter, http.MethodPost, computeMigrationsPath+"/prepare", nil, in)
+}
+
+func (c *restComputeClient) FinalizeMigration(ctx context.Context, in *pb.FinalizeMigrationRequest, _ ...grpc.CallOption) (*pb.FinalizeMigrationResponse, error) {
+	path := computeMigrationsPath + "/" + url.PathEscape(in.GetReceiverId()) + "/finalize"
+	return restRPC[pb.FinalizeMigrationResponse](ctx, c.adapter, http.MethodPost, path, nil, in)
+}
+
+func (c *restComputeClient) AttestVM(ctx context.Context, in *pb.AttestVMRequest, _ ...grpc.CallOption) (*pb.AttestVMResponse, error) {
+	return restRPC[pb.AttestVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetVmId(), "attest"), nil, in)
+}
+
+func (c *restComputeClient) VerifyVMAttestation(ctx context.Context, in *pb.VerifyVMAttestationRequest, _ ...grpc.CallOption) (*pb.VerifyVMAttestationResponse, error) {
+	return restRPC[pb.VerifyVMAttestationResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetVmId(), "attest/verify"), nil, in)
 }
 
 // =============================================================================

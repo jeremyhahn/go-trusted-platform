@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
@@ -340,7 +341,7 @@ func (s *Supervisor) abandonLaunch(ctx context.Context, proc *supervised, child 
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
 	cancel()
-	s.removeCgroup(proc)
+	s.removeCgroup(context.WithoutCancel(ctx), proc)
 }
 
 // runtimeDirMode is the control-socket directory's mode: the service
@@ -523,6 +524,16 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	return nil
 }
 
+// childStarting holds the gateway states a child reports before its
+// Gateway.Start has finished: STOPPED until Start begins, INITIALIZING while
+// it runs. A service health read in these states describes a start still in
+// flight, not its outcome.
+var childStarting = map[ipcv1.ProcessState]bool{
+	ipcv1.ProcessState_PROCESS_STATE_UNSPECIFIED:  true,
+	ipcv1.ProcessState_PROCESS_STATE_STOPPED:      true,
+	ipcv1.ProcessState_PROCESS_STATE_INITIALIZING: true,
+}
+
 // awaitService polls the child's control socket until the service reports
 // active, the readiness deadline passes, or the child dies.
 func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service string) error {
@@ -545,6 +556,15 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 			} else {
 				lastErr = nil
 				detail = status.GetStartError()
+				// A child answers before its Gateway.Start has run, and
+				// until Start returns every hosted service reports
+				// "not active" as its health. That is not a verdict:
+				// stopping the child here cancels the start in flight
+				// (the OVS pipeline install among it). Only a start error
+				// or the deadline below ends the wait early.
+				if detail == "" && childStarting[status.GetState()] {
+					status = nil
+				}
 				for _, svc := range status.GetServices() {
 					if svc.GetName() != service {
 						continue
@@ -624,7 +644,8 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		s.cfg.Logger.Warn("gatewayd supervisor: process down, restarting",
 			slog.String("process", proc.def.Name),
 			slog.Duration("backoff", backoff),
-			slog.Any("error", cause))
+			slog.Any("error", cause),
+			s.memoryAttr(proc.def.Name))
 
 		select {
 		case <-ctx.Done():
@@ -707,7 +728,8 @@ func (s *Supervisor) noteRestart(proc *supervised, failure error, cause error) (
 // up is the caller's question in StartService, and the health report's
 // afterwards.
 func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
-	deadline := s.cfg.Clock.Now().Add(s.cfg.ReadyTimeout)
+	started := s.cfg.Clock.Now()
+	deadline := started.Add(s.cfg.ReadyTimeout)
 	var lastErr error
 	for {
 		s.mu.Lock()
@@ -718,6 +740,9 @@ func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
 		}
 		if client != nil {
 			if _, err := client.Status(ctx); err == nil {
+				s.cfg.Logger.Info("gatewayd supervisor: process answering",
+					slog.String("process", proc.def.Name),
+					slog.Duration("waited", s.cfg.Clock.Now().Sub(started)))
 				return nil
 			} else {
 				lastErr = err
@@ -919,7 +944,7 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 		// and a failure left over from the crash would otherwise be
 		// reported for a process nobody is running any more.
 		s.clearProcessState(proc)
-		s.removeCgroup(proc)
+		s.removeCgroup(ctx, proc)
 		return nil
 	}
 	if err := s.terminate(ctx, proc.def.Name, child, done); err != nil {
@@ -930,7 +955,7 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 	}
 
 	s.clearProcessState(proc)
-	s.removeCgroup(proc)
+	s.removeCgroup(ctx, proc)
 	s.cfg.Logger.Info("gatewayd supervisor: process stopped", slog.String("process", proc.def.Name))
 	return nil
 }
@@ -979,12 +1004,40 @@ func (s *Supervisor) clearProcessState(proc *supervised) {
 // removeCgroup deletes the process's cgroup leaf. A leaf that cannot be
 // removed is logged rather than retried: it means something is still in it,
 // which the stop above was supposed to have ended.
-func (s *Supervisor) removeCgroup(proc *supervised) {
-	// Nil-safe for the same reason as Prepare in launch.
-	if err := s.cfg.Cgroups.Remove(proc.def.Name); err != nil {
+func (s *Supervisor) removeCgroup(ctx context.Context, proc *supervised) {
+	// Nil-safe for the same reason as Prepare in launch. The leaf's
+	// accounting is read before the leaf goes: it is the class's measured
+	// peak for the whole time the process was up.
+	if s.cfg.Cgroups.Enabled() {
+		s.cfg.Logger.Info("gatewayd supervisor: process memory",
+			slog.String("process", proc.def.Name), s.memoryAttr(proc.def.Name))
+	}
+	// The kernel empties the leaf moments after the child is reaped; a
+	// leaf still populated after StopTimeout has a process in it that
+	// outlived the child.
+	removeCtx, cancel := context.WithTimeout(ctx, s.cfg.StopTimeout)
+	defer cancel()
+	if err := s.cfg.Cgroups.Remove(removeCtx, proc.def.Name); err != nil {
 		s.cfg.Logger.Warn("gatewayd supervisor: removing cgroup leaf",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
+}
+
+// memoryAttr is a process's leaf memory accounting as one log attribute, so
+// the gatewayd log carries the measured peak of every class and the OOM
+// kills behind a restart. It is empty when cgroup placement is off.
+func (s *Supervisor) memoryAttr(name string) slog.Attr {
+	if !s.cfg.Cgroups.Enabled() {
+		return slog.Attr{}
+	}
+	usage, err := s.cfg.Cgroups.Memory(name)
+	if err != nil {
+		return slog.Any("memory_error", err)
+	}
+	return slog.Group("memory",
+		slog.Int64("current", usage.Current),
+		slog.Int64("peak", usage.Peak),
+		slog.Int64("oom_kill", usage.OOMKill))
 }
 
 // ServiceActive implements gateway.ServiceSupervisor. It is the child's own

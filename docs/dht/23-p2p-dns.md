@@ -1,5 +1,8 @@
 # P2P DNS Architecture
 
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
+
 ## Overview
 
 P2P DNS provides distributed name resolution for P2P leaf nodes that do not have their own control plane. Unlike Local mode deployments where a control plane server provides DNS for data plane nodes, P2P mode requires a decentralized approach to naming and resolution.

@@ -63,6 +63,23 @@ service SDNService {
 }
 ```
 
+A `Port`'s `status` from `AddPort`, `GetPort` and `ListPorts` is its Open
+vSwitch interface's `admin_state`: `up` is `PORT_STATUS_UP`, `down` is
+`PORT_STATUS_DOWN`, and a state OVS has not recorded, or a port with no
+interface of its own name (a bond), is `PORT_STATUS_UNSPECIFIED`. A failed read
+is `Internal`. `SetPortState` answers the state it committed.
+
+`AddPort` writes the port's Open vSwitch interface type in the transaction that
+creates it: `PORT_TYPE_INTERNAL` is `internal`, `PORT_TYPE_VXLAN` is `vxlan`
+and `PORT_TYPE_GRE` is `gre`. Every other type attaches the existing kernel
+device of the port's name (for `PORT_TYPE_TAP`, the TAP device `AddPort`
+creates first).
+
+`CreateBridge` creates the bridge with `config.options["fail_mode"]` in one
+Open vSwitch transaction, so a `secure` bridge never runs as a standalone
+learning switch; a fail mode other than `secure`, `standalone` or empty is
+`INVALID_ARGUMENT` and creates nothing.
+
 ## Key Message Types
 
 Resources are config + status pairs. For example bridges:

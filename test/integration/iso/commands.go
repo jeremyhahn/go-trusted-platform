@@ -112,20 +112,18 @@ type DownloadOptions struct {
 	Force        bool
 	Verify       bool
 	ResumeEnable bool
-	ConfigFile   string
 	WorkDir      string
 	Debug        bool
-	Verbose      bool
 }
 
-// DownloadResult contains the result of ISO download.
+// DownloadResult is the result `iso download` prints.
 type DownloadResult struct {
-	Success   bool
-	ISOPath   string
-	SHA256    string
-	SizeBytes int64
-	Verified  bool
-	Message   string
+	Success   bool   `json:"success" yaml:"success"`
+	ISOPath   string `json:"iso_path" yaml:"iso_path"`
+	SHA256    string `json:"sha256" yaml:"sha256"`
+	SizeBytes int64  `json:"size_bytes" yaml:"size_bytes"`
+	Verified  bool   `json:"verified" yaml:"verified"`
+	Message   string `json:"message" yaml:"message"`
 }
 
 // =============================================================================
@@ -134,21 +132,19 @@ type DownloadResult struct {
 
 // ExtractOptions contains options for extracting ISO contents.
 type ExtractOptions struct {
-	ISO        string
-	OutputDir  string
-	Force      bool
-	ConfigFile string
-	WorkDir    string
-	Debug      bool
-	Verbose    bool
+	ISO       string
+	OutputDir string
+	Force     bool
+	WorkDir   string
+	Debug     bool
 }
 
-// ExtractResult contains the result of ISO extraction.
+// ExtractResult is the result `iso extract` prints.
 type ExtractResult struct {
-	Success   bool
-	OutputDir string
-	FileCount int
-	Message   string
+	Success   bool   `json:"success" yaml:"success"`
+	OutputDir string `json:"output_dir" yaml:"output_dir"`
+	FileCount int    `json:"file_count" yaml:"file_count"`
+	Message   string `json:"message" yaml:"message"`
 }
 
 // =============================================================================
@@ -157,22 +153,21 @@ type ExtractResult struct {
 
 // CustomizeOptions contains options for customizing ISO contents.
 type CustomizeOptions struct {
-	ISODir          string
-	Overlay         string
-	KeysDir         string
-	PlatformdPath   string
-	Autoinstall     bool
-	ModifyInitramfs bool
-	ConfigFile      string
-	WorkDir         string
-	Debug           bool
-	Verbose         bool
+	ISODir         string
+	Overlay        string
+	KeysDir        string
+	PlatformdPath  string
+	PlatformConfig string
+	ConfigFile     string
+	WorkDir        string
+	Debug          bool
 }
 
-// CustomizeResult contains the result of ISO customization.
+// CustomizeResult is the result `iso customize` prints.
 type CustomizeResult struct {
-	Success bool
-	Message string
+	Success bool   `json:"success" yaml:"success"`
+	ISODir  string `json:"iso_dir" yaml:"iso_dir"`
+	Message string `json:"message" yaml:"message"`
 }
 
 // =============================================================================
@@ -185,19 +180,18 @@ type BuildOptions struct {
 	Output      string
 	VolumeID    string
 	GenerateSum bool
-	ConfigFile  string
-	WorkDir     string
 	Debug       bool
-	Verbose     bool
 }
 
-// BuildResult contains the result of ISO build.
+// BuildResult is the result `iso build` prints. Its --output flag shadows the
+// global -o, so the verb prints YAML.
 type BuildResult struct {
-	Success   bool
-	OutputISO string
-	SHA256    string
-	SizeBytes int64
-	Message   string
+	Success      bool   `yaml:"success"`
+	OutputISO    string `yaml:"output_iso"`
+	SHA256       string `yaml:"sha256"`
+	SizeBytes    int64  `yaml:"size_bytes"`
+	ChecksumFile string `yaml:"checksum_file"`
+	Message      string `yaml:"message"`
 }
 
 // =============================================================================
@@ -206,37 +200,36 @@ type BuildResult struct {
 
 // ProfileInfo contains information about an installation profile.
 type ProfileInfo struct {
-	Name        string
-	Description string
-	SecureBoot  bool
-	TPMUnseal   bool
-	LUKS        bool
-	FIPS        bool
-	Lockdown    string
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	SecureBoot  bool   `json:"secure_boot" yaml:"secure_boot"`
+	TPMUnseal   bool   `json:"tpm_unseal" yaml:"tpm_unseal"`
+	LUKS        bool   `json:"luks" yaml:"luks"`
+	FIPS        bool   `json:"fips" yaml:"fips"`
+	Lockdown    string `json:"lockdown" yaml:"lockdown"`
 }
 
-// ProfileListResult contains the list of available profiles.
+// ProfileListResult is the result `iso profile list` prints.
 type ProfileListResult struct {
-	Success  bool
-	Profiles []ProfileInfo
-	Message  string
+	Success  bool          `json:"success" yaml:"success"`
+	Profiles []ProfileInfo `json:"profiles" yaml:"profiles"`
+	Message  string        `json:"message" yaml:"message"`
 }
 
-// ProfileShowResult contains the full profile configuration.
+// ProfileShowResult is the result `iso profile show` prints.
 type ProfileShowResult struct {
-	Success bool
-	Profile *ProfileInfo
-	YAML    string
-	Message string
+	Success bool         `json:"success" yaml:"success"`
+	Profile *ProfileInfo `json:"profile" yaml:"profile"`
+	YAML    string       `json:"yaml" yaml:"yaml"`
+	Message string       `json:"message" yaml:"message"`
 }
 
-// ProfileValidateResult contains the result of profile validation.
+// ProfileValidateResult is the result `iso profile validate` prints.
 type ProfileValidateResult struct {
-	Success  bool
-	Valid    bool
-	Errors   []string
-	Warnings []string
-	Message  string
+	Success bool     `json:"success" yaml:"success"`
+	Valid   bool     `json:"valid" yaml:"valid"`
+	Errors  []string `json:"errors" yaml:"errors"`
+	Message string   `json:"message" yaml:"message"`
 }
 
 // ProfileGenerateOptions contains options for generating a profile.
@@ -244,15 +237,15 @@ type ProfileGenerateOptions struct {
 	ProfileName    string
 	OutputFile     string
 	OverrideDevice string
-	Interactive    bool
 }
 
-// ProfileGenerateResult contains the result of profile generation.
+// ProfileGenerateResult is the result `iso profile generate` prints. Its
+// --output flag shadows the global -o, so the verb prints YAML.
 type ProfileGenerateResult struct {
-	Success    bool
-	OutputFile string
-	YAML       string
-	Message    string
+	Success    bool   `yaml:"success"`
+	OutputFile string `yaml:"output_file"`
+	YAML       string `yaml:"yaml"`
+	Message    string `yaml:"message"`
 }
 
 // =============================================================================
@@ -281,6 +274,8 @@ type TestInstallOptions struct {
 // TestBootOptions contains options for boot tests.
 type TestBootOptions struct {
 	Disk        string
+	Timeout     time.Duration // --timeout: console to a log in WorkDir, its tail on failure
+	Expect      string        // --expect: the serial-console milestone that ends the boot
 	Memory      int
 	CPUs        int
 	WorkDir     string

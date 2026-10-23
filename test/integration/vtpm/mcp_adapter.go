@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -161,6 +162,20 @@ func (e ErrMCPVTPMRequestFailed) Error() string {
 
 func (e ErrMCPVTPMRequestFailed) Unwrap() error {
 	return e.Err
+}
+
+// ErrMCPVTPMValidationFailed is returned when vtpm_validate answers
+// valid: false, as the gRPC, Unix and QUIC adapters do for the same reply.
+type ErrMCPVTPMValidationFailed struct {
+	BundleID string
+	Errors   []string
+}
+
+func (e ErrMCPVTPMValidationFailed) Error() string {
+	if len(e.Errors) > 0 {
+		return fmt.Sprintf("MCP vTPM bundle %s failed validation: %s", e.BundleID, e.Errors[0])
+	}
+	return fmt.Sprintf("MCP vTPM bundle %s failed validation", e.BundleID)
 }
 
 // =============================================================================
@@ -465,30 +480,13 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 		return nil, ErrMCPVTPMToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
 
-	if len(rawResult) == 0 {
-		return &mcpVTPMCallToolResult{}, nil
+	// The tool output is JSON in the CallToolResult's text block.
+	output, err := mcpwire.ToolOutputJSON(rawResult)
+	if err != nil {
+		return nil, ErrMCPVTPMToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
-
-	// Try MCP content-wrapped format first
-	var toolResult mcpVTPMCallToolResult
-	if err := json.Unmarshal(rawResult, &toolResult); err == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			msg := ""
-			if len(toolResult.Content) > 0 {
-				msg = toolResult.Content[0].Text
-			}
-			return nil, ErrMCPVTPMToolCallFailed{Tool: name, Code: -1, Message: msg}
-		}
-		return &toolResult, nil
-	}
-
-	// Server returned result directly as a raw map (not wrapped in content items).
-	// Wrap it in a content item for consistent downstream handling.
-	text := string(rawResult)
 	return &mcpVTPMCallToolResult{
-		Content: []mcpVTPMContent{
-			{Type: "text", Text: text},
-		},
+		Content: []mcpVTPMContent{{Type: "text", Text: string(output)}},
 	}, nil
 }
 
@@ -949,6 +947,12 @@ func (m *MCPAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOpti
 		return nil, err
 	}
 
+	// vtpm_validate answers valid: false for an absent or corrupt bundle
+	// (docs/vtpm/api.md §5); surface it as an error like the other adapters.
+	if !resp.Valid {
+		return nil, ErrMCPVTPMValidationFailed{BundleID: opts.ID, Errors: resp.Errors}
+	}
+
 	return &ValidateBundleResult{
 		Valid:            resp.Valid,
 		Errors:           resp.Errors,
@@ -1136,7 +1140,7 @@ func (m *MCPAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 		args["pcrs"] = opts.PCRs
 	}
 	if opts.AuthValue != "" {
-		args["auth"] = opts.AuthValue
+		args["auth_value"] = opts.AuthValue
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMSeal, args)
@@ -1160,11 +1164,11 @@ func (m *MCPAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 // Unseal decrypts data from the TPM via MCP.
 func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
 	args := map[string]interface{}{
-		"name":        opts.BundleID,
-		"sealed_data": base64.StdEncoding.EncodeToString(opts.SealedData),
+		"name":   opts.BundleID,
+		"sealed": base64.StdEncoding.EncodeToString(opts.SealedData),
 	}
 	if opts.AuthValue != "" {
-		args["auth"] = opts.AuthValue
+		args["auth_value"] = opts.AuthValue
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMUnseal, args)
@@ -1188,9 +1192,9 @@ func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // ExtendPCR extends a PCR with the provided data via MCP.
 func (m *MCPAdapter) ExtendPCR(ctx context.Context, opts ExtendPCROptions) (*ExtendPCRResult, error) {
 	args := map[string]interface{}{
-		"name":      opts.BundleID,
-		"pcr_index": opts.PCRIndex,
-		"data":      base64.StdEncoding.EncodeToString(opts.Data),
+		"name": opts.BundleID,
+		"pcr":  opts.PCRIndex,
+		"data": base64.StdEncoding.EncodeToString(opts.Data),
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMExtendPCR, args)
@@ -1213,8 +1217,8 @@ func (m *MCPAdapter) ExtendPCR(ctx context.Context, opts ExtendPCROptions) (*Ext
 // ReadPCR reads the current value of a PCR via MCP.
 func (m *MCPAdapter) ReadPCR(ctx context.Context, opts ReadPCROptions) (*ReadPCRResult, error) {
 	args := map[string]interface{}{
-		"name":      opts.BundleID,
-		"pcr_index": opts.PCRIndex,
+		"name": opts.BundleID,
+		"pcr":  opts.PCRIndex,
 	}
 
 	result, err := m.callTool(ctx, MCPToolVTPMReadPCR, args)

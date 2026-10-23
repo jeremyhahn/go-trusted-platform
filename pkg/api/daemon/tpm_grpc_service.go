@@ -45,6 +45,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -115,6 +116,9 @@ func (s *TPMGRPCService) Info(
 
 	if cfg := tpm.Config(); cfg != nil {
 		resp.IsSimulator = cfg.UseSimulator
+	}
+	for _, bank := range tpmattrs.ActivePCRBanks(tpm) {
+		resp.PcrBanks = append(resp.PcrBanks, hashAlgToProtoPCRBank(bank))
 	}
 
 	// Populate structured fields from the typed xkms.FixedProperties
@@ -291,14 +295,8 @@ func (s *TPMGRPCService) CreateEK(
 
 	s.logger.Debug("TPM CreateEK request received")
 
-	// Get EK attributes from config or use defaults
-	ekAttrs, err := tpm.EKAttributes()
+	ekAttrs, err := tpmek.Create(tpm)
 	if err != nil {
-		s.logger.Slog().Error("Failed to get EK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	if err := tpm.CreateEK(ekAttrs); err != nil {
 		s.logger.Slog().Error("TPM CreateEK failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
@@ -423,19 +421,16 @@ func (s *TPMGRPCService) DeleteEK(
 
 	s.logger.Debug("TPM DeleteEK request received")
 
-	// EK is typically not deleted, but we can flush the handle
-	ekAttrs, err := tpm.EKAttributes()
+	handle, err := tpmek.Delete(tpm)
 	if err != nil {
 		return nil, s.mapError(err)
 	}
 
-	tpm.Flush(ekAttrs.TPMAttributes.Handle)
-
-	s.logger.Debug("TPM DeleteEK completed")
+	s.logger.Debug("TPM DeleteEK completed", "handle", fmt.Sprintf("0x%08X", handle))
 	return &platformv1.DeleteEKResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "EK handle flushed",
+			Message: "EK evicted",
 		},
 	}, nil
 }
@@ -456,13 +451,8 @@ func (s *TPMGRPCService) CreateSRK(
 
 	s.logger.Debug("TPM CreateSRK request received")
 
-	srkAttrs, err := tpm.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(tpm)
 	if err != nil {
-		s.logger.Slog().Error("Failed to get SRK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	if err := tpm.CreateSRK(srkAttrs); err != nil {
 		s.logger.Slog().Error("TPM CreateSRK failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
@@ -551,18 +541,16 @@ func (s *TPMGRPCService) DeleteSRK(
 
 	s.logger.Debug("TPM DeleteSRK request received")
 
-	srkAttrs, err := tpm.SSRKAttributes()
+	handle, err := tpmsrk.Delete(tpm)
 	if err != nil {
 		return nil, s.mapError(err)
 	}
 
-	tpm.Flush(srkAttrs.TPMAttributes.Handle)
-
-	s.logger.Debug("TPM DeleteSRK completed")
+	s.logger.Debug("TPM DeleteSRK completed", "handle", fmt.Sprintf("0x%08X", handle))
 	return &platformv1.DeleteSRKResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "SRK handle flushed",
+			Message: "SRK evicted",
 		},
 	}, nil
 }

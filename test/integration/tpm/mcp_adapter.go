@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -327,29 +328,13 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 		return nil, ErrMCPTPMToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
 
-	if len(rawResult) == 0 {
-		return &mcpTPMCallToolResult{}, nil
+	// The tool output is JSON in the CallToolResult's text block.
+	output, err := mcpwire.ToolOutputJSON(rawResult)
+	if err != nil {
+		return nil, ErrMCPTPMToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
-
-	// Try MCP content-wrapped format first
-	var toolResult mcpTPMCallToolResult
-	if err := json.Unmarshal(rawResult, &toolResult); err == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			msg := ""
-			if len(toolResult.Content) > 0 {
-				msg = toolResult.Content[0].Text
-			}
-			return nil, ErrMCPTPMToolCallFailed{Tool: name, Code: -1, Message: msg}
-		}
-		return &toolResult, nil
-	}
-
-	// Server returned result directly as a raw map
-	text := string(rawResult)
 	return &mcpTPMCallToolResult{
-		Content: []mcpTPMContent{
-			{Type: "text", Text: text},
-		},
+		Content: []mcpTPMContent{{Type: "text", Text: string(output)}},
 	}, nil
 }
 
@@ -379,14 +364,15 @@ func (m *MCPAdapter) Info(ctx context.Context) (*InfoResult, error) {
 	}
 
 	var resp struct {
-		Info         string `json:"info"`
-		Version      string `json:"version"`
-		Manufacturer string `json:"manufacturer"`
-		Model        string `json:"model"`
-		FWVersion    string `json:"fw_version"`
-		IsSimulator  bool   `json:"is_simulator"`
-		FIPSMode     bool   `json:"fips_mode"`
-		MaxNVRAMSize uint32 `json:"max_nvram_size"`
+		Info            string   `json:"info"`
+		Version         string   `json:"version"`
+		Manufacturer    string   `json:"manufacturer"`
+		Model           string   `json:"model"`
+		FirmwareVersion string   `json:"firmware_version"`
+		IsSimulator     bool     `json:"is_simulator"`
+		FIPSMode        bool     `json:"fips_mode"`
+		MaxNVRAMSize    uint32   `json:"max_nvram_size"`
+		PCRBanks        []string `json:"pcr_banks"`
 	}
 
 	if err := json.Unmarshal(data, &resp); err != nil {
@@ -398,13 +384,14 @@ func (m *MCPAdapter) Info(ctx context.Context) (*InfoResult, error) {
 		IsSimulator:  resp.IsSimulator,
 		FIPSMode:     resp.FIPSMode,
 		MaxNVRAMSize: resp.MaxNVRAMSize,
+		PCRBanks:     resp.PCRBanks,
 	}
 
 	if resp.Manufacturer != "" {
 		ir.Manufacturer = &ManufacturerInfo{
 			Name:            resp.Manufacturer,
 			Model:           resp.Model,
-			FirmwareVersion: resp.FWVersion,
+			FirmwareVersion: resp.FirmwareVersion,
 		}
 	}
 
@@ -793,7 +780,7 @@ func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // =============================================================================
 
 // EventLog reads the TPM event log via MCP.
-func (m *MCPAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (m *MCPAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	result, err := m.callTool(ctx, MCPToolTPMEventLog, nil)
 	if err != nil {
 		return nil, err

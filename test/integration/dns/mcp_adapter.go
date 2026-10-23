@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -82,11 +84,6 @@ type jsonRPCError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// JSON-RPC 2.0 standard error codes.
-const (
-	jsonRPCInternalError = -32603
-)
-
 // =============================================================================
 // MCP Protocol Types
 // =============================================================================
@@ -126,18 +123,6 @@ type mcpServerInfo struct {
 type mcpCallToolRequest struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
-}
-
-// mcpCallToolResult is the MCP tools/call response payload.
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-// mcpContentItem represents a content item in a tool result.
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
 }
 
 // =============================================================================
@@ -264,39 +249,34 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 	return nil
 }
 
+// callTool runs one tools/call. The platform MCP server answers with an
+// MCP CallToolResult whose text block holds the tool's output as JSON
+// (pkg/api/mcp Server.handleToolsCall); a tool failure is a JSON-RPC error.
 func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[string]interface{}, result interface{}) error {
 	toolReq := mcpCallToolRequest{
 		Name:      toolName,
 		Arguments: args,
 	}
 
-	var toolResult mcpCallToolResult
-	if err := m.sendRequest(ctx, "tools/call", toolReq, &toolResult); err != nil {
+	var rawResult json.RawMessage
+	err := m.sendRequest(ctx, "tools/call", toolReq, &rawResult)
+	var toolErr ErrMCPToolCallFailed
+	if errors.As(err, &toolErr) {
+		toolErr.Tool = toolName
+		return toolErr
+	}
+	if err != nil {
 		return err
 	}
 
-	if toolResult.IsError {
-		var errMsg string
-		for _, item := range toolResult.Content {
-			if item.Type == "text" {
-				errMsg = item.Text
-				break
-			}
-		}
-		return ErrMCPToolCallFailed{Tool: toolName, Code: jsonRPCInternalError, Message: errMsg}
+	if result == nil {
+		_, err = mcpwire.ToolOutputJSON(rawResult)
+	} else {
+		err = mcpwire.DecodeToolOutput(rawResult, result)
 	}
-
-	if result != nil && len(toolResult.Content) > 0 {
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if err := json.Unmarshal([]byte(item.Text), result); err != nil {
-					return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
-				}
-				break
-			}
-		}
+	if err != nil {
+		return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
 	}
-
 	return nil
 }
 
@@ -382,7 +362,7 @@ func (c mcpDNSClient) call(ctx context.Context, tool string, request, response p
 		return err
 	}
 	if len(result) == 0 {
-		return nil
+		return ErrMCPEmptyResult{Tool: tool}
 	}
 	if err := protojson.Unmarshal(result, response); err != nil {
 		return ErrMCPResponseParseFailed{Operation: tool, Err: err}
@@ -534,6 +514,16 @@ type ErrMCPToolCallFailed struct {
 
 func (e ErrMCPToolCallFailed) Error() string {
 	return fmt.Sprintf("MCP tool %q call failed (code %d): %s", e.Tool, e.Code, e.Message)
+}
+
+// ErrMCPEmptyResult indicates an MCP tool answered without a result, which
+// would otherwise leave the caller an empty response to dereference.
+type ErrMCPEmptyResult struct {
+	Tool string
+}
+
+func (e ErrMCPEmptyResult) Error() string {
+	return fmt.Sprintf("MCP tool %q returned no result", e.Tool)
 }
 
 // ErrMCPResponseParseFailed indicates MCP response parsing failed.

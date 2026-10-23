@@ -379,6 +379,24 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "profile_find_config",
+		Description: "Find the profile a booting device receives, by EK serial first and MAC address second",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"ek_serial": map[string]interface{}{
+					"type":        "string",
+					"description": "Device EK certificate serial",
+				},
+				"mac_address": map[string]interface{}{
+					"type":        "string",
+					"description": "Device MAC address",
+				},
+			},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_assign_to_device",
 		Description: "Bind a profile to a specific device identity: an already-registered device (device_id; the server derives the EK serial from its stored EK certificate and prestages it), or an explicit TPM EK certificate serial and/or MAC address, optionally prestaging the device's PEM-encoded EK certificate. The EK certificate is source-agnostic: it may come from a swtpm-backed vTPM or a physical hardware TPM. At least one of device_id, ek_serial or mac_address is required; explicit values override what device_id derives.",
 		InputSchema: map[string]interface{}{

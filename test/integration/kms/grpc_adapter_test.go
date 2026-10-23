@@ -16,9 +16,12 @@
 package kms
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 )
@@ -59,4 +62,83 @@ func TestHashAlgorithmProtoToString(t *testing.T) {
 func TestHashAlgorithmProtoToString_Unknown(t *testing.T) {
 	assert.Equal(t, "UNSPECIFIED", hashAlgorithmProtoToString(pb.HashAlgorithm(99)))
 	assert.Equal(t, pb.HashAlgorithm_HASH_ALG_UNSPECIFIED, hashAlgorithmStringToProto("MD5"))
+}
+
+func TestErrGRPCMissingInResponse(t *testing.T) {
+	err := error(ErrGRPCMissingInResponse{Method: "GetKeyMetadata", Field: "metadata"})
+	assert.Equal(t, "gRPC GetKeyMetadata response carries no metadata", err.Error())
+}
+
+// emptyKMSClient answers every call it overrides with a successful,
+// empty response: the shape a server that omits a message would send.
+type emptyKMSClient struct {
+	pb.KeyManagementClient
+}
+
+func (emptyKMSClient) GenerateKey(context.Context, *pb.GenerateKeyRequest, ...grpc.CallOption) (*pb.GenerateKeyResponse, error) {
+	return &pb.GenerateKeyResponse{}, nil
+}
+
+func (emptyKMSClient) GetKey(context.Context, *pb.GetKeyRequest, ...grpc.CallOption) (*pb.GetKeyResponse, error) {
+	return &pb.GetKeyResponse{}, nil
+}
+
+func (emptyKMSClient) GetKeyMetadata(context.Context, *pb.GetKeyMetadataRequest, ...grpc.CallOption) (*pb.GetKeyMetadataResponse, error) {
+	return &pb.GetKeyMetadataResponse{}, nil
+}
+
+func (emptyKMSClient) UpdateKeyMetadata(context.Context, *pb.UpdateKeyMetadataRequest, ...grpc.CallOption) (*pb.UpdateKeyMetadataResponse, error) {
+	return &pb.UpdateKeyMetadataResponse{}, nil
+}
+
+func (emptyKMSClient) GetKeyPolicy(context.Context, *pb.GetKeyPolicyRequest, ...grpc.CallOption) (*pb.GetKeyPolicyResponse, error) {
+	return &pb.GetKeyPolicyResponse{}, nil
+}
+
+type emptySecretsClient struct {
+	pb.SecretsManagementClient
+}
+
+func (emptySecretsClient) GetSecretVersion(context.Context, *pb.GetSecretVersionRequest, ...grpc.CallOption) (*pb.GetSecretVersionResponse, error) {
+	return &pb.GetSecretVersionResponse{}, nil
+}
+
+// TestGRPCAdapter_EmptyResponses: a response that omits the message the
+// adapter reads is a typed error naming the method, never a nil-pointer
+// panic that takes the whole suite down.
+func TestGRPCAdapter_EmptyResponses(t *testing.T) {
+	ctx := context.Background()
+	g := &GRPCAdapter{kms: emptyKMSClient{}, secrets: emptySecretsClient{}}
+
+	calls := map[string]func() error{
+		"GenerateKey": func() error {
+			_, err := g.KeyGenerate(ctx, KeyGenerateOptions{Name: "k"})
+			return err
+		},
+		"GetKey": func() error {
+			_, err := g.KeyGet(ctx, "k", 0)
+			return err
+		},
+		"GetKeyMetadata": func() error {
+			_, err := g.KeyMetadata(ctx, "k")
+			return err
+		},
+		"UpdateKeyMetadata": func() error {
+			_, err := g.KeyMetadataUpdate(ctx, "k", KeyMetadataUpdateOptions{})
+			return err
+		},
+		"GetKeyPolicy": func() error {
+			_, err := g.KeyPolicy(ctx, "k")
+			return err
+		},
+		"GetSecretVersion": func() error {
+			_, err := g.SecretsVersion(ctx, "s", 1)
+			return err
+		},
+	}
+	for method, call := range calls {
+		var missing ErrGRPCMissingInResponse
+		require.ErrorAs(t, call(), &missing, method)
+		assert.Equal(t, method, missing.Method)
+	}
 }

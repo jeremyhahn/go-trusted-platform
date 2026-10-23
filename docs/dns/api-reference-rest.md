@@ -91,8 +91,8 @@ GET /api/v1/dns/zones?internal=true
 }
 ```
 
-`limit` (default 50, at most 1000) and `offset` are echoed back but not
-applied: every matching zone is returned.
+`limit` (default 50, at most 1000) and `offset` page the matching zones and
+are echoed back; `total` counts every matching zone, not the page.
 
 ### GetZone, UpdateZone, DeleteZone
 

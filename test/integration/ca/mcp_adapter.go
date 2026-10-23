@@ -24,11 +24,13 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -318,29 +320,13 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 		return nil, ErrMCPCAToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
 
-	if len(rawResult) == 0 {
-		return &mcpCACallToolResult{}, nil
+	// The tool output is JSON in the CallToolResult's text block.
+	output, err := mcpwire.ToolOutputJSON(rawResult)
+	if err != nil {
+		return nil, ErrMCPCAToolCallFailed{Tool: name, Code: -1, Message: err.Error()}
 	}
-
-	// Try MCP content-wrapped format first
-	var toolResult mcpCACallToolResult
-	if err := json.Unmarshal(rawResult, &toolResult); err == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			msg := ""
-			if len(toolResult.Content) > 0 {
-				msg = toolResult.Content[0].Text
-			}
-			return nil, ErrMCPCAToolCallFailed{Tool: name, Code: -1, Message: msg}
-		}
-		return &toolResult, nil
-	}
-
-	// Server returned result directly as a raw map
-	text := string(rawResult)
 	return &mcpCACallToolResult{
-		Content: []mcpCAContent{
-			{Type: "text", Text: text},
-		},
+		Content: []mcpCAContent{{Type: "text", Text: string(output)}},
 	}, nil
 }
 
@@ -435,6 +421,7 @@ type mcpCACRLResp struct {
 			RevocationTime *protoTimestamp `json:"revocation_time"`
 			Reason         int32           `json:"reason"`
 		} `json:"revoked_certs"`
+		Data []byte `json:"data"`
 	} `json:"crl"`
 }
 
@@ -831,6 +818,7 @@ func (m *MCPAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 	crlResult := &GetCRLResult{}
 
 	if resp.CRL != nil {
+		crlResult.Data = resp.CRL.Data
 		crlResult.RevokedCount = resp.CRL.RevokedCount
 		if resp.CRL.LastUpdate != nil {
 			crlResult.ThisUpdate = resp.CRL.LastUpdate.toTime()
@@ -849,6 +837,10 @@ func (m *MCPAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 			}
 			crlResult.RevokedCerts = append(crlResult.RevokedCerts, rce)
 		}
+	}
+
+	if err := crlResult.setIssuerFromData("MCP"); err != nil {
+		return nil, err
 	}
 
 	return crlResult, nil

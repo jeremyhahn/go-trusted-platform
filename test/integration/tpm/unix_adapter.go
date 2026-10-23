@@ -224,7 +224,7 @@ func (u *UnixAdapter) EKDelete(ctx context.Context, handle uint32, password stri
 // SRKCreate creates an SRK via the SDK client over Unix socket.
 func (u *UnixAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRKCreateResult, error) {
 	resp, err := u.client.CreateSRKDomain(ctx, keyAlgorithmFromString(opts.Algorithm),
-		opts.Persistent, opts.Handle, opts.Password)
+		opts.Persistent, opts.Parent, opts.ParentPassword)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "CreateSRK", Err: err}
 	}
@@ -282,7 +282,7 @@ func (u *UnixAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 // =============================================================================
 
 // EventLog reads the TPM event log via the SDK client over Unix socket.
-func (u *UnixAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (u *UnixAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	resp, err := u.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "GetEventLog", Err: err}

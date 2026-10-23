@@ -1,10 +1,10 @@
 # Bootstrap — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/bootstrap/`, `pkg/firstboot/`, `pkg/boot/`, `pkg/barrier/`, `pkg/api/rest/init_handlers.go` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/bootstrap/`, `pkg/firstboot/`, `pkg/boot/`, `pkg/barrier/`, `pkg/api/rest/init_handlers.go` · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
-> Every identifier below was read out of the packages named above on 2026-08-18.
+> Every identifier below was read out of the packages named above on 2026-10-19.
 > Where the legacy files in this folder disagree with the code, the code wins and
 > the correction is recorded in §12.
 
@@ -39,6 +39,15 @@
 | `secrets.go` | Secret-URI scheme and strategy constants, `IsSecretURI`, `ExpandShortKMSPath` |
 | `config_writer.go` | `ConfigWriter`, `SecretUpdate` |
 | `config.go` | `Config`, `NoiseServerConfig`, `DefaultConfig` |
+| `network_plan.go` | `BootstrapConfig.NetworkPlan`, the switch config, the retired-key check (`ErrRetiredKey`, `ErrSwitchPortClass`) |
+| `node_platform.go` | Node platform, architecture and Pi boot model (`PlatformRaspberryPi`, `BootModelDiskless`, `BootModelDisklessNBD`), netboot-media validation |
+| `node_resolve_rules.go` | Per-node config checks: merged addresses and IDevID, the diskless install-target refusal |
+| `control_plane_identity.go` | `ControlPlaneTLSName`, `ControlPlaneAddresses`, the control-plane port and per-node TLS names |
+| `bmc_trust.go` | `NewBootstrapBMCTLSProvider`, the per-node BMC trust config |
+| `media_read_probe.go` | `MediaReadProbe`, `MediaReadResult`, `MediaReadBaseline`: the advisory smbd media-read watch |
+| `console_transcript.go` | `ConsoleTranscript`: the per-attempt SOL transcript |
+| `console_diagnostics.go` | The media-read wait and the forensic upload of a failed attempt |
+| `secret_fields.go` | `PlaintextSecretFields`: plaintext secrets found by walking the config schema |
 | `errors.go` | The bulk of the typed error set |
 
 `pkg/firstboot/` — the node-side first boot: `strategy.go`
@@ -68,7 +77,9 @@ func (o *Orchestrator) ControlPlaneAddresses(node *DiscoveredNode) []string
 ```
 
 `OrchestratorParams` fields: `Config`, `ConfigPath`, `BMCFactory`, `Logger`,
-`Deployer`, `HealthChecker`, `TrustConfig`, `SkipVirtualMediaMount`. `Config` and
+`Deployer`, `HealthChecker`, `ConfigServerReadiness`, `TrustConfig`,
+`SkipVirtualMediaMount`. A nil `ConfigServerReadiness` selects the real HTTP
+probe of the container's `/health` and boot-script endpoints. `Config` and
 `BMCFactory` are required — a nil either way returns `ErrNilOrchestratorConfig`
 or `ErrNilBMCFactory`. `Orchestrator.SkipVirtualMediaMount` is a public field and
 may be set after construction.
@@ -82,6 +93,10 @@ type Deployer interface {
 }
 type HealthChecker interface { Check(ctx context.Context, address string) error }
 type ServerNameHealthChecker interface { CheckServerName(ctx context.Context, address, serverName string) error }
+type ConfigServerReadiness interface {
+    WaitReady(ctx context.Context, baseURL string) error
+    WaitDeviceScriptReady(ctx context.Context, baseURL string) error
+}
 type BoardController interface {
     PowerOn(ctx context.Context) error
     PowerOff(ctx context.Context) error
@@ -108,6 +123,7 @@ run.
 ```go
 func LoadBootstrapConfig(path string) (*BootstrapConfig, error)
 func (c *BootstrapConfig) Validate() error
+func (c *BootstrapConfig) ValidateDefinition() error
 func (c *BootstrapConfig) NetworkPlan() (*netplan.Plan, error)
 func (c *BootstrapConfig) EffectiveBackupsDir() (string, error)
 func (d *DeployerConfig) EffectiveDataDir() string
@@ -122,6 +138,10 @@ func (n *NodeConfig) StaticIPv4s() []string
 func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error
 func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger, opts ...DiscoveryOptions) ([]DiscoveredNode, error)
 ```
+
+`Validate` is `ValidateDefinition` plus the check that the deployer's netboot
+media build is on disk; work that only reads the config (resolving each node's
+platform config) calls `ValidateDefinition`.
 
 Constants: `RoleControlPlane`, `RoleGateway`, `RoleWorker`; `BootMethodPXE`,
 `BootMethodVirtualMedia`; `RedeployAlways`, `RedeployIfStale`, `RedeployNever`;
@@ -165,17 +185,19 @@ func NewBootstrapBMCTLSProvider(trustCfg *trust.Config, logger *slog.Logger) (bm
 `RolloverPhase` values: `RolloverIdle`, `RolloverPrePublish`, `RolloverActivated`,
 `RolloverComplete`.
 
-**Wiring status, verified by grep on 2026-08-18.** `DANEPublisher` is
+**Wiring status, verified on 2026-10-19.** `DANEPublisher` is
 constructed in production (`app.ensureDANEPublisher`, shared with the
 SDK-registered publisher adapter so there is exactly one DNS-write path).
-`CertReloader` is constructed in production and wired to
-`tls.Config.GetCertificate`; nothing calls `Reload` outside tests, so the
-hot-swap path is present and never exercised. `CABundleAdapter` is constructed in
+`CertReloader` is constructed in production (`pkg/webservice/webserver_v1.go`)
+and wired to `tls.Config.GetCertificate`. `platformd serve` registers each
+webservice's `ReloadCertificate` through `App.RegisterWebServiceCertInstaller`,
+and issuance calls it after a successful reissue, so a renewed certificate
+reaches the live listener through `Reload`. `CABundleAdapter` is constructed in
 `platformd serve` to feed the Noise listener. **`RolloverManager` has no
-production caller at all** — the BMC certificate hooks call
-`PrePublishRollover` and `PublishForCertificate` on the publisher directly. Treat
-`RolloverManager` as an implemented-but-unwired component, not as the live
-rollover path.
+production caller at all**: the BMC certificate hooks (`pkg/app/bmc_cert_init.go`,
+`pkg/app/bmc_enroll.go`) call `PrePublishRollover` and `PublishForCertificate`
+on the publisher directly. Treat `RolloverManager` as an
+implemented-but-unwired component, not as the live rollover path.
 
 ### Secrets
 
@@ -268,6 +290,7 @@ func (s *Server) Close() error
 func Attach(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Export, error)
 func ServerFromCmdline(cmdline string) (ServerAddr, bool, error)
 func NewClientConfig(ctx context.Context, server ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (ClientConfig, error)
+func OpenMetadataFile(volumeDir, identity, name string) (*MetadataFile, error)
 ```
 
 `Attach` is the node's side of the negotiation below. It is specified with the
@@ -511,7 +534,7 @@ no `rd.luks.*` or `rd.lvm.*`.
     and `--dry-run` validated a resolution the real run did not use. Do not
     reintroduce a direct `config.Templates[role]` read.
 
-8b. **An incomplete identity is propagated and logged at WARN, never
+8c. **An incomplete identity is propagated and logged at WARN, never
     silently dropped.** The IPMI path returns a vendor-only identity with a
     *nil* error when the FRU is definitively unavailable, so incompleteness
     is checked on the value rather than inferred from the error.
@@ -525,7 +548,7 @@ no `rd.luks.*` or `rd.lvm.*`.
     tie between equally specific answers — two equally complete readings of
     one board can resolve different entries.
 
-8c. **Discovery reads the identity before `SystemInfo`, through the
+8d. **Discovery reads the identity before `SystemInfo`, through the
     orchestrator's `bmcFactory`.** `Orchestrator.discover` passes its
     injected factory as `DiscoveryOptions.ClientFactory` (nil falls back to
     `bmc.NewDefaultClientFactory`), the same seam every other BMC call site
@@ -654,8 +677,14 @@ no `rd.luks.*` or `rd.lvm.*`.
     with seal artefacts present skips TPM provisioning and sealing and unlocks
     from the preserved key, reporting the degraded state.
 
-17. **The installer container is wiped only after sealing succeeded.** On any
-    failure it is preserved so the next boot can retry.
+17. **The installer container is wiped only after the seal has proven itself.**
+    First boot never wipes it, even when sealing succeeds: `Unlock` keeps
+    `sealingSucceeded` false, so `closeInstaller` always preserves
+    `installer.luks`. The next boot's `platform-initrd` destroys it
+    (`sealConfirmation`, `pkg/boot/commands/sealconfirm.go`) only when the
+    container is mounted and the root unlocked with the TPM-PCR strategy
+    (`shouldConfirmSeal`). On any earlier failure it is preserved so the next
+    boot can retry.
 
 18. **`RolloverManager` is single-flight.** A second `BeginRollover` while a
     rollover is in progress returns `ErrRolloverInProgress`. Phase transitions
@@ -664,6 +693,10 @@ no `rd.luks.*` or `rd.lvm.*`.
 
 19. **The pre-unseal REST surface accepts only its own state.** `/init` in
     `uninitialized`, `/unseal` in `sealed` or `unsealing`; anything else is 409.
+    The one exception: an init service that implements `BarrierInitReplayer`
+    answers an identical repeat of the init it already completed with the same
+    response, so a lost admin bundle can be fetched again. `/init` is rate limited
+    (429, `ErrInitRateLimited`).
     `/healthz` is always callable and reports `ready` only in `unsealed`. See
     [`docs/barrier/api.md` §2](../barrier/api.md#2-the-barrier-gate).
 
@@ -770,7 +803,14 @@ Every error in this feature is a typed struct or a package sentinel;
 | `ErrConfigFileNotFound{Path}` | `bootstrap.yaml` or a referenced overrides file is absent |
 | `ErrParseYAML{Path, Err}` | YAML parse failure, or home-directory expansion failure |
 | `ErrInvalidBootstrapConfig{Reason}` | No nodes; duplicate `bmc_address` |
-| `ErrMissingRequiredField{Field}` | `deployer.host`, `platform.domain`, provisioning subnet, `iso_path` when virtual media is used, `config path` |
+| `ErrMissingRequiredField{Field}` | `deployer.host`, `platform.domain`, `environment` (from `NetworkPlan`), `nodes[].hostname`, `switch.port_assignments[].port`, `iso_path` when virtual media is used, `config path`; `deployer.user`, `deployer.ssh_key` and `deployer.container_image` when the deployer adapter is built |
+| `ErrInvalidPort{Field, Port, Reason}` | A deployer or control-plane port outside 1-65535, the two container ports equal, or a derived device-script port past 65535; `dns.internal.port` at node-config resolution |
+| `ErrInvalidNodePlatform{Hostname, Field, Value, Reason}` | An unknown `platform`, `architecture`, `model` or `boot_model`, Pi-only fields on a generic node, a `bmc_address` on a Pi, a malformed Pi `serial` |
+| `ErrNetbootMediaRequired{Hostname, Reason, Err}` | `deployer.netboot_media_dir` unset or unusable, or the build lacks what a PXE-installed node boots (`validateNetbootMedia`) |
+| `ErrSwitchPortClass{Port, Class, Cause}` | A `switch.port_assignments[]` class the plan cannot realise |
+| `ErrRetiredKey{Path, Key, Line, Use}` | A retired literal-number key in `bootstrap.yaml` (`checkRetiredKeys`) |
+| `ErrNodeDiscoveryFailed{Hostname, Cause}`, `ErrMACDiscoveryFailed{BMCAddress, Cause}` | BMC MAC discovery for a node failed |
+| `ErrNodeConfigResolveFailed{Hostname, Cause}`, `ErrUnknownNode{Hostname}` | A node's merged config cannot be resolved; a hostname asked for is not in `bootstrap.yaml` |
 | `ErrInvalidNodeRole{Hostname, Role}` | Role is not `control-plane`/`gateway`/`worker` |
 | `ErrNodeMissingIdentity{Hostname}` | Neither `bmc_address` nor `macs` on an installing node |
 | `ErrDuplicateMAC{MAC, Hostnames}` | The same MAC on two nodes |
@@ -789,30 +829,34 @@ Every error in this feature is a typed struct or a package sentinel;
 
 `ErrBootstrapFailed{Phase, Cause}`, `ErrPhaseTimeout{Phase, Timeout}`,
 `ErrNodeProvisionFailed{Hostname, Role, Cause}`,
-`ErrHealthCheckFailed{Address, Cause}`,
+`ErrNodesProvisionFailed{Failures}`, `ErrHealthCheckFailed{Address, Cause}`,
 `HealthWaitTimeoutError{Cause, LastProbe}` (unwraps to both — `errors.Is` on the
 context error still works, and the message carries the last probe failure, e.g.
 an `x509` verification error, instead of a bare deadline),
 `CABundleUnavailableError{Hostname, Attempts, Cause, LastErr}` (same shape, for
 the pre-probe capture),
 `ControlPlaneStaticIPRequiredError{Hostname}`, `ControlPlaneTLSNameUnknownError{}`,
-`ErrCABundleRequired{Operation, Cause}`,
+`NodeTLSNameUnknownError{Hostname, Role, TLSPort, Cause}`,
 `ErrControlPlaneHealthGateFailed{Timeout, Cause}`,
 `ErrContainerDeployFailed{Host, Cause}`,
-`ErrContainerTeardownFailed{Host, Cause}`,
+`ErrContainerServiceNotServing{Host, BaseURL, Listener, Cause}` (§4 *Paths
+that fail closed*), `ErrContainerTeardownFailed{Host, Cause}`,
+`ErrDeployerNotConfigured{}`,
 `ErrNilOrchestratorConfig{}`, `ErrNilBMCFactory{}`, `ErrNoControlPlaneNode{}`,
 `ErrDryRunBMCUnreachable{Hostname, BMCAddress, Cause}`, `ErrDryRunNoNodes{}`.
 
 Seeding: `ErrSeedFailed{Cause}`, `ErrMissingSeederAddr{}`,
 `ErrTemplateNotFoundForRole{Role}`, `ErrTemplateFileNotFound{Role, Path}`,
-`ErrTemplateReadFailed`, `ErrTemplateYAMLParseFailed`,
-`ErrTemplateJSONConvertFailed`, `ErrTemplateUploadFailed{Role, StatusCode, Cause}`,
+`ErrTemplateReadFailed{Role, Path, Cause}`,
+`ErrTemplateYAMLParseFailed{Role, Path, Cause}`,
+`ErrTemplateJSONConvertFailed{Role, Cause}`,
+`ErrTemplateUploadFailed{Role, StatusCode, Cause}`,
 `ErrTemplateMergeFailed{Hostname, Role, Cause}`,
 `ErrProfileCreateFailed{Hostname, StatusCode, Cause}`,
 `ErrProfileIDParseFailed{Hostname, Cause}`.
 
 Trust capture: `ErrCABundleInvalid{URL}`, `ErrCABundleVerifyFailed{URL, Cause}`,
-`ErrCABundleRequired{Operation}`, `ErrNoPeerCertificates{Endpoint}`,
+`ErrCABundleRequired{Operation, Cause}`, `ErrNoPeerCertificates{Endpoint}`,
 `ErrCABundleEmpty{}`.
 
 Boot and install: `ErrVirtualMediaBootFailed{Hostname, Cause}`,
@@ -848,8 +892,9 @@ Secrets and config rewriting: `ErrInvalidYAMLPath`, `ErrPathNotFound`,
 
 Generic shapes used where nothing else fits: `MessageError{Msg}` and
 `WrappedError{Msg, Err}` — both defined per package (`bootstrap`, `firstboot`,
-`pkg/cli/commands/bootstrap`), plus `CommandOutputError` and
-`SentinelCauseError` in `firstboot`.
+`pkg/cli/commands/bootstrap`; `bootstrap/container` has its own
+`MessageError`), plus `CommandOutputError` and `SentinelCauseError` in
+`firstboot`.
 
 ### First boot sentinels
 
@@ -947,17 +992,17 @@ rather than silently ignored.
 | `platform.control_plane_port` | int | `8443` (`DefaultControlPlanePort`) | TLS port of the control plane's webservice — the `webservices[].tls-port` its role template declares. The orchestrator dials it to capture the CA bundle and SPKI pin and to seed templates, selects the control plane's TLS name from the webservice entry on it, and tries it first in the post-install and `bootstrap status` health probes (then `9443`, `443`). Addresses are joined with `net.JoinHostPort`, so IPv6 literals work. Outside 1-65535 is `ErrInvalidPort` at config load; omit or `0` for the default |
 | `templates` | map role→path | — | Missing role means the node is skipped at profile creation with a warning |
 | `iso_path` | string | — | Required when any installing node uses `virtual-media` |
-| `backups_dir` | string | a `~`-relative default | `~` expanded at load; set it explicitly rather than relying on the default |
+| `backups_dir` | string | `backups` beside `bootstrap.yaml` | A relative path is resolved against `bootstrap.yaml`'s directory and `~` is expanded, both at load |
 | `nodes[].hostname` | string | **required** | |
 | `nodes[].role` | string | **required** | |
 | `nodes[].macs` (legacy `mac`) | list/string | — | The scalar form is migrated automatically and merged into the slice |
-| `nodes[].bmc_address`, `bmc_user`, `bmc_password`, `bmc_protocol`, `bmc_encryption_key` | string | protocol `redfish` when unset or `auto` | `bmc_password` and `bmc_encryption_key` carry `secret:"true"` |
-| `nodes[].bmc_trust` | list | platform default | `dane`, `spki`, `ca-file` — **not** `tofu` (#83) |
+| `nodes[].bmc_address`, `bmc_user`, `bmc_password`, `bmc_protocol`, `bmc_encryption_key` | string | protocol `redfish` | `bmc_protocol` is `redfish`, `ipmi` or `auto`; unset or any other value is Redfish, and only `auto` probes the BMC (`bmc.DetectProtocol`), failing discovery with `ErrMACDiscoveryFailed` when nothing answers. `bmc_password` and `bmc_encryption_key` carry `secret:"true"` |
+| `nodes[].bmc_trust` | list | the platform's `trust.bmc` scope | `dane`, `spki`, `ca-file`, `tofu`: the `ClassBMC` allowlist, queried from `pkg/trust` (`StrategyAllowedForClass`); anything else is `ErrInvalidBMCTrust`. `tofu` was barred under #83 and is allowed again since go-xkms#139 made it endpoint pinning |
 | `nodes[].bmc_spki_pin` | string | — | Hex SHA-256 of the BMC SPKI; implies the `spki` strategy when no chain is declared |
 | `nodes[].bmc_enroll` | bool | `false` | Opts the node into the enrollment phase |
 | `nodes[].boot_method` | string | `pxe` | `pxe` or `virtual-media` |
 | `nodes[].skip_install` | bool | `false` | Already-deployed node |
-| `nodes[].platform` | string | — (generic server) | `raspberrypi`; without it `model` and `serial` are rejected |
+| `nodes[].platform` | string | — (generic server) | `raspberrypi`; without it `model` and `serial` are rejected. A Pi has no BMC, so `bmc_address` is rejected on it (`ErrInvalidNodePlatform`) |
 | `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) |
 | `nodes[].architecture` | string | `aarch64` for a Pi, else `x86_64` | `x86_64` or `aarch64`; a Pi must be `aarch64` (`EffectiveArchitecture`) |
 | `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
@@ -1042,9 +1087,12 @@ variables ([cli.md](cli.md) §1).
 
 **Precedence.** Flag > environment > config file > built-in default, per the
 platform convention. Inside `bootstrap.yaml` the merge precedence is the one in
-§3.11. For PCR selection at first boot: CLI `--pcrs` > `pcr-banks` on the EFI
-partition > `seal-pcrs` in configuration; with none of the three, first boot
-refuses to run.
+§3.11. PCR selection: `platformctl firstboot` takes `--pcrs`, else `seal-pcrs`
+(top level, `tpm.` or `installer.`) from `config.yaml`, and refuses to run with
+neither; the seal strategy prefers the installer TPM config's `seal-pcrs` over
+that selection. At every later boot `platform-initrd` takes `--pcrs` >
+`pcr-banks` on the EFI partition (written by first boot) > `seal-pcrs` in
+`config.yaml`.
 
 ## 6. Persistence
 
@@ -1062,10 +1110,16 @@ refuses to run.
 │                               #   EEPROM's HTTP_PATH=data/http-boot); only when
 │                               #   the build had --fleet-key
 ├── <platform>.iso              # staged for virtual-media, served over SMB
-├── installs/<key>/install.log  # forensic sink, key is a MAC or a hostname
-├── installs/<host>/registration.json
-└── config/mac/<mac>/{hostname,installer.yaml,ca-bundle.pem,bootstrap-spki-pin}
+└── installs/                   # pxeboot's InstallsDir
+    ├── <key>/install.log       # forensic sink, key is a MAC or a hostname
+    ├── <key>/registration.json # PUT by platformd, MAC- or hostname-keyed
+    └── config/mac/<mac>/{hostname,installer.yaml,ca-bundle.pem,bootstrap-spki-pin}
 ```
+
+The per-MAC config sits under `installs/` (`pkg/ipxe/http_server.go`
+`handleConfig`), though its URL is `/config/mac/<mac>/<key>`. An upload to
+`/installs/mac/<mac>/<file>` and one to `/installs/<host>/<file>` both land in
+`installs/<key>/<file>`.
 
 The MAC in a path is dash-separated and lower-cased. Staging is a PUT; reading is
 a GET. Nothing here is encrypted — see [architecture.md](architecture.md) trust
@@ -1077,7 +1131,7 @@ boundary 4.
 |---|---|---|
 | `<efi>/tpm2/installer.luks` | installer | Encrypted container: LUKS key, recovery key, config |
 | `<efi>/tpm2/seal-platform.pub` / `.priv` | first boot | The production seal. **Presence is the "already provisioned" marker.** |
-| `<efi>/tpm2/seal-upgrade.pub` / `.priv` | nothing in production | Read by the `TPM-Upgrade` strategy every boot, which declines when the files are absent (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). The only writer, `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is reached only from `Executor.Run`, which nothing calls; first boot deletes any it finds (`pkg/firstboot/strategy.go:1361`). No device has one today. |
+| `<efi>/tpm2/seal-upgrade.pub` / `.priv` | nothing in production | Read by the `TPM-Upgrade` strategy every boot, which declines when the files are absent (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). Both writers are unreached: `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`) is called only from `Executor.Run`, which nothing calls, and nothing calls `TPMUpgradeStrategy.CreateUpgradeSeal` (`pkg/initrd/strategy_tpm_upgrade.go:304`). First boot deletes any it finds (`pkg/firstboot/strategy.go:1401-1402`). No device has one today. |
 | `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs` (recorded only, `pkg/firstboot/strategy.go:1335`; never applied to the seal, which uses the platform policy, `strategy.go:1302`), `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle` (the seal parent — the **Platform KeyStore SRK**, default `0x81000002`; never the SSRK, whose absence-of-platform-binding made platformd re-provision destructively, #61), `keystore-platform-policy` (HOW the seal authorized the parent SRK — the unseal replays this mode instead of assuming; absent defaults to `false`, the seal side's default), `ssrk-handle` |
 | `<efi>/tpm2/pcr-seal-values.txt` | first boot | PCR values at seal time, for debugging |
 | `<efi>/tpm2/swtpm-state/` | first boot | Software-TPM state, when a software TPM is in use |
@@ -1104,8 +1158,9 @@ into the tenant secret store, and shreds the tmpfs copy afterwards.
 - `nodes[].mac` (scalar) is still accepted and merged into `macs`. Do not remove
   the shadow unmarshaller without a migration.
 - `SealStrategySoftware` is an alias of `SealStrategyPassphrase`; both validate.
-- The seeder tolerates both the enveloped REST response (`{code, success,
-  payload}`) and a bare object, for templates and profile IDs alike.
+- The seeder reads a profile ID from either the enveloped REST response
+  (`{code, success, payload}`) or a bare object. A template upload's ID is
+  read from the envelope only.
 - Profile IDs are JSON **strings** on the wire because a `uint64` exceeds the
   precision of a double. Parsing failure is fatal (`ErrProfileIDParseFailed`) —
   without the ID there is no enrollment.
@@ -1116,14 +1171,17 @@ into the tenant secret store, and shreds the tmpfs copy afterwards.
 
 Recorded because a reader will otherwise assume they are covered.
 
-1. **No seal-confirmation handshake.** `luks-key.bin` is preserved indefinitely
-   inside `installer.luks`, and the container is not wiped until sealing
-   succeeds — but nothing proves the seal actually unseals before the wipe. The
-   code says so in place; the fix is a real unseal test gated ahead of deletion.
+1. **Seal confirmation needs a later `TPM-PCR` boot.** First boot never wipes
+   `installer.luks` (`sealingSucceeded` is never set in
+   `pkg/firstboot/strategy.go`). `platform-initrd boot` wipes it only after a
+   boot that unlocked the root with `TPM-PCR`
+   (`pkg/boot/commands/sealconfirm.go`); until such a boot, `luks-key.bin`
+   stays inside the container.
 2. **`RolloverManager` is unwired** (§2). RFC 7671 pre-publication rollover is
    implemented and reachable only from tests.
-3. **`CertReloader.Reload` has no production caller.** The hot-swap is installed
-   in the TLS config and never triggered.
+3. *Closed.* `CertReloader.Reload` is reached in production: a reissued
+   webservice certificate is swapped into the live listener (§2, *Wiring
+   status*).
 4. **BMC TOFU pins are process-lifetime only.** A certificate change between runs
    is invisible. Publish BMC TLSA records instead of relying on TOFU.
 5. **The install-log poller has no internal deadline.** Callers pass a bounded
@@ -1135,7 +1193,9 @@ Recorded because a reader will otherwise assume they are covered.
    loop moves on.
 6. **The canonical trust modes are stubs.** `bootstrap auto|dane|noise|spki`
    return `PendingBootstrapBackendError`; only `direct` does work, and that work
-   is limited to validating that the supplied bundle path is a readable file.
+   is limited to checking that the `--bundle` path exists and is not a
+   directory. It neither parses the PEM nor records the bundle anywhere,
+   though its help text says it does (`pkg/cli/commands/bootstrap/canonical_modes.go`).
 7. **Media-read attribution assumes the BMC's SMB source address is its
    `bmc_address`, and that smbd retitles its workers.** `MediaReadProbe.Client`
    is matched against the worker title pkg/ipxe reads from `/proc` — Debian's
@@ -1168,12 +1228,15 @@ per-phase specifics (`smb_url`, `exit_code`, `profile_id`, `macs_total`,
 `config_bytes`, `spki_captured`). First boot writes a fixed `[FIRSTBOOT-SEAL]`
 banner sequence to stderr because in the initramfs the kernel console is often
 the only channel; `platform-initrd boot` additionally mirrors numbered
-breadcrumbs (`step01` … `step07`) to `/run/platform-initrd-boot.log` so a hang
-before the pivot can be localised afterwards.
+breadcrumbs (`step01` … `step08`, with `step04a`/`step04b` for the PCR-selection
+fallbacks) to `/run/platform-initrd-boot.log` so a hang before the pivot can be
+localised afterwards.
 
-**Forensics.** `dumpFirstbootForensics` snapshots the kernel ring buffer, block
-topology and LUKS state into the still-mounted installer container on every entry
-to first boot. The install log itself is uploaded to the deployer's HTTP sink and
+**Forensics.** `dumpFirstbootForensics` runs deferred on every return from first
+boot's `Unlock`, success or failure. It snapshots the kernel ring buffer, block
+topology, device-mapper state, mounts, the kernel command line, the TPM device
+nodes and the interfaces into `firstboot-runs/<UTC stamp>/` in the still-mounted
+installer container, and points `firstboot-runs/latest` at it. The install log itself is uploaded to the deployer's HTTP sink and
 is the authoritative record of what the installer did.
 
 **The two signals that mean different things.** The install log says *the
@@ -1211,7 +1274,7 @@ code logs only the first bytes of a key hash, never the key.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/bootstrap/*_test.go` | Config load and validation, forbidden-override detection with line numbers, MAC union, merge precedence, dry-run planning and SEL pre-flight warnings, seeder profile-ID parsing, DANE record derivation, rollover phases, cert reloader, virtual-media retry, advisory media-read watch and console transcript (`virtual_media_never_read_test.go`, against a scripted sink, `bmc.MockClient` and a scripted console), trust capture, post-install health of a gateway and worker against an `httptest` server on `127.0.0.1:0` serving a DNS-only leaf from a test CA (`post_install_health_noncp_test.go`) |
-| Unit | `pkg/firstboot/*_test.go`, `pkg/boot/commands/*_test.go` | Types, executor helpers, PCR-list parsing |
+| Unit | `pkg/firstboot/*_test.go`, `pkg/boot/commands/*_test.go` | Types, executor helpers, PCR-bank and PCR-list parsing, the seal parent, the event log, closing the installer mapping, seal confirmation, TPM manager retry, the diskless boot path |
 | Integration | `test/integration/`, `make integration-test-bootstrap` | Real deploy host, real container, real BMC paths |
 
 **`pkg/bootstrap` runs in `make test`, `make test-race` and `make coverage`**
@@ -1229,7 +1292,10 @@ health checker and the deploy-phase serving gate all derive the same URL
 through the real config path. The sink is strict: unsanitized MACs, unknown
 config keys, or an `install.log` for a node the config does not declare fail
 the test, and so does any other request.
-`pkg/firstboot`, `pkg/boot/commands` and `pkg/cli/commands/*` remain excluded.
+`pkg/firstboot`, `pkg/boot/commands` and the root `pkg/cli/commands` package
+remain in `TEST_EXCLUDE`, so their tests run in no unit stage. The entries are
+end-anchored, so `pkg/cli/commands/bootstrap` is discovered by `make test`; it
+is also named in `TEST_UNIT_PKGS` (#134).
 
 **Fault-injection seams.** `OrchestratorParams.Deployer` and `.HealthChecker` are
 interfaces; `BMCFactory` is injectable; `ISOStager` is an interface;
@@ -1259,21 +1325,30 @@ window closed with evidence" true by construction instead of by scheduler luck
 (issue #262, third instance). `SkipVirtualMediaMount` is an operational escape
 hatch that doubles as a test seam.
 
-**Parity gap.** `conventions/feature-docs.md` §4 requires every `cli.md` verb to
+**Parity gap.** `../handbook/software/conventions/feature-docs.md` §4 requires every `cli.md` verb to
 have a matching `CommandDefinition` in the integration parity suite. **No
-`CommandDefinition` type exists in this repository** (grepped 2026-08-18), so the
+`CommandDefinition` type exists in this repository** (searched again 2026-10-19), so the
 requirement is unmet repo-wide, not only here.
 
 ## 10. Concurrency
 
-Discovery, control-plane provisioning, remaining-node provisioning and the health
-gate each fan out one goroutine per node over a buffered channel, close the
-channel from a waiter goroutine, and drain. Discovery writes results into a
-pre-sized slice by index, so ordering is stable regardless of completion order.
-`CertReloader` and `RolloverManager` use atomics rather than mutexes;
-`barrier.Manager` tracks initialized/sealed with `atomic.Bool` and signals
-readiness by closing a channel. The health checker guards its TLS config swap
-with a mutex because it mutates a live `http.Transport`.
+Discovery, node provisioning and the control-plane health gate each fan out one
+goroutine per node and write results by index or over a buffered channel, so
+completion order never reorders them. Discovery (`discovery.go`) and the health
+gate (`controlPlaneHealthGate`) send into a channel sized to the node count,
+close it from a waiter goroutine, and drain; discovery stores each result into a
+pre-sized slice by index. `provisionNodes`, which provisions both the control
+plane and the remaining nodes, runs each node under `sync.WaitGroup.Go` and
+records its error by index before `Wait`.
+`CertReloader` holds the live certificate in an `atomic.Pointer` and
+`RolloverManager` its phase in an `atomic.Uint32`; `barrier.Manager` tracks
+initialized, sealed and unsealing with `atomic.Bool` and signals readiness by
+closing the channel of the current `readyGate` generation, swapped through an
+`atomic.Pointer` on seal. Mutexes remain where several fields change together:
+the health checker's `WithCAPool` rebuilds its HTTP clients from the new pool
+under `mu` and closes the old clients' idle connections, the orchestrator guards
+the captured control-plane CA pool with `cpCAMu`, and the console transcript and
+diagnostics buffers have their own locks.
 
 `Orchestrator` itself is **not** safe for concurrent `Run` calls: `o.discovered`
 is a plain field. One orchestrator, one run. Within a run, `o.cpCAPool` is

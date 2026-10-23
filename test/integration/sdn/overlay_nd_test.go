@@ -56,12 +56,19 @@ const (
 	// come, once the controller has already accounted for the solicitation.
 	ovlNDNoAnswerWait = 2 * time.Second
 
-	// ovlNDHoldDownWait outlasts the controller's first fallback hold-down
-	// (30s) by a poll and a punt refresh, and ovlNDDoubledHoldDownWait the
-	// doubled one that follows a second fallback inside the quiet period
+	// ovlNDHoldDown is the controller's first fallback hold-down here. The
+	// 30-second default would spend 90 seconds of the package's budget
+	// waiting out it and the doubled one; the back-off itself is unit
+	// tested on a fake clock. It stays well above the no-answer check a
+	// fallen-back subtest makes before the hold-down ends.
+	ovlNDHoldDown = 10 * time.Second
+
+	// ovlNDHoldDownWait outlasts the first fallback hold-down by a poll and
+	// a punt refresh, and ovlNDDoubledHoldDownWait the doubled one that
+	// follows a second fallback inside the quiet period
 	// (docs/sdn/overlay/architecture.md, ND suppression).
-	ovlNDHoldDownWait        = 45 * time.Second
-	ovlNDDoubledHoldDownWait = 80 * time.Second
+	ovlNDHoldDownWait        = ovlNDHoldDown + 15*time.Second
+	ovlNDDoubledHoldDownWait = 2*ovlNDHoldDown + 20*time.Second
 
 	// ovlNDBurst solicitations far exceed the punt meter's 64 kb burst.
 	ovlNDBurst = 2000
@@ -136,6 +143,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		punts, _ := ovlNDPunts(ctx, t, ovsClient)
 		return punts == 1
 	})
+	ovlNDSettle(t)
 
 	t.Run("KnownTargetAnsweredOnTheSegmentVLANNotFlooded", func(t *testing.T) {
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
@@ -211,6 +219,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 0 && handler.GetStatus().NDSuppression.Fallbacks > fallbacks
 		})
+		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
 		waitFor(ctx, t, "the solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
@@ -226,6 +235,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 1
 		})
+		ovlNDSettle(t)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
 		_, answered = readProxyAdvert(t, conn, ovlNDTargetIP, 10*time.Second)
 		assert.True(t, answered, "the returned controller answers again")
@@ -250,6 +260,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		assert.Greater(t, after.MeterDropped+after.QueueDropped, before.MeterDropped+before.QueueDropped,
 			"the fallback follows a drop")
 
+		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, solicitation)
 		waitFor(ctx, t, "the known target's solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
@@ -286,9 +297,10 @@ func startOverlay(ctx context.Context, t *testing.T, bridge string, localIP neti
 			UnderlayMTU:   vxlan.MinimumUnderlayMTU,
 			VXLANPort:     vxlan.DefaultVXLANPort,
 		},
-		BridgeName: bridge,
-		AccessPort: accessPort,
-		Logger:     slog.Default(),
+		BridgeName:         bridge,
+		AccessPort:         accessPort,
+		NDFallbackHoldDown: ovlNDHoldDown,
+		Logger:             slog.Default(),
 	}
 	handler, err := modes.NewOverlayModeHandler(cfg, ovsClient, ofClient)
 	require.NoError(t, err)
@@ -336,6 +348,17 @@ func ovlNDPunts(ctx context.Context, t *testing.T, client *ovs.Client) (int, int
 		packets += flow.PacketCount
 	}
 	return len(flows), packets
+}
+
+// ovlNDSettle waits for the datapath to follow a punt change the OpenFlow
+// tables already show. OVS revalidates its kernel megaflows asynchronously,
+// so a solicitation sent right after a punt is removed can still ride the
+// old megaflow to the controller, which answers a known target instead of
+// letting it flood; one sent right after a punt is installed can still
+// flood. Every send that follows a punt change waits here first.
+func ovlNDSettle(t *testing.T) {
+	t.Helper()
+	runCmd(t, "ovs-appctl", "revalidator/wait")
 }
 
 // openNDSocket opens a raw IPv6 packet socket on the endpoint's VLAN

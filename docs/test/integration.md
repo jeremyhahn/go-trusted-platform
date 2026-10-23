@@ -300,10 +300,11 @@ test/integration/
 
 ### Build Tags
 
-The targets build with `TEST_BUILD_TAGS` (Makefile:344): `integration`,
+The targets build with `TEST_BUILD_TAGS` (Makefile:365): `integration`,
 `INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`),
 `INTEGRATION_VECTOR_TAGS` (`vector qrdb_vector`, the `WITH_VECTOR=1` tags) and
-the full `BUILD_TAGS` list.
+the full `BUILD_TAGS` list, which includes any `GO_BUILD_TAGS` passed to `make`
+([build-tags.md](../configuration/build-tags.md#go_build_tags)).
 `integration` marks a file as needing the devcontainer; the codecs carry the
 QUIC wire protocol and the REST/MCP bodies; the vector tags let the embedded
 `quicbaas.TestConfig` serve the Vector service that the quicbaas and sdk suites
@@ -345,7 +346,15 @@ every key except `cold-start` and `barrier-gate` (each needs the shared
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`).
+`ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
+daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
+which flushes the SRKs sealing the daemon's platform-policy key passwords, so
+no gRPC, QUIC or MCP handshake succeeds after it. `compute` is not in the
+list: one orchestrator serves both VMs and containers, and the shared daemon
+runs the container orchestrator the `container` suite needs, which refuses
+every VM spec. The run ends by stopping the shared daemon, restarting swtpm
+fresh and running `compute` on a `platformd` started on the `local-qemu`
+provider, as `make integration-test-compute` does.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
@@ -353,6 +362,19 @@ none (`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `installer`, `lb`,
 `e2e`, `ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`.
+
+The `sdn` key runs `./test/integration/sdn/` and
+`./test/integration/sdn/mock_bgp/...` within its 15 minutes (its tests run
+one at a time and take about 11; the runner's `TARGET_TIMEOUTS` comment has
+the breakdown), not
+`./test/integration/sdn/...`: the load generators in `sdn/stress` keep every
+CPU busy for about 270 s, and running beside the `sdn` package they starved
+ovs-vswitchd, `platformd` and `platformctl` until it ran out of time (#973).
+They run as the `sdn-stress` key (`make integration-test-sdn-stress`, 30
+minutes, as `make stress-sdn` gives them). `sdn-stress` needs no daemon but is
+not in `TARGET_NO_DAEMON`, since the daemon-free keys run concurrently and the
+generators would starve them too; it runs alone, in `ALL_TARGETS` order right
+after `sdn`.
 
 Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
 `datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `ipxe`, `installer`, `e2e`)
@@ -379,7 +401,7 @@ Kept out of the runner, or out of its default set:
 | `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
-| `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` key's `./test/integration/sdn/...`; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
+| `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` and `sdn-stress` keys' packages; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
 | `compute-aws` | A Floci emulator compose file, not a suite; the tests are in `pkg/compute/aws` | `make integration-test-compute-aws` on the host |
 | `diskimage/userspace` | An arm64 userspace container | `make integration-test-diskimage-userspace` |
 | `web` | Playwright (TypeScript), not Go | `npx playwright test --config ../test/integration/web/playwright.config.ts` from `web/` |
@@ -553,15 +575,24 @@ devcontainer image so a developer and CI run the same thing:
 
 | Job | Tier | What it runs |
 |-----|------|--------------|
-| `image` | PR | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
+| `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) |
+| `image` | docs | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
 | `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
-| `lint`, `sdkjs`, `security`, `build`, `test` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls`; the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
+| `lint` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls` |
+| `sdkjs`, `security`, `build`, `test` | docs | Native-runner checks: the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
 | `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
 | `fips` | main only | `make test-fips`; outside the gate |
 
 The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
-labelled `ci:full`. `CI Gate` passes when every PR-tier job passed and every
-full-tier job passed or was not selected.
+labelled `ci:full`. The docs tier runs on every run except a docs-only PR: one
+whose every changed file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`),
+none of them a page a unit test reads (`DOCS_TESTED_PATTERN`, today
+`docs/daemon/` and `docs/web/`). A docs-only PR runs `lint` and `CI Gate`
+only; `ci:full` overrides it, and so does any doubt in the diff. `CI Gate`
+passes when every PR-tier job passed, every docs-tier job passed or skipped on
+a docs-only PR (`docs_only` reading exactly `true`), and every full-tier job
+passed or was not selected. `pkg/arch/citiers_test.go` holds the tiers, the
+gate's `needs` and its check lines to one another.
 
 The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
 the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
@@ -573,6 +604,17 @@ the root `.trivyignore`: each entry is scoped by path to one package copy and
 carries its reason and an `expired_at` date, after which the finding fails the
 gate again. Today it holds only advisories in the dependencies npm itself
 bundles, which no Node or npm release fixes yet.
+
+A fixed Debian package is never suppressed; the image picks it up instead. The
+`base` stage's `apt-get upgrade` layer reads the `APT_REFRESH` build argument,
+which `make docker-build` (the CI image job) sets to the UTC day
+(`date -u +%Y-%m-%d`), so the layer is rebuilt daily; the Dockerfile's dated
+default applies only to a bare `docker build`. Without a key BuildKit reused a
+cached layer that predated a Debian fix, and `trivy image` reported the fixed
+libexpat1 (deb12u4) as HIGH. A new key rebuilds that layer and, through
+`FROM base`, every apt layer of the toolchain and integration stages; the
+`tools` and `modules` stages stay cached. Pass `APT_REFRESH=<key>` to make to
+rebuild against a fixed key.
 
 The images come from one Dockerfile, `build/docker/devcontainer/Dockerfile`,
 built from the repository root. `scripts/tool-pins.sh` holds the base image and
@@ -623,6 +665,135 @@ unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 
 To run a stage locally as CI does: `make docker-build`, then
 `make docker-run CMD='make test'`.
+
+### Foreign-Failure Baseline
+
+Company Agent ruling 125: a failure in a class that ruling 104 counts as
+foreign (fixed only by an upstream release this repository pins, and named
+on an open upstream issue) does not block a merge. Such failures are listed in
+`.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
+nothing is admin-merged.
+
+CI runs `make integration-test IT_FOREIGN_BASELINE=1`. The suites' output
+still goes to the job log, and is also written to `IT_LOG`. When the suites
+pass, nothing else happens. When they fail, `scripts/foreignfailures` decides
+the step's result instead:
+
+- It passes only when every failed leaf test is a row of the baseline.
+- It fails, naming each one, on a failed leaf the baseline does not list.
+- It fails closed on anything it cannot attribute to a listed test: a build
+  or compile failure, a panic or timeout, a package that failed with no
+  failing test, a target that failed outside go test, or a log without the
+  runner's closing summary.
+
+It prints the baseline hits per upstream issue. Rows that did not fail are
+reported as a notice; they do not fail the step. `ci-gate` reads the job's
+result unchanged.
+
+A local `make integration-test` leaves `IT_FOREIGN_BASELINE` unset, so it
+exits with the suites' own status and shows every failure.
+
+The file is tab-separated, with the columns `kind`, `package`, `name`,
+`upstream` and `closing_release`:
+
+| Column | Value |
+|--------|-------|
+| `kind` | `test` (one leaf test) or `job` (one runner target in `ALL_TARGETS`) |
+| `package` | the module-relative package, e.g. `test/integration/kms` |
+| `name` | the full leaf name, e.g. `TestKMS/gRPC/HMAC`; for `job`, the target |
+| `upstream` | the open issue, `repo#number`; several are joined by `+` |
+| `closing_release` | the release whose adoption fixes it |
+
+**Adding an entry:**
+
+- Only a ruling-104 foreign class may be listed, with its open upstream issue.
+- Add one row per failing leaf, copied exactly from the job log.
+- There are no wildcards or patterns, so a new failure can never hide under
+  an existing row.
+- `go test ./scripts/foreignfailures/` refuses a malformed, incomplete or
+  duplicated row.
+
+**Removing an entry:** a row is removed in the PR that adopts its
+`closing_release`.
+
+#### The FIPS baseline
+
+The FIPS job (`fips` in `ci.yml` and `nightly.yml`, both one `make test-fips`
+call, outside `ci-gate`'s needs) has its own baseline, the sibling file
+`.github/foreign-failures-fips.tsv`. It is a separate file rather than a
+`kind` in the Integration file for three reasons:
+
+- The two jobs fail differently. The Integration suites fail one leaf test
+  at a time. Under `GODEBUG=fips140=only`, the Go runtime enforces by panic,
+  and a panic kills the whole test binary.
+- A FIPS row needs two columns the Integration rows do not: the stack
+  `frame` and the panic `message`.
+- Each job reads only its own file, and each reader refuses the other
+  file's rows. A FIPS row therefore can never excuse an Integration failure,
+  and an Integration row can never excuse a FIPS one.
+
+`make test-fips` always consults the FIPS baseline. The unit tests' output
+also goes to `FIPS_LOG`. When `make test` fails,
+`scripts/foreignfailures -job fips` decides the result. A failure is foreign
+only when **all** of these hold:
+
+- The panicking test is exactly a row's package and top-level test name.
+  There are no wildcards and no subtests.
+- Every `panic:` line's message is exactly the row's message.
+- The panicking goroutine's stack passes through the row's `frame`, and
+  through the listed test function itself.
+- That test is its package's only failure, and nothing else in the run
+  fails. Another failing test, a build failure, a timeout, a killed binary,
+  or a run without go test's closing `FAIL` all gate. So does a plain
+  failure of a listed test: `panic` is the only kind.
+
+A recovered panic inside a passing package, such as the deliberate one
+`pkg/api/daemon`'s recover-guard test logs, is not a failure.
+
+**The rest of a panicked package still gates.** A panic stops every test
+after it in that binary. So, for each attributed package, the checker runs
+all of its other top-level tests again:
+
+1. It lists them with `go test -list .`.
+2. It runs them by explicit name with `-run '^(A|B|...)$'`, under the same
+   `GOFIPS140`/`fips140=only` environment and the same derived build tags.
+   The checker refuses to run outside `fips140=only`.
+
+The job passes only when that rerun passes and runs every name. No `t.Skip`,
+`-short` or build tag is involved. The rerun passes no `-skip` either: the
+names `make test`'s `TEST_SKIP` drops, passed in as `-skip-tests`, are left
+out of the explicit list, exactly as the run left them out. Each rerun's
+output is printed in the job log, with a `rerun:` line for every round.
+
+**A rerun repeats until it settles.** The first panic can hide a second
+listed test's panic behind it. When a rerun round fails only by such a
+panic, and that panic meets every rule above (exact row, message, frame,
+the test's own frame, the round's only failure, and the round finished),
+the next round excludes that test as well and runs the rest again. Every
+round keeps the same guards: explicit names, every name run, no `-skip`, no
+`-short`, the same environment and tags. Any other round failure gates.
+The rounds are bounded by the package's number of rows, one per listed test
+it can exclude, so the loop cannot spin: a round past that bound gates. A
+row first hit in a rerun counts as a hit; a row of a rerun package that no
+round hit is reported stale.
+
+The columns are `kind` (always `panic`), `package`, `name`, `upstream`,
+`closing_release`, `frame` (a Go function as a stack trace names it, without
+its arguments, e.g. `github.com/google/go-tpm/tpm2.(*policySession).Authorize`)
+and `message` (last, because it holds spaces). Rows are added and removed as
+for the Integration file.
+
+The rows today are the go-tpm HMAC panics (go-quicbaas#1389, removed by
+the go-quicbaas v0.16.0-alpha adoption):
+
+- `pkg/vpn/agent` `TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey`
+- `pkg/app` `TestDeviceActivation_IDevIDOverMTLS`
+- `pkg/app` `TestFetchProfileAndActivate_IDevIDOverMTLS`,
+  `TestIDevIDSigner_NilPublicKey` and
+  `TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify`, which each run
+  after the one before and surface only in the rerun's rounds 1 to 3; all
+  four `pkg/app` rows reach `CreateIDevID` through `newSimulatedIDevID`, so
+  a `pkg/app` rerun is bounded at four rounds
 
 ## Protocol Parity Assertions
 
@@ -790,11 +961,20 @@ calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
 which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
 persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
 certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
-is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
+is written to NV index `0x01C00002`, the RSA 2048 Low Range index of the TCG
+EK Credential Profile (§2.2.1.4) and the `tpm.ek.cert-handle` both configs
+name, so every transport's EK certificate call reads it from NV
+(`TestIntegrationConfig_EKCertIsTheSwtpmNVIndex`). With no `cert-handle`,
+go-xkms looks only in the platform certificate store, which these configs
+never fill. Provisioned this way, `platformd` opens a TPM it
 recognises as initialized and does not take its recovery path, which no
 shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting
 the daemons on a TPM without an EK.
+
+`TestIntegrationConfig_EKCertificateAtHarnessIndex` in `pkg/app` also holds
+both configs to the index the provisioning script writes, read from the
+script's `swtpm_setup` flags.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
@@ -831,6 +1011,21 @@ matched now.
 Do not add a phrase list to a suite. If a transport lacks an operation, make
 its adapter return `ErrNoSurface`. If the server refuses for a deployment
 reason, match its sentinel with `IsDeclaredRefusal`.
+
+An upstream defect in the pinned go-quicbaas SDK is declared with
+`helpers.DeclaredGap` (`test/integration/helpers/declaredgap.go`), which names
+the go-quicbaas issue that fixes it. The subtest asserts the typed refusal
+(`Unserved`: the embedded transport's `UnknownMethodError`; `Mistyped`: its
+`InvalidRequestTypeError`) or the recorded behaviour (`Defect`), then returns
+before its success path. When a pin bump carries the fix, the assertion fails
+with the issue's name; deleting the gap check restores the success path. The
+quicbaas and sdk suites declare seven today: embedded `quicbaas.Batch/Execute`
+unrouted (go-quicbaas #1533), embedded Transaction request type mismatch
+(#1319), embedded KV List ignoring `PageSize` (#1534), embedded
+`quicbaas.Ollama` unrouted (#1535), embedded `quicbaas.Vector` unrouted in
+the pinned SDK (#1404, fixed on go-quicbaas main), embedded
+`quicbaas.ParameterStore` unrouted in the pinned SDK and in v0.14.0-alpha, and
+the embedded transport dispatching a KV `Put` on an already-cancelled context.
 
 ## Best Practices
 

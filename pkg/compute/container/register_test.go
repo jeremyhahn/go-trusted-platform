@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
 func TestContainerProviderRegistered(t *testing.T) {
@@ -99,7 +100,16 @@ func TestComputeOrchestrator_HostTPMWithoutRuntime(t *testing.T) {
 	ctx := context.Background()
 	_, createErr := orch.engine.Create(ctx, &OrchestratorContainerSpec{Name: "refused", Image: "alpine:latest"})
 	startErr := orch.engine.Start(ctx, "refused")
-	for op, err := range map[string]error{"Create": createErr, "Start": startErr} {
+	// The compute API answers a start of an instance it never created with
+	// the refusal too: a refusing host keeps no instance to look up.
+	_, computeCreateErr := orch.Create(ctx, &entities.DeviceProfile{Name: "refused", Model: "container:image=alpine:latest"})
+	computeStartErr := orch.Start(ctx, "never-created")
+	for op, err := range map[string]error{
+		"Create":         createErr,
+		"Start":          startErr,
+		"compute Create": computeCreateErr,
+		"compute Start":  computeStartErr,
+	} {
 		var refusal *MeasuredRuntimeUnavailableError
 		if !errors.As(err, &refusal) {
 			t.Fatalf("%s on a TPM host without a runtime: got %v, want MeasuredRuntimeUnavailableError", op, err)

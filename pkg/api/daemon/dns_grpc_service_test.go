@@ -755,7 +755,8 @@ func TestDNSServiceServer_AddRecord_ZoneNotFound(t *testing.T) {
 	req := &platformv1.AddRecordRequest{
 		ZoneName: "nonexistent.com.",
 		Record: &platformv1.Record{
-			Type: platformv1.RecordType_RECORD_TYPE_A,
+			Type:   platformv1.RecordType_RECORD_TYPE_A,
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "192.0.2.10", Ttl: 3600}},
 		},
 	}
 

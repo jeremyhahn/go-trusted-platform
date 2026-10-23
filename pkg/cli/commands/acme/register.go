@@ -14,6 +14,8 @@
 package acme
 
 import (
+	"net/mail"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
@@ -50,7 +52,21 @@ Examples:
 
 // runRegister executes the register command
 func runRegister(flags *cli.CommonFlags, email string) error {
-	// Daemon connection required for ACME operations
-	// Dual-mode support will be added later
-	return ErrDaemonConnectionRequired{Command: "register"}
+	if err := validateEmail(email); err != nil {
+		return err
+	}
+	return ErrACMEDaemonCallMissing{Command: "register", Section: "§7.3 newAccount"}
+}
+
+// validateEmail requires a bare address, the form an RFC 8555 §7.3
+// "mailto:" contact carries.
+func validateEmail(email string) error {
+	if email == "" {
+		return ErrMissingEmail{}
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Name != "" || addr.Address != email {
+		return ErrInvalidEmail{Email: email}
+	}
+	return nil
 }

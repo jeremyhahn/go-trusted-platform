@@ -24,10 +24,6 @@ Three things surprise people, so read them before you start:
    encryption key** inside a container whose password is a published constant.
    That is a deliberate trade for forensic protection, not a secret. Don't
    leave a machine in that state, and don't image the disk in that state.
-3. **`iso build`, `iso download`, `iso extract`, `iso customize` and every
-   `iso profile` verb currently do nothing.** They print
-   *"daemon connection required … dual-mode will be added later"*. Use
-   `iso create`, which does the whole pipeline.
 
 ---
 
@@ -439,10 +435,11 @@ The autoinstall script reboots at the end, QEMU exits non-zero, and the harness
 treats that as success when the disk exists and is over 100 MB. If you see a
 real failure, the disk will be missing or tiny.
 
-**Recovery reseals against PCRs I did not choose.**
-`platform-initrd recovery` hard-codes its PCR selection to `0,1,2,3,7` and has
-no `--pcrs` flag. If your seal uses a different set, do not rely on recovery's
-automatic reseal — unlock, boot, and reseal from the running system.
+**Recovery's "Attempt to reseal TPM keys" refuses.**
+Expected. The initrd cannot store a new seal (the ESP seal files are written
+only by first boot), so `platform-initrd recovery` does not reseal, and its menu
+option says *"the resealed data cannot be stored"* instead of reporting success.
+Unlock, boot, and reseal from the running system.
 
 ---
 

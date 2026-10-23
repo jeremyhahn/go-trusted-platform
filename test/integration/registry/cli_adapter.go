@@ -132,6 +132,14 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 	return stdout.Bytes(), nil
 }
 
+// GenerateSigningKey creates an ECDSA P-256 signing key named keyID in the
+// SDK KMS through `platformctl kms key generate`. The registry signs a
+// manifest only with a KMS key that already exists; it never creates one.
+func (c *CLIAdapter) GenerateSigningKey(ctx context.Context, keyID string) error {
+	_, err := c.runCommand(ctx, "kms", "key", "generate", keyID, "--algorithm", "ECDSA-P256", "--purpose", "sign")
+	return err
+}
+
 // =============================================================================
 // Image Management Commands
 // =============================================================================
@@ -221,12 +229,9 @@ func (c *CLIAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*P
 		return nil, err
 	}
 
-	var result cliPullResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "Pull", Err: err}
-	}
-
-	return result.toPullResult(), nil
+	// Without --output-file, stdout is the image document the registry
+	// streams and nothing else (docs/registry/cli.md §4).
+	return pullResultFromImage(ref, output)
 }
 
 // List lists images in the registry via CLI.
@@ -239,7 +244,7 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, e
 	}
 
 	if opts.TagPrefix != "" {
-		args = append(args, "--tag-prefix", opts.TagPrefix)
+		args = append(args, "--prefix", opts.TagPrefix)
 	}
 
 	if opts.Limit > 0 {
@@ -251,7 +256,7 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, e
 	}
 
 	if opts.IncludeEncrypted {
-		args = append(args, "--include-encrypted")
+		args = append(args, "--show-encrypted")
 	}
 
 	if opts.SortBy != "" {
@@ -288,9 +293,10 @@ func (c *CLIAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions)
 		args = append(args, "--force")
 	}
 
-	if opts.DeleteLayers {
-		args = append(args, "--delete-layers")
-	}
+	// opts.DeleteLayers has no CLI flag: `registry delete` documents only
+	// --force, --dry-run and --keep-untagged (docs/registry/cli.md §6), and
+	// the registry service has no delete-layers request, so the gRPC and MCP
+	// adapters drop it too.
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
@@ -344,7 +350,11 @@ func (c *CLIAdapter) Status(ctx context.Context) (*StatusResult, error) {
 		return nil, ErrInvalidResponse{Operation: "Status", Err: err}
 	}
 
-	return result.toStatusResult(), nil
+	status, err := result.toStatusResult()
+	if err != nil {
+		return nil, ErrInvalidResponse{Operation: "Status", Err: err}
+	}
+	return status, nil
 }
 
 // Tag has no platformctl registry command.

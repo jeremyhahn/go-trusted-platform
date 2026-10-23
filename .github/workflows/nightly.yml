@@ -32,6 +32,23 @@
 #           than an ordinary suite does. pkg/bmc reported one failing test and
 #           had three (#209). Fix the first panic, re-run, and expect more.
 #
+#           WHAT IT TOLERATES (ruling 125): only the rows of
+#           .github/foreign-failures-fips.tsv, today the two go-tpm HMAC
+#           panics of go-quicbaas#1389 (crypto/hmac short key, raised in
+#           go-tpm tpm2.(*policySession).Authorize), fixed by adopting
+#           go-quicbaas v0.16.0-alpha:
+#             pkg/vpn/agent  TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey
+#             pkg/app        TestDeviceActivation_IDevIDOverMTLS
+#           `make test-fips` hands a failed run to scripts/foreignfailures
+#           -job fips. A panic is excused only when its test, message and
+#           frame are a row's and nothing else fails. Because the panic hid the
+#           rest of its package, every other top-level test of that package is
+#           then rerun by explicit name (go test -list, then -run '^(...)$')
+#           under the same fips140=only environment and derived tags, and must
+#           pass. The lower-bound warning above is therefore answered for
+#           listed panics only: the rerun is what surfaces the hidden tests.
+#           docs/test/integration.md "The FIPS baseline".
+#
 #             pkg/dns          1 test, A FIFTH CAUSE, found 2026-09-03 and not
 #                              present in the run #209 was filed from.
 #                              `crypto/sha1: use of SHA-1 is not allowed`, via
@@ -148,7 +165,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.27.2"
+  GO_VERSION: "1.27.3"
   # Builds never resolve through a workspace: first-party modules come from
   # Gitea tags (conventions/dependency-resolution.md §2).
   GOWORK: "off"

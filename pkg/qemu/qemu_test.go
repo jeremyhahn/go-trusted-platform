@@ -637,6 +637,55 @@ func TestVMWaitNotRunning(t *testing.T) {
 	assert.ErrorIs(t, err, ErrVMNotRunning)
 }
 
+// A QEMU that exits with an error explains why on stderr (here: no KVM);
+// Wait carries that reason in its error so the exit can be reported.
+func TestVMWaitCarriesStderr(t *testing.T) {
+	vm := startFakeQEMU(t, "#!/bin/sh\necho 'qemu-system-x86_64: failed to initialize kvm: No such file or directory' >&2\nexit 1\n")
+
+	err := vm.Wait()
+
+	require.ErrorIs(t, err, ErrQEMUFailed)
+	assert.Contains(t, err.Error(), "exit status 1")
+	assert.Contains(t, err.Error(), "failed to initialize kvm: No such file or directory")
+	assert.False(t, vm.IsRunning())
+}
+
+func TestVMWaitCleanExitIsNil(t *testing.T) {
+	vm := startFakeQEMU(t, "#!/bin/sh\nexit 0\n")
+
+	require.NoError(t, vm.Wait())
+	assert.False(t, vm.IsRunning())
+}
+
+// startFakeQEMU starts a VM whose QEMU binary is the given shell script.
+func startFakeQEMU(t *testing.T, script string) *VM {
+	t.Helper()
+	tmpDir := t.TempDir()
+	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
+	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
+	disk := filepath.Join(tmpDir, "test.qcow2")
+	qemuBinary := filepath.Join(tmpDir, "qemu-system-x86_64")
+	require.NoError(t, os.WriteFile(ovmfCode, []byte("mock"), 0644))
+	require.NoError(t, os.WriteFile(ovmfVars, []byte("mock"), 0644))
+	require.NoError(t, os.WriteFile(disk, []byte("mock"), 0644))
+	require.NoError(t, os.WriteFile(qemuBinary, []byte(script), 0755))
+
+	vm, err := NewVM(&Config{
+		DiskPath:    disk,
+		Memory:      4096,
+		CPUs:        2,
+		DiskSize:    "10G",
+		WorkDir:     tmpDir,
+		OVMFCode:    ovmfCode,
+		OVMFVars:    ovmfVars,
+		QEMUBinary:  qemuBinary,
+		NetworkMode: "none",
+	}, logging.DefaultLogger())
+	require.NoError(t, err)
+	require.NoError(t, vm.Start(context.Background(), string(BootModeBoot)))
+	return vm
+}
+
 func TestBuildFIDO2Args(t *testing.T) {
 	tmpDir := t.TempDir()
 	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")

@@ -187,6 +187,7 @@ type TPM2InfoResponse struct {
     IsSimulator  bool              `codec:"is_simulator"`
     FIPSMode     bool              `codec:"fips_mode"`
     MaxNVRAMSize uint32            `codec:"max_nvram_size"`
+    PCRBanks     []string          `codec:"pcr_banks"` // "sha1", "sha256", ...; empty when the PCR read fails
     Properties   map[string]string `codec:"properties"`
     Timestamp    int64             `codec:"timestamp"`
 }
@@ -254,13 +255,20 @@ type TPM2KeyResponse struct {
 {}
 ```
 
-The EK is created from the configured EK attributes.
+The EK is built from `tpm.ek` (the TCG EK Credential Profile template of its
+algorithm, RSA unless it names ECC, under the endorsement hierarchy) and
+persisted at the configured EK handle, so it can be created after
+`TPM2_Clear` has emptied the handle. An occupied EK handle is refused with
+`StatusAlreadyExists` (0x06); a `tpm.ek` with no handle, or with an algorithm
+that has no EK template, is refused with `StatusInvalidRequest` (0x01, gRPC
+`FailedPrecondition`).
 
 **Response Payload:**
 ```go
-type TPM2StatusResponse struct {
-    Success   bool   `codec:"success"`
-    Message   string `codec:"message"`
+type TPM2KeyResponse struct {
+    Handle    uint32 `codec:"handle"`
+    PublicKey []byte `codec:"public_key"`
+    Algorithm string `codec:"algorithm"`
     Timestamp int64  `codec:"timestamp"`
 }
 ```
@@ -272,7 +280,11 @@ type TPM2StatusResponse struct {
 {}
 ```
 
-The configured EK handle is flushed.
+The EK that `tpm.ek` configures is evicted from its persistent handle
+(`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5) with the `tpm.ek`
+hierarchy auth; the message is `EK evicted`. An empty handle is NotFound.
+DeleteSRK (`0x0B`) does the same for the Shared SRK `tpm.ssrk` configures,
+answering `SRK evicted`.
 
 **Response Payload:**
 ```go
@@ -312,6 +324,29 @@ type TPM2ImportEKCertRequest struct {
 type TPM2StatusResponse struct {
     Success   bool   `codec:"success"`
     Message   string `codec:"message"`
+    Timestamp int64  `codec:"timestamp"`
+}
+```
+
+### CreateSRK (0x0A)
+
+**Request Payload:**
+```messagepack
+{}
+```
+
+The Shared SRK is created from `tpm.ssrk` and persisted at its handle; it is
+never read back from the handle first, so it works on a cleared TPM. An
+occupied handle is refused with `StatusAlreadyExists` (0x06); a `tpm.ssrk`
+with no handle is refused with `StatusInvalidRequest` (0x01, gRPC
+`FailedPrecondition`).
+
+**Response Payload:**
+```go
+type TPM2KeyResponse struct {
+    Handle    uint32 `codec:"handle"`
+    PublicKey []byte `codec:"public_key"`
+    Algorithm string `codec:"algorithm"`
     Timestamp int64  `codec:"timestamp"`
 }
 ```

@@ -132,6 +132,10 @@ type OverlayModeStatus struct {
 	// local host's IP.
 	RefusedBindings uint64
 
+	// RefusedReplays is how many replays of a refused VTEP's routes failed,
+	// leaving the VTEP refused for the next sweep to replay again.
+	RefusedReplays uint64
+
 	// L3VNI is the IP-VRF of symmetric IRB; zero when off.
 	L3VNI uint32
 
@@ -279,6 +283,12 @@ type OverlayModeConfig struct {
 	// it, so an SA runs to exactly the VTEPs this node exchanges frames with.
 	FloodPeers bgp.EVPNRouteHandler
 
+	// NDFallbackHoldDown is how long every solicitation floods after the
+	// first ND fallback; zero takes the 30-second default. Repeated
+	// fallbacks double it up to the 8-minute cap, so it must not exceed
+	// that cap.
+	NDFallbackHoldDown time.Duration
+
 	// Logger for logging operations.
 	Logger *slog.Logger
 }
@@ -302,6 +312,9 @@ func (c *OverlayModeConfig) Validate() error {
 	}
 	if c.Logger == nil {
 		return ErrLoggerNil
+	}
+	if c.NDFallbackHoldDown < 0 || c.NDFallbackHoldDown > overlayNDFallbackHoldDownMax {
+		return ErrNDFallbackHoldDownInvalid
 	}
 	if c.EVPNConfig != nil && c.Admitter == nil {
 		return ErrAdmitterNil
@@ -484,6 +497,9 @@ type OverlayModeHandler struct {
 	// refusedBindings counts the remote bindings refused or held back for
 	// a conflict.
 	refusedBindings uint64
+
+	// refusedReplays counts the replays of a refused VTEP that failed.
+	refusedReplays uint64
 
 	// ndOwners indexes the hosts by their IPv6 bindings, for answering
 	// punted solicitations; mu guards it.
@@ -1255,6 +1271,7 @@ func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
 		VNICount:                 len(h.segments),
 		PrefixCount:              len(h.prefixes),
 		RefusedBindings:          h.refusedBindings,
+		RefusedReplays:           h.refusedReplays,
 		L3VNI:                    h.config.L3VNI,
 		ARPSuppressionEnabled:    h.config.ARPSuppression,
 		NDSuppression:            h.ndStatus(),

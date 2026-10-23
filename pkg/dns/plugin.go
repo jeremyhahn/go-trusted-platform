@@ -16,7 +16,6 @@ package dns
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -49,6 +48,15 @@ var (
 	datastoreFactory *quicbaas.Factory
 
 	ErrInternalZoneQueryViolation = errors.New("received public query for internal zone")
+
+	// ErrServerZoneUndefined reports a public or internal server with no zone
+	// in the configuration.
+	ErrServerZoneUndefined = errors.New("server zone not defined in configuration")
+
+	// ErrNoDNSSECSigner reports DNSSEC enabled with no key backend wired, so
+	// a zone would be stored unsigned.
+	ErrNoDNSSECSigner = errors.New("DNSSEC enabled but no key store and no XKMS adapter are configured; " +
+		"set one with SetDNSSECKeyStore or SetXKMSAdapter before loading zones")
 )
 
 func (cp TrustedPlatformPlugin) Name() string { return trustedPlatformPlugin }
@@ -73,6 +81,26 @@ type TrustedPlatformPlugin struct {
 // ServeDNS handles incoming DNS requests.
 func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 
+	// Only standard queries are served. An UPDATE (RFC 2136 §2), NOTIFY or
+	// any other opcode gets NOTIMP (RFC 1035 §4.1.1 RCODE 4) instead of being
+	// answered as if it were a query. NOTIMP is one of the rcodes for which
+	// plugin.ClientWrite is false, so the CoreDNS server writes the reply.
+	if r.Opcode != dns.OpcodeQuery {
+		Configuration.Logger.Warn("Unsupported DNS opcode",
+			slog.String("remoteAddr", w.RemoteAddr().String()),
+			slog.String("opcode", dns.OpcodeToString[r.Opcode]))
+		return dns.RcodeNotImplemented, nil
+	}
+
+	// A query names what it asks for in its question section (RFC 1035
+	// §4.1.2). One without a question cannot be interpreted, so it gets
+	// FORMERR (RFC 1035 §4.1.1 RCODE 1), which the CoreDNS server writes.
+	if len(r.Question) == 0 {
+		Configuration.Logger.Warn("DNS query without a question",
+			slog.String("remoteAddr", w.RemoteAddr().String()))
+		return dns.RcodeFormatError, nil
+	}
+
 	// Parse the port number from the local connection address
 	pieces := strings.Split(w.LocalAddr().String(), ":")
 	port := pieces[len(pieces)-1]
@@ -82,7 +110,7 @@ func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWrit
 	qtype := r.Question[0].Qtype          // Query type
 
 	Configuration.Logger.Info("Inbound DNS query",
-		slog.String("remoteAddrress", w.RemoteAddr().String()),
+		slog.String("remoteAddr", w.RemoteAddr().String()),
 		slog.String("port", port),
 		slog.String("qname", qname),
 		slog.String("qtype", dns.TypeToString[qtype]))
@@ -454,7 +482,9 @@ func setup(c *caddy.Controller) error {
 	}
 
 	// Initialize macro values
-	setupMacros()
+	if err := setupMacros(); err != nil {
+		return &WrappedError{Msg: "failed to set up zone macros", Err: err}
+	}
 
 	// Use injected DatastoreFactory if available (shared with main platform),
 	// otherwise create a new one (standalone DNS server mode)
@@ -581,7 +611,7 @@ func isNotFoundError(err error) bool {
 func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) error {
 
 	if zone.Name == "" {
-		return &MessageError{Msg: fmt.Sprintf("%s server zone not defined in configuration", serverType)}
+		return &DetailError{Err: ErrServerZoneUndefined, Detail: " (" + serverType + " server)"}
 	}
 
 	ctx := context.Background()
@@ -589,7 +619,7 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 	// Check if the zone already exists in the datastore
 	existingZone, err := zoneDAO.GetByName(ctx, zone.Name)
 	if err != nil && !isNotFoundError(err) {
-		return &WrappedError{Msg: fmt.Sprintf("failed to check if zone %s exists", zone.Name), Err: err}
+		return &ZoneError{Op: "look up", Zone: zone.Name, Err: err}
 	}
 
 	// Save the zone to the datastore if it doesn't already exist
@@ -601,17 +631,17 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 
 		// Expand config file macros
 		if err := Expand(&zone); err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("failed to expand zone %s", zone.Name), Err: err}
+			return &ZoneError{Op: "expand", Zone: zone.Name, Err: err}
 		}
 
 		// Sign the zone with DNSSEC if enabled
 		if err := signZoneIfEnabled(&zone); err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("failed to sign zone %s", zone.Name), Err: err}
+			return &ZoneError{Op: "sign", Zone: zone.Name, Err: err}
 		}
 
 		// Save the zone to the datastore
 		if err := zoneDAO.Save(ctx, &zone); err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("failed to save zone %s", zone.Name), Err: err}
+			return &ZoneError{Op: "save", Zone: zone.Name, Err: err}
 		}
 		log.Infof("Zone %s (%s server) saved to datastore", zone.Name, serverType)
 	} else if needsDNSSECSigning(existingZone) {
@@ -620,12 +650,12 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 
 		// Sign the existing zone
 		if err := signZoneIfEnabled(existingZone); err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("failed to sign zone %s", zone.Name), Err: err}
+			return &ZoneError{Op: "sign", Zone: zone.Name, Err: err}
 		}
 
 		// Update the zone in the datastore
 		if err := zoneDAO.Save(ctx, existingZone); err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("failed to update zone %s", zone.Name), Err: err}
+			return &ZoneError{Op: "update", Zone: zone.Name, Err: err}
 		}
 		log.Infof("Zone %s (%s server) DNSSEC signed and saved", zone.Name, serverType)
 	}
@@ -676,24 +706,24 @@ func signZoneIfEnabled(zone *entities.Zone) error {
 		log.Infof("Using DNSSEC key store for key management")
 		dnssecSvc, err = NewDNSSECServiceWithKeyStore(Configuration.DNSSEC, Configuration.Logger, KeyStore)
 		if err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("dns: failed to create DNSSEC service with key store for zone %s", zone.Name), Err: err}
+			return &WrappedError{Msg: "dns: failed to create DNSSEC service with key store", Err: err}
 		}
 	case XKMSAdapter != nil:
 		log.Infof("Using XKMS adapter for DNSSEC key management")
 		dnssecSvc, err = NewDNSSECServiceWithXKMS(Configuration.DNSSEC, Configuration.Logger, XKMSAdapter)
 		if err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("dns: failed to create DNSSEC service with XKMS adapter for zone %s", zone.Name), Err: err}
+			return &WrappedError{Msg: "dns: failed to create DNSSEC service with XKMS adapter", Err: err}
 		}
 	default:
 		// HARD FAIL: DNSSEC is enabled but no key backend is wired up.
 		// The caller MUST NOT persist this zone as "signed" — the data is
 		// unsigned and the validator will reject it downstream.
-		return &MessageError{Msg: fmt.Sprintf("dns: DNSSEC enabled for zone %s but no key store and no XKMS adapter are configured — set DNSSECKeyStore via SetDNSSECKeyStore or XKMSAdapter via SetXKMSAdapter before loading zones", zone.Name)}
+		return ErrNoDNSSECSigner
 	}
 
 	log.Infof("Signing zone %s with DNSSEC", zone.Name)
 	if err := dnssecSvc.SignZone(zone); err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("dns: DNSSEC signing failed for zone %s", zone.Name), Err: err}
+		return &WrappedError{Msg: "dns: DNSSEC signing failed", Err: err}
 	}
 	log.Infof("Zone %s signed with DNSSEC successfully", zone.Name)
 

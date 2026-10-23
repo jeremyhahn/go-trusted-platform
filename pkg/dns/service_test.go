@@ -1014,6 +1014,16 @@ func TestService_PublicDomain(t *testing.T) {
 	assert.Equal(t, "example.com.", domain)
 }
 
+// A daemon may run the DNS service with neither server configured (the
+// integration platformd does); its domains are then empty, and reading them
+// must not dereference the absent server config (QUIC DNS GetConfig panicked).
+func TestService_Domains_NoServerConfigured(t *testing.T) {
+	svc := &Service{params: &Params{Config: &Config{}}}
+
+	assert.Empty(t, svc.InternalDomain())
+	assert.Empty(t, svc.PublicDomain())
+}
+
 // TestService_InternalZone verifies internal zone retrieval.
 func TestService_InternalZone(t *testing.T) {
 	mockDAO := mocks.NewMockZoneDAO()

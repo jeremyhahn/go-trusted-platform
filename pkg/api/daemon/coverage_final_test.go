@@ -330,14 +330,54 @@ func TestCoverageFinalKeyStatusToString(t *testing.T) {
 func TestCoverageFinalKeyUsagesToStrings(t *testing.T) {
 	t.Parallel()
 
-	usages := []pb.KeyUsage{
-		pb.KeyUsage_KEY_USAGE_ENCRYPT,
-		pb.KeyUsage_KEY_USAGE_SIGN,
-	}
-	result := keyUsagesToStrings(usages)
-	if len(result) != 2 {
-		t.Errorf("expected 2 strings, got %d", len(result))
-	}
+	t.Run("ShortNames", func(t *testing.T) {
+		t.Parallel()
+		usages := []pb.KeyUsage{
+			pb.KeyUsage_KEY_USAGE_ENCRYPT,
+			pb.KeyUsage_KEY_USAGE_SIGN,
+			pb.KeyUsage_KEY_USAGE_WRAP_KEY,
+		}
+		want := []string{"ENCRYPT", "SIGN", "WRAP_KEY"}
+		result := keyUsagesToStrings(usages)
+		if len(result) != len(want) {
+			t.Fatalf("expected %d strings, got %v", len(want), result)
+		}
+		for i := range want {
+			if result[i] != want[i] {
+				t.Errorf("result[%d] = %q, want %q", i, result[i], want[i])
+			}
+		}
+	})
+
+	t.Run("RoundTrip", func(t *testing.T) {
+		t.Parallel()
+		usages := []pb.KeyUsage{
+			pb.KeyUsage_KEY_USAGE_ENCRYPT,
+			pb.KeyUsage_KEY_USAGE_DECRYPT,
+			pb.KeyUsage_KEY_USAGE_SIGN,
+			pb.KeyUsage_KEY_USAGE_VERIFY,
+			pb.KeyUsage_KEY_USAGE_WRAP_KEY,
+			pb.KeyUsage_KEY_USAGE_DERIVE_KEY,
+			pb.KeyUsage_KEY_USAGE_GENERATE_MAC,
+			pb.KeyUsage_KEY_USAGE_VERIFY_MAC,
+		}
+		back := stringsToKeyUsages(keyUsagesToStrings(usages))
+		if len(back) != len(usages) {
+			t.Fatalf("round trip lost usages: got %v, want %v", back, usages)
+		}
+		for i := range usages {
+			if back[i] != usages[i] {
+				t.Errorf("round trip [%d] = %v, want %v", i, back[i], usages[i])
+			}
+		}
+	})
+
+	t.Run("Empty", func(t *testing.T) {
+		t.Parallel()
+		if result := keyUsagesToStrings(nil); len(result) != 0 {
+			t.Errorf("expected no strings, got %v", result)
+		}
+	})
 }
 
 func TestCoverageFinalStringToKeyUsage(t *testing.T) {

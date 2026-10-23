@@ -15,6 +15,7 @@ package ipc
 
 import (
 	"context"
+	"slices"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -29,13 +30,19 @@ import (
 // DatapathUIDs additionally admits the parser processes' uid to the
 // kernel-programming process's narrow surface: the VPN peer RPCs, never
 // ApplyDesired, which replaces the whole desired document and is the
-// supervisor's alone.
+// supervisor's alone. PlatformUIDs admits platformd's uid to
+// GatewayServicesService (#660), the live load-balancer, NAT64 and perf
+// surface, and to nothing else.
 type Policy struct {
 	// ControlUIDs may call every method. Empty means uid 0 only.
 	ControlUIDs []uint32
 	// DatapathUIDs may call the parser-facing DatapathService methods in
 	// addition to ControlUIDs.
 	DatapathUIDs []uint32
+	// PlatformUIDs may call the GatewayServicesService methods in addition
+	// to ControlUIDs. Empty admits no one beyond ControlUIDs: a platformd
+	// running as root is already a control uid.
+	PlatformUIDs []uint32
 }
 
 // admission decides whether a kernel-verified uid may call one method.
@@ -51,6 +58,11 @@ func supervisorOrParser(p Policy, uid uint32) bool {
 	return admits(p.ControlUIDs, uid) || admits(p.DatapathUIDs, uid)
 }
 
+// supervisorOrPlatform admits the control uids and platformd's uids.
+func supervisorOrPlatform(p Policy, uid uint32) bool {
+	return admits(p.ControlUIDs, uid) || slices.Contains(p.PlatformUIDs, uid)
+}
+
 // methodAdmissions is the authorization table, keyed by the full gRPC
 // method. A method it does not name is refused (ErrUnknownService), so a
 // method added to the contract is closed until it is placed here.
@@ -60,6 +72,17 @@ var methodAdmissions = map[string]admission{
 	ipcv1.DatapathService_ApplyDesired_FullMethodName:   supervisorOnly,
 	ipcv1.DatapathService_InstallVPNPeer_FullMethodName: supervisorOrParser,
 	ipcv1.DatapathService_RemoveVPNPeer_FullMethodName:  supervisorOrParser,
+
+	ipcv1.GatewayServicesService_LBStatus_FullMethodName:       supervisorOrPlatform,
+	ipcv1.GatewayServicesService_ListVIPs_FullMethodName:       supervisorOrPlatform,
+	ipcv1.GatewayServicesService_GetVIP_FullMethodName:         supervisorOrPlatform,
+	ipcv1.GatewayServicesService_AddVIP_FullMethodName:         supervisorOrPlatform,
+	ipcv1.GatewayServicesService_RemoveVIP_FullMethodName:      supervisorOrPlatform,
+	ipcv1.GatewayServicesService_SetVIPBackends_FullMethodName: supervisorOrPlatform,
+	ipcv1.GatewayServicesService_NAT64Status_FullMethodName:    supervisorOrPlatform,
+	ipcv1.GatewayServicesService_PerfFlows_FullMethodName:      supervisorOrPlatform,
+	ipcv1.GatewayServicesService_PerfDatapath_FullMethodName:   supervisorOrPlatform,
+	ipcv1.GatewayServicesService_PerfConntrack_FullMethodName:  supervisorOrPlatform,
 }
 
 // admits reports whether uid is in the list, treating an empty list as

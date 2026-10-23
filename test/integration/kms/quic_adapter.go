@@ -1118,6 +1118,7 @@ var quicPurposes = map[string][]int32{
 	"sign":            quicSignUsages,
 	"sign_verify":     quicSignUsages,
 	"wrap":            quicWrapUsages,
+	"mac":             {int32(platformv1.KeyUsage_KEY_USAGE_HMAC)},
 }
 
 // quicSigningAlgorithms are the algorithms whose default purpose is signing.

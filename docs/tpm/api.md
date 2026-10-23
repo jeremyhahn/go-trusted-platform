@@ -136,6 +136,16 @@ fields. Parse the structured fields. If the underlying `FixedProperties` read
 fails the call still succeeds with the text fallback and empty structured
 fields — check for an empty `Manufacturer` before trusting them.
 
+**`Info` reports the TPM version and the allocated PCR banks on every
+transport.** The version is `TPM_VERSION_2_0` on gRPC/Unix and REST and the
+string `"2.0"` (`tpmattrs.Version`) on QUIC (`version`), MCP (`version`) and
+`platformctl tpm info -o json`. The PCR banks come from one reader,
+`tpmattrs.ActivePCRBanks`, which reads PCR 0 of every bank the TPM allocates:
+`PcrBanks` (`PCR_BANK_SHA1`, `PCR_BANK_SHA256`, ...) on gRPC/Unix and REST, and
+lower-case hash names (`sha1`, `sha256`, ...) in `pcr_banks` on QUIC, MCP and
+the CLI. Like the `FixedProperties` fields this read fails soft: a TPM that
+refuses it returns an empty bank list and the call still succeeds.
+
 **`Info` also publishes the configured SRK handles**, so a client probes the real
 handle instead of assuming the default. Every transport carries the same two
 keys, as `0x%08X` strings, built by `tpmsrk.InfoProperties`: `platform_srk_handle`
@@ -532,7 +542,7 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 | MCP — `platform_tpm_pcr_extend` | **scoped `tpm:write`** in `pkg/api/mcp/authz.go`, the scope of gRPC `ExtendPCR` and QUIC's `SubOpTPM2ExtendPCR` |
 | MCP — `platform_tpm_*` tools with a gRPC twin | **scoped** in `pkg/api/mcp/authz.go` on the gRPC tiers (#304), except `platform_tpm_unseal`, which needs `tpm:write`; the table is in [api-reference-mcp.md](api-reference-mcp.md) |
 | MCP — `platform_tpm_capabilities`, `platform_tpm_platform` | **scoped** `tpm:read` (#304), the scope of their gRPC twins `GetCapabilities` and `GetPlatformAttributes` and of QUIC `0x17` and `0x1E` |
-| MCP — `platform_tpm_{ek,srk,iak}_delete` | **scoped `tpm:delete`** in `pkg/api/mcp/authz.go`, the scope of gRPC `DeleteEK`/`DeleteSRK`/`DeleteAK`. `ek_delete` and `srk_delete` flush a persistent handle, which deletes nothing; `iak_delete` is refused with `FailedPrecondition` (§8) |
+| MCP — `platform_tpm_{ek,srk,iak}_delete` | **scoped `tpm:delete`** in `pkg/api/mcp/authz.go`, the scope of gRPC `DeleteEK`/`DeleteSRK`/`DeleteAK`. `ek_delete` and `srk_delete` evict the configured persistent key; `iak_delete` is refused with `FailedPrecondition` (§8) |
 | MCP — `idevid_*` / `iak_*` tools | **scoped** in `pkg/api/mcp/authz.go` with their gRPC twins' scopes, IAK tools included: `idevid:read` for info, exists and get-cert; `idevid:write` for generate, CSR, install-cert and `idevid_create_ldevid`; `idevid:delete` for the deletes. The tools call the shared `IDevIDGRPCService`, so each answers with its gRPC message and error class (#304) |
 | MCP — `device_attributes`, `activate_credential` | **scoped** `idevid:read` and `idevid:write`, the scopes of gRPC `GetDeviceAttributes` and `IDevIDService/ActivateCredential` (#304). They make the same TPM calls as those methods but answer with the MCP provider's errors, not the gRPC status |
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID CSR and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete`. The exception is `LDevIDCSR` (`0x1D`): the daemon serves it with `IDevIDService.CreateLDevID`, so it takes `idevid:write` |
@@ -578,11 +588,11 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x02` | `StatusNotFound` | 404 | `NotFound` | upstream error text matching `not found` / `does not exist` / `no such` |
 | `0x03` | `StatusUnauthorized` | 401 | `Unauthenticated` | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | `Internal` | `ErrTPM2OperationFailed`, `ErrTPM2EncodingFailed`, anything unclassified |
-| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | upstream text matching `already exists` / `duplicate` |
+| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | `tpmek.ErrEKExists` (Create EK at an occupied EK handle); upstream text matching `already exists` / `duplicate` |
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| — | — | — | `FailedPrecondition` | upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrNotConfigured` / `tpmek.ErrAlgorithm` (Create EK when `tpm.ek` names no handle, or an algorithm with no EK template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line

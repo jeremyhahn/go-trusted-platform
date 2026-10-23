@@ -917,6 +917,13 @@ func mapVTPMError(err error) error {
 		return status.Error(codes.InvalidArgument, errMsg)
 	}
 
+	// A bundle that is not in the state the operation needs (REST 409).
+	var notRunning vtpm.ErrVTPMNotRunning
+	var alreadyRunning vtpm.ErrVTPMAlreadyRunning
+	if errors.As(err, &notRunning) || errors.As(err, &alreadyRunning) {
+		return status.Error(codes.FailedPrecondition, errMsg)
+	}
+
 	// Check for not found errors
 	if containsAny(errMsg, "not found", "does not exist", "no such") {
 		return status.Error(codes.NotFound, errMsg)

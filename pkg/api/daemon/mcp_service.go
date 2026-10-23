@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,6 +39,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -65,7 +67,7 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
-	// DeviceTemplateService backs device_template_create and
+	// DeviceTemplateService backs the device_template_* tools and
 	// profile_create_from_template; nil answers that no template service
 	// is configured.
 	DeviceTemplateService device.DeviceTemplateService
@@ -112,8 +114,10 @@ type MCPServiceProviderConfig struct {
 	// backs the proxy_* MCP tools (same instance as gRPC/REST/QUIC).
 	ProxyService *grpcapi.ProxyGRPCService
 
-	// GatewayLB serves gateway load balancer VIP tools (gateway_lb_*).
-	GatewayLB GatewayLoadBalancerInterface
+	// GatewayBackends is the shared gateway service the load balancer
+	// (gateway_lb_*), NAT64 and perf (gateway_perf_*) tools read their
+	// backend from (#660).
+	GatewayBackends GatewayBackendSource
 
 	// GatewaySnapshots serves the gateway telemetry snapshot tools
 	// (gateway_snapshot, gateway_snapshots); nil answers that no gateway
@@ -129,10 +133,6 @@ type MCPServiceProviderConfig struct {
 	// gRPC, REST and QUIC overlay services use; nil answers that the
 	// overlay service is not available.
 	Overlay OverlayControllerInterface
-
-	// GatewayPerf serves gateway performance verification tools
-	// (gateway_perf_*).
-	GatewayPerf GatewayPerfInterface
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -156,8 +156,10 @@ type MCPServiceProvider struct {
 	kmsService            baasservice.KMSService
 	cryptoService         baasservice.CryptoService
 	secretsService        baasservice.SecretsService
-	dekService            DEKServiceInterface // the gRPC DEKManagement adapter, shared with QUIC
-	kmsBackend            *PlatformKMSBackend // shared with gRPC KeyManagementService, QUIC and REST
+	secretsPrefix         SecretsPrefixService    // the gRPC SecretsManagement adapter, for secret_get_by_prefix
+	secretsServer         SecretsServiceInterface // the gRPC SecretsManagement adapter, shared with QUIC, for secret_rollback
+	dekService            DEKServiceInterface     // the gRPC DEKManagement adapter, shared with QUIC
+	kmsBackend            *PlatformKMSBackend     // shared with gRPC KeyManagementService, QUIC and REST
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
 	bmcServer             platformv1.BMCServiceServer
@@ -172,9 +174,9 @@ type MCPServiceProvider struct {
 	zoneService           gateway.ZoneService
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
-	gatewayLB             GatewayLoadBalancerInterface
-	gatewayNAT64          GatewayNAT64Interface
-	gatewayPerf           GatewayPerfInterface
+	// gatewayBackends is the shared gateway service the gateway_lb_*,
+	// gateway_nat64_* and gateway_perf_* tools read their backend from.
+	gatewayBackends GatewayBackendSource
 	// gatewaySnapshotTools serves the telemetry snapshot tools.
 	gatewaySnapshotTools
 	// gatewayStatusTools serves the gateway status and mode tools (#65).
@@ -234,8 +236,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		gatewayIPAMTools:      gatewayIPAMTools{ipam: config.IPAMService},
 		configDeliveryService: config.ConfigDeliveryService,
 		proxyService:          config.ProxyService,
-		gatewayLB:             config.GatewayLB,
-		gatewayPerf:           config.GatewayPerf,
+		gatewayBackends:       config.GatewayBackends,
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
 		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
 		gatewayBGPTools:       gatewayBGPTools{controller: config.GatewayBGP},
@@ -316,14 +317,22 @@ func (p *MCPServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOption
 }
 
 // VTPMStart starts a vTPM instance.
-func (p *MCPServiceProvider) VTPMStart(ctx context.Context, name string) error {
+func (p *MCPServiceProvider) VTPMStart(ctx context.Context, name string) (interface{}, error) {
 	if p.vtpmService == nil {
-		return ErrServiceNotAvailable{Service: "vtpm"}
+		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return err
+		return nil, err
 	}
-	return p.vtpmService.Start(ctx, name)
+	if err := p.vtpmService.Start(ctx, name); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"success":     true,
+		"bundle_id":   name,
+		"running":     p.vtpmService.IsRunning(name),
+		"socket_path": p.vtpmService.GetTPMSocketPath(name),
+	}, nil
 }
 
 // VTPMStop stops a vTPM instance.
@@ -775,7 +784,11 @@ func (p *MCPServiceProvider) DeviceFindBySerial(ctx context.Context, serial stri
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
-	return p.deviceService.FindBySerial(ctx, serial)
+	dev, err := p.deviceService.FindBySerial(ctx, serial)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return dev, nil
 }
 
 // registerMCPDevice stores the device described by a device_register request
@@ -800,7 +813,9 @@ func registerMCPDevice(ctx context.Context, svc device.DeviceService, req *mcp.D
 	return dev, nil
 }
 
-// DeviceGet retrieves a device by ID.
+// DeviceGet retrieves a device by ID. Service failures are classified by
+// deviceStatusError, as the gRPC device service classifies them, so a missing
+// device is NotFound on MCP as it is on every other transport.
 func (p *MCPServiceProvider) DeviceGet(ctx context.Context, deviceID string) (interface{}, error) {
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
@@ -810,7 +825,11 @@ func (p *MCPServiceProvider) DeviceGet(ctx context.Context, deviceID string) (in
 	if err != nil {
 		return nil, err
 	}
-	return p.deviceService.Get(ctx, id)
+	dev, err := p.deviceService.Get(ctx, id)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return dev, nil
 }
 
 // DeviceList lists devices with optional filter.
@@ -819,13 +838,11 @@ func (p *MCPServiceProvider) DeviceList(ctx context.Context, filter map[string]s
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
 
-	query := datastore.PageQuery{
-		PageSize:  100,
-		SortOrder: datastore.SortAscending,
-	}
+	query := datastore.NewPageQuery()
+	query.PageSize = 100
 	result, err := p.deviceService.Page(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, deviceStatusError(err)
 	}
 
 	devices := make([]interface{}, len(result.Entities))
@@ -847,9 +864,9 @@ func (p *MCPServiceProvider) DeviceDelete(ctx context.Context, deviceID string) 
 	}
 	dev, err := p.deviceService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
-	return p.deviceService.Delete(ctx, dev)
+	return deviceStatusError(p.deviceService.Delete(ctx, dev))
 }
 
 // DeviceUpdate updates a device.
@@ -864,7 +881,7 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 	}
 	dev, err := p.deviceService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
 	if model, ok := updates["model"].(string); ok {
 		dev.Model = model
@@ -872,7 +889,7 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 	if serial, ok := updates["serial"].(string); ok {
 		dev.Serial = serial
 	}
-	return p.deviceService.Update(ctx, dev)
+	return deviceStatusError(p.deviceService.Update(ctx, dev))
 }
 
 // DeviceAttest verifies a TPM quote submitted for a device over MCP. It
@@ -1534,12 +1551,14 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 // CASignCSR certifies the KMS key a CSR names for code signing. The CA
 // service authorizes the caller from the gRPC context, so the MCP caller's
 // validated platform token is carried over to it; a caller without one is
-// refused there.
+// refused there. An operator client certificate presented with no token
+// carries an AuthorizedContext too, but its grant is the peer's, not a
+// token's, so it is not carried over (docs/ca/api.md §4).
 func (p *MCPServiceProvider) CASignCSR(ctx context.Context, req *mcp.CASignCSRRequest) (interface{}, error) {
 	if p.caService == nil {
 		return nil, ErrServiceNotAvailable{Service: "ca"}
 	}
-	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok {
+	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && mcp.TokenFromContext(ctx) != "" {
 		ctx = grpcapi.ContextWithAuthorizedContext(ctx, authCtx)
 	}
 	return p.caService.SignCSR(ctx, &platformv1.SignCSRRequest{
@@ -1663,6 +1682,19 @@ func (p *MCPServiceProvider) IAMGetUser(ctx context.Context, tenantID string, us
 	return p.iam.GetUser(ctx, &platformv1.GetIAMUserRequest{TenantId: tenantID, UserId: userID})
 }
 
+// IAMUpdateUser updates an IAM user, as gRPC UpdateUser.
+func (p *MCPServiceProvider) IAMUpdateUser(ctx context.Context, req *mcp.IAMUpdateUserRequest) (interface{}, error) {
+	return p.iam.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{
+		TenantId:   req.TenantID,
+		UserId:     req.UserID,
+		Email:      req.Email,
+		Name:       req.Name,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
+		Attributes: req.Attributes,
+	})
+}
+
 // IAMListUsers lists a tenant's IAM users, as gRPC ListUsers.
 func (p *MCPServiceProvider) IAMListUsers(ctx context.Context, req *mcp.IAMListUsersRequest) (interface{}, error) {
 	return p.iam.ListUsers(ctx, &platformv1.ListIAMUsersRequest{
@@ -1693,6 +1725,17 @@ func (p *MCPServiceProvider) IAMDeleteRole(ctx context.Context, tenantID string,
 // IAMGetRole returns an IAM role, as gRPC GetRole.
 func (p *MCPServiceProvider) IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error) {
 	return p.iam.GetRole(ctx, &platformv1.GetIAMRoleRequest{TenantId: tenantID, RoleId: roleID})
+}
+
+// IAMUpdateRole updates an IAM role, as gRPC UpdateRole.
+func (p *MCPServiceProvider) IAMUpdateRole(ctx context.Context, req *mcp.IAMUpdateRoleRequest) (interface{}, error) {
+	return p.iam.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    req.TenantID,
+		RoleId:      req.RoleID,
+		Name:        req.Name,
+		Description: req.Description,
+		Permissions: req.Permissions,
+	})
 }
 
 // IAMListRoles lists a tenant's IAM roles, as gRPC ListRoles.
@@ -1754,6 +1797,16 @@ func (p *MCPServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID string
 // IAMGetGroup returns an IAM group, as gRPC GetGroup.
 func (p *MCPServiceProvider) IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error) {
 	return p.iam.GetGroup(ctx, &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: groupID})
+}
+
+// IAMUpdateGroup updates an IAM group, as gRPC UpdateGroup.
+func (p *MCPServiceProvider) IAMUpdateGroup(ctx context.Context, req *mcp.IAMUpdateGroupRequest) (interface{}, error) {
+	return p.iam.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{
+		TenantId:    req.TenantID,
+		GroupId:     req.GroupID,
+		Name:        req.Name,
+		Description: req.Description,
+	})
 }
 
 // IAMListGroups lists a tenant's IAM groups, as gRPC ListGroups.
@@ -2478,20 +2531,28 @@ func (m *MCPServiceProvider) ContainerCreate(ctx context.Context, name string, i
 		return nil, ErrContainerInvalidParameter{Parameter: "image", Reason: "container image is required"}
 	}
 
-	// Build device profile from request config
-	profile := &deviceentities.DeviceProfile{
-		Name:  name,
-		Model: "container:image=" + image,
+	attestOnCreate, _ := config["attest_on_create"].(bool)
+	creation, err := createContainer(ctx, m.computeOrchestrator, name, image, attestOnCreate)
+	if errors.As(err, new(ErrContainerAttestNotSupported)) {
+		return nil, err
 	}
-
-	// Create the instance using orchestrator
-	instance, err := m.computeOrchestrator.Create(ctx, profile)
 	if err != nil {
 		m.logger.Error("failed to create container", "name", name, "error", err)
 		return nil, ErrContainerOperationFailed{Operation: "create", Cause: err}
 	}
+	if creation.AttestErr != nil {
+		m.logger.Error("container created but attestation failed", "container_id", creation.Instance.ID, "error", creation.AttestErr)
+	}
 
-	return m.instanceToContainerResponse(instance), nil
+	// The tool answers the container's fields with the create status beside
+	// them, as CreateContainerResponse.status carries it on gRPC.
+	response := m.instanceToContainerResponse(creation.Instance)
+	createStatus := creation.status()
+	response["status"] = map[string]interface{}{
+		"success": createStatus.GetSuccess(),
+		"message": createStatus.GetMessage(),
+	}
+	return response, nil
 }
 
 // ContainerStart starts a container.
@@ -2853,7 +2914,9 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 	}
 
 	result := map[string]interface{}{
-		"info": info,
+		"info":      info,
+		"version":   tpmattrs.Version,
+		"pcr_banks": tpmattrs.ActivePCRBanks(p.tpm2Service),
 	}
 	for key, value := range tpmsrk.InfoProperties(p.tpm2Service) {
 		result[key] = value
@@ -2988,12 +3051,8 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	ekAttrs, err := tpmek.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateEK(ekAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 
@@ -3010,16 +3069,15 @@ func (p *MCPServiceProvider) TPMDeleteEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	handle, err := tpmek.Delete(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
-
-	p.tpm2Service.Flush(ekAttrs.TPMAttributes.Handle)
 
 	return map[string]interface{}{
 		"success": true,
-		"message": "EK handle flushed",
+		"message": "EK evicted",
+		"handle":  handle,
 	}, nil
 }
 
@@ -3047,12 +3105,8 @@ func (p *MCPServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, err
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateSRK(srkAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 
@@ -3069,16 +3123,15 @@ func (p *MCPServiceProvider) TPMDeleteSRK(ctx context.Context) (interface{}, err
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
+	handle, err := tpmsrk.Delete(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
-
-	p.tpm2Service.Flush(srkAttrs.TPMAttributes.Handle)
 
 	return map[string]interface{}{
 		"success": true,
-		"message": "SRK handle flushed",
+		"message": "SRK evicted",
+		"handle":  handle,
 	}, nil
 }
 

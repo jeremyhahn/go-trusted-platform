@@ -9,6 +9,7 @@
 | Protocol | MCP (JSON-RPC 2.0) |
 | Endpoint | `https://host:9445/mcp` |
 | Tools | 7 `provision_*` tools |
+| Result | `CallToolResult`; the tool's JSON output is its text block ([daemon api.md](../daemon/api.md) §1 "MCP tool results") |
 | Implementation | `pkg/api/mcp/provision_tools.go` |
 
 The `provision_*` tools mirror the `platform.v1 ConfigDeliveryService` gRPC

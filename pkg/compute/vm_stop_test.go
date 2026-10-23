@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // plainStartStopper is an orchestrator without the VMStopper capability.
@@ -71,6 +73,62 @@ func TestStopOptionsValidate(t *testing.T) {
 				return
 			}
 			assert.ErrorIs(t, err, ErrInvalidStopOptions)
+		})
+	}
+}
+
+func TestStopOptionsGuestWait(t *testing.T) {
+	tests := []struct {
+		name string
+		opts StopOptions
+		want time.Duration
+	}{
+		{name: "default waits the default window", opts: StopOptions{}, want: DefaultStopTimeout},
+		{name: "timeout waits the timeout", opts: StopOptions{Timeout: 5 * time.Second}, want: 5 * time.Second},
+		{name: "force does not wait", opts: StopOptions{Force: true}, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.opts.GuestWait())
+		})
+	}
+}
+
+func TestStopOptionsReplyWindow(t *testing.T) {
+	tests := []struct {
+		name string
+		opts StopOptions
+		want time.Duration
+	}{
+		{name: "default outlasts the default window", opts: StopOptions{}, want: DefaultStopTimeout + stopReplyMargin},
+		{name: "timeout outlasts the timeout", opts: StopOptions{Timeout: MaxStopTimeout}, want: MaxStopTimeout + stopReplyMargin},
+		{name: "force keeps only the margin", opts: StopOptions{Force: true}, want: stopReplyMargin},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.opts.ReplyWindow())
+		})
+	}
+}
+
+// The SDK computes the window a client waits for a stop's reply; it must
+// match the window the daemon holds the reply open for, or a client gives up
+// on a graceful stop that is still answering.
+func TestStopOptionsReplyWindowMatchesSDK(t *testing.T) {
+	assert.Equal(t, DefaultStopTimeout, computesvc.DefaultStopTimeout)
+	tests := []struct {
+		name           string
+		force          bool
+		timeoutSeconds uint32
+	}{
+		{name: "default", force: false, timeoutSeconds: 0},
+		{name: "timeout", force: false, timeoutSeconds: 90},
+		{name: "force", force: true, timeoutSeconds: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := StopOptions{Force: tt.force, Timeout: time.Duration(tt.timeoutSeconds) * time.Second}
+			assert.Equal(t, computesvc.StopReplyWindow(tt.force, tt.timeoutSeconds), opts.ReplyWindow())
 		})
 	}
 }

@@ -313,6 +313,17 @@ func (e ErrNoReachableSource) Error() string {
 	return "ntp: no reachable time source (" + strconv.Itoa(e.Total) + " configured)"
 }
 
+// ErrStepRefused is returned by Step when chronyd answers makestep with its
+// failure reply: chronyd is running but cannot step the clock, because it
+// does not control it (started with -x, or without CAP_SYS_TIME).
+type ErrStepRefused struct{ Output string }
+
+// Error implements the error interface.
+func (e ErrStepRefused) Error() string {
+	return "ntp: chronyd refused the step: it does not control the system clock (" +
+		strings.TrimSpace(e.Output) + ")"
+}
+
 // ErrRTCWriteFailed is returned when the system clock cannot be written back
 // to the hardware clock.
 type ErrRTCWriteFailed struct {
@@ -341,7 +352,7 @@ type ErrDisabled struct{}
 func (ErrDisabled) Error() string { return "ntp: time synchronization is not enabled" }
 
 // ErrUnresolvedNTSMaterial is returned when an NTS certificate or key field
-// still holds a secret reference (kms://, secret://, file://) at the point
+// still holds a secret reference (any <scheme>://, e.g. kms://) at the point
 // chronyd needs the material on disk. Serving unauthenticated time instead
 // would be a silent security downgrade, so this is fatal for the NTP service.
 type ErrUnresolvedNTSMaterial struct {

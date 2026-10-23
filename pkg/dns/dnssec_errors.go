@@ -48,6 +48,11 @@ var (
 	// ErrInvalidKeyType is returned when an invalid key type is specified.
 	ErrInvalidKeyType = errors.New("dnssec: invalid key type, must be 'ksk' or 'zsk'")
 
+	// ErrRolloverKeyDeleted is returned when a rollover deleted the current
+	// key but could not generate its replacement: the zone has no key of
+	// that type until a new one is generated.
+	ErrRolloverKeyDeleted = errors.New("dnssec: rollover deleted the current key but generated no replacement")
+
 	// ErrSigningFailed is returned when zone signing fails.
 	ErrSigningFailed = errors.New("dnssec: zone signing failed")
 
@@ -83,6 +88,15 @@ var (
 
 	// ErrInvalidKeyStore is returned when an invalid key store type is specified.
 	ErrInvalidKeyStore = errors.New("dnssec: invalid key store type")
+
+	// ErrInvalidDuration is returned when a DNSSEC duration such as
+	// signature-expiry is not a whole number followed by d, h, m or s, nor a
+	// Go duration.
+	ErrInvalidDuration = errors.New("dnssec: invalid duration")
+
+	// ErrInvalidKeyLifetime is returned when a ksk or zsk lifetime is not a
+	// positive duration such as "365d" or "720h".
+	ErrInvalidKeyLifetime = errors.New("dnssec: key lifetime must be a positive duration such as 365d or 720h")
 
 	// ErrKeyStoreNil is returned when the key store is nil.
 	ErrKeyStoreNil = errors.New("dnssec: key store is nil")

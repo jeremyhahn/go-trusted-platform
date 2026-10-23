@@ -55,6 +55,11 @@ type Config struct {
 	// whether KVM can accelerate the guest. Empty means runtime.GOARCH.
 	HostArch string `yaml:"-" json:"-" mapstructure:"-"`
 
+	// KVMProbe reports why the host's KVM device cannot be used, or nil
+	// when it can. Nil means probeKVMDevice, which opens /dev/kvm
+	// read-write; tests inject one so they never touch the host.
+	KVMProbe func() error `yaml:"-" json:"-" mapstructure:"-"`
+
 	// Firmware is the firmware image for architectures that take one as
 	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead,
 	// and so does aarch64 when Firmware is empty and OVMFCode is set: it
@@ -115,6 +120,12 @@ type Config struct {
 
 	// OVMFVars is the path to OVMF NVRAM template
 	OVMFVars string `yaml:"ovmf_vars" json:"ovmf_vars" mapstructure:"ovmf_vars"`
+
+	// NVRAMFormat is the per-instance NVRAM file format: raw (the default,
+	// the OVMFVars template copied as is) or qcow2. savevm refuses a VM
+	// while any writable drive cannot hold an internal snapshot, and a raw
+	// pflash cannot, so a UEFI guest that takes snapshots needs qcow2.
+	NVRAMFormat string `yaml:"nvram_format" json:"nvram_format" mapstructure:"nvram_format"`
 
 	// TPMSocket is the path to the TPM socket
 	TPMSocket string `yaml:"tpm_socket" json:"tpm_socket" mapstructure:"tpm_socket"`
@@ -505,6 +516,9 @@ func (c *Config) Validate() error {
 		_, err := p.firmware(c)
 		return err
 	}
+	if _, ok := validDiskFormats[c.nvramFormat()]; !ok {
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "NVRAM format must be qcow2 or raw, got " + c.NVRAMFormat}}
+	}
 
 	// Check OVMF firmware files exist
 	ovmfCode := c.OVMFCode
@@ -527,10 +541,28 @@ func (c *Config) Validate() error {
 // argument accept.
 var validDiskFormats = map[string]struct{}{DiskFormatQCOW2: {}, DiskFormatRaw: {}}
 
-// GetNVRAMPath returns the path to the NVRAM file
+// nvramFormat is NVRAMFormat, raw when unset.
+func (c *Config) nvramFormat() string {
+	if c.NVRAMFormat == "" {
+		return DiskFormatRaw
+	}
+	return c.NVRAMFormat
+}
+
+// GetNVRAMPath returns the path to the NVRAM file. A qcow2 NVRAM has its own
+// name, so a raw file left by an earlier run is never opened as qcow2.
 func (c *Config) GetNVRAMPath() string {
-	nvramDir := filepath.Join(c.WorkDir, "nvram")
-	return filepath.Join(nvramDir, "OVMF_VARS.fd")
+	if c.nvramFormat() == DiskFormatQCOW2 {
+		return filepath.Join(c.WorkDir, "nvram", "OVMF_VARS.qcow2")
+	}
+	return c.rawNVRAMPath()
+}
+
+// rawNVRAMPath is where a raw per-VM NVRAM lives. A VM created before its
+// NVRAM format became qcow2 has its persisted variables (boot entries,
+// enrolled Secure Boot keys) here.
+func (c *Config) rawNVRAMPath() string {
+	return filepath.Join(c.WorkDir, "nvram", "OVMF_VARS.fd")
 }
 
 // GetOVMFCodePath returns the appropriate OVMF code path based on Secure Boot setting

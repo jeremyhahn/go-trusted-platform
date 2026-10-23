@@ -76,8 +76,7 @@ Three observations that matter more than the table:
 component, listing what is registered, adding a checker at runtime — is an
 in-process Go call with no wire form of its own.
 
-**Checker registration is in-process only, by design** (owner ruling,
-2026-10-17). A checker is Go code running inside `platformd`; a remote caller
+**Checker registration is in-process only, by design.** A checker is Go code running inside `platformd`; a remote caller
 has no checker to hand over, so registering and unregistering one have no
 transport and never will. **Listing is served by the existing health
 endpoint:** the aggregate response carries one `components[]` entry per

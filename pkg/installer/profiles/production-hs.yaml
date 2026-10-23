@@ -34,3 +34,8 @@ security:
     seal_pcrs: [0, 1, 2, 3, 4, 5, 7, 9, 11, 12, 13, 14]
   secure_boot:
     enabled: true
+    # The canonical platform Secure Boot keys (docs/firmware/secure-boot.md);
+    # firstboot provisions the material behind these kms:// URIs.
+    pk:  { cn: "Trusted Platform Secure Boot PK",  store: tpm2,     key-uri: kms://platform/secureboot/pk,  cert-uri: kms://platform/secureboot/pk-cert }
+    kek: { cn: "Trusted Platform Secure Boot KEK", store: tpm2,     key-uri: kms://platform/secureboot/kek, cert-uri: kms://platform/secureboot/kek-cert }
+    db:  { cn: "Trusted Platform Secure Boot DB",  store: software, key-uri: kms://platform/secureboot/db,  cert-uri: kms://platform/secureboot/db-cert }

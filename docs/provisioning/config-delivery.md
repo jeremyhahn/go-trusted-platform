@@ -204,7 +204,8 @@ Status codes: `400` malformed request, expired or missing nonce, unusable
 digest or undecodable EK certificate, `403` EAB or EK verification failure,
 `409` the device profile is not provisioned for remote signing (no profile
 matched, `key_ref` other than `db`, secure boot disabled, `resign-mode` not
-`remote`, or no DB key URI), `503` no DB key signer is configured on the
+`remote`, or no DB key URI); the same 409 is returned when the KMS does not
+hold the configured DB key, `503` no DB key signer is configured on the
 control plane (`writeSignError`, `pkg/provisioning/configdelivery/handler.go`).
 
 ### Poll Session

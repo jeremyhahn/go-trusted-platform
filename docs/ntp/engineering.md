@@ -442,12 +442,13 @@ platform does not own.
 | `ErrDisabled` | — | Section absent or disabled | `Unavailable` / 503 |
 | `ErrRenderFailed` | `Cause` | Template render failed | `Internal` / 500 |
 | `ErrWriteConfigFailed` | `Path`, `Cause` | `chrony.conf` or NTS material unwritable | `Internal` / 500 |
-| `ErrUnresolvedNTSMaterial` | `Field`, `Value` | Value still a `kms://`/`secret://`/`file://` reference | `Internal` / 500 |
+| `ErrUnresolvedNTSMaterial` | `Field`, `Value` | Value still a `<scheme>://` reference (e.g. `kms://`, `file://`) | `Internal` / 500 |
 | `ErrServiceCommandFailed` | `Service`, `Action`, `Output`, `Cause` | `rc-update` / `rc-service` failed | `Internal` / 500 |
 | `ErrControlUnavailable` | `Command`, `Output`, `Cause` | `chronyc` failed — usually chronyd is down | `Unavailable` / 503 |
 | `ErrMalformedControlOutput` | `Command`, `Line`, `Want`, `Got` | CSV had too few fields | `Internal` / 500 |
 | `ErrSyncTimeout` | `Seconds` | The startup gate expired | `DeadlineExceeded` / 504 |
 | `ErrNoReachableSource` | `Total` | `Step` with nothing reachable | `Aborted` / **409** |
+| `ErrStepRefused` | `Output` | chronyd answered `makestep` with `500 Failure`: it does not control the clock (`-x`, or no `CAP_SYS_TIME`) | `Aborted` / **409** |
 | `ErrRTCWriteFailed` | `Output`, `Cause` | `hwclock --systohc` failed | never surfaced — logged only |
 | `ErrInvalidNTSVersionLink` | `Target` | The material store's `current` link points at something the store did not generate | `Internal` / 500 |
 | `ErrRotatedNTSMaterialLost` | `Cause` | The published pair no longer matches the last rotation; restart to re-resolve from the KMS | `Internal` / 500 |
@@ -563,6 +564,7 @@ renames on the wire: `LastSync` (a `time.Time`) becomes `last_sync_unix` (an
 |---|---|
 | `ntp.ErrDisabled`, `daemon.ErrNTPNotConfigured` | `Unavailable` |
 | `ntp.ErrNoReachableSource` | `Aborted` |
+| `ntp.ErrStepRefused` | `Aborted` |
 | `ntp.ErrControlUnavailable` | `Unavailable` |
 | `ntp.ErrMalformedControlOutput` | `Internal` |
 | `ntp.ErrSyncTimeout` | `DeadlineExceeded` |
@@ -649,9 +651,19 @@ transport. The devcontainer is Debian without OpenRC, so platformd's
 `rc-update add chronyd` fails and is logged; the runner
 (`run-integration-tests.sh` `start_chronyd`) then starts `chronyd -x` on the
 rendered file. `-x` keeps chronyd off the system clock, which the container
-shares with the CI host. Nothing serves NTP on the loopback, so no source is
-ever reachable and `Step` always returns the documented `ErrNoReachableSource`
-refusal: no suite can move a clock.
+shares with the CI host. Before it, `start_ntp_reference` starts a second
+`chronyd -x` that serves the loopback upstream as a `local stratum 8` reference
+with no command socket, and the runner waits (`chronyc waitsync`) until the
+daemon's chronyd has synchronised to it. The reference's config is
+`/etc/chrony/reference.conf` and its pid file `/run/chrony/reference.pid`: the
+chrony AppArmor profile loaded on the CI host also confines chronyd in the
+privileged container and lets it read only `/etc/chrony/` and write only
+`/run/chrony/`, so a config elsewhere fails with `Permission denied` even for
+root. A reference that does not start stops the run (`FATAL`). Without that source the clock never
+converged, the `ntp` component stayed degraded, and every transport's aggregate
+health answered not-healthy (#949). Both chronyds run `-x`, so a `Step` the ntp
+suite issues moves only chronyd's view, never the clock: no suite can move a
+clock.
 
 **Fault-injection seams.** `WithRunner` fakes `chronyc`/`rc-service` output
 (including malformed CSV and non-zero exit), `WithFileSystem` keeps rendering

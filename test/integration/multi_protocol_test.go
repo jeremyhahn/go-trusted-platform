@@ -30,15 +30,18 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	attestsvc "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/service"
 	pkgvtpm "github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/attestation"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/ca"
@@ -1019,9 +1022,12 @@ func testCARevokeCertificate(t *testing.T, ctx context.Context, adapter Protocol
 	require.NoError(t, err, "Issue prerequisite certificate")
 	require.NotNil(t, issueResult)
 	require.NotNil(t, issueResult.Certificate)
+	require.NotEmpty(t, issueResult.Certificate.Serial, "issued certificate must carry its serial")
 
+	// docs/ca/api.md: every transport revokes a certificate by its serial.
 	result, err := cmd.RevokeCertificate(ctx, ca.RevokeCertificateOptions{
 		CommonName: cn,
+		Serial:     issueResult.Certificate.Serial,
 		Reason:     ca.RevocationReasonSuperseded,
 	})
 	if missing := surfaceMissing(adapter, "CA", "RevokeCertificate", err); missing != nil {
@@ -1085,49 +1091,71 @@ func testDNSService(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	})
 }
 
-func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// setupMatrixDNSZone creates a zone of its own for one DNS leg and returns the
+// zone name with a deferable cleanup. The platform resolver answers from the
+// zones it serves (docs/dns/), so every leg resolves records it created rather
+// than names such as "localhost" no zone carries.
+func setupMatrixDNSZone(t *testing.T, ctx context.Context, cmd dns.DNSCommands, adapter ProtocolAdapter) (string, func()) {
+	t.Helper()
+	zoneName := fmt.Sprintf("matrix-%d.test.", time.Now().UnixNano())
+	_, err := cmd.CreateZone(ctx, dns.CreateZoneOptions{Name: zoneName, TTL: 3600})
+	if missing := surfaceMissing(adapter, "DNS", "CreateZone", err); missing != nil {
+		t.Fatal(missing)
+	}
+	require.NoError(t, err, "DNS CreateZone prerequisite should succeed")
+	return zoneName, func() {
+		if _, err := cmd.DeleteZone(ctx, zoneName); err != nil {
+			t.Errorf("DNS DeleteZone %s cleanup failed: %v", zoneName, err)
+		}
+	}
+}
+
+// testDNSResolveRecord adds one record of recordType to a fresh zone and
+// resolves it back over the adapter's transport.
+func testDNSResolveRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter, recordType, value string) {
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	result, err := cmd.Resolve(ctx, "localhost", "A")
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	name := "resolve." + zoneName
+	_, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
+		Name:       name,
+		RecordType: recordType,
+		Value:      value,
+		TTL:        300,
+	})
+	if missing := surfaceMissing(adapter, "DNS", "AddRecord", err); missing != nil {
+		t.Fatal(missing)
+	}
+	require.NoError(t, err, "DNS AddRecord %s prerequisite should succeed", recordType)
+
+	result, err := cmd.Resolve(ctx, name, recordType)
 	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
 		t.Fatal(missing)
 	}
-	require.NoError(t, err, "DNS Resolve A should succeed")
-	require.NotNil(t, result, "Resolve A result should not be nil")
+	require.NoError(t, err, "DNS Resolve %s should succeed", recordType)
+	require.NotNil(t, result, "Resolve %s result should not be nil", recordType)
+	assert.Equal(t, recordType, result.RecordType, "resolved record type")
+	// A TXT value may come back in its quoted presentation form.
+	assert.Contains(t, strings.Join(result.Values, " "), value, "resolved %s values", recordType)
+}
+
+func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+	testDNSResolveRecord(t, ctx, adapter, "A", "10.20.30.40")
 }
 
 func testDNSResolveAAAA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := createDNSAdapter(adapter.Name())
-	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
-
-	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
-	defer cmd.Teardown()
-
-	result, err := cmd.Resolve(ctx, "localhost", "AAAA")
-	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err, "DNS Resolve AAAA should succeed")
-	require.NotNil(t, result, "Resolve AAAA result should not be nil")
+	testDNSResolveRecord(t, ctx, adapter, "AAAA", "2001:db8::40")
 }
 
 func testDNSResolveTXT(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := createDNSAdapter(adapter.Name())
-	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
-
-	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
-	defer cmd.Teardown()
-
-	result, err := cmd.Resolve(ctx, "localhost", "TXT")
-	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err, "DNS Resolve TXT should succeed")
-	require.NotNil(t, result, "Resolve TXT result should not be nil")
+	testDNSResolveRecord(t, ctx, adapter, "TXT", "matrix-txt-value")
 }
 
 func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1137,8 +1165,12 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	recordName := fmt.Sprintf("matrix-test-%d.example.com", time.Now().UnixNano())
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	recordName := "create." + zoneName
 	result, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
 		Name:       recordName,
 		RecordType: "A",
 		Value:      "10.0.0.1",
@@ -1149,9 +1181,6 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	}
 	require.NoError(t, err, "DNS AddRecord should succeed")
 	require.NotNil(t, result, "AddRecord result should not be nil")
-
-	// Cleanup
-	_, _ = cmd.DeleteRecord(ctx, recordName, "A")
 }
 
 func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1161,8 +1190,12 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	recordName := fmt.Sprintf("matrix-del-%d.example.com", time.Now().UnixNano())
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	recordName := "delete." + zoneName
 	_, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
 		Name:       recordName,
 		RecordType: "A",
 		Value:      "10.0.0.2",
@@ -1179,6 +1212,9 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	}
 	require.NoError(t, err, "DNS DeleteRecord should succeed")
 	require.NotNil(t, result, "DeleteRecord result should not be nil")
+
+	_, err = cmd.Resolve(ctx, recordName, "A")
+	require.Error(t, err, "a deleted record no longer resolves")
 }
 
 // =============================================================================
@@ -1362,9 +1398,10 @@ func testIAMDeleteUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	roleID := fmt.Sprintf("matrix-role-%d", time.Now().UnixNano())
+	// The CA's certificate scopes (pkg/webservice/v1/rest/ca/handlers.go).
 	result, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
 		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role",
-		Description: "Role created by matrix integration test", Permissions: []string{"read", "write"},
+		Description: "Role created by matrix integration test", Permissions: []string{"certs:read", "certs:generate"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1393,7 +1430,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 
 	roleID := fmt.Sprintf("matrix-assign-role-%d", time.Now().UnixNano())
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"read"},
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"certs:read"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1493,7 +1530,7 @@ func testKMSCreateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-key-%d", time.Now().UnixNano())
 	result, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt", Name: "Matrix Test Key",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt", Name: "Matrix Test Key",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1508,7 +1545,7 @@ func testKMSGetKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-getkey-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1541,7 +1578,7 @@ func testKMSSign(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-sign-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
+		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1565,7 +1602,7 @@ func testKMSVerify(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-verify-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign-verify",
+		KeyID: keyID, Algorithm: "RSA-2048", Purpose: "sign",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1599,7 +1636,7 @@ func testKMSEncrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-encrypt-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1623,7 +1660,7 @@ func testKMSDecrypt(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-decrypt-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1655,7 +1692,7 @@ func testKMSRotateKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-rotate-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1677,7 +1714,7 @@ func testKMSDeleteKey(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	cmd := setupKMSAdapter(t, ctx, adapter)
 	keyID := fmt.Sprintf("matrix-delkey-%d", time.Now().UnixNano())
 	genResult, err := cmd.KeyGenerate(ctx, kms.KeyGenerateOptions{
-		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt-decrypt",
+		KeyID: keyID, Algorithm: "AES-256-GCM", Purpose: "encrypt",
 	})
 	if missing := surfaceMissing(adapter, "KMS", "KeyGenerate", err); missing != nil {
 		t.Fatal(missing)
@@ -1741,8 +1778,9 @@ func setupSDNAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-br-%d", time.Now().UnixNano()%100000)
-	result, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Test Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-br")
+	bridgeID := opts.BridgeID
+	result, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1753,8 +1791,9 @@ func testSDNCreateNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 
 func testSDNGetNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-get-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Get Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-get")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1781,8 +1820,9 @@ func testSDNListNetworks(t *testing.T, ctx context.Context, adapter ProtocolAdap
 
 func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-del-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Delete Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-del")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1798,8 +1838,9 @@ func testSDNDeleteNetwork(t *testing.T, ctx context.Context, adapter ProtocolAda
 
 func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-route-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix Route Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-route")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1819,8 +1860,9 @@ func testSDNAddRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testSDNRemoveRoute(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupSDNAdapter(t, ctx, adapter)
-	bridgeID := fmt.Sprintf("mx-rmrt-%d", time.Now().UnixNano()%100000)
-	_, err := cmd.BridgeCreate(ctx, sdn.BridgeCreateOptions{BridgeID: bridgeID, Name: "Matrix RemoveRoute Bridge", Type: "ovs"})
+	opts := sdn.DefaultBridgeOptions("mx-rmrt")
+	bridgeID := opts.BridgeID
+	_, err := cmd.BridgeCreate(ctx, opts)
 	if missing := surfaceMissing(adapter, "SDN", "BridgeCreate", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -2152,31 +2194,24 @@ func testDeviceStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 // Service Tests - Attestation
 // =============================================================================
 
+// testAttestationService drives the attestation verbs every transport serves
+// (docs/attestation/api.md §2), each for an id the daemon does not hold. VM
+// identity is served by no transport, so it is not a reachability probe.
 func testAttestationService(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	t.Run("GetChallenge", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testAttestationGetChallenge(t, testCtx, adapter)
-	})
-	t.Run("SubmitQuote", func(t *testing.T) {
+	t.Run("CollectVMAttestation", func(t *testing.T) {
 		testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		testAttestationSubmitQuote(t, testCtx, adapter)
+		testAttestationCollectVM(t, testCtx, adapter)
 	})
-	t.Run("VerifyQuote", func(t *testing.T) {
+	t.Run("GetManifest", func(t *testing.T) {
 		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		testAttestationVerifyQuote(t, testCtx, adapter)
+		testAttestationGetManifest(t, testCtx, adapter)
 	})
-	t.Run("GetAttestationStatus", func(t *testing.T) {
+	t.Run("VerifyManifest", func(t *testing.T) {
 		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		testAttestationGetStatus(t, testCtx, adapter)
-	})
-	t.Run("PolicyEvaluation", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testAttestationPolicyEvaluation(t, testCtx, adapter)
+		testAttestationVerifyManifest(t, testCtx, adapter)
 	})
 }
 
@@ -2189,45 +2224,48 @@ func setupAttestationAdapter(t *testing.T, ctx context.Context, adapter Protocol
 	return cmd
 }
 
-func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// testAttestationCollectVM collects a VM attestation for an unknown VM. The
+// daemon owns no TPM session, so every transport answers the
+// ErrTPMSessionNotConfigured refusal (docs/attestation/api.md §2).
+func testAttestationCollectVM(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+	result, err := cmd.GetVMAttestation(ctx, attestation.GetVMAttestationOptions{
+		VMID:          "nonexistent-collect-test",
+		Nonce:         attestation.GenerateTestNonce(),
+		PCRIndices:    attestation.DefaultPCRIndices(),
+		HashAlgorithm: attestation.DefaultHashAlgorithm(),
+	})
+	if missing := surfaceMissing(adapter, "Attestation", "CollectVMAttestation", err); missing != nil {
 		t.Fatal(missing)
 	}
-	// A not-found error is acceptable; it means the service is reachable
+	want := attestsvc.ErrTPMSessionNotConfigured{Op: "CollectVMAttestation"}.Error()
+	require.Error(t, err, "CollectVMAttestation over %s succeeded, want refusal %q", protocolName(adapter), want)
+	assert.Contains(t, err.Error(), want, "CollectVMAttestation over %s", protocolName(adapter))
+	assert.Nil(t, result, "CollectVMAttestation over %s returned a result alongside its refusal", protocolName(adapter))
 }
 
-func testAttestationSubmitQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// testAttestationGetManifest reads a manifest the daemon does not hold and
+// requires the transport's typed not-found.
+func testAttestationGetManifest(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-submit-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+	_, err := cmd.GetManifest(ctx, attestation.GetManifestOptions{ManifestID: "nonexistent-manifest-test"})
+	if missing := surfaceMissing(adapter, "Attestation", "GetManifest", err); missing != nil {
 		t.Fatal(missing)
 	}
+	assert.True(t, attestation.IsNotFound(err), "GetManifest of an unknown manifest over %s = %v, want a typed not-found", protocolName(adapter), err)
 }
 
-func testAttestationVerifyQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// testAttestationVerifyManifest verifies a manifest the daemon does not hold.
+// Every adapter fetches the stored manifest first, so the lookup's typed
+// not-found is the answer (docs/attestation/api.md §3).
+func testAttestationVerifyManifest(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-verify-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
+	result, err := cmd.VerifyManifest(ctx, attestation.VerifyManifestOptions{ManifestID: "nonexistent-verify-test"})
+	if missing := surfaceMissing(adapter, "Attestation", "VerifyManifest", err); missing != nil {
 		t.Fatal(missing)
 	}
-}
-
-func testAttestationGetStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-status-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
-	}
-}
-
-func testAttestationPolicyEvaluation(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-policy-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
-	}
+	assert.True(t, attestation.IsNotFound(err), "VerifyManifest of an unknown manifest over %s = %v, want a typed not-found", protocolName(adapter), err)
+	assert.Nil(t, result, "VerifyManifest over %s returned a result for an unknown manifest", protocolName(adapter))
 }
 
 // =============================================================================
@@ -2334,32 +2372,65 @@ func testPlatformConfiguration(t *testing.T, ctx context.Context, adapter Protoc
 // Service Tests - PXE
 // =============================================================================
 
+// errPXENotConfigured is the refusal platformd's PXE service answers on every
+// call. PXE is a gateway-role service and the platformd config has no pxe:
+// section, so platformd builds the service with no backend
+// (pkg/api/daemon/daemon.go) and each RPC answers Unavailable with
+// SERVICE_NOT_CONFIGURED and this detail, which every transport relays.
+var errPXENotConfigured = errors.New("PXE service is not configured on this node")
+
+// pxeOperation is one PXE call the matrix drives against platformd.
+type pxeOperation struct {
+	name string
+	call func(ctx context.Context, cmd pxe.PXECommands) error
+}
+
+// pxeMatrixDeviceID names a device no node has registered.
+const pxeMatrixDeviceID = "pxe-matrix-unregistered-device"
+
+var pxeOperations = []pxeOperation{
+	{name: "GetStatus", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.GetStatus(ctx)
+		return err
+	}},
+	{name: "RegisterDevice", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.RegisterDevice(ctx, pxe.RegisterDeviceOptions{
+			MACAddress: pxe.GenerateTestMAC("matrix"),
+			PortID:     pxe.GenerateTestPortID("matrix"),
+		})
+		return err
+	}},
+	{name: "ListDevices", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.ListDevices(ctx, pxe.ListDevicesOptions{})
+		return err
+	}},
+	{name: "GetDevice", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.GetDevice(ctx, pxeMatrixDeviceID)
+		return err
+	}},
+	{name: "RemoveDevice", call: func(ctx context.Context, cmd pxe.PXECommands) error {
+		_, err := cmd.RemoveDevice(ctx, pxeMatrixDeviceID)
+		return err
+	}},
+}
+
+// testPXEService asserts that every PXE operation answers the declared
+// not-configured refusal: platformd serves the PXE surface on every
+// transport but never runs a PXE backend.
 func testPXEService(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	t.Run("GetBootConfig", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXEGetBootConfig(t, testCtx, adapter)
-	})
-	t.Run("SetBootConfig", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXESetBootConfig(t, testCtx, adapter)
-	})
-	t.Run("ListBootImages", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXEListBootImages(t, testCtx, adapter)
-	})
-	t.Run("UploadBootImage", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-		defer cancel()
-		testPXEUploadBootImage(t, testCtx, adapter)
-	})
-	t.Run("DeleteBootImage", func(t *testing.T) {
-		testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		testPXEDeleteBootImage(t, testCtx, adapter)
-	})
+	for _, op := range pxeOperations {
+		t.Run(op.name, func(t *testing.T) {
+			testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			cmd := setupPXEAdapter(t, testCtx, adapter)
+			err := op.call(testCtx, cmd)
+			if missing := surfaceMissing(adapter, "PXE", op.name, err); missing != nil {
+				t.Fatal(missing)
+			}
+			require.Truef(t, surface.IsDeclaredRefusal(err, errPXENotConfigured),
+				"PXE %s over %s: want the not-configured refusal, got %v", op.name, protocolName(adapter), err)
+		})
+	}
 }
 
 func setupPXEAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter) pxe.PXECommands {
@@ -2369,60 +2440,6 @@ func setupPXEAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	helpers.RequireAdapterSetup(t, "PXE", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
-}
-
-func testPXEGetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.GetStatus(ctx)
-	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-}
-
-func testPXESetBootConfig(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	mac := fmt.Sprintf("00:11:22:33:%02x:%02x", time.Now().UnixNano()%256, (time.Now().UnixNano()/256)%256)
-	result, err := cmd.RegisterDevice(ctx, pxe.RegisterDeviceOptions{MACAddress: mac, PortID: "test-port"})
-	if missing := surfaceMissing(adapter, "PXE", "RegisterDevice", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	if result.ID != "" {
-		_, _ = cmd.RemoveDevice(ctx, result.ID)
-	}
-}
-
-func testPXEListBootImages(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.ListDevices(ctx, pxe.ListDevicesOptions{})
-	if missing := surfaceMissing(adapter, "PXE", "ListDevices", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-}
-
-func testPXEUploadBootImage(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.GetStatus(ctx)
-	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
-}
-
-func testPXEDeleteBootImage(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupPXEAdapter(t, ctx, adapter)
-	result, err := cmd.GetStatus(ctx)
-	if missing := surfaceMissing(adapter, "PXE", "GetStatus", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err)
-	require.NotNil(t, result)
 }
 
 // =============================================================================

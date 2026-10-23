@@ -16,6 +16,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -52,7 +53,20 @@ type renewalFixture struct {
 
 func newRenewalFixture(t *testing.T) *renewalFixture {
 	t.Helper()
-	f := &renewalFixture{ca: newFakeKeystoreCA(t), cfg: tlsTransportConfig(), log: &bytes.Buffer{}, clock: time.Now()}
+	return newRenewalFixtureOn(t, tlsTransportConfig(), func(cfg *daemon.Config) *tls.Config {
+		return &tls.Config{
+			GetCertificate: cfg.TLSIdentity.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
+		}
+	})
+}
+
+// newRenewalFixtureOn provisions the identity into cfg, registers the renewal
+// sweep, and serves handshakes on the tls.Config listenerTLS takes from cfg
+// once the identity is applied.
+func newRenewalFixtureOn(t *testing.T, cfg *daemon.Config, listenerTLS func(*daemon.Config) *tls.Config) *renewalFixture {
+	t.Helper()
+	f := &renewalFixture{ca: newFakeKeystoreCA(t), cfg: cfg, log: &bytes.Buffer{}, clock: time.Now()}
 	f.app = &app.App{CA: f.ca, PlatformDir: t.TempDir()}
 	if err := applyDaemonTLSIdentity(context.Background(), logging.NewLogger(slog.LevelDebug, f.log), f.app, f.cfg, true); err != nil {
 		t.Fatalf("applyDaemonTLSIdentity: %v", err)
@@ -71,10 +85,7 @@ func newRenewalFixture(t *testing.T) *renewalFixture {
 	}
 	f.sweep = sched.handler
 
-	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		GetCertificate: f.cfg.TLSIdentity.GetCertificate,
-		MinVersion:     tls.VersionTLS12,
-	})
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", listenerTLS(f.cfg))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -160,6 +171,44 @@ func TestDaemonIdentityRenewal_InsideWindowRenewsAndNextHandshakePresentsIt(t *t
 	}
 	if f.ca.signerOf(f.servedLeaf()) == nil {
 		t.Error("the renewed identity has no keystore-held key")
+	}
+}
+
+// TestDaemonIdentityRenewal_QUICListenerPresentsTheRenewedIdentity proves the
+// QUIC listener serves the daemon identity and its renewal (#36). serve hands
+// QUIC a boot-time self-signed tls.Config (quic.DefaultServerConfigWithTLS);
+// unless applyDaemonTLSIdentity points it at the renewable identity, QUIC
+// presents that boot certificate for the life of the process. The listener
+// here is built from the same tls.Config the QUIC server is given.
+func TestDaemonIdentityRenewal_QUICListenerPresentsTheRenewedIdentity(t *testing.T) {
+	cfg := tlsTransportConfig()
+	cfg.EnableQUIC = true
+	quicConfig, err := quic.DefaultServerConfigWithTLS()
+	if err != nil {
+		t.Fatalf("DefaultServerConfigWithTLS: %v", err)
+	}
+	cfg.QUICConfig = quicConfig
+	f := newRenewalFixtureOn(t, cfg, func(cfg *daemon.Config) *tls.Config {
+		return cfg.QUICConfig.TLSConfig.Clone()
+	})
+
+	before := f.presentedSerial(t)
+	if before.Cmp(f.servedLeaf().SerialNumber) != 0 {
+		t.Fatalf("QUIC presented serial %s, want the daemon identity %s", before, f.servedLeaf().SerialNumber)
+	}
+
+	f.clock = f.servedLeaf().NotAfter.Add(-25 * 24 * time.Hour)
+	result := f.runSweep(t)
+	if !result.Success || !strings.Contains(result.Message, "1 renewed") {
+		t.Fatalf("sweep result = %+v, want one renewal", result)
+	}
+
+	after := f.presentedSerial(t)
+	if after.Cmp(before) == 0 {
+		t.Fatalf("the next QUIC handshake still presented serial %s", before)
+	}
+	if after.Cmp(f.servedLeaf().SerialNumber) != 0 {
+		t.Errorf("QUIC presented serial %s, want the newly issued %s", after, f.servedLeaf().SerialNumber)
 	}
 }
 

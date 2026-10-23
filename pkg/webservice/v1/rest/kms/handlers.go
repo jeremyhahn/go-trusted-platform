@@ -25,6 +25,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -1260,20 +1261,18 @@ func (h *Handlers) GetSecret(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	value, err := common.DecodeSecretValue(s.Data["value"])
+	if err != nil {
+		h.respWriter.Error500(w, r, err)
+		return
+	}
 	out := &SecretResponse{
 		Path:      s.Path,
 		Version:   s.Version,
+		Value:     value,
 		Tags:      s.Metadata,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.CreatedAt,
-	}
-	if v, ok := s.Data["value"]; ok {
-		switch typed := v.(type) {
-		case string:
-			out.Value = []byte(typed)
-		case []byte:
-			out.Value = typed
-		}
 	}
 	if v, ok := s.Data["content_type"]; ok {
 		if str, ok := v.(string); ok {
@@ -1308,12 +1307,22 @@ func (h *Handlers) RotateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req RotateSecretRequest
-	_ = h.decodeJSON(r, &req)
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	// The new version is the same data map StoreSecret writes, so GetSecret
+	// reads it back.
+	data, err := common.EncodeSecretData(map[string]interface{}{"value": req.Value})
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.secrets.Rotate(ctx, &secretsclient.RotateSecretRequest{
 		SecretID: h.name(r),
-		NewData:  req.Value,
+		NewData:  data,
 	})
 	if err != nil {
 		h.fail(w, r, err)
