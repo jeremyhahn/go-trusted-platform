@@ -2045,14 +2045,26 @@ endef
 ## exit and the target exits with the suites' status. CI passes a per-run
 ## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
+## CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 (CI sets it) also writes the
+## suites' output to $(IT_LOG) and, when they fail, makes scripts/foreignfailures
+## the target's verdict: it passes only when every failure is a row of
+## $(FOREIGN_BASELINE), and fails closed on anything it cannot attribute to a
+## listed test. Unset, the target exits with the suites' own status, so a
+## developer sees every failure (docs/test/integration.md).
+integration-test: SHELL := /bin/bash
 integration-test: docker-build-it
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@status=0; \
+	@set -o pipefail; status=0; \
 	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
-		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" || status=$$?; \
+		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
 	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes; \
+	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
+		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
+		status=0; \
+		$(GO) run ./scripts/foreignfailures -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
+	fi; \
 	exit $$status
 
 .PHONY: integration-test-webservice
@@ -2146,6 +2158,12 @@ TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
 # CI passes per-run values.
 IT_IMAGE ?= go-trusted-platform-it:local
 IT_PROJECT ?= go-trusted-platform-it
+
+# The foreign-failure baseline (ruling 125). IT_FOREIGN_BASELINE is empty by
+# default: only `make integration-test IT_FOREIGN_BASELINE=1` consults it.
+IT_FOREIGN_BASELINE ?=
+IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
+FOREIGN_BASELINE ?= .github/foreign-failures.tsv
 
 # A KEY=value file with the forge credentials the module download needs
 # (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
@@ -3020,7 +3038,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # decision logic, tested over testdata fixtures with no network. Discovery
 # lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
 # unit stage.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/
+#
+# scripts/foreignfailures added 2026-10-22 (ruling 125): the foreign-failure
+# baseline checker the Integration job runs on a failed suite, and the test
+# that holds .github/foreign-failures.tsv to the ruling. Same reason as
+# depscheck: discovery would not reach it.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/ ./scripts/foreignfailures/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
