@@ -129,6 +129,15 @@ func (e ErrInvalidResponse) Unwrap() error {
 	return e.Err
 }
 
+// ErrMissingField is returned when a response omits a field it must carry.
+type ErrMissingField struct {
+	Field string
+}
+
+func (e ErrMissingField) Error() string {
+	return fmt.Sprintf("response has no %q field", e.Field)
+}
+
 // ErrSessionNotFound is returned when a session cannot be found.
 type ErrSessionNotFound struct {
 	ClientID string
@@ -611,18 +620,29 @@ func (r *cliImageConfigResponse) toImageConfig() *ImageConfig {
 	}
 }
 
+// cliStatusResponse is the JSON `platformctl registry status -o json`
+// prints: the registry view nested under "status"
+// (pkg/cli/commands/registry.StatusResult).
 type cliStatusResponse struct {
-	Healthy            bool   `json:"healthy"`
-	Status             string `json:"status"`
-	Version            string `json:"version"`
-	UptimeSeconds      int64  `json:"uptime_seconds"`
-	ImageCount         int    `json:"image_count"`
-	TotalSize          int64  `json:"total_size"`
-	ActiveConnections  int    `json:"active_connections"`
-	AttestationEnabled bool   `json:"attestation_enabled"`
-	EncryptionEnabled  bool   `json:"encryption_enabled"`
-	StorageBackend     string `json:"storage_backend"`
-	StorageStatus      string `json:"storage_status"`
+	Status *cliRegistryStatus `json:"status"`
+}
+
+type cliRegistryStatus struct {
+	Healthy       bool   `json:"healthy"`
+	Version       string `json:"version"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Storage       *struct {
+		Backend    string `json:"backend"`
+		Healthy    bool   `json:"healthy"`
+		UsedBytes  int64  `json:"used_bytes"`
+		ImageCount int64  `json:"image_count"`
+	} `json:"storage"`
+	Attestation *struct {
+		Enabled bool `json:"enabled"`
+	} `json:"attestation"`
+	Encryption *struct {
+		Enabled bool `json:"enabled"`
+	} `json:"encryption"`
 }
 
 // storageComponentName and storageBackendDetail locate the storage
@@ -632,18 +652,34 @@ const (
 	storageBackendDetail = "backend"
 )
 
-func (r *cliStatusResponse) toStatusResult() *StatusResult {
-	return &StatusResult{
-		Healthy:            r.Healthy,
-		Status:             r.Status,
-		Version:            r.Version,
-		Uptime:             time.Duration(r.UptimeSeconds) * time.Second,
-		ImageCount:         r.ImageCount,
-		TotalSize:          r.TotalSize,
-		ActiveConnections:  r.ActiveConnections,
-		AttestationEnabled: r.AttestationEnabled,
-		EncryptionEnabled:  r.EncryptionEnabled,
-		StorageBackend:     r.StorageBackend,
-		StorageStatus:      r.StorageStatus,
+func (r *cliStatusResponse) toStatusResult() (*StatusResult, error) {
+	s := r.Status
+	if s == nil {
+		return nil, ErrMissingField{Field: "status"}
 	}
+	result := &StatusResult{
+		Healthy: s.Healthy,
+		Status:  "degraded",
+		Version: s.Version,
+		Uptime:  time.Duration(s.UptimeSeconds) * time.Second,
+	}
+	if s.Healthy {
+		result.Status = "running"
+	}
+	if s.Storage != nil {
+		result.ImageCount = int(s.Storage.ImageCount)
+		result.TotalSize = s.Storage.UsedBytes
+		result.StorageBackend = s.Storage.Backend
+		result.StorageStatus = "unhealthy"
+		if s.Storage.Healthy {
+			result.StorageStatus = "healthy"
+		}
+	}
+	if s.Attestation != nil {
+		result.AttestationEnabled = s.Attestation.Enabled
+	}
+	if s.Encryption != nil {
+		result.EncryptionEnabled = s.Encryption.Enabled
+	}
+	return result, nil
 }

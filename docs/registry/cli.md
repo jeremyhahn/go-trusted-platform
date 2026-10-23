@@ -164,6 +164,15 @@ platformctl registry status --attestation --encryption
 has its gate on — it prints the effective `require_attestation`, the golden PCR
 set, the AIK allowlist and the quote freshness bound.
 
+With `-o json` (or `-o yaml`) the view is nested under `status`, and the storage
+backend comes from the service's `storage` component (`api.md` §6):
+
+```json
+{"status": {"healthy": true, "version": "…", "uptime_seconds": 60,
+  "storage": {"backend": "quicbaas", "healthy": true, "used_bytes": 2048, "image_count": 3, …},
+  "attestation": {…}, "encryption": {…}}}
+```
+
 ---
 
 ## 8. Exit codes and output
