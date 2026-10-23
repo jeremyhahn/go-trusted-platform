@@ -27,6 +27,7 @@ import (
 	"time"
 
 	lukssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -111,16 +112,6 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
 // rpc sends a JSON-RPC request and decodes the result into out.
 func (m *MCPAdapter) rpc(ctx context.Context, method string, params interface{}, out interface{}) error {
 	body := jsonRPCRequest{
@@ -168,32 +159,11 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 	if err := m.rpc(ctx, "tools/call", params, &raw); err != nil {
 		return err
 	}
-	if len(raw) == 0 {
-		return nil
-	}
-	var result mcpCallToolResult
-	if err := json.Unmarshal(raw, &result); err != nil || len(result.Content) == 0 {
-		if out != nil {
-			return json.Unmarshal(raw, out)
-		}
-		return nil
-	}
-	if result.IsError {
-		msg := ""
-		if len(result.Content) > 0 {
-			msg = result.Content[0].Text
-		}
-		return fmt.Errorf("MCP tool %s error: %s", name, msg)
-	}
 	if out == nil {
-		return nil
+		_, err := mcpwire.ToolOutputJSON(raw)
+		return err
 	}
-	for _, item := range result.Content {
-		if item.Type == "text" && item.Text != "" {
-			return json.Unmarshal([]byte(item.Text), out)
-		}
-	}
-	return nil
+	return mcpwire.DecodeToolOutput(raw, out)
 }
 
 // Status invokes platform_luks_status.

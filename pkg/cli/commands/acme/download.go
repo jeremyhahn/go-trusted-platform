@@ -14,6 +14,8 @@
 package acme
 
 import (
+	"net/url"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
@@ -49,7 +51,21 @@ Examples:
 
 // runDownload executes the download command
 func runDownload(flags *cli.CommonFlags, certURL string) error {
-	// Daemon connection required for ACME operations
-	// Dual-mode support will be added later
-	return ErrDaemonConnectionRequired{Command: "download"}
+	if err := validateCertificateURL(certURL); err != nil {
+		return err
+	}
+	return ErrACMEDaemonCallMissing{Command: "download", Section: "§7.4.2 certificate download"}
+}
+
+// validateCertificateURL requires an absolute https URL: RFC 8555 §6.1
+// mandates HTTPS for every ACME resource.
+func validateCertificateURL(certURL string) error {
+	if certURL == "" {
+		return ErrMissingCertificateURL{}
+	}
+	parsed, err := url.Parse(certURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return ErrInvalidCertificateURL{URL: certURL}
+	}
+	return nil
 }

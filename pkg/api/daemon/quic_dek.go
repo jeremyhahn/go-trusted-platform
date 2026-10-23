@@ -37,6 +37,9 @@ type DEKServiceInterface interface {
 	GetDEKStatus(ctx context.Context, req *pb.GetDEKStatusRequest) (*pb.GetDEKStatusResponse, error)
 	RotateDEK(ctx context.Context, req *pb.RotateDEKRequest) (*pb.RotateDEKResponse, error)
 	DeleteDEK(ctx context.Context, req *pb.DeleteDEKRequest) (*pb.DeleteDEKResponse, error)
+	SetDefaultDEK(ctx context.Context, req *pb.SetDefaultDEKRequest) (*pb.SetDefaultDEKResponse, error)
+	SetDEKSafety(ctx context.Context, req *pb.SetDEKSafetyRequest) (*pb.SetDEKSafetyResponse, error)
+	ClearDEKSafety(ctx context.Context, req *pb.ClearDEKSafetyRequest) (*pb.ClearDEKSafetyResponse, error)
 }
 
 // Compile-time check: the gRPC DEK adapter satisfies the QUIC interface.
@@ -46,12 +49,15 @@ var _ DEKServiceInterface = (*DEKServerAdapter)(nil)
 // extended dispatcher consults it before the key-lifecycle table, so the DEK
 // subs need only the DEK service.
 var dekQUICDispatch = map[byte]kmsExtendedQUICHandler{
-	quicwire.KMSSubCreateDEK:    dekPBHandler("DEKCreate", DEKServiceInterface.CreateDEK),
-	quicwire.KMSSubListDEKs:     dekPBHandler("DEKList", DEKServiceInterface.ListDEKs),
-	quicwire.KMSSubGetDEK:       dekPBHandler("DEKGet", DEKServiceInterface.GetDEK),
-	quicwire.KMSSubGetDEKStatus: dekPBHandler("DEKStatus", DEKServiceInterface.GetDEKStatus),
-	quicwire.KMSSubRotateDEK:    dekPBHandler("DEKRotate", DEKServiceInterface.RotateDEK),
-	quicwire.KMSSubDeleteDEK:    dekPBHandler("DEKDelete", DEKServiceInterface.DeleteDEK),
+	quicwire.KMSSubCreateDEK:      dekPBHandler("DEKCreate", DEKServiceInterface.CreateDEK),
+	quicwire.KMSSubListDEKs:       dekPBHandler("DEKList", DEKServiceInterface.ListDEKs),
+	quicwire.KMSSubGetDEK:         dekPBHandler("DEKGet", DEKServiceInterface.GetDEK),
+	quicwire.KMSSubGetDEKStatus:   dekPBHandler("DEKStatus", DEKServiceInterface.GetDEKStatus),
+	quicwire.KMSSubRotateDEK:      dekPBHandler("DEKRotate", DEKServiceInterface.RotateDEK),
+	quicwire.KMSSubDeleteDEK:      dekPBHandler("DEKDelete", DEKServiceInterface.DeleteDEK),
+	quicwire.KMSSubSetDefaultDEK:  dekPBHandler("DEKSetDefault", DEKServiceInterface.SetDefaultDEK),
+	quicwire.KMSSubSetDEKSafety:   dekPBHandler("DEKSetSafety", DEKServiceInterface.SetDEKSafety),
+	quicwire.KMSSubClearDEKSafety: dekPBHandler("DEKClearSafety", DEKServiceInterface.ClearDEKSafety),
 }
 
 // dekPBHandler serves one DEK sub-operation through the DEK service, or

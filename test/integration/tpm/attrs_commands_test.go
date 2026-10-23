@@ -44,8 +44,9 @@ func TestTPMAttrMultiProtocol(t *testing.T) {
 			t.Logf("Warning: teardown error for the reference adapter: %v", err)
 		}
 	}()
-	_, err := reference.Provision(ctx, ProvisionOptions{CreateEK: true, CreateSRK: true})
-	require.NoError(t, err, "the TPM must be provisioned before its attributes are read")
+	// The daemon provisioned its TPM at start and owns it with the SO PIN
+	// (docs/tpm/engineering.md). A Provision here would present the empty owner
+	// auth to that owned hierarchy and be refused with TPM_RC_BAD_AUTH.
 
 	adapters := []TPMAttrCommands{
 		NewRESTAdapter(),

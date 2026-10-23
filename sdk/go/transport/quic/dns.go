@@ -146,7 +146,8 @@ func (w *dnsRecordWire) toProto() *platformv1.Record {
 
 // dnsListRecordsWire mirrors platformv1.ListRecordsResponse.
 type dnsListRecordsWire struct {
-	Records []*dnsRecordWire `codec:"Records"`
+	Records    []*dnsRecordWire               `codec:"Records"`
+	Pagination *platformv1.PaginationResponse `codec:"Pagination"`
 }
 
 // dnsResolveWire mirrors platformv1.ResolveResponse.
@@ -179,6 +180,7 @@ func decodeDNSListRecordsReply(payload []byte, reply interface{}) error {
 	for _, w := range wire.Records {
 		out.Records = append(out.Records, w.toProto())
 	}
+	out.Pagination = wire.Pagination
 	return nil
 }
 

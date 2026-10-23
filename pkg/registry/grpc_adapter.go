@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -43,6 +44,26 @@ import (
 type GRPCAdapter struct {
 	registry *Registry
 	clock    func() time.Time
+	// startedAt is when the adapter was built; Status measures uptime from it.
+	startedAt time.Time
+}
+
+// Status component and detail names the registry reports, so clients can
+// read the storage backend from the storage component's details.
+const (
+	StatusComponentStorage = "storage"
+	StatusDetailBackend    = "backend"
+	StorageBackendQuicBaaS = "quicbaas"
+)
+
+// buildVersion is the module version the daemon was built from, or "dev"
+// for a build without one.
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" {
+		return "dev"
+	}
+	return info.Main.Version
 }
 
 // NewGRPCAdapter returns an adapter ready to be plugged into
@@ -51,7 +72,7 @@ func NewGRPCAdapter(r *Registry) *GRPCAdapter {
 	if r == nil {
 		return nil
 	}
-	return &GRPCAdapter{registry: r, clock: time.Now}
+	return &GRPCAdapter{registry: r, clock: time.Now, startedAt: time.Now().UTC()}
 }
 
 // refOf joins Repository + Tag into the colon-delimited reference
@@ -110,14 +131,25 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 	if img.Manifest == nil {
 		return nil, ErrInvalidManifest{Reference: ref, Reason: "envelope missing manifest"}
 	}
+	// Decode the config before storing anything, so a malformed config is
+	// refused rather than persisted.
+	config, err := decodeImageConfig(ref, img.Config)
+	if err != nil {
+		return nil, err
+	}
 	if err := a.registry.Push(ctx, ref, &img, pushOptionsOf(metadata.Annotations)); err != nil {
 		if errors.As(err, &ErrImageAlreadyExists{}) {
 			return nil, grpcapi.ErrArtifactAlreadyExists{Repository: metadata.Repository, Reference: metadata.Tag}
 		}
+		return nil, a.mapRegistryError(metadata.Repository, metadata.Tag, err)
+	}
+	artifact, err := a.manifestToArtifact(metadata.Repository, metadata.Tag, img.Manifest)
+	if err != nil {
 		return nil, err
 	}
+	applyImageConfig(artifact, config)
 	return &grpcapi.RegistryPushResponse{
-		Artifact:      a.manifestToArtifact(metadata.Repository, metadata.Tag, img.Manifest),
+		Artifact:      artifact,
 		BytesReceived: int64(len(payload)),
 		Timestamp:     a.clock().UTC(),
 	}, nil
@@ -125,10 +157,32 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 
 // pushOptionsOf turns push-metadata annotations into PushOptions; the
 // overwrite annotation sets AllowOverwrite.
+// Push request annotations a transport sets on the push metadata to ask
+// for push options. They travel the way overwrite does, with no proto
+// field; PushAnnotationEncrypt is the key the REST handler already sends.
+const (
+	// PushAnnotationEncrypt is "true" to encrypt the layers on push.
+	PushAnnotationEncrypt = "encrypt"
+	// PushAnnotationKeyID names the encryption key; empty uses the
+	// registry default key.
+	PushAnnotationKeyID = "encrypt-key-id"
+	// PushAnnotationSign is "true" to ask for the manifest to be signed.
+	// A registry built without a signer refuses such a push with
+	// ErrSigningNotConfigured.
+	PushAnnotationSign = "sign"
+	// PushAnnotationSigningKeyID names the signing key; empty uses the
+	// registry default signing key.
+	PushAnnotationSigningKeyID = "signing-key-id"
+)
+
 func pushOptionsOf(annotations map[string]string) PushOptions {
 	return PushOptions{
 		Annotations:    annotations,
 		AllowOverwrite: annotations[regsvc.AnnotationOverwrite] == "true",
+		Encrypt:        annotations[PushAnnotationEncrypt] == "true",
+		KeyID:          annotations[PushAnnotationKeyID],
+		SignImage:      annotations[PushAnnotationSign] == "true",
+		SigningKeyID:   annotations[PushAnnotationSigningKeyID],
 	}
 }
 
@@ -143,14 +197,18 @@ func (a *GRPCAdapter) Pull(ctx context.Context, req *grpcapi.RegistryPullRequest
 	}
 	img, err := a.registry.Pull(ctx, ref, PullOptions{})
 	if err != nil {
-		return nil, a.mapPullError(req.Repository, req.Reference, err)
+		return nil, a.mapRegistryError(req.Repository, req.Reference, err)
 	}
 	data, err := json.Marshal(img)
 	if err != nil {
 		return nil, err
 	}
+	artifact, err := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
+	if err != nil {
+		return nil, err
+	}
 	return &grpcapi.RegistryPullResponse{
-		Artifact:  a.manifestToArtifact(req.Repository, req.Reference, img.Manifest),
+		Artifact:  artifact,
 		TotalSize: int64(len(data)),
 		Data:      data,
 	}, nil
@@ -194,7 +252,11 @@ func (a *GRPCAdapter) List(ctx context.Context, req *grpcapi.RegistryListRequest
 		if endsWithSha256Sentinel(repo) && isHex64(tag) {
 			continue
 		}
-		artifacts = append(artifacts, a.manifestToArtifact(repo, tag, m))
+		artifact, err := a.manifestToArtifact(repo, tag, m)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
 	}
 	return &grpcapi.RegistryListResponse{
 		Artifacts: artifacts,
@@ -214,9 +276,17 @@ func (a *GRPCAdapter) Inspect(ctx context.Context, req *grpcapi.RegistryInspectR
 	}
 	img, err := a.registry.Pull(ctx, ref, PullOptions{})
 	if err != nil {
-		return nil, a.mapPullError(req.Repository, req.Reference, err)
+		return nil, a.mapRegistryError(req.Repository, req.Reference, err)
 	}
-	art := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
+	art, err := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	config, err := decodeImageConfig(ref, img.Config)
+	if err != nil {
+		return nil, err
+	}
+	applyImageConfig(art, config)
 	return &grpcapi.RegistryInspectResponse{
 		Detail: &grpcapi.RegistryArtifactDetail{
 			Artifact: art,
@@ -236,7 +306,7 @@ func (a *GRPCAdapter) Delete(ctx context.Context, req *grpcapi.RegistryDeleteReq
 		return nil, grpcapi.ErrMissingReference{}
 	}
 	if err := a.registry.Delete(ctx, ref); err != nil {
-		return nil, err
+		return nil, a.mapRegistryError(req.Repository, req.Reference, err)
 	}
 	return &grpcapi.RegistryDeleteResponse{
 		Digest:    req.Digest,
@@ -247,34 +317,43 @@ func (a *GRPCAdapter) Delete(ctx context.Context, req *grpcapi.RegistryDeleteReq
 // Status reports a synthetic health view. A real-storage probe lands
 // alongside the cluster-wide forwarder.
 func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusResponse, error) {
+	resp := &grpcapi.RegistryStatusResponse{
+		Health:    grpcapi.RegistryHealthStatusHealthy,
+		Version:   buildVersion(),
+		StartedAt: a.startedAt,
+		Timestamp: a.clock().UTC(),
+	}
+	storage := &grpcapi.RegistryComponentHealth{
+		Name:      StatusComponentStorage,
+		Status:    grpcapi.RegistryHealthStatusHealthy,
+		LastCheck: resp.Timestamp,
+		Details:   map[string]string{StatusDetailBackend: StorageBackendQuicBaaS},
+	}
+	resp.Components = []*grpcapi.RegistryComponentHealth{storage}
+
 	manifests, err := a.registry.List(ctx, RegistryListOptions{Limit: 0})
 	if err != nil {
-		return &grpcapi.RegistryStatusResponse{
-			Health:    grpcapi.RegistryHealthStatusUnhealthy,
-			Timestamp: a.clock().UTC(),
-			Components: []*grpcapi.RegistryComponentHealth{{
-				Name:    "storage",
-				Status:  grpcapi.RegistryHealthStatusUnhealthy,
-				Message: err.Error(),
-			}},
-		}, nil
+		resp.Health = grpcapi.RegistryHealthStatusUnhealthy
+		storage.Status = grpcapi.RegistryHealthStatusUnhealthy
+		storage.Message = err.Error()
+		return resp, nil
 	}
-	return &grpcapi.RegistryStatusResponse{
-		Health: grpcapi.RegistryHealthStatusHealthy,
-		Storage: &grpcapi.RegistryStorageStats{
-			ArtifactCount: int64(len(manifests)),
-		},
-		Timestamp: a.clock().UTC(),
-		StartedAt: a.clock().UTC(),
-	}, nil
+	resp.Storage = &grpcapi.RegistryStorageStats{ArtifactCount: int64(len(manifests))}
+	return resp, nil
 }
 
 // manifestToArtifact projects an ImageManifest into the artifact
 // shape the gRPC contract speaks. Sizes are summed from layers since
-// the manifest doesn't carry a top-level size today.
-func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifest) *grpcapi.RegistryArtifact {
+// the manifest doesn't carry a top-level size today. The digest is the
+// sha256 of the manifest the OCI distribution endpoint serves, so it
+// equals that endpoint's Docker-Content-Digest.
+func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifest) (*grpcapi.RegistryArtifact, error) {
 	if m == nil {
-		return &grpcapi.RegistryArtifact{Repository: repository, Tag: tag}
+		return &grpcapi.RegistryArtifact{Repository: repository, Tag: tag}, nil
+	}
+	body, err := encodeOCIManifest(m)
+	if err != nil {
+		return nil, err
 	}
 	var size int64
 	layers := make([]*grpcapi.RegistryArtifactLayer, 0, len(m.Layers))
@@ -290,6 +369,7 @@ func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifes
 	return &grpcapi.RegistryArtifact{
 		Repository: repository,
 		Tag:        tag,
+		Digest:     sha256Digest(body),
 		Type:       grpcapi.ArtifactTypeContainerImage,
 		State:      grpcapi.ArtifactStateAvailable,
 		Size:       size,
@@ -302,16 +382,53 @@ func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifes
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 		PushedAt:    m.CreatedAt,
-	}
+	}, nil
 }
 
-// mapPullError converts public Registry errors into the artifact-
+// imageConfigFields are the OCI image config properties (image-spec
+// config.md) that the registry reports on an artifact.
+type imageConfigFields struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Author       string `json:"author,omitempty"`
+}
+
+// decodeImageConfig reads the reported properties from an image config
+// blob. An image without a config reports none; a config that is not
+// JSON is refused.
+func decodeImageConfig(ref string, config []byte) (imageConfigFields, error) {
+	var fields imageConfigFields
+	if len(config) == 0 {
+		return fields, nil
+	}
+	if err := json.Unmarshal(config, &fields); err != nil {
+		return fields, ErrInvalidManifest{Reference: ref, Reason: "image config is not valid JSON"}
+	}
+	return fields, nil
+}
+
+// applyImageConfig sets the artifact's OS, architecture and author from
+// the image config fields.
+func applyImageConfig(art *grpcapi.RegistryArtifact, fields imageConfigFields) {
+	art.OS = fields.OS
+	art.Architecture = fields.Architecture
+	art.Author = fields.Author
+}
+
+// mapRegistryError converts public Registry errors into the artifact-
 // shaped gRPC errors so callers see a consistent surface across
 // transports.
-func (a *GRPCAdapter) mapPullError(repository, reference string, err error) error {
+func (a *GRPCAdapter) mapRegistryError(repository, reference string, err error) error {
 	var notFound ErrImageNotFound
 	if errors.As(err, &notFound) {
 		return grpcapi.ErrArtifactNotFound{Repository: repository, Reference: reference}
+	}
+	var invalidRef ErrInvalidImageRef
+	if errors.As(err, &invalidRef) {
+		return grpcapi.ErrInvalidArtifactReference{Reference: invalidRef.Reference, Reason: invalidRef.Reason}
+	}
+	if errors.As(err, &ErrSigningNotConfigured{}) || errors.As(err, &ErrEncryptionNotConfigured{}) {
+		return grpcapi.ErrRegistryNotConfigured{Reason: err.Error()}
 	}
 	return err
 }

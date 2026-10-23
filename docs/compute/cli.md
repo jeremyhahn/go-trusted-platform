@@ -191,6 +191,7 @@ platformctl compute migrate web-01 --destination worker-02.example.com:9443 --li
 | `--cmd` | | string array | | Command to run |
 | `--workdir` | `-w` | string | | Working directory |
 | `--tpm-access` | | bool | `false` | **Mount the host TPM device into the container** |
+| `--attest` | | bool | `false` | Measure the container into the TPM event log on create |
 | `--start` | | bool | `false` | Start immediately after creation |
 
 **`--privileged` and `--tpm-access` are the two to think about.** `--privileged`

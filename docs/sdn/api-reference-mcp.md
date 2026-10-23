@@ -4,7 +4,9 @@
 
 > The SDN tools of the platform MCP server.
 
-Transport: MCP (stdio / HTTPS, port 9445).
+Transport: MCP (stdio / HTTPS, port 9445). A tool's result is a
+`CallToolResult` whose text block holds the tool's JSON output
+([daemon api.md](../daemon/api.md) §1 "MCP tool results").
 
 Tool definitions live in `pkg/api/mcp/tools.go`. Each tool's OAuth scope
 (`sdn:read`, `sdn:write` or `sdn:delete`) is mapped in `pkg/api/mcp/authz.go`

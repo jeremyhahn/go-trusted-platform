@@ -448,6 +448,7 @@ platform does not own.
 | `ErrMalformedControlOutput` | `Command`, `Line`, `Want`, `Got` | CSV had too few fields | `Internal` / 500 |
 | `ErrSyncTimeout` | `Seconds` | The startup gate expired | `DeadlineExceeded` / 504 |
 | `ErrNoReachableSource` | `Total` | `Step` with nothing reachable | `Aborted` / **409** |
+| `ErrStepRefused` | `Output` | chronyd answered `makestep` with `500 Failure`: it does not control the clock (`-x`, or no `CAP_SYS_TIME`) | `Aborted` / **409** |
 | `ErrRTCWriteFailed` | `Output`, `Cause` | `hwclock --systohc` failed | never surfaced — logged only |
 | `ErrInvalidNTSVersionLink` | `Target` | The material store's `current` link points at something the store did not generate | `Internal` / 500 |
 | `ErrRotatedNTSMaterialLost` | `Cause` | The published pair no longer matches the last rotation; restart to re-resolve from the KMS | `Internal` / 500 |
@@ -563,6 +564,7 @@ renames on the wire: `LastSync` (a `time.Time`) becomes `last_sync_unix` (an
 |---|---|
 | `ntp.ErrDisabled`, `daemon.ErrNTPNotConfigured` | `Unavailable` |
 | `ntp.ErrNoReachableSource` | `Aborted` |
+| `ntp.ErrStepRefused` | `Aborted` |
 | `ntp.ErrControlUnavailable` | `Unavailable` |
 | `ntp.ErrMalformedControlOutput` | `Internal` |
 | `ntp.ErrSyncTimeout` | `DeadlineExceeded` |

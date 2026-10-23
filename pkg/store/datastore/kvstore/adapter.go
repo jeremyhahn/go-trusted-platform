@@ -206,6 +206,16 @@ func (d *GenericDAO[E]) Count(ctx context.Context) (int, error) {
 
 // Page retrieves a page of entities.
 func (d *GenericDAO[E]) Page(ctx context.Context, pageQuery datastore.PageQuery) (datastore.PageResult[E], error) {
+	// Pages are 1-based. A zero page or size (an unset query) takes the
+	// default rather than slicing from a negative offset.
+	defaults := datastore.NewPageQuery()
+	if pageQuery.Page < 1 {
+		pageQuery.Page = defaults.Page
+	}
+	if pageQuery.PageSize < 1 {
+		pageQuery.PageSize = defaults.PageSize
+	}
+
 	result := datastore.PageResult[E]{
 		Entities: make([]E, 0, pageQuery.PageSize),
 		Page:     pageQuery.Page,

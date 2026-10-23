@@ -58,6 +58,12 @@ func signCSR(t *testing.T, handler *CAHandler, signReq *CASignCSRRequest) *quicw
 
 // scopedCtx is the context of a caller whose platform token grants scopes.
 func scopedCtx(scopes ...string) context.Context {
+	return ContextWithToken(peerCtx(scopes...), "platform-token")
+}
+
+// peerCtx is what the peer authenticator leaves for a client certificate
+// presented with no token: an AuthorizedContext and no token.
+func peerCtx(scopes ...string) context.Context {
 	return ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Subject: "u", Scopes: scopes})
 }
 
@@ -74,6 +80,8 @@ func TestCAHandler_SignCSR_NeedsCASignCSR(t *testing.T) {
 	}{
 		{"no platform token", context.Background(), quicwire.StatusPermissionDenied},
 		{"ca:write", scopedCtx("ca:write"), quicwire.StatusPermissionDenied},
+		{"operator certificate, no token", peerCtx("*:*"), quicwire.StatusPermissionDenied},
+		{"empty token", ContextWithToken(peerCtx("ca:sign-csr"), ""), quicwire.StatusPermissionDenied},
 		{"ca:sign-csr", scopedCtx("ca:sign-csr"), quicwire.StatusOK},
 	}
 	for _, tc := range cases {

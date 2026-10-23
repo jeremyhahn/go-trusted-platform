@@ -112,6 +112,11 @@ func (s *DeviceGRPCService) CreateDevice(
 	if req.GetDevice() == nil {
 		return nil, status.Error(codes.InvalidArgument, "device is required")
 	}
+	// The serial is what enrollment matches a TPM against, so a device
+	// without one could never be claimed; REST and MCP refuse it too.
+	if req.GetDevice().GetSerial() == "" {
+		return nil, status.Error(codes.InvalidArgument, device.ErrDeviceSerialRequired{}.Error())
+	}
 
 	device := s.pbToDevice(req.GetDevice())
 
@@ -1084,10 +1089,12 @@ func deviceStatusError(err error) error {
 		templateID       device.ErrInvalidTemplateID
 		templateName     device.ErrTemplateNameRequired
 		templateAbsent   device.ErrNilTemplate
+		badEvidence      ErrInvalidAttestationEvidence
 	)
 	if errors.As(err, &vlans) || errors.As(err, &tlsClear) ||
 		errors.As(err, &identityRequired) || errors.As(err, &templateID) ||
-		errors.As(err, &templateName) || errors.As(err, &templateAbsent) {
+		errors.As(err, &templateName) || errors.As(err, &templateAbsent) ||
+		errors.As(err, &badEvidence) {
 		return status.Error(codes.InvalidArgument, errStr)
 	}
 	var noConfig device.ErrNoMatchingConfig

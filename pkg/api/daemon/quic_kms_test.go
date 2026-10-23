@@ -2603,12 +2603,22 @@ func TestPlatformKMSUsagesToPb(t *testing.T) {
 		}, result)
 	})
 
+	// QUIC carries the platform HMAC usage to the go-quicbaas MAC usages,
+	// which the gRPC adapter generates as sign and verify.
+	t.Run("hmac maps to generate and verify mac", func(t *testing.T) {
+		result, err := platformKMSUsagesToPb([]int32{int32(platformv1.KeyUsage_KEY_USAGE_HMAC)})
+		require.NoError(t, err)
+		assert.Equal(t, []pb.KeyUsage{
+			pb.KeyUsage_KEY_USAGE_GENERATE_MAC,
+			pb.KeyUsage_KEY_USAGE_VERIFY_MAC,
+		}, result)
+	})
+
 	t.Run("unsupported usages rejected", func(t *testing.T) {
 		for _, usage := range []platformv1.KeyUsage{
 			platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED,
 			platformv1.KeyUsage_KEY_USAGE_UNWRAP,
 			platformv1.KeyUsage_KEY_USAGE_DERIVE,
-			platformv1.KeyUsage_KEY_USAGE_HMAC,
 		} {
 			_, err := platformKMSUsagesToPb([]int32{int32(usage)})
 			require.Error(t, err, "usage %v should be rejected", usage)

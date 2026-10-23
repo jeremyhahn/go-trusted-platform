@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,7 +153,9 @@ func GenerateUniqueImageRef(prefix, tag string) string {
 	if tag == "" {
 		tag = "latest"
 	}
-	return fmt.Sprintf("%s-%s-%09d:%s", prefix, now.Format("20060102150405"), now.Nanosecond(), tag)
+	// OCI distribution spec name grammar: repository components are
+	// lowercase. The prefix carries the transport name ("Unix", "CLI").
+	return fmt.Sprintf("%s-%s-%09d:%s", strings.ToLower(prefix), now.Format("20060102150405"), now.Nanosecond(), tag)
 }
 
 // GenerateTestLayer generates a test layer with deterministic content.

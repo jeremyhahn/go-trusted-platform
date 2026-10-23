@@ -722,7 +722,9 @@ func TestSDNFailoverPersistence(t *testing.T) {
 		mockOp.setLeader(0)
 	}
 
-	followers := stc.getFollowers()
+	// The stopped leader reports IsLeader() == false, so only a running
+	// follower is a candidate for the new leader.
+	followers := stc.getRunningFollowers()
 	require.NotEmpty(t, followers)
 
 	newLeaderNode := followers[0]
@@ -730,9 +732,8 @@ func TestSDNFailoverPersistence(t *testing.T) {
 		mockOp.setLeader(newLeaderNode.id)
 	}
 
-	if _, err := waitForNewLeader(ctx, defaultLeaderTimeout, []*testNode{newLeaderNode}); err != nil {
-		t.Logf("%v", err)
-	}
+	_, err = waitForNewLeader(ctx, defaultLeaderTimeout, []*testNode{newLeaderNode})
+	require.NoError(t, err)
 
 	// Find the new leader's state manager
 	var newLeaderSM *sdncluster.QuicBaaSStateManager
@@ -802,7 +803,9 @@ func TestSDNFailoverPersistence_WriteAfterFailover(t *testing.T) {
 		mockOp.setLeader(0)
 	}
 
-	followers := stc.getFollowers()
+	// The stopped leader reports IsLeader() == false, so only a running
+	// follower is a candidate for the new leader.
+	followers := stc.getRunningFollowers()
 	require.NotEmpty(t, followers)
 
 	newLeaderNode := followers[0]
@@ -810,9 +813,8 @@ func TestSDNFailoverPersistence_WriteAfterFailover(t *testing.T) {
 		mockOp.setLeader(newLeaderNode.id)
 	}
 
-	if _, err := waitForNewLeader(ctx, defaultLeaderTimeout, []*testNode{newLeaderNode}); err != nil {
-		t.Logf("%v", err)
-	}
+	_, err = waitForNewLeader(ctx, defaultLeaderTimeout, []*testNode{newLeaderNode})
+	require.NoError(t, err)
 
 	// Get new leader's state manager
 	var newLeaderSM *sdncluster.QuicBaaSStateManager

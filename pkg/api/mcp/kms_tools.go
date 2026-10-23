@@ -1150,6 +1150,40 @@ func (r *ToolRegistry) registerSecretsTools() {
 			"required": []string{"secret_id", "status"},
 		},
 	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "secret_get_by_prefix",
+		Description: "List the secrets whose ID starts with a prefix, optionally with their data",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"prefix": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret ID prefix to match",
+				},
+				"include_data": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Also return each secret's data, metadata and version",
+					"default":     false,
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of secrets to return (0 = all)",
+				},
+				"cursor": map[string]interface{}{
+					"type":        "string",
+					"description": "Pagination cursor from a previous response's next_cursor",
+				},
+			},
+			"required": []string{"prefix"},
+		},
+	})
+}
+
+// ErrSecretPrefixRequired indicates a secret ID prefix is required.
+var ErrSecretPrefixRequired = &KMSError{
+	Code:    "SECRET_PREFIX_REQUIRED",
+	Message: "secret prefix is required",
 }
 
 // ErrSecretIDRequired indicates a secret ID is required.

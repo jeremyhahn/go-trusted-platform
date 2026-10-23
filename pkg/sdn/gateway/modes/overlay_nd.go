@@ -78,7 +78,8 @@ const (
 	overlayNDPuntRefresh            = 4 * time.Second
 
 	// overlayNDFallbackHoldDown is how long every solicitation floods after
-	// a punt was lost, before known targets are punted again. A fallback
+	// a punt was lost, before known targets are punted again, unless
+	// OverlayModeConfig.NDFallbackHoldDown sets another. A fallback
 	// within overlayNDFallbackQuiet of the last resumption doubles the
 	// hold-down, up to overlayNDFallbackHoldDownMax: a load the punts
 	// cannot take does not have them flap. Suppression that holds for the
@@ -385,7 +386,7 @@ func (h *OverlayModeHandler) ndWatch(ctx context.Context, now time.Time) ([]ndKe
 // holds mu.
 func (h *OverlayModeHandler) ndFallBack(ctx context.Context, now time.Time) {
 	if h.ndSuppressing {
-		h.ndHoldDown = nextNDHoldDown(h.ndHoldDown, now.Sub(h.ndResumedAt))
+		h.ndHoldDown = nextNDHoldDown(h.ndHoldDownBase(), h.ndHoldDown, now.Sub(h.ndResumedAt))
 	}
 	h.ndResumeAt = now.Add(h.ndHoldDown)
 	if !h.ndSuppressing {
@@ -400,12 +401,21 @@ func (h *OverlayModeHandler) ndFallBack(ctx context.Context, now time.Time) {
 	}
 }
 
+// ndHoldDownBase is the first fallback's hold-down: the configured one, or
+// overlayNDFallbackHoldDown when none is.
+func (h *OverlayModeHandler) ndHoldDownBase() time.Duration {
+	if h.config.NDFallbackHoldDown > 0 {
+		return h.config.NDFallbackHoldDown
+	}
+	return overlayNDFallbackHoldDown
+}
+
 // nextNDHoldDown is the hold-down of a fallback after suppression held for
-// suppressed: the base on the first fallback or after a quiet period, or
-// else twice the last, capped.
-func nextNDHoldDown(last, suppressed time.Duration) time.Duration {
+// suppressed: base on the first fallback or after a quiet period, or else
+// twice the last, capped.
+func nextNDHoldDown(base, last, suppressed time.Duration) time.Duration {
 	if last == 0 || suppressed >= overlayNDFallbackQuiet {
-		return overlayNDFallbackHoldDown
+		return base
 	}
 	return min(2*last, overlayNDFallbackHoldDownMax)
 }

@@ -15,7 +15,10 @@ package tenant
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 )
 
 func TestErrTenantExists_Error(t *testing.T) {
@@ -326,6 +329,33 @@ func TestErrQuotaExceeded_Error(t *testing.T) {
 
 func TestErrQuotaExceeded_ImplementsError(t *testing.T) {
 	var _ error = ErrQuotaExceeded{}
+}
+
+func TestIsQuotaExceeded_MatchesBothQuotaErrors(t *testing.T) {
+	refusals := []error{
+		ErrQuotaExceeded{TenantID: "t1", Resource: "vms"},
+		quota.ErrQuotaExceeded{TenantID: "t1", Resource: quota.ResourceVMs},
+		fmt.Errorf("check: %w", ErrQuotaExceeded{TenantID: "t1"}),
+	}
+	for _, err := range refusals {
+		if !IsQuotaExceeded(err) {
+			t.Errorf("IsQuotaExceeded(%v) = false, want true", err)
+		}
+	}
+}
+
+func TestIsQuotaExceeded_RejectsOtherErrors(t *testing.T) {
+	failures := []error{
+		nil,
+		ErrTenantNotFound{ID: "t1"},
+		ErrInvalidRequest{Reason: "bad"},
+		errors.New("storage down"),
+	}
+	for _, err := range failures {
+		if IsQuotaExceeded(err) {
+			t.Errorf("IsQuotaExceeded(%v) = true, want false", err)
+		}
+	}
 }
 
 func TestErrResourceLimitReached_Error(t *testing.T) {

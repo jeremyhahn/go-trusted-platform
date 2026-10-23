@@ -5,7 +5,8 @@
 
 IPAM operations are exposed as gateway MCP tools
 (`pkg/api/mcp/gateway_tools.go`), served via MCP (stdio / HTTPS, port
-9445).
+9445). A tool's result is a `CallToolResult` whose text block holds the tool's
+JSON output ([daemon api.md](../../daemon/api.md) §1 "MCP tool results").
 
 ## Tools
 

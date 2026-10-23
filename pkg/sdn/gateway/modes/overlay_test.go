@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,8 @@ func TestOverlayModeConfig_Validate(t *testing.T) {
 		{name: "no bridge", edit: func(c *OverlayModeConfig) { c.BridgeName = "" }, want: ErrBridgeNameEmpty},
 		{name: "no access port", edit: func(c *OverlayModeConfig) { c.AccessPort = "" }, want: ErrAccessPortEmpty},
 		{name: "no logger", edit: func(c *OverlayModeConfig) { c.Logger = nil }, want: ErrLoggerNil},
+		{name: "negative ND hold-down", edit: func(c *OverlayModeConfig) { c.NDFallbackHoldDown = -time.Second }, want: ErrNDFallbackHoldDownInvalid},
+		{name: "ND hold-down above the cap", edit: func(c *OverlayModeConfig) { c.NDFallbackHoldDown = overlayNDFallbackHoldDownMax + time.Second }, want: ErrNDFallbackHoldDownInvalid},
 		{name: "anycast IP without a MAC", edit: func(c *OverlayModeConfig) { c.AnycastGatewayMAC = nil }, want: ErrAnycastGatewayIncomplete},
 		{name: "anycast MAC without an IP", edit: func(c *OverlayModeConfig) { c.AnycastGateways = nil }, want: ErrAnycastGatewayIncomplete},
 		{name: "IPv6 anycast gateway", edit: func(c *OverlayModeConfig) { c.AnycastGateways[ovlL2VNI] = netip.MustParseAddr("fd00::1") }, want: ErrAnycastGatewayIncomplete},

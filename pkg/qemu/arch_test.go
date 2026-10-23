@@ -432,6 +432,136 @@ func TestInitializeNVRAM_AArch64UEFICopiesTheVarsPerInstance(t *testing.T) {
 	assert.NotEqual(t, cfg.OVMFVars, cfg.GetNVRAMPath(), "the template itself is never written")
 }
 
+// A qcow2 NVRAM is converted from the raw vars template and attached as
+// qcow2, so savevm finds no writable drive that cannot hold a snapshot.
+func TestInitializeNVRAM_QCOW2ConvertsTheVarsTemplate(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	cfg.WorkDir = filepath.Join(f.dir, "qcow2-work")
+	cfg.NVRAMFormat = DiskFormatQCOW2
+	vm, err := NewVM(cfg, nil)
+	require.NoError(t, err)
+	var converted []string
+	vm.convertImage = func(src, format, dst string) ([]byte, error) {
+		converted = []string{src, format, dst}
+		return nil, os.WriteFile(dst, []byte("qcow2 vars"), 0o644)
+	}
+
+	require.NoError(t, vm.initializeNVRAM())
+
+	nvram := filepath.Join(cfg.WorkDir, "nvram", "OVMF_VARS.qcow2")
+	assert.Equal(t, []string{cfg.OVMFVars, DiskFormatQCOW2, nvram}, converted)
+	assert.Contains(t, buildArgs(t, cfg, BootModeBoot), "if=pflash,unit=1,format=qcow2,file="+nvram)
+}
+
+func TestInitializeNVRAM_QCOW2ConversionFailureLeavesNoNVRAM(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	cfg.WorkDir = filepath.Join(f.dir, "qcow2-work")
+	cfg.NVRAMFormat = DiskFormatQCOW2
+	vm, err := NewVM(cfg, nil)
+	require.NoError(t, err)
+	vm.convertImage = func(_, _, dst string) ([]byte, error) {
+		if err := os.WriteFile(dst, []byte("partial"), 0o644); err != nil {
+			return nil, err
+		}
+		return []byte("qemu-img: write failed"), &MessageError{Msg: "exit status 1"}
+	}
+
+	err = vm.initializeNVRAM()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "qemu-img: write failed")
+	_, statErr := os.Stat(cfg.GetNVRAMPath())
+	assert.True(t, os.IsNotExist(statErr), "a failed conversion must not leave an NVRAM the next start would reuse")
+}
+
+// qcow2NVRAMVM is a qcow2-NVRAM VM whose work directory already holds the raw
+// NVRAM a VM created before the qcow2 default persisted.
+func qcow2NVRAMVM(t *testing.T, raw []byte) (*VM, *Config) {
+	t.Helper()
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	cfg.WorkDir = filepath.Join(f.dir, "existing-work")
+	cfg.NVRAMFormat = DiskFormatQCOW2
+	require.NoError(t, os.WriteFile(cfg.OVMFVars, []byte("pristine template"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(cfg.WorkDir, "nvram"), 0o755))
+	require.NoError(t, os.WriteFile(cfg.rawNVRAMPath(), raw, 0o644))
+	vm, err := NewVM(cfg, nil)
+	require.NoError(t, err)
+	return vm, cfg
+}
+
+func TestInitializeNVRAM_QCOW2ConvertsTheExistingRawNVRAM(t *testing.T) {
+	raw := []byte("boot entries and enrolled PK/KEK/db")
+	vm, cfg := qcow2NVRAMVM(t, raw)
+	var source string
+	vm.convertImage = func(src, _, dst string) ([]byte, error) {
+		source = src
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return nil, err
+		}
+		return nil, os.WriteFile(dst, data, 0o644)
+	}
+
+	require.NoError(t, vm.initializeNVRAM())
+
+	assert.Equal(t, cfg.rawNVRAMPath(), source, "the guest's own NVRAM is the source, not the template")
+	got, err := os.ReadFile(cfg.GetNVRAMPath())
+	require.NoError(t, err)
+	assert.Equal(t, raw, got)
+	kept, err := os.ReadFile(cfg.rawNVRAMPath())
+	require.NoError(t, err)
+	assert.Equal(t, raw, kept, "the raw NVRAM is kept")
+}
+
+func TestInitializeNVRAM_QCOW2ReusesTheExistingQCOW2(t *testing.T) {
+	vm, cfg := qcow2NVRAMVM(t, []byte("stale raw"))
+	existing := []byte("qcow2 vars in use")
+	require.NoError(t, os.WriteFile(cfg.GetNVRAMPath(), existing, 0o644))
+	vm.convertImage = func(src, _, _ string) ([]byte, error) {
+		t.Errorf("an existing qcow2 NVRAM must not be converted again (source %s)", src)
+		return nil, nil
+	}
+
+	require.NoError(t, vm.initializeNVRAM())
+
+	got, err := os.ReadFile(cfg.GetNVRAMPath())
+	require.NoError(t, err)
+	assert.Equal(t, existing, got)
+}
+
+func TestInitializeNVRAM_QCOW2RawConversionFailureKeepsTheRawNVRAM(t *testing.T) {
+	raw := []byte("boot entries and enrolled PK/KEK/db")
+	vm, cfg := qcow2NVRAMVM(t, raw)
+	vm.convertImage = func(_, _, dst string) ([]byte, error) {
+		if err := os.WriteFile(dst, []byte("partial"), 0o644); err != nil {
+			return nil, err
+		}
+		return []byte("qemu-img: write failed"), &MessageError{Msg: "exit status 1"}
+	}
+
+	err := vm.initializeNVRAM()
+
+	var cmdErr *CommandOutputError
+	require.ErrorAs(t, err, &cmdErr)
+	assert.Contains(t, err.Error(), "the existing raw NVRAM")
+	_, statErr := os.Stat(cfg.GetNVRAMPath())
+	assert.True(t, os.IsNotExist(statErr), "no partial qcow2 is left for the next start to reuse")
+	kept, readErr := os.ReadFile(cfg.rawNVRAMPath())
+	require.NoError(t, readErr)
+	assert.Equal(t, raw, kept, "a failed conversion leaves the raw NVRAM untouched")
+}
+
+func TestConfigValidate_NVRAMFormat(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	assert.Equal(t, f.path("nvram/OVMF_VARS.fd"), cfg.GetNVRAMPath(), "raw stays the default")
+
+	cfg.NVRAMFormat = "vmdk"
+	assert.ErrorIs(t, cfg.Validate(), ErrInvalidConfiguration)
+}
+
 func TestConfigKVM_FollowsTheInjectedHostArch(t *testing.T) {
 	cases := []struct {
 		arch     Arch

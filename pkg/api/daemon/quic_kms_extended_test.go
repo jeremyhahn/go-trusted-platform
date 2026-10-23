@@ -194,7 +194,7 @@ func TestHandleKMSExtendedCategoryPolicy(t *testing.T) {
 		require.NotNil(t, out.Policy)
 		assert.Equal(t, "key-1", out.Policy.KeyID)
 		assert.Equal(t, uint64(4), out.Policy.Version)
-		assert.Equal(t, []string{"KEY_USAGE_SIGN"}, out.Policy.AllowedOperations)
+		assert.Equal(t, []string{"SIGN"}, out.Policy.AllowedOperations)
 	})
 
 	t.Run("SetMissingPolicy", func(t *testing.T) {

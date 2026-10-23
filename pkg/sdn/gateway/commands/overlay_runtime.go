@@ -216,6 +216,15 @@ type overlayRuntimeVerdicts struct {
 func (r *overlayRuntimeVerdicts) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
 	id := strconv.FormatUint(deviceID, 10)
 	report, err := r.client.GetDeviceReport(ctx, id)
+	if status.Code(err) == codes.FailedPrecondition {
+		// platformd answered that it runs no attestation reporting service,
+		// so it records no verdict for any device. That is a missing
+		// verdict, which denies, not an outage that a later read may end.
+		return nil, &ErrOverlayPlatformRecordMissing{
+			Record: "attestation report for device " + id + " (platformd runs no attestation reporting)",
+			Cause:  err,
+		}
+	}
 	if err != nil {
 		return nil, overlayPlatformError("attestation report for device "+id, err)
 	}

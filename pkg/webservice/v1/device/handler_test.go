@@ -583,6 +583,43 @@ func TestActivate_SupersededPlan_Error500(t *testing.T) {
 	mockActivator.AssertExpectations(t)
 }
 
+// TestActivate_ActivationRefusal_Returns404 verifies that the hook's
+// retryable refusals at the commit step — the pending activation gone
+// (an already-activated device) or the port still unregistered — are 404s,
+// not server faults, matching the precheck mapping
+// (docs/sdn/provisioning.md, "POST /api/v1/device/activate" errors).
+func TestActivate_ActivationRefusal_Returns404(t *testing.T) {
+	tests := []struct {
+		name    string
+		hookErr error
+	}{
+		{"no pending activation", policy.ErrNoPendingActivation{Serial: "DEVICE-12345"}},
+		{"port not registered", policy.ErrPortNotRegisteredForDevice{MAC: "52:54:00:12:34:56"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockResponseWriter := &MockHttpWriter{}
+			mockActivator := &MockDeviceActivator{}
+			handler := NewHandler(newTestLogger(), mockResponseWriter, mockActivator, &MockProfileService{})
+
+			plan := newSwitchTestPlan("DEVICE-12345", 200)
+			mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
+			mockActivator.On("ActivateDevice", plan).Return(nil, tt.hookErr).Once()
+			mockResponseWriter.On("Error404", mock.Anything, mock.Anything, tt.hookErr).Return()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+			req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
+
+			handler.Activate(httptest.NewRecorder(), req)
+
+			mockResponseWriter.AssertExpectations(t)
+			mockResponseWriter.AssertNotCalled(t, "Error500", mock.Anything, mock.Anything, mock.Anything)
+			mockActivator.AssertExpectations(t)
+			mockActivator.AssertNotCalled(t, "FinalizeActivation", mock.Anything)
+		})
+	}
+}
+
 func TestActivate_NonSerialContextValue(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}

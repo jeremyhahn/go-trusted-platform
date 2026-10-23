@@ -16,6 +16,7 @@ package iso
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -99,6 +100,43 @@ func TestCustomizeCommand_DefaultValues(t *testing.T) {
 	for _, name := range []string{"overlay", "keys-dir", "platformd-binary", "platform-config", "config"} {
 		assert.Equal(t, "", cmd.Flags().Lookup(name).DefValue, "flag %s", name)
 	}
+}
+
+// The autoinstall script installs lvm2, parted and the rest from the ISO's
+// offline repository: a customized tree without it cannot install from the
+// CD, so iso customize pre-fetches by default, as iso create does.
+func TestCustomizeCommand_PreFetchDefaultsOn(t *testing.T) {
+	cmd := newCustomizeCommand(getTestFlags)
+
+	preFetch := cmd.Flags().Lookup("pre-fetch")
+	require.NotNil(t, preFetch, "iso customize must take --pre-fetch")
+	assert.Equal(t, "true", preFetch.DefValue)
+}
+
+func TestCustomizeBuildConfig_CarriesPreFetch(t *testing.T) {
+	platformd := filepath.Join(t.TempDir(), "platformd")
+	require.NoError(t, os.WriteFile(platformd, []byte("binary"), 0o755))
+
+	for _, preFetch := range []bool{true, false} {
+		buildConfig, err := customizeBuildConfig(&customizeFlags{
+			platformdPath: platformd,
+			workDir:       t.TempDir(),
+			preFetch:      preFetch,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, preFetch, buildConfig.PreFetch)
+	}
+}
+
+func TestCustomizeBuildConfig_MissingPlatformdBinary(t *testing.T) {
+	_, err := customizeBuildConfig(&customizeFlags{
+		platformdPath: filepath.Join(t.TempDir(), "platformd"),
+		workDir:       t.TempDir(),
+		preFetch:      true,
+	})
+
+	var invalid ErrConfigValidationFailed
+	require.ErrorAs(t, err, &invalid)
 }
 
 func TestCustomizeCommand_HasRunE(t *testing.T) {

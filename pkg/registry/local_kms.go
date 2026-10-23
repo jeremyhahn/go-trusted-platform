@@ -42,6 +42,9 @@ import (
 // prepended to the ciphertext. The context parameter is bound into
 // the GCM additional-authenticated-data so a ciphertext from one
 // layer cannot be replayed against another.
+//
+// It does not sign manifests: SDKSigner signs with a key held by the
+// quicbaas SDK KMS.
 type LocalKMSClient struct {
 	root string
 	mu   sync.RWMutex

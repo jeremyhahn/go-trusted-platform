@@ -31,6 +31,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -150,6 +151,7 @@ func (m *mockCAForDaemon) DefaultValidityPeriod() int                         { 
 func (m *mockCAForDaemon) TrustedRoot() (*x509.Certificate, error)            { return m.rootCert, nil }
 func (m *mockCAForDaemon) TrustedIntermediate() (*x509.Certificate, error)    { return m.intermCert, nil }
 func (m *mockCAForDaemon) CertStore() xkmssdk.CertStore                       { return m.certStore }
+func (m *mockCAForDaemon) KeyStore() xkmsbackend.Backend                      { return &rotatingKeyStore{} }
 func (m *mockCAForDaemon) Signer(_ context.Context) (crypto.Signer, error)    { return m, nil }
 func (m *mockCAForDaemon) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil

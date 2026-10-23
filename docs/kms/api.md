@@ -43,7 +43,8 @@ MCP: 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
 | Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `KeyManagement.RevokeKey` | as above | `kms_revoke_key` (`kms:write`) | — |
 | Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `kms_update_key_status` (`kms:write`) | ✅ |
 | List key versions | `GET /api/v1/kms/keys/{name}/versions` | `GetKeyVersions` | as above | `kms_list_key_versions` (`kms:read`) | ✅ |
-| Export key | `GET /api/v1/kms/keys/{id}/export` (daemon) | `ExportKey` | as above | `kms_export_public_key` (`kms:read`) | ✅ |
+| Export key | `GET /api/v1/kms/keys/{id}/export` (daemon) | `ExportKey` | as above | — | ✅ |
+| Get public key | — | `KeyManagement.GetPublicKey` | — | `kms_export_public_key` (`kms:read`) | — |
 | Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `KeyManagement.GetKeyMetadata` | as above | `kms_get_key_metadata` (`kms:read`) | — |
 | Update key metadata | `PUT /api/v1/kms/keys/{name}/metadata` | `KeyManagement.UpdateKeyMetadata` | as above | `kms_update_key_metadata` (`kms:write`) | — |
 | Get key policy | `GET /api/v1/kms/keys/{name}/policy` | `KeyManagement.GetKeyPolicy` | as above | `kms_get_key_policy` (`kms:read`) | — |
@@ -55,10 +56,37 @@ MCP: 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
 `wrapping_algorithm` and `format` as their proto enum numbers, and `version`.
 A value that is not a number answers 400; an absent one leaves the default. The
 reply carries `format` and `wrapping_algorithm` as numbers and
-`wrapped_material` as base64. The MCP tool is `kms_export_public_key` — note
-the name: public key only. The gRPC RPC is `ExportKey` without that qualifier,
-which is a naming difference worth checking before assuming what crosses the
-boundary.
+`wrapped_material` as base64. The MCP tool `kms_export_public_key` is not an
+export: it returns the public key (PEM or DER) through `GetPublicKey`, not
+`ExportKey`'s wrapped material.
+
+**`GetPublicKey`** returns the DER (PKIX) public key of the current version;
+`platformctl kms key csr` reads it there. A request naming any other `version`
+is refused with NotFound, because the SDK serves only the current version. REST
+and QUIC have no public-key route yet.
+
+**`ListKeys`** pages on every transport: `limit` caps the page, `cursor` is the
+offset `next_cursor` returned, and the reply carries `has_more` and
+`total_count`. `filter` accepts `name` (exact) and `algorithm` (any case). The
+SDK `ListKeys` takes no paging arguments, so the daemon pages the full list
+itself; a cursor that is not a non-negative number, or another filter key, is
+refused with InvalidArgument.
+
+**`RotateKey`** answers `old_version` and `new_version` on every transport. The
+SDK `RotateKeyResponse` carries only the new version, and a rotation adds
+exactly one version, so `old_version` is `new_version - 1`.
+
+**`SetKeyPolicy`** on gRPC, QUIC and Unix answers the `policy_version` the KMS
+stored: the KMS stamps each set with the request's version plus one. The SDK
+`SetKeyPolicy` returns only an error, so the daemon reads the policy back after
+the set; a read-back failure fails the request with its class, and the new
+policy is already in force.
+
+A **QUIC key policy** names its `allowed_operations` as strings. QUIC answers
+the short names `ENCRYPT`, `DECRYPT`, `SIGN`, `VERIFY`, `WRAP_KEY`,
+`DERIVE_KEY`, `GENERATE_MAC` and `VERIFY_MAC`, the form REST answers. A request
+may also use any case, dashes for underscores, or the `KEY_USAGE_` prefix, so a
+policy read over QUIC can be written back unchanged.
 
 Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
@@ -164,11 +192,15 @@ unknown key fails it whole. Each answer has the layout of the platform.v1 reply
 | DEK status | `GET /api/v1/kms/deks/{path}/status` | `DEKManagement.GetDEKStatus` | sub `0x0B` | `dek_status` (`kms:read`) | — |
 | Rotate DEK | `POST /api/v1/kms/deks/{path}/rotate` | `DEKManagement.RotateDEK` | sub `0x0C` | `dek_rotate` (`kms:write`) | — |
 | Delete DEK | `DELETE /api/v1/kms/deks/{path}` | `DEKManagement.DeleteDEK` | sub `0x0D` | `dek_delete` (`kms:delete`) | — |
+| Set default DEK | — (go-quicbaas SDK DEK client) | `DEKManagement.SetDefaultDEK` (`kms:write`) | sub `0x0E` (`kms:write`) | — (go-quicbaas SDK DEK client) | — |
+| Set DEK safety limits | — (go-quicbaas SDK DEK client) | `DEKManagement.SetDEKSafety` (`kms:write`) | sub `0x0F` (`kms:write`) | — (go-quicbaas SDK DEK client) | — |
+| Clear DEK safety limits | — (go-quicbaas SDK DEK client) | `DEKManagement.ClearDEKSafety` (`kms:write`) | sub `0x10` (`kms:write`) | — (go-quicbaas SDK DEK client) | — |
 
 | Secrets capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Store secret | `POST /api/v1/kms/secrets` | `SecretsManagement.StoreSecret` | secrets category `0xCE`, sub `0x01` | `secret_store` (`secrets:write`) | — |
 | List secrets | `GET /api/v1/kms/secrets` | `SecretsManagement.ListSecrets` | sub `0x03` | `secret_list` (`secrets:list`) | — |
+| Get secrets by prefix | `GET /api/v1/kms/secrets?prefix=` (paths only) | `SecretsManagement.GetSecretsByPrefix` | — (list, then filter) | `secret_get_by_prefix` (`secrets:read`) | — |
 | Get secret | `GET /api/v1/kms/secrets/{name}` | `SecretsManagement.GetSecret` | sub `0x02` | `secret_get` (`secrets:read`) | — |
 | Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `SecretsManagement.DeleteSecret` | sub `0x04` | `secret_delete` (`secrets:delete`) | — |
 | Get secret version | `GET /api/v1/kms/secrets/{name}/versions/{version}` | `SecretsManagement.GetSecretVersion` | sub `0x07` | `secret_get_version` (`secrets:read`) | — |
@@ -185,6 +217,21 @@ transport is read, rotated and deleted on the other. The gRPC secret version,
 rotate, rollback and status RPCs call the SDK secrets client the secret routes
 call; the matching MCP tools call the daemon's secrets service
 (`Security().Secrets()`), the one `secret_get` and `secret_store` use.
+
+**`secret_get_by_prefix` answers what `GetSecretsByPrefix` answers.** The tool
+calls the gRPC `SecretsServerAdapter` method, so both return the same
+`GetSecretsByPrefixResponse`: a `secrets` map keyed by secret path, each
+entry's bytes under data key `data` (base64 in the MCP JSON) when
+`include_data` is set, plus `total_count`, `has_more` and `next_cursor`. It
+takes `prefix` (required), `include_data`, `limit` and `cursor`; an empty
+prefix is refused with `ErrSecretPrefixRequired`.
+
+**`GET /api/v1/kms/secrets/{name}` returns the stored bytes.** The SDK
+secrets client JSON-encodes the data map, so the `value` a store wrote comes
+back from its `Get` as base64 text. The handler decodes it with
+`common.DecodeSecretValue`, the function `platformctl kms secrets get` uses, and
+`value` in the response is the base64 of the bytes that were stored. A stored
+value that is not base64 text answers 500 with `ErrMalformedSecretValue`.
 
 **QUIC DEK subs `0x08`–`0x0D` carry the quicbaas.kms.v1 messages.** Their
 payload after the sub-opcode byte is the `DEKManagement` request message and
@@ -217,21 +264,31 @@ Subs `0x01`–`0x06` take platform wire structs and are not routed by method nam
 Every secrets sub needs the scope in its row's MCP cell, the one its gRPC method
 needs; the two list subs, `0x03` and `0x08`, need `secrets:list`.
 
-**An embedded daemon cannot serve secret versions, rotate, rollback or
-status.** Seam: go-quicbaas embedded Secrets `GetVersion`, `ListVersions`,
-`Rotate`, `Rollback` and `UpdateStatus`. The pinned SDK's embedded dispatcher
+**An embedded daemon cannot serve secret versions, rotate, rollback, status
+or rotation policy.** Seam: go-quicbaas embedded Secrets `GetVersion`,
+`ListVersions`, `Rotate`, `Rollback`, `UpdateStatus`, `SetRotationPolicy` and
+`GetRotationPolicy`. The pinned SDK's embedded dispatcher
 (`sdk/go/transport/embedded/transport.go` `unaryHandlers`, v0.12.0-alpha)
 registers only `Store`, `Get`, `List`, `Delete` and `Ensure` for
 `quicbaas.Secrets`, so on an embedded daemon every transport's route for the
-other five reaches the SDK and answers its unknown-method error; its service
-also refuses a `deleted` status. A daemon on a remote quicbaas transport
-serves them.
+other seven reaches the SDK and answers its unknown-method error, classed
+`Unimplemented` by `pkg/api/errclass`; its service also refuses a `deleted`
+status. A daemon on a remote quicbaas transport serves them.
 
-**The CLI cannot reach them either** — the entire `platformctl kms secrets`
-and `kms dek` subtrees are stubs that return typed
-`ErrSecretsNotImplemented` / `ErrDEKNotImplemented` errors. See
-[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. (`kms crypto
-datakey`, which mints a wrapped DEK, does work.)
+**The CLI reaches them through the same SDK client** — `platformctl kms
+secrets` and `kms dek` call `Security().Secrets()` and `Security().DEK()`, so
+against an embedded daemon the same seven secrets verbs exit 1 with the SDK's
+unknown-method error. See [cli.md](cli.md) §7.
+
+**An embedded daemon cannot disable or enable a key.** Seam: go-quicbaas
+`sdk/go` `kms.Client.UpdateKeyStatus`. The SDK client sends
+`*kms.UpdateKeyStatusRequest`, and the pinned embedded handler for
+`quicbaas.KMS/UpdateKeyStatus` (`sdk/go/transport/embedded`, v0.12.0-alpha and
+still v0.14.0-alpha) accepts only `*service.UpdateKeyStatusRequest`, so the
+gRPC, Unix and QUIC `UpdateKeyStatus` routes, which call the SDK through
+`KMSServerAdapter.UpdateKeyStatus`, answer its `invalid request type for
+quicbaas.KMS/UpdateKeyStatus` error. A daemon on a remote quicbaas transport
+serves them.
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on

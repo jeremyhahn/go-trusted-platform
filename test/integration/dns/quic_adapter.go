@@ -108,12 +108,25 @@ type quicDNSGetZoneReq struct {
 }
 
 type quicDNSZone struct {
-	ID          uint64 `codec:"id"`
-	Name        string `codec:"name"`
-	TTL         uint32 `codec:"ttl"`
-	Description string `codec:"description"`
-	Internal    bool   `codec:"internal"`
-	RecordCount int    `codec:"record_count"`
+	ID          uint64      `codec:"id"`
+	Name        string      `codec:"name"`
+	TTL         uint32      `codec:"ttl"`
+	Description string      `codec:"description"`
+	Internal    bool        `codec:"internal"`
+	RecordCount int         `codec:"record_count"`
+	SOA         *quicDNSSOA `codec:"soa"`
+}
+
+type quicDNSSOA struct {
+	Name       string `codec:"name"`
+	MName      string `codec:"mname"`
+	RName      string `codec:"rname"`
+	Serial     uint32 `codec:"serial"`
+	Refresh    uint32 `codec:"refresh"`
+	Retry      uint32 `codec:"retry"`
+	Expire     uint32 `codec:"expire"`
+	MinimumTTL uint32 `codec:"minimum_ttl"`
+	TTL        uint32 `codec:"ttl"`
 }
 
 type quicDNSGetZoneResp struct {
@@ -252,7 +265,8 @@ func (w *quicRecordWire) toPB() *pb.Record {
 }
 
 type quicListRecordsWire struct {
-	Records []*quicRecordWire `codec:"Records"`
+	Records    []*quicRecordWire      `codec:"Records"`
+	Pagination *pb.PaginationResponse `codec:"Pagination"`
 }
 
 type quicResolveWire struct {
@@ -535,14 +549,28 @@ func (q *QUICAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 	if result.Zone == nil {
 		return nil, ErrQUICDecodeFailed{Operation: "GetZone", Err: fmt.Errorf("empty zone")}
 	}
-	return &GetZoneResult{
+	out := &GetZoneResult{
 		Name:        result.Zone.Name,
 		ID:          fmt.Sprintf("%d", result.Zone.ID),
 		TTL:         result.Zone.TTL,
 		Description: result.Zone.Description,
 		Internal:    result.Zone.Internal,
 		RecordCount: result.Zone.RecordCount,
-	}, nil
+	}
+	if soa := result.Zone.SOA; soa != nil {
+		out.SOA = &SOARecordInfo{
+			Name:       soa.Name,
+			MName:      soa.MName,
+			RName:      soa.RName,
+			Serial:     soa.Serial,
+			Refresh:    soa.Refresh,
+			Retry:      soa.Retry,
+			Expire:     soa.Expire,
+			MinimumTTL: soa.MinimumTTL,
+			TTL:        soa.TTL,
+		}
+	}
+	return out, nil
 }
 
 // UpdateZone has no QUIC opcode (not SDK-mapped and the 0x20-0x2D space is
@@ -708,6 +736,9 @@ func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 	if opts.RecordType != "" {
 		req.Type = recordTypeStringToProto(opts.RecordType)
 	}
+	if opts.Limit > 0 {
+		req.Pagination = &pb.PaginationRequest{PageSize: uint32(opts.Limit)}
+	}
 	resp, err := q.sendRequest(ctx, OpDNSListRecords, req)
 	if err != nil {
 		return nil, err
@@ -728,7 +759,12 @@ func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 			Priority:   priority,
 		})
 	}
-	return &ListRecordsResult{Records: records, TotalCount: int32(len(records))}, nil
+	out := &ListRecordsResult{Records: records, TotalCount: int32(len(records))}
+	if wire.Pagination != nil {
+		out.TotalCount = int32(wire.Pagination.GetTotalItems())
+		out.HasMore = wire.Pagination.GetPage() < wire.Pagination.GetTotalPages()
+	}
+	return out, nil
 }
 
 // =============================================================================

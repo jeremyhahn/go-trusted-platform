@@ -312,12 +312,12 @@ func aarch64Boot(_ *Config, mode BootMode) ([]string, error) {
 }
 
 // pflashArgs are the two UEFI pflash drives: the code read-only (the Secure
-// Boot build when Secure Boot is on) and the per-instance NVRAM copied from
-// the vars template.
+// Boot build when Secure Boot is on) and the per-instance NVRAM, in
+// NVRAMFormat, made from the vars template.
 func pflashArgs(c *Config) []string {
 	return []string{
 		"-drive", fmt.Sprintf("if=pflash,unit=0,format=raw,readonly=on,file=%s", c.GetOVMFCodePath()),
-		"-drive", fmt.Sprintf("if=pflash,unit=1,format=raw,file=%s", c.GetNVRAMPath()),
+		"-drive", fmt.Sprintf("if=pflash,unit=1,format=%s,file=%s", c.nvramFormat(), c.GetNVRAMPath()),
 	}
 }
 

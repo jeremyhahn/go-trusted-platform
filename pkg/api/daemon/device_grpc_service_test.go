@@ -433,12 +433,36 @@ func TestDeviceGRPCService_CreateDevice_SaveError(t *testing.T) {
 
 	ctx := context.Background()
 	req := &platformv1.CreateDeviceRequest{
-		Device: &platformv1.Device{Id: 1},
+		Device: &platformv1.Device{Id: 1, Serial: "SN-SAVE-ERR"},
 	}
 
 	resp, err := svc.CreateDevice(ctx, req)
 	require.Error(t, err)
 	assert.Nil(t, resp)
+}
+
+// TestDeviceGRPCService_CreateDevice_NoSerial verifies a device without a
+// serial is refused with InvalidArgument before anything is saved, as REST
+// and MCP refuse it (docs/device/api.md).
+func TestDeviceGRPCService_CreateDevice_NoSerial(t *testing.T) {
+	deviceSvc := newMockDeviceService()
+	profileSvc := newMockProfileService()
+	svc := NewDeviceGRPCService(deviceSvc, profileSvc, nil)
+
+	resp, err := svc.CreateDevice(context.Background(), &platformv1.CreateDeviceRequest{
+		Device: &platformv1.Device{Model: "no-serial"},
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+	assert.Equal(t, device.ErrDeviceSerialRequired{}.Error(), st.Message())
+
+	list, err := svc.ListDevices(context.Background(), &platformv1.ListDevicesRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, list.GetDevices(), "a refused create must not persist a device")
 }
 
 func TestDeviceGRPCService_GetDevice(t *testing.T) {

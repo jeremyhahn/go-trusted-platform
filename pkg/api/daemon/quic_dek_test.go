@@ -108,6 +108,40 @@ func TestHandleKMSExtendedCategoryDEK(t *testing.T) {
 		assert.True(t, out.GetDeleted())
 		assert.True(t, client.lastDelete.Force)
 	})
+
+	t.Run("SetDefault", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetDefaultDEK,
+			&pb.SetDefaultDEKRequest{Path: "tenants/a/new"}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.SetDefaultDEKResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, "tenants/a/new", out.GetPath())
+		assert.Equal(t, "tenants/a/old", out.GetPreviousDefault())
+		assert.Equal(t, "tenants/a/new", client.lastPath)
+	})
+
+	t.Run("SetSafety", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetDEKSafety,
+			&pb.SetDEKSafetyRequest{Path: "tenants/a/dek", MaxOperations: 1000, MaxBytes: 4096, WarningPercent: 75}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.SetDEKSafetyResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, "tenants/a/dek", out.GetPath())
+		require.NotNil(t, client.lastSafety)
+		assert.Equal(t, uint64(1000), client.lastSafety.MaxOperations)
+		assert.Equal(t, uint64(4096), client.lastSafety.MaxBytes)
+		assert.Equal(t, 75, client.lastSafety.WarningPercent)
+	})
+
+	t.Run("ClearSafety", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubClearDEKSafety,
+			&pb.ClearDEKSafetyRequest{Path: "tenants/a/cleared"}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.ClearDEKSafetyResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, "tenants/a/cleared", out.GetPath())
+		assert.Equal(t, "tenants/a/cleared", client.lastPath)
+	})
 }
 
 // TestHandleKMSExtendedCategoryDEKErrors holds each DEK sub to the class the
@@ -120,11 +154,14 @@ func TestHandleKMSExtendedCategoryDEKErrors(t *testing.T) {
 		noPath  interface{}
 		failing byte
 	}{
-		"Create": {quicwire.KMSSubCreateDEK, &pb.CreateDEKRequest{Path: "p"}, &pb.CreateDEKRequest{}, quicwire.StatusInternalError},
-		"Get":    {quicwire.KMSSubGetDEK, &pb.GetDEKRequest{Path: "p"}, &pb.GetDEKRequest{}, quicwire.StatusNotFound},
-		"Status": {quicwire.KMSSubGetDEKStatus, &pb.GetDEKStatusRequest{Path: "p"}, &pb.GetDEKStatusRequest{}, quicwire.StatusNotFound},
-		"Rotate": {quicwire.KMSSubRotateDEK, &pb.RotateDEKRequest{Path: "p"}, &pb.RotateDEKRequest{}, quicwire.StatusInternalError},
-		"Delete": {quicwire.KMSSubDeleteDEK, &pb.DeleteDEKRequest{Path: "p"}, &pb.DeleteDEKRequest{}, quicwire.StatusInternalError},
+		"Create":      {quicwire.KMSSubCreateDEK, &pb.CreateDEKRequest{Path: "p"}, &pb.CreateDEKRequest{}, quicwire.StatusInternalError},
+		"Get":         {quicwire.KMSSubGetDEK, &pb.GetDEKRequest{Path: "p"}, &pb.GetDEKRequest{}, quicwire.StatusNotFound},
+		"Status":      {quicwire.KMSSubGetDEKStatus, &pb.GetDEKStatusRequest{Path: "p"}, &pb.GetDEKStatusRequest{}, quicwire.StatusNotFound},
+		"Rotate":      {quicwire.KMSSubRotateDEK, &pb.RotateDEKRequest{Path: "p"}, &pb.RotateDEKRequest{}, quicwire.StatusInternalError},
+		"Delete":      {quicwire.KMSSubDeleteDEK, &pb.DeleteDEKRequest{Path: "p"}, &pb.DeleteDEKRequest{}, quicwire.StatusInternalError},
+		"SetDefault":  {quicwire.KMSSubSetDefaultDEK, &pb.SetDefaultDEKRequest{Path: "p"}, &pb.SetDefaultDEKRequest{}, quicwire.StatusInternalError},
+		"SetSafety":   {quicwire.KMSSubSetDEKSafety, &pb.SetDEKSafetyRequest{Path: "p"}, &pb.SetDEKSafetyRequest{}, quicwire.StatusInternalError},
+		"ClearSafety": {quicwire.KMSSubClearDEKSafety, &pb.ClearDEKSafetyRequest{Path: "p"}, &pb.ClearDEKSafetyRequest{}, quicwire.StatusInternalError},
 	}
 
 	for name, tc := range requests {
@@ -171,7 +208,7 @@ func connectDEKQUIC(t *testing.T, client dekclient.Client, scopes ...string) pb.
 	return pb.NewDEKManagementClient(conn)
 }
 
-// TestSDKQUIC_DEK drives the six DEK methods through the SDK's QUIC adapter
+// TestSDKQUIC_DEK drives the nine DEK methods through the SDK's QUIC adapter
 // and the daemon's OpKMSExtendedCategory handler into the adapter the gRPC
 // transport serves.
 func TestSDKQUIC_DEK(t *testing.T) {
@@ -203,6 +240,18 @@ func TestSDKQUIC_DEK(t *testing.T) {
 	deleted, err := deks.DeleteDEK(ctx, &pb.DeleteDEKRequest{Path: "tenants/a/dek"})
 	require.NoError(t, err)
 	assert.True(t, deleted.GetDeleted())
+
+	def, err := deks.SetDefaultDEK(ctx, &pb.SetDefaultDEKRequest{Path: "tenants/a/dek"})
+	require.NoError(t, err)
+	assert.Equal(t, "tenants/a/old", def.GetPreviousDefault())
+
+	safety, err := deks.SetDEKSafety(ctx, &pb.SetDEKSafetyRequest{Path: "tenants/a/dek", MaxOperations: 10})
+	require.NoError(t, err)
+	assert.Equal(t, "tenants/a/dek", safety.GetPath())
+
+	cleared, err := deks.ClearDEKSafety(ctx, &pb.ClearDEKSafetyRequest{Path: "tenants/a/dek"})
+	require.NoError(t, err)
+	assert.Equal(t, "tenants/a/dek", cleared.GetPath())
 }
 
 // TestSDKQUIC_DEKRefuse checks the QUIC path refuses a read-only caller's
@@ -216,6 +265,12 @@ func TestSDKQUIC_DEKRefuse(t *testing.T) {
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "rotate needs kms:write: %v", err)
 	_, err = readOnly.DeleteDEK(ctx, &pb.DeleteDEKRequest{Path: "tenants/a/dek"})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "delete needs kms:delete: %v", err)
+	_, err = readOnly.SetDefaultDEK(ctx, &pb.SetDefaultDEKRequest{Path: "tenants/a/dek"})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "set-default needs kms:write: %v", err)
+	_, err = readOnly.SetDEKSafety(ctx, &pb.SetDEKSafetyRequest{Path: "tenants/a/dek"})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "set-safety needs kms:write: %v", err)
+	_, err = readOnly.ClearDEKSafety(ctx, &pb.ClearDEKSafetyRequest{Path: "tenants/a/dek"})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "clear-safety needs kms:write: %v", err)
 	_, err = readOnly.GetDEK(ctx, &pb.GetDEKRequest{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "missing path: %v", err)
 

@@ -424,10 +424,11 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 		entity.DEKPath = BuildDEKPath(id)
 	}
 
-	// Cache and return
-	m.cache.Store(id, entity)
+	// A record cached meanwhile is the richer one: IAM carries no
+	// lifecycle state, so the rebuild must never replace it.
+	cached, _ := m.cache.LoadOrStore(id, entity)
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // GetTenantByName retrieves a tenant by name.
@@ -464,10 +465,17 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 		entity.DEKPath = BuildDEKPath(entity.ID)
 	}
 
-	// Cache and return
-	m.cache.Store(entity.ID, entity)
+	// The IAM record holds no lifecycle state, and the SDK rewrites its
+	// name to the DisplayName on update, so a by-name hit on a tenant this
+	// manager already holds is answered from the cached record and never
+	// replaces it. A name the cached record does not carry is a display
+	// name, not the tenant's name.
+	cached, loaded := m.cache.LoadOrStore(entity.ID, entity)
+	if loaded && cached.(*TenantEntity).Name != name {
+		return nil, ErrTenantNotFound{Name: name}
+	}
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // ListTenants lists all tenants with pagination.
@@ -487,6 +495,14 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 
 	entities := make([]*TenantEntity, 0, len(tenants))
 	for _, t := range tenants {
+		// A cached tenant is the richer record: IAM carries no lifecycle
+		// state, quotas, labels or annotations, so replacing it with
+		// FromIAM would reset an active tenant to "created".
+		if cached, ok := m.cache.Load(t.ID); ok {
+			entities = append(entities, cached.(*TenantEntity).Clone())
+			continue
+		}
+
 		entity := FromIAM(&t)
 
 		// Enrich with DEK path
@@ -683,6 +699,13 @@ func (m *Manager) ResumeTenant(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Resuming an active tenant is a same-state transition: it succeeds
+	// without a change so a retried resume never fails
+	// (docs/tenant/engineering.md §2 rule 3).
+	if entity.State == StateActive {
+		return nil
+	}
+
 	if entity.State != StateSuspended {
 		return ErrInvalidTransition{
 			From: entity.State,
@@ -759,24 +782,62 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 
 // GetUsage returns tenant resource usage. When the usage tracker is not
 // configured (e.g. on a daemon wired with IAM-only tenant management),
-// the manager returns a zero-valued TenantUsage rather than an error so
-// dashboards and admin tools can still render the page without the
-// optional quota subsystem online.
+// the manager returns a zero-valued TenantUsage for an existing tenant
+// rather than an error so dashboards and admin tools can still render
+// the page without the optional quota subsystem online.
 func (m *Manager) GetUsage(ctx context.Context, tenantID string) (*quota.TenantUsage, error) {
 	if m.usageTracker == nil {
+		if _, err := m.GetTenant(ctx, tenantID); err != nil {
+			return nil, err
+		}
 		return &quota.TenantUsage{TenantID: tenantID, Timestamp: time.Now()}, nil
 	}
 
 	return m.usageTracker.GetAllUsage(ctx, tenantID)
 }
 
-// CheckQuota checks if a resource request can be fulfilled.
+// entityAvailable maps a quota resource to the capacity a tenant entity
+// still has for it. Volumes are absent: the entity tracks volume capacity
+// in GB, not a volume count.
+var entityAvailable = map[quota.ResourceType]func(*TenantEntity) int64{
+	quota.ResourceVMs:        func(t *TenantEntity) int64 { return t.ComputeQuota.AvailableVMs() },
+	quota.ResourceContainers: func(t *TenantEntity) int64 { return t.ComputeQuota.AvailableContainers() },
+	quota.ResourceVCPUs:      func(t *TenantEntity) int64 { return t.ComputeQuota.AvailableVCPUs() },
+	quota.ResourceMemory:     func(t *TenantEntity) int64 { return t.ComputeQuota.AvailableMemoryMB() },
+	quota.ResourceDisk:       func(t *TenantEntity) int64 { return t.ComputeQuota.AvailableDiskGB() },
+	quota.ResourceBridges:    func(t *TenantEntity) int64 { return t.NetworkQuota.AvailableBridges() },
+	quota.ResourcePorts:      func(t *TenantEntity) int64 { return t.NetworkQuota.AvailablePorts() },
+	quota.ResourceBandwidth:  func(t *TenantEntity) int64 { return t.NetworkQuota.MaxBandwidthMbps },
+	quota.ResourceSnapshots:  func(t *TenantEntity) int64 { return t.StorageQuota.AvailableSnapshots() },
+}
+
+// CheckQuota checks if a resource request can be fulfilled. Without a
+// quota enforcer (IAM-only tenant management) the tenant entity's own
+// quotas, as set by CreateTenant and UpdateQuotas, are the limits.
 func (m *Manager) CheckQuota(ctx context.Context, tenantID string, resource quota.ResourceType, amount int64) error {
-	if m.quotaEnforcer == nil {
-		return ErrInvalidRequest{Reason: "quota enforcer not configured"}
+	if m.quotaEnforcer != nil {
+		return m.quotaEnforcer.CheckQuota(ctx, tenantID, resource, amount)
 	}
 
-	return m.quotaEnforcer.CheckQuota(ctx, tenantID, resource, amount)
+	entity, err := m.GetTenant(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+
+	available, ok := entityAvailable[resource]
+	if !ok {
+		return ErrInvalidRequest{Reason: fmt.Sprintf("resource %q is not tracked without a quota enforcer", resource)}
+	}
+
+	if remaining := available(entity); amount > remaining {
+		return ErrQuotaExceeded{
+			TenantID:  tenantID,
+			Resource:  string(resource),
+			Requested: amount,
+			Available: remaining,
+		}
+	}
+	return nil
 }
 
 // ReserveQuota reserves quota for a pending resource creation.

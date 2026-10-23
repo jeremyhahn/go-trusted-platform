@@ -126,6 +126,14 @@ type ListUsersResult struct {
 	Total uint64  `json:"total" yaml:"total"`
 }
 
+// UserListFilter narrows ListUsersDomain. Each set field becomes the
+// matching ListIAMUsersRequest filter; an empty field filters nothing.
+type UserListFilter struct {
+	Email string
+	Role  string
+	Group string
+}
+
 // ListGroupsResult contains the result of listing groups.
 type ListGroupsResult struct {
 	Groups []*Group `json:"groups" yaml:"groups"`

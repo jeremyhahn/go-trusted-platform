@@ -363,10 +363,12 @@ message UpdateRecordResponse {
 message ListRecordsRequest {
   string zone_name = 1;
   RecordType type = 2;
+  PaginationRequest pagination = 3;
 }
 
 message ListRecordsResponse {
   repeated Record records = 1;
+  PaginationResponse pagination = 2;
 }
 
 // DNSSEC request/response

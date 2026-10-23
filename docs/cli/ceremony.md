@@ -136,7 +136,10 @@ there is no transport-local placeholder for ceremony verbs.
 | `ceremony claim-share complete` | `POST /api/v1/ceremony/claim-share/complete` | `platform_ceremony_claim_share_complete` |
 | `ceremony sign-csr` | `POST /api/v1/ceremony/sign-csr` | `platform_ceremony_sign_csr` |
 
-REST responses use snake_case JSON. MCP tool names follow the
+REST responses use snake_case JSON. `claim-cert complete` and `sign-csr`
+answer the issued certificate as `certificate_pem` and `chain_pem` on REST
+and MCP alike, the proto's field names; the SDK response types carry them as
+`Certificate` and `Chain`. MCP tool names follow the
 `platform_{module}_{verb}` convention. gRPC service names and QUIC opcodes
 are in `pkg/api/grpc/proto/ceremony.proto` and `sdk/go/wire/quicwire/phase35_opcodes.go`
 respectively.

@@ -165,6 +165,12 @@ two concurrent creates of one serial cannot both pass the check. A created
 device starts in `registered` with both timestamps set unless the caller
 supplied them, whichever transport created it (#484).
 
+**Create refuses a device without a serial on every transport.** REST answers
+`400` (the request-shape table below), MCP `ErrDeviceSerialRequired`, and `DeviceGRPCService.CreateDevice`
+— which gRPC, Unix and QUIC `0x30` share — `InvalidArgument` (`StatusInvalidArgument`
+on QUIC) with the text `device serial is required`. The gRPC service used to
+check only that the device was present, so a serial-less device was created there.
+
 Until #525 the create verbs called `DeviceService.Save`, which requires a
 non-zero id because it doubles as the update primitive, so a caller creating a
 device — who by definition has no id — was refused with `InvalidArgument:

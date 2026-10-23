@@ -36,6 +36,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -114,9 +115,32 @@ type mockCA struct {
 	defaultSigAlg x509.SignatureAlgorithm
 	validity      int
 	certStore     *mockCertStore
+	keyStore      *rotatingKeyStore
 	revokedCerts  []*x509.Certificate
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
+}
+
+// rotatingKeyStore records the keys a renewal rotates.
+type rotatingKeyStore struct {
+	xkmsbackend.Backend
+	rotated   []*xkmssdk.KeyAttributes
+	rotateErr error
+}
+
+func (k *rotatingKeyStore) RotateKey(_ context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+	if k.rotateErr != nil {
+		return nil, k.rotateErr
+	}
+	k.rotated = append(k.rotated, attrs)
+	return nil, nil
+}
+
+func (m *mockCA) KeyStore() xkmsbackend.Backend {
+	if m.keyStore == nil {
+		return nil
+	}
+	return m.keyStore
 }
 
 func newMockCA() *mockCA {
@@ -133,6 +157,7 @@ func newMockCA() *mockCA {
 		defaultSigAlg: x509.ECDSAWithSHA256,
 		validity:      365,
 		certStore:     newMockCertStore(),
+		keyStore:      &rotatingKeyStore{},
 		revokedCerts:  make([]*x509.Certificate, 0),
 		generateCRL:   true,
 		privateKey:    privateKey,
@@ -947,6 +972,40 @@ func TestCAHandler_HandleRenew_Success(t *testing.T) {
 
 	assert.Equal(t, cert.SerialNumber.String(), renewResp.OldSerial)
 	assert.NotNil(t, renewResp.Certificate)
+}
+
+// Renewal re-keys under the same key name (docs/ca/user.md "Renewing").
+// Revoking with DeleteKeys instead left the name reserved in the SDK KMS, and
+// the issue failed with already_exists.
+func TestCAHandler_HandleRenew_RotatesTheCertificatesKey(t *testing.T) {
+	ca := newMockCA()
+	handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+	cert := generateTestCertificate("renew.example.com", false, ca.intermCert, ca.privateKey)
+	ca.certStore.StoreCertificate(cert)
+
+	payload, err := quicwire.EncodePayload(&CARenewRequest{Serial: cert.SerialNumber.String(), ExtendDays: 30})
+	require.NoError(t, err)
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCARenew, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status, "%s", resp.Payload)
+
+	require.Len(t, ca.keyStore.rotated, 1)
+	assert.Equal(t, "renew.example.com", ca.keyStore.rotated[0].CN)
+	assert.Equal(t, cert.PublicKeyAlgorithm, ca.keyStore.rotated[0].KeyAlgorithm)
+}
+
+func TestCAHandler_HandleRenew_RotateFailureIssuesNothing(t *testing.T) {
+	ca := newMockCA()
+	ca.keyStore.rotateErr = errors.New("rotation refused")
+	handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+	cert := generateTestCertificate("renew.example.com", false, ca.intermCert, ca.privateKey)
+	ca.certStore.StoreCertificate(cert)
+
+	payload, err := quicwire.EncodePayload(&CARenewRequest{Serial: cert.SerialNumber.String(), ExtendDays: 30})
+	require.NoError(t, err)
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCARenew, Payload: payload})
+
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
+	assert.Contains(t, string(resp.Payload), "rotate the key")
 }
 
 func TestCAHandler_HandleRenew_InvalidExtendDays(t *testing.T) {

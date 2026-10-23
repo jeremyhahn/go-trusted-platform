@@ -437,7 +437,7 @@ platformd component enabled by `attestation.reporting.enabled`; the standalone
 topology needs a ruling on where a reporting server gets device records and is
 filed as a follow-up rather than shipped as a stub.
 
-### Every node is its own root CA — measured 2026-09-05
+### Every node is its own root CA
 
 Do not design against "the platform CA" as if there were one. On the live fleet
 every node stands up its **own** root and issuing CA (`root-ca.<role>.<domain>`

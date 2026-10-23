@@ -642,6 +642,9 @@ curl --tlsv1.3 --cacert platform-ca.pem -X POST https://localhost:9445/mcp \
 }
 ```
 
+The `result` is an MCP `CallToolResult`: the tool's JSON output is the text of
+its one `text` block ([daemon api.md](../daemon/api.md) §1 "MCP tool results").
+
 ## Error Handling
 
 MCP errors follow JSON-RPC 2.0. A failed tool call answers the code for its

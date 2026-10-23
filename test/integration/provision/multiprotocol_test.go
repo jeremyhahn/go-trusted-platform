@@ -40,7 +40,9 @@ package provision
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/pem"
 	"strings"
 	"testing"
@@ -682,7 +684,8 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 		//     ErrSignerUnavailable (fail-fast before the nonce is
 		//     consumed);
 		//   - signer wired: the EK-bound SIGNED path must complete with a
-		//     non-empty signature and a parseable PEM DB certificate.
+		//     signature that verifies against the returned PEM DB
+		//     certificate, which is the CA certificate of the seeded DB key.
 		//
 		// An EK-binding rejection is NO LONGER legitimate here — the
 		// prestage feature makes the gate pass by construction.
@@ -708,6 +711,21 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 			if certBlock == nil || certBlock.Type != "CERTIFICATE" {
 				t.Fatalf("SignDigest succeeded but the DB certificate is not a PEM CERTIFICATE block (%d bytes)",
 					len(resp.GetCertPem()))
+			}
+			dbCert, parseErr := x509.ParseCertificate(certBlock.Bytes)
+			if parseErr != nil {
+				t.Fatalf("SignDigest succeeded but the DB certificate does not parse: %v", parseErr)
+			}
+			if dbCert.Subject.CommonName != fixture.dbKeyID {
+				t.Fatalf("SignDigest returned the certificate of %q, want the seeded DB key %q",
+					dbCert.Subject.CommonName, fixture.dbKeyID)
+			}
+			dbKey, ok := dbCert.PublicKey.(*ecdsa.PublicKey)
+			if !ok {
+				t.Fatalf("DB certificate public key is %T, want the seeded ECDSA P-256 key", dbCert.PublicKey)
+			}
+			if !ecdsa.VerifyASN1(dbKey, digest[:], resp.GetSignature()) {
+				t.Fatal("SignDigest signature does not verify against the returned DB certificate")
 			}
 			t.Log("remote sign succeeded: CP DB key signed the digest through the EK-bound path")
 			return

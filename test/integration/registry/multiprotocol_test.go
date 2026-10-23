@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,16 @@ func TestRegistryMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	// Signed pushes sign with an SDK KMS key the push names; the registry
+	// never creates it. Create one through the CLI for every protocol leg.
+	signingKeyID := fmt.Sprintf("registry-sign-%d", time.Now().UnixNano())
+	keyAdmin := NewCLIAdapter()
+	require.NoError(t, keyAdmin.Setup(ctx), "CLI setup for the signing key")
+	require.NoError(t, keyAdmin.GenerateSigningKey(ctx, signingKeyID), "create the signing key in the SDK KMS")
+	if err := keyAdmin.Teardown(); err != nil {
+		t.Logf("Warning: teardown error for the signing-key CLI: %v", err)
+	}
+
 	gate := helpers.NewAdapterGate(t, "registry", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
@@ -73,19 +84,22 @@ func TestRegistryMultiProtocol(t *testing.T) {
 				}
 			}()
 
-			runRegistryProtocolTests(t, ctx, adapter)
+			runRegistryProtocolTests(t, ctx, adapter, signingKeyID)
 		})
 	}
 }
 
 // runRegistryProtocolTests runs the complete registry test suite against a single
 // protocol adapter.
-func runRegistryProtocolTests(t *testing.T, ctx context.Context, cmd RegistryCommands) {
-	// Generate unique test prefix for this protocol run
-	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
+func runRegistryProtocolTests(t *testing.T, ctx context.Context, cmd RegistryCommands, signingKeyID string) {
+	// Generate unique test prefix for this protocol run. Every image
+	// reference starts with it, and an OCI repository name is lowercase
+	// (distribution-spec "Pulling manifests": [a-z0-9]+(...)*), so the
+	// mixed-case transport name ("gRPC", "MCP") is lowercased here.
+	prefix := fmt.Sprintf("%s-%d", strings.ToLower(cmd.Name()), time.Now().Unix())
 
 	t.Run("ImageLifecycle", func(t *testing.T) {
-		runImagePushTests(t, ctx, cmd, prefix)
+		runImagePushTests(t, ctx, cmd, prefix, signingKeyID)
 		runImagePullTests(t, ctx, cmd, prefix)
 		runImageListTests(t, ctx, cmd, prefix)
 		runImageDeleteTests(t, ctx, cmd, prefix)
@@ -119,7 +133,7 @@ func runRegistryProtocolTests(t *testing.T, ctx context.Context, cmd RegistryCom
 // Image Push Tests
 // =============================================================================
 
-func runImagePushTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
+func runImagePushTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix, signingKeyID string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -217,7 +231,7 @@ func runImagePushTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 			Layers:       layers,
 			Config:       config,
 			SignImage:    true,
-			SigningKeyID: "test-signing-key-1",
+			SigningKeyID: signingKeyID,
 		}
 
 		result, err := cmd.Push(testCtx, ref, opts)
@@ -227,6 +241,25 @@ func runImagePushTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 
 		// Cleanup
 		cleanupImage(t, testCtx, cmd, ref)
+	})
+
+	t.Run("PushImageWithMissingSigningKeyIsRefused", func(t *testing.T) {
+		// The registry signs only with an existing SDK KMS key: a key the
+		// KMS does not hold is refused (ErrSigningKeyUnavailable), never
+		// created, and nothing is stored.
+		ref := GenerateUniqueImageRef(prefix+"-push-missing-key", "v1")
+		layers, config := GenerateTestImage(1, 1024)
+
+		_, err := cmd.Push(testCtx, ref, PushOptions{
+			Layers:       layers,
+			Config:       config,
+			SignImage:    true,
+			SigningKeyID: signingKeyID + "-missing",
+		})
+		require.Error(t, err, "Push should fail when the signing key is not in the KMS")
+
+		_, err = cmd.Inspect(testCtx, ref)
+		require.Error(t, err, "a push refused for a missing signing key must store nothing")
 	})
 
 	t.Run("PushImageOverwriteNotAllowed", func(t *testing.T) {

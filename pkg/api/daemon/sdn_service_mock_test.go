@@ -256,6 +256,12 @@ func (m *ConfigurableMockOVSClient) AddPort(ctx context.Context, bridgeName, por
 	}, nil
 }
 
+// AddPortWithType records the requested interface type, then behaves as AddPort.
+func (m *ConfigurableMockOVSClient) AddPortWithType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error) {
+	m.recordCall("AddPortWithType", bridgeName, portName, ifType)
+	return m.AddPort(ctx, bridgeName, portName)
+}
+
 func (m *ConfigurableMockOVSClient) DeletePort(ctx context.Context, bridgeName, portName string) error {
 	m.recordCall("DeletePort", bridgeName, portName)
 	if m.deletePortFunc != nil {

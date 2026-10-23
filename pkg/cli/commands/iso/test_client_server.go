@@ -651,7 +651,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 			qemuConfig.SerialConsole = true
 			logger.Info("Using console serial output for server boot")
 		}
-		if err := runTestQEMUBoot(ctx, logger, qemuConfig); err != nil {
+		if err := runTestQEMUBoot(ctx, logger, qemuConfig, ""); err != nil {
 			return &WrappedError{Msg: "server boot failed", Err: err}
 		}
 		printSuccess("Server VM completed")
@@ -1256,7 +1256,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 	}
 
 	// Run boot
-	if err := runTestQEMUBoot(ctx, logger, qemuConfig); err != nil {
+	if err := runTestQEMUBoot(ctx, logger, qemuConfig, ""); err != nil {
 		return &WrappedError{Msg: "client boot failed", Err: err}
 	}
 
