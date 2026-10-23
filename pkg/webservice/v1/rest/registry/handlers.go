@@ -115,12 +115,7 @@ func (h *Handlers) GetImage(w http.ResponseWriter, r *http.Request) {
 			Reference:  tag,
 		})
 		if err != nil {
-			var nf grpcapi.ErrArtifactNotFound
-			if errors.As(err, &nf) {
-				h.respWriter.Error404(w, r, err)
-				return
-			}
-			h.respWriter.Error500(w, r, err)
+			h.writeServiceError(w, r, err)
 			return
 		}
 		w.Header().Set("Content-Type", contentTypePullEnvelope)
@@ -133,12 +128,7 @@ func (h *Handlers) GetImage(w http.ResponseWriter, r *http.Request) {
 		Reference:  tag,
 	})
 	if err != nil {
-		var nf grpcapi.ErrArtifactNotFound
-		if errors.As(err, &nf) {
-			h.respWriter.Error404(w, r, err)
-			return
-		}
-		h.respWriter.Error500(w, r, err)
+		h.writeServiceError(w, r, err)
 		return
 	}
 	h.respWriter.Success200(w, r, resp.Detail)
@@ -204,12 +194,7 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 		strings.NewReader(string(body)),
 	)
 	if err != nil {
-		var exists grpcapi.ErrArtifactAlreadyExists
-		if errors.As(err, &exists) {
-			h.respWriter.Error400(w, r, err)
-			return
-		}
-		h.respWriter.Error500(w, r, err)
+		h.writeServiceError(w, r, err)
 		return
 	}
 	h.respWriter.Success200(w, r, resp)
@@ -278,12 +263,7 @@ func (h *Handlers) DeleteImage(w http.ResponseWriter, r *http.Request) {
 		Reference:  tag,
 	})
 	if err != nil {
-		var nf grpcapi.ErrArtifactNotFound
-		if errors.As(err, &nf) {
-			h.respWriter.Error404(w, r, err)
-			return
-		}
-		h.respWriter.Error500(w, r, err)
+		h.writeServiceError(w, r, err)
 		return
 	}
 	h.respWriter.Success200(w, r, resp)
@@ -362,6 +342,23 @@ func artifactToSummary(a *grpcapi.RegistryArtifact) ImageSummary {
 		s.UpdatedAt = a.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
 	}
 	return s
+}
+
+// writeServiceError answers a RegistryService failure: a missing artifact is
+// 404, a caller error (an existing tag without overwrite, a reference outside
+// the OCI grammar) is 400, anything else is 500.
+func (h *Handlers) writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
+	var notFound grpcapi.ErrArtifactNotFound
+	var exists grpcapi.ErrArtifactAlreadyExists
+	var invalid grpcapi.ErrInvalidArtifactReference
+	switch {
+	case errors.As(err, &notFound):
+		h.respWriter.Error404(w, r, err)
+	case errors.As(err, &exists), errors.As(err, &invalid):
+		h.respWriter.Error400(w, r, err)
+	default:
+		h.respWriter.Error500(w, r, err)
+	}
 }
 
 // ErrRegistryNotConfigured is returned when /compute/images endpoints

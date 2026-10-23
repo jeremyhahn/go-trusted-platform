@@ -214,8 +214,9 @@ says `FailedPrecondition`), a missing `repository` or `reference` is
 takes the code `grpcapi.RegistryErrorStatus` gives it on gRPC — an unknown
 artifact is `NotFound`, and a reference outside the OCI distribution-spec name
 grammar (`ErrInvalidImageRef`, e.g. an uppercase repository, carried as
-`grpcapi.ErrInvalidArtifactReference`) is `InvalidArgument`: the caller's
-error, never `Internal`.
+`grpcapi.ErrInvalidArtifactReference`) is `InvalidArgument` on gRPC, Unix and
+MCP (JSON-RPC invalid params) and 400 on REST: the caller's error, never
+`Internal`.
 
 **A push that asks for a capability the registry was built without is
 `FailedPrecondition` on gRPC.** `sign` with no signer is

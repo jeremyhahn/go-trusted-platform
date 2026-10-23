@@ -14,6 +14,7 @@
 package registry
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -385,11 +386,29 @@ func TestImageRefRegex(t *testing.T) {
 		"myrepo/myimage",
 		"myrepo/myimage:v1.0",
 		"localhost:5000/myimage",
+		// OCI distribution-spec separators and the longest tag.
+		"my__repo/image:v1",
+		"my---repo/image:v1",
+		"alpine:" + strings.Repeat("a", 128),
 	}
 
 	for _, pattern := range validPatterns {
 		if !imageRefRegex.MatchString(pattern) {
 			t.Errorf("pattern %q should match imageRefRegex", pattern)
+		}
+	}
+
+	invalidPatterns := []string{
+		"my___repo/image:v1",
+		"myrepo-/image:v1",
+		"gRPC-1792717075-push-basic:v1",
+		"alpine:" + strings.Repeat("a", 129),
+		"alpine:.v1",
+	}
+
+	for _, pattern := range invalidPatterns {
+		if imageRefRegex.MatchString(pattern) {
+			t.Errorf("pattern %q should not match imageRefRegex", pattern)
 		}
 	}
 }
