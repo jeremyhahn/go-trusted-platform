@@ -36,6 +36,9 @@ type StorageStats struct {
 type ComponentStatus struct {
 	Name   string       `json:"name" yaml:"name"`
 	Status HealthStatus `json:"status" yaml:"status"`
+	// Details carries component-specific facts, such as the storage
+	// component's "backend".
+	Details map[string]string `json:"details,omitempty" yaml:"details,omitempty"`
 }
 
 // Artifact represents a registry artifact.

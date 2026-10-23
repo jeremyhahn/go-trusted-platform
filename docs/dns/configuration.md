@@ -83,7 +83,7 @@ The other keys (`transport`, `address`, `unix-socket`, `raft-address`,
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `port` | int | `8053` public, `9053` internal | UDP/TCP listen port |
-| `forwarders` | list | public `4.4.4.4`, `8.8.8.8`; internal `192.168.1.1`, `192.168.2.1`, `192.168.3.1` | Upstreams for names outside the server's zones |
+| `forwarders` | list | public `4.4.4.4`, `8.8.8.8`; internal `198.51.100.1`, `198.51.100.2`, `198.51.100.3` | Upstreams for names outside the server's zones |
 | `zone` | map | `example.com.` / `example.internal.` | The server's zone, below |
 
 The internal server answers internal zones; the public server drops queries for

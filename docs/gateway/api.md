@@ -56,7 +56,9 @@ nothing. The document's sections and their provenance are in
 The overlay section of the snapshot includes the local VTEP, underlay bridge,
 OpenFlow table ids, admitted VTEPs, and the neighbor-discovery counters the
 gatewayd overlay handler maintains: punted, answered, meter-dropped,
-queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
+queue-dropped, and fell-through. It also counts the routes refused for
+claiming the anycast gateway's address (`refused_bindings`) and the replays of
+a refused VTEP's routes that failed (`refused_replays`). The admitted-VTEP read/list verbs are backed
 by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
 the SDK/CLI; they return `NotFound` for an address that is not currently
 admitted, and `Unavailable` (REST 503) on a gateway with no overlay section.
@@ -337,6 +339,18 @@ consumed by gateways:
 | PUT | `/api/v1/gateway/vpn-leases/{id}` | Gateway records a management VPN lease it admitted or renewed ([docs/vpn/api.md](../vpn/api.md) §6) | `{id}` **must equal** the client certificate CN |
 | DELETE | `/api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | Gateway releases a lease it revoked | `{id}` **must equal** the client certificate CN |
 
+**Both REST servers carry the four gatewayd-facing routes.** With a
+`webservices:` listener they are on the webservice router
+(`pkg/webservice/v1/router.go`) beside the operator `state` routes. A
+daemon-only control plane — no `webservices:` section, so the daemon's own
+REST server on 8443 is the REST listener — mounts the same four on that server
+(`RESTServer.SetGatewayControlPlane`, wired by `wireGatewayControlPlane` in
+`pkg/daemon/commands/gateway_control_init.go`), backed by the same telemetry
+store and desired-configuration source. The operator `state` routes are not
+mounted there; the snapshot is read through `GetGatewaySnapshot` on every
+transport (§2). The certificate binding below is the same handler code on
+both.
+
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
 
@@ -351,7 +365,7 @@ The response payload is `{"gateway_id": …, "config": <DesiredConfig>}`, where
   "load_balancer": {"vips": [{"address": "10.0.200.10", "port": 443, "protocol": "tcp",
                              "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}]}]},
   "nat": {"snat_internal_cidr": "10.0.100.0/24",
-          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2222", "internal": "10.0.100.5:22"}]}
+          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2022", "internal": "10.0.100.5:22"}]}
 }
 ```
 

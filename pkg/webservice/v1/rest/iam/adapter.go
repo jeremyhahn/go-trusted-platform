@@ -111,9 +111,20 @@ func NewQuicBaaSIAMAdapter(client quicbaassdk.IAMClient) *QuicBaaSIAMAdapter {
 // User operations — direct delegation, types are shared between REST and SDK.
 // -----------------------------------------------------------------------------
 
-// CreateUser delegates to iamsdk.UserClient.Create.
+// CreateUser delegates to iamsdk.UserClient.Create, first resolving the
+// request's role references, which may name roles, to the role IDs the SDK
+// takes (ResolveRoleIDs). The caller's request is not modified.
 func (a *QuicBaaSIAMAdapter) CreateUser(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
-	return a.client.User().Create(ctx, tenantID, req)
+	if req == nil {
+		return nil, ErrInvalidRequestBody{Reason: "create user request is required"}
+	}
+	roleIDs, err := ResolveRoleIDs(ctx, a.client.Role(), tenantID, req.Roles)
+	if err != nil {
+		return nil, err
+	}
+	resolved := *req
+	resolved.Roles = roleIDs
+	return a.client.User().Create(ctx, tenantID, &resolved)
 }
 
 // GetUser delegates to iamsdk.UserClient.Get.
@@ -141,13 +152,29 @@ func (a *QuicBaaSIAMAdapter) DeleteUser(ctx context.Context, tenantID, userID st
 	return a.client.User().Delete(ctx, tenantID, userID)
 }
 
-// AssignRole delegates to iamsdk.UserClient.AssignRole.
-func (a *QuicBaaSIAMAdapter) AssignRole(ctx context.Context, tenantID, userID, roleID string) error {
+// SetUserRoles replaces the user's roles with the referenced ones
+// (SetUserRoles); no references leaves them alone.
+func (a *QuicBaaSIAMAdapter) SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
+	return SetUserRoles(ctx, a.client, tenantID, userID, roles)
+}
+
+// AssignRole delegates to iamsdk.UserClient.AssignRole, first resolving the
+// role reference, which may name the role, to its ID (ResolveRoleID).
+func (a *QuicBaaSIAMAdapter) AssignRole(ctx context.Context, tenantID, userID, roleRef string) error {
+	roleID, err := ResolveRoleID(ctx, a.client.Role(), tenantID, roleRef)
+	if err != nil {
+		return err
+	}
 	return a.client.User().AssignRole(ctx, tenantID, userID, roleID)
 }
 
-// RevokeRole delegates to iamsdk.UserClient.RevokeRole.
-func (a *QuicBaaSIAMAdapter) RevokeRole(ctx context.Context, tenantID, userID, roleID string) error {
+// RevokeRole delegates to iamsdk.UserClient.RevokeRole, first resolving the
+// role reference, which may name the role, to its ID (ResolveRoleID).
+func (a *QuicBaaSIAMAdapter) RevokeRole(ctx context.Context, tenantID, userID, roleRef string) error {
+	roleID, err := ResolveRoleID(ctx, a.client.Role(), tenantID, roleRef)
+	if err != nil {
+		return err
+	}
 	return a.client.User().RevokeRole(ctx, tenantID, userID, roleID)
 }
 

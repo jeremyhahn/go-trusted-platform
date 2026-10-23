@@ -60,7 +60,8 @@ Three properties that follow, and that callers depend on:
 2. **`deleting` only goes forward.** Deletion cannot be cancelled once entered.
 3. **Same-state transitions are allowed for idempotency**
    (`CanTransitionTo`, `state.go:69-73`). Suspending a suspended tenant
-   succeeds. This is deliberate — retried API calls must not fail — and it means
+   succeeds, and resuming an active tenant succeeds without a change
+   (`Manager.ResumeTenant`) on every transport. This is deliberate — retried API calls must not fail — and it means
    `CanTransitionTo(s, s)` is always true, including for `deleted`.
 
 An invalid transition is `ErrInvalidTransition`; an operation against a state
@@ -134,7 +135,13 @@ unusual; compare it with `errors.Is` like any other sentinel.
    and resumption are state changes only. Traffic enforcement for a tenant
    arrives with its VRF.
 3. **Quota checks precede allocation.** `CheckQuota` exists as its own RPC so a
-   caller can ask before acting.
+   caller can ask before acting. An exceeded quota is an answer
+   (`available: false` with the reason); any other failure, such as an unknown
+   tenant, is an error on every transport. Without a quota enforcer (the
+   IAM-only manager platformd runs) the tenant's own quotas, set by
+   `CreateTenant` and `UpdateQuotas`, are the limits; `volumes` is refused
+   there because the entity tracks volume capacity in GB, not a count.
+   `GetUsage` likewise refuses an unknown tenant.
 4. **DEK rotation does not re-encrypt tenant data.** `RotateTenantDEK` returns
    `DEKRotationResult`; the DEK is rewrapped, not the data.
 5. **Suspension is reversible; deletion is not.** See §2.
@@ -149,6 +156,16 @@ Tenant entities are stored through the stack; `ErrStorageFailed` wraps
 persistence failures. Per-tenant keyspaces (`keyspace.go`) are how a tenant's
 data is separated in the store — the isolation is in the key path, not in a
 filter applied at read time.
+
+A tenant's lifecycle state, quotas, labels and annotations live only in the
+`Manager`'s in-memory cache; the IAM tenant record holds the ID, the name and
+the timestamps. The pinned go-quicbaas `sdk/go` (v0.12.0-alpha) cannot carry
+more: its embedded transport's tenant update keeps only `DisplayName`, stores
+it as the tenant's new IAM **name**, and drops status and metadata. So a
+tenant rebuilt from IAM (after a restart) starts as `created`, and a by-name
+lookup that falls back to IAM never replaces a cached record: a name the cached
+record does not carry is `ErrTenantNotFound`, since it is the SDK's rewritten
+display name.
 
 ## 7. Test strategy
 

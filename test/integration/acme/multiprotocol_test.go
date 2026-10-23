@@ -36,6 +36,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	acmecmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/acme"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -113,6 +114,71 @@ func testACMEProtocol(t *testing.T, ctx context.Context, cmd ACMECommands) {
 }
 
 // =============================================================================
+// CLI Refusals
+// =============================================================================
+
+// requireCLIRefusal asserts the refusal the CLI gives op for valid input
+// (cliRefusals) and reports whether it did, so the leaf ends there. On any
+// other transport it returns false and the leaf goes on to its own
+// assertions.
+func requireCLIRefusal(t *testing.T, cmd ACMECommands, err error, op string) bool {
+	t.Helper()
+	if cmd.Name() != "CLI" {
+		return false
+	}
+	require.ErrorIs(t, err, cliRefusals[op], "platformctl refuses %s (docs/ca/cli.md §3)", op)
+	return true
+}
+
+// requireCLIValidation asserts that the CLI refused the input with want,
+// which platformctl checks before it reaches the gap. The error crosses the
+// process boundary as text, so the match is on want's exact message.
+func requireCLIValidation(t *testing.T, cmd ACMECommands, err error, want error) {
+	t.Helper()
+	if cmd.Name() != "CLI" {
+		return
+	}
+	require.ErrorContains(t, err, want.Error(), "platformctl validates its input before the gap")
+}
+
+// setupAccount creates the account a leaf needs. On the CLI it asserts the
+// refusal and returns an empty account, so every leaf still runs and
+// asserts its own refusal.
+func setupAccount(t *testing.T, ctx context.Context, cmd ACMECommands, email string) *AccountCreateResult {
+	t.Helper()
+	account, err := cmd.AccountCreate(ctx, DefaultAccountCreateOptions(email))
+	if requireCLIRefusal(t, cmd, err, "AccountCreate") {
+		return &AccountCreateResult{}
+	}
+	require.NoError(t, err, "Setup: AccountCreate should succeed")
+	return account
+}
+
+// setupOrder places the order a leaf needs, the way setupAccount creates an
+// account.
+func setupOrder(t *testing.T, ctx context.Context, cmd ACMECommands, accountID string, identifiers ...OrderIdentifier) *OrderCreateResult {
+	t.Helper()
+	order, err := cmd.OrderCreate(ctx, OrderCreateOptions{AccountID: accountID, Identifiers: identifiers})
+	if requireCLIRefusal(t, cmd, err, "OrderCreate") {
+		return &OrderCreateResult{}
+	}
+	require.NoError(t, err, "Setup: OrderCreate should succeed")
+	return order
+}
+
+// setupCertificate requests the certificate a revoke leaf needs and reports
+// whether the CLI refused the request, in which case the result is empty.
+func setupCertificate(t *testing.T, ctx context.Context, cmd ACMECommands, cn, email string) (*CertificateRequestResult, bool) {
+	t.Helper()
+	result, err := cmd.CertificateRequest(ctx, DefaultCertificateRequestOptions(cn, email))
+	if requireCLIRefusal(t, cmd, err, "CertificateRequest") {
+		return &CertificateRequestResult{}, true
+	}
+	require.NoError(t, err, "Setup: CertificateRequest should succeed")
+	return result, false
+}
+
+// =============================================================================
 // Account Management Tests
 // =============================================================================
 
@@ -125,6 +191,9 @@ func testAccountCreate(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 		opts := DefaultAccountCreateOptions(email)
 
 		result, err := cmd.AccountCreate(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "AccountCreate") {
+			return
+		}
 		require.NoError(t, err, "AccountCreate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.NotEmpty(t, result.AccountID, "Account ID should not be empty")
@@ -143,6 +212,9 @@ func testAccountCreate(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 		}
 
 		result, err := cmd.AccountCreate(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "AccountCreate") {
+			return
+		}
 		// This may fail if the ACME server doesn't require EAB, but should not panic
 		if err != nil {
 			t.Logf("EAB account creation returned error (may be expected): %v", err)
@@ -162,6 +234,7 @@ func testAccountCreate(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 
 		_, err := cmd.AccountCreate(testCtx, opts)
 		require.Error(t, err, "AccountCreate should fail with empty email")
+		requireCLIValidation(t, cmd, err, acmecmd.ErrMissingEmail{})
 	})
 
 	t.Run("CreateAccountWithoutTOSFails", func(t *testing.T) {
@@ -174,6 +247,8 @@ func testAccountCreate(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 
 		_, err := cmd.AccountCreate(testCtx, opts)
 		require.Error(t, err, "AccountCreate should fail without accepting TOS")
+		// acme register takes no TOS flag: the CLI ends on the gap.
+		requireCLIRefusal(t, cmd, err, "AccountCreate")
 	})
 }
 
@@ -183,14 +258,14 @@ func testAccountList(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 
 	// Create a few accounts first
 	for i := 0; i < 3; i++ {
-		email := GenerateUniqueEmail(fmt.Sprintf("%s-list-%d", prefix, i))
-		opts := DefaultAccountCreateOptions(email)
-		_, err := cmd.AccountCreate(testCtx, opts)
-		require.NoError(t, err, "Setup: AccountCreate should succeed")
+		setupAccount(t, testCtx, cmd, GenerateUniqueEmail(fmt.Sprintf("%s-list-%d", prefix, i)))
 	}
 
 	t.Run("ListAllAccounts", func(t *testing.T) {
 		result, err := cmd.AccountList(testCtx, AccountListOptions{Limit: 100})
+		if requireCLIRefusal(t, cmd, err, "AccountList") {
+			return
+		}
 		require.NoError(t, err, "AccountList should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Accounts), 3, "Should have at least 3 accounts")
@@ -198,6 +273,9 @@ func testAccountList(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 
 	t.Run("ListAccountsWithPagination", func(t *testing.T) {
 		result, err := cmd.AccountList(testCtx, AccountListOptions{Limit: 2})
+		if requireCLIRefusal(t, cmd, err, "AccountList") {
+			return
+		}
 		require.NoError(t, err, "AccountList should succeed with limit")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.LessOrEqual(t, int32(len(result.Accounts)), int32(2), "Should respect limit")
@@ -219,14 +297,13 @@ func testAccountDelete(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 	defer cancel()
 
 	// Create an account for deletion
-	email := GenerateUniqueEmail(prefix + "-delete")
-	createOpts := DefaultAccountCreateOptions(email)
-	createResult, err := cmd.AccountCreate(testCtx, createOpts)
-	require.NoError(t, err, "Setup: AccountCreate should succeed")
-	require.NotNil(t, createResult, "Create result should not be nil")
+	createResult := setupAccount(t, testCtx, cmd, GenerateUniqueEmail(prefix+"-delete"))
 
 	t.Run("DeleteExistingAccount", func(t *testing.T) {
 		result, err := cmd.AccountDelete(testCtx, createResult.AccountID)
+		if requireCLIRefusal(t, cmd, err, "AccountDelete") {
+			return
+		}
 		require.NoError(t, err, "AccountDelete should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, createResult.AccountID, result.AccountID, "Account ID should match")
@@ -236,6 +313,7 @@ func testAccountDelete(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 	t.Run("DeleteNonexistentAccountFails", func(t *testing.T) {
 		_, err := cmd.AccountDelete(testCtx, "nonexistent-account-id")
 		require.Error(t, err, "AccountDelete should fail for nonexistent account")
+		requireCLIRefusal(t, cmd, err, "AccountDelete")
 	})
 }
 
@@ -248,10 +326,7 @@ func testOrderCreate(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 	defer cancel()
 
 	// Create an account first
-	email := GenerateUniqueEmail(prefix + "-order")
-	accountOpts := DefaultAccountCreateOptions(email)
-	account, err := cmd.AccountCreate(testCtx, accountOpts)
-	require.NoError(t, err, "Setup: AccountCreate should succeed")
+	account := setupAccount(t, testCtx, cmd, GenerateUniqueEmail(prefix+"-order"))
 
 	t.Run("CreateOrderWithDNSIdentifier", func(t *testing.T) {
 		cn := GenerateUniqueCommonName(prefix + "-dns")
@@ -263,6 +338,9 @@ func testOrderCreate(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 		}
 
 		result, err := cmd.OrderCreate(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "OrderCreate") {
+			return
+		}
 		require.NoError(t, err, "OrderCreate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.NotEmpty(t, result.OrderID, "Order ID should not be empty")
@@ -286,6 +364,9 @@ func testOrderCreate(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 		}
 
 		result, err := cmd.OrderCreate(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "OrderCreate") {
+			return
+		}
 		require.NoError(t, err, "OrderCreate should succeed with multiple identifiers")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Len(t, result.Identifiers, 4, "Should have 4 identifiers")
@@ -300,6 +381,9 @@ func testOrderCreate(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 		}
 
 		result, err := cmd.OrderCreate(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "OrderCreate") {
+			return
+		}
 		require.NoError(t, err, "OrderCreate should succeed with IP identifier")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, "ip", result.Identifiers[0].Type, "Identifier type should be ip")
@@ -315,6 +399,9 @@ func testOrderCreate(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 		}
 
 		result, err := cmd.OrderCreate(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "OrderCreate") {
+			return
+		}
 		require.NoError(t, err, "OrderCreate should succeed with permanent-identifier")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, "permanent-identifier", result.Identifiers[0].Type, "Identifier type should be permanent-identifier")
@@ -328,6 +415,7 @@ func testOrderCreate(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 
 		_, err := cmd.OrderCreate(testCtx, opts)
 		require.Error(t, err, "OrderCreate should fail with empty identifiers")
+		requireCLIRefusal(t, cmd, err, "OrderCreate")
 	})
 }
 
@@ -336,21 +424,11 @@ func testOrderList(t *testing.T, ctx context.Context, cmd ACMECommands, prefix s
 	defer cancel()
 
 	// Create an account and orders
-	email := GenerateUniqueEmail(prefix + "-orderlist")
-	accountOpts := DefaultAccountCreateOptions(email)
-	account, err := cmd.AccountCreate(testCtx, accountOpts)
-	require.NoError(t, err, "Setup: AccountCreate should succeed")
+	account := setupAccount(t, testCtx, cmd, GenerateUniqueEmail(prefix+"-orderlist"))
 
 	for i := 0; i < 3; i++ {
 		cn := GenerateUniqueCommonName(fmt.Sprintf("%s-list-%d", prefix, i))
-		opts := OrderCreateOptions{
-			AccountID: account.AccountID,
-			Identifiers: []OrderIdentifier{
-				{Type: "dns", Value: cn},
-			},
-		}
-		_, err := cmd.OrderCreate(testCtx, opts)
-		require.NoError(t, err, "Setup: OrderCreate should succeed")
+		setupOrder(t, testCtx, cmd, account.AccountID, OrderIdentifier{Type: "dns", Value: cn})
 	}
 
 	t.Run("ListOrdersForAccount", func(t *testing.T) {
@@ -358,6 +436,9 @@ func testOrderList(t *testing.T, ctx context.Context, cmd ACMECommands, prefix s
 			AccountID: account.AccountID,
 			Limit:     100,
 		})
+		if requireCLIRefusal(t, cmd, err, "OrderList") {
+			return
+		}
 		require.NoError(t, err, "OrderList should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Orders), 3, "Should have at least 3 orders")
@@ -369,6 +450,9 @@ func testOrderList(t *testing.T, ctx context.Context, cmd ACMECommands, prefix s
 			Status:    "pending",
 			Limit:     100,
 		})
+		if requireCLIRefusal(t, cmd, err, "OrderList") {
+			return
+		}
 		require.NoError(t, err, "OrderList should succeed with status filter")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -382,6 +466,9 @@ func testOrderList(t *testing.T, ctx context.Context, cmd ACMECommands, prefix s
 			AccountID: account.AccountID,
 			Limit:     2,
 		})
+		if requireCLIRefusal(t, cmd, err, "OrderList") {
+			return
+		}
 		require.NoError(t, err, "OrderList should succeed with limit")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.LessOrEqual(t, int32(len(result.Orders)), int32(2), "Should respect limit")
@@ -393,23 +480,15 @@ func testOrderGet(t *testing.T, ctx context.Context, cmd ACMECommands, prefix st
 	defer cancel()
 
 	// Create an account and order
-	email := GenerateUniqueEmail(prefix + "-orderget")
-	accountOpts := DefaultAccountCreateOptions(email)
-	account, err := cmd.AccountCreate(testCtx, accountOpts)
-	require.NoError(t, err, "Setup: AccountCreate should succeed")
-
+	account := setupAccount(t, testCtx, cmd, GenerateUniqueEmail(prefix+"-orderget"))
 	cn := GenerateUniqueCommonName(prefix + "-get")
-	orderOpts := OrderCreateOptions{
-		AccountID: account.AccountID,
-		Identifiers: []OrderIdentifier{
-			{Type: "dns", Value: cn},
-		},
-	}
-	order, err := cmd.OrderCreate(testCtx, orderOpts)
-	require.NoError(t, err, "Setup: OrderCreate should succeed")
+	order := setupOrder(t, testCtx, cmd, account.AccountID, OrderIdentifier{Type: "dns", Value: cn})
 
 	t.Run("GetExistingOrder", func(t *testing.T) {
 		result, err := cmd.OrderGet(testCtx, order.OrderID)
+		if requireCLIRefusal(t, cmd, err, "OrderGet") {
+			return
+		}
 		require.NoError(t, err, "OrderGet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, order.OrderID, result.OrderID, "Order ID should match")
@@ -418,6 +497,9 @@ func testOrderGet(t *testing.T, ctx context.Context, cmd ACMECommands, prefix st
 
 	t.Run("GetOrderShowsAuthorizations", func(t *testing.T) {
 		result, err := cmd.OrderGet(testCtx, order.OrderID)
+		if requireCLIRefusal(t, cmd, err, "OrderGet") {
+			return
+		}
 		require.NoError(t, err, "OrderGet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -431,6 +513,7 @@ func testOrderGet(t *testing.T, ctx context.Context, cmd ACMECommands, prefix st
 	t.Run("GetNonexistentOrderFails", func(t *testing.T) {
 		_, err := cmd.OrderGet(testCtx, "nonexistent-order-id")
 		require.Error(t, err, "OrderGet should fail for nonexistent order")
+		requireCLIRefusal(t, cmd, err, "OrderGet")
 	})
 }
 
@@ -448,6 +531,9 @@ func testCertificateRequest(t *testing.T, ctx context.Context, cmd ACMECommands,
 		opts := DefaultCertificateRequestOptions(cn, email)
 
 		result, err := cmd.CertificateRequest(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRequest") {
+			return
+		}
 		require.NoError(t, err, "CertificateRequest should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.NotEmpty(t, result.OrderID, "Order ID should not be empty")
@@ -469,6 +555,9 @@ func testCertificateRequest(t *testing.T, ctx context.Context, cmd ACMECommands,
 		}
 
 		result, err := cmd.CertificateRequest(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRequest") {
+			return
+		}
 		require.NoError(t, err, "CertificateRequest with SANs should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 	})
@@ -491,6 +580,9 @@ func testCertificateRequest(t *testing.T, ctx context.Context, cmd ACMECommands,
 		}
 
 		result, err := cmd.CertificateRequest(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRequest") {
+			return
+		}
 		require.NoError(t, err, "CertificateRequest with full subject should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 	})
@@ -507,6 +599,7 @@ func testCertificateRequest(t *testing.T, ctx context.Context, cmd ACMECommands,
 
 		_, err := cmd.CertificateRequest(testCtx, opts)
 		require.Error(t, err, "CertificateRequest should fail with empty CN")
+		requireCLIValidation(t, cmd, err, acmecmd.ErrMissingAuthorizationValue{})
 	})
 }
 
@@ -520,6 +613,9 @@ func testCertificateRenew(t *testing.T, ctx context.Context, cmd ACMECommands, p
 		opts := DefaultCertificateRenewOptions(cn, email)
 
 		result, err := cmd.CertificateRenew(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRenew") {
+			return
+		}
 		require.NoError(t, err, "CertificateRenew should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.NotEmpty(t, result.OrderID, "Order ID should not be empty")
@@ -538,6 +634,9 @@ func testCertificateRenew(t *testing.T, ctx context.Context, cmd ACMECommands, p
 		}
 
 		result, err := cmd.CertificateRenew(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRenew") {
+			return
+		}
 		require.NoError(t, err, "CertificateRenew with DNS challenge should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 	})
@@ -555,6 +654,9 @@ func testCertificateRenew(t *testing.T, ctx context.Context, cmd ACMECommands, p
 		}
 
 		result, err := cmd.CertificateRenew(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRenew") {
+			return
+		}
 		// This may fail if device attestation is not configured, but should handle gracefully
 		if err != nil {
 			t.Logf("Device attestation challenge returned error (may be expected): %v", err)
@@ -568,21 +670,18 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 	testCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 
-	// First request a certificate to revoke
+	// First request a certificate to revoke. The CLI refuses the request, so
+	// it has no certificate and each leaf asserts the revoke refusal instead.
 	cn := GenerateUniqueCommonName(prefix + "-revoke")
-	email := GenerateUniqueEmail(prefix + "-revoke")
-	reqOpts := DefaultCertificateRequestOptions(cn, email)
-
-	reqResult, err := cmd.CertificateRequest(testCtx, reqOpts)
-	require.NoError(t, err, "Setup: CertificateRequest should succeed")
+	reqResult, cliRefused := setupCertificate(t, testCtx, cmd, cn, GenerateUniqueEmail(prefix+"-revoke"))
 
 	// Revocation needs the certificate this setup just requested.
-	if reqResult.CertificateURL == "" && reqResult.SerialNumber == "" {
+	if !cliRefused && reqResult.CertificateURL == "" && reqResult.SerialNumber == "" {
 		t.Fatalf("Setup: CertificateRequest for %s issued no certificate (status %q); revocation needs an issued certificate URL or serial", cn, reqResult.Status)
 	}
 
 	t.Run("RevokeCertificateByURL", func(t *testing.T) {
-		if reqResult.CertificateURL == "" {
+		if !cliRefused && reqResult.CertificateURL == "" {
 			t.Fatalf("Setup: CertificateRequest for %s returned no certificate URL; revoke-by-URL needs one", cn)
 		}
 
@@ -592,6 +691,9 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 		}
 
 		result, err := cmd.CertificateRevoke(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRevoke") {
+			return
+		}
 		require.NoError(t, err, "CertificateRevoke should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Revoked, "Certificate should be revoked")
@@ -600,13 +702,9 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 	t.Run("RevokeCertificateBySerial", func(t *testing.T) {
 		// Create another certificate for this test
 		cn2 := GenerateUniqueCommonName(prefix + "-revoke2")
-		email2 := GenerateUniqueEmail(prefix + "-revoke2")
-		reqOpts2 := DefaultCertificateRequestOptions(cn2, email2)
+		reqResult2, cliRefused2 := setupCertificate(t, testCtx, cmd, cn2, GenerateUniqueEmail(prefix+"-revoke2"))
 
-		reqResult2, err := cmd.CertificateRequest(testCtx, reqOpts2)
-		require.NoError(t, err, "Setup: CertificateRequest should succeed")
-
-		if reqResult2.SerialNumber == "" {
+		if !cliRefused2 && reqResult2.SerialNumber == "" {
 			t.Fatalf("Setup: CertificateRequest for %s returned no certificate serial; revoke-by-serial needs one", cn2)
 		}
 
@@ -616,6 +714,9 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 		}
 
 		result, err := cmd.CertificateRevoke(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRevoke") {
+			return
+		}
 		require.NoError(t, err, "CertificateRevoke should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Revoked, "Certificate should be revoked")
@@ -630,6 +731,7 @@ func testCertificateRevoke(t *testing.T, ctx context.Context, cmd ACMECommands, 
 
 		_, err := cmd.CertificateRevoke(testCtx, opts)
 		require.Error(t, err, "CertificateRevoke should fail for nonexistent certificate")
+		requireCLIRefusal(t, cmd, err, "CertificateRevoke")
 	})
 }
 
@@ -654,6 +756,9 @@ func testChallengeHTTP01(t *testing.T, ctx context.Context, cmd ACMECommands, pr
 		}
 
 		result, err := cmd.CertificateRequest(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRequest") {
+			return
+		}
 		require.NoError(t, err, "HTTP-01 challenge flow should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 	})
@@ -676,6 +781,9 @@ func testChallengeDNS01(t *testing.T, ctx context.Context, cmd ACMECommands, pre
 		}
 
 		result, err := cmd.CertificateRequest(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRequest") {
+			return
+		}
 		require.NoError(t, err, "DNS-01 challenge flow should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 	})
@@ -686,20 +794,10 @@ func testChallengeEnroll01(t *testing.T, ctx context.Context, cmd ACMECommands, 
 	defer cancel()
 
 	// Create account and order first
-	email := GenerateUniqueEmail(prefix + "-enroll01")
-	accountOpts := DefaultAccountCreateOptions(email)
-	account, err := cmd.AccountCreate(testCtx, accountOpts)
-	require.NoError(t, err, "Setup: AccountCreate should succeed")
-
+	account := setupAccount(t, testCtx, cmd, GenerateUniqueEmail(prefix+"-enroll01"))
 	deviceSerial := GenerateUniqueDeviceSerial(prefix)
-	orderOpts := OrderCreateOptions{
-		AccountID: account.AccountID,
-		Identifiers: []OrderIdentifier{
-			{Type: "permanent-identifier", Value: deviceSerial},
-		},
-	}
-	order, err := cmd.OrderCreate(testCtx, orderOpts)
-	require.NoError(t, err, "Setup: OrderCreate should succeed")
+	order := setupOrder(t, testCtx, cmd, account.AccountID,
+		OrderIdentifier{Type: "permanent-identifier", Value: deviceSerial})
 
 	t.Run("Enroll01ChallengeWithAttestation", func(t *testing.T) {
 		opts := ChallengeEnroll01Options{
@@ -715,6 +813,9 @@ func testChallengeEnroll01(t *testing.T, ctx context.Context, cmd ACMECommands, 
 		}
 
 		result, err := cmd.ChallengeEnroll01(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "ChallengeEnroll01") {
+			return
+		}
 		// This may fail without actual TPM, but should handle gracefully
 		if err != nil {
 			t.Logf("Enroll-01 challenge returned error (expected without TPM): %v", err)
@@ -735,6 +836,7 @@ func testChallengeEnroll01(t *testing.T, ctx context.Context, cmd ACMECommands, 
 
 		_, err := cmd.ChallengeEnroll01(testCtx, opts)
 		require.Error(t, err, "Enroll-01 should fail with empty device serial")
+		requireCLIRefusal(t, cmd, err, "ChallengeEnroll01")
 	})
 }
 
@@ -756,11 +858,14 @@ func testAccountErrors(t *testing.T, ctx context.Context, cmd ACMECommands, pref
 
 		_, err := cmd.AccountCreate(testCtx, opts)
 		require.Error(t, err, "AccountCreate should fail with invalid directory URL")
+		// acme register takes no directory flag: the CLI ends on the gap.
+		requireCLIRefusal(t, cmd, err, "AccountCreate")
 	})
 
 	t.Run("DeleteAccountInvalidID", func(t *testing.T) {
 		_, err := cmd.AccountDelete(testCtx, "invalid-account-id-!@#$%")
 		require.Error(t, err, "AccountDelete should fail with invalid account ID")
+		requireCLIRefusal(t, cmd, err, "AccountDelete")
 	})
 }
 
@@ -779,13 +884,11 @@ func testOrderErrors(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 
 		_, err := cmd.OrderCreate(testCtx, opts)
 		require.Error(t, err, "OrderCreate should fail with invalid account ID")
+		requireCLIRefusal(t, cmd, err, "OrderCreate")
 	})
 
 	t.Run("CreateOrderInvalidIdentifierType", func(t *testing.T) {
-		email := GenerateUniqueEmail(prefix + "-invalidid")
-		accountOpts := DefaultAccountCreateOptions(email)
-		account, err := cmd.AccountCreate(testCtx, accountOpts)
-		require.NoError(t, err, "Setup: AccountCreate should succeed")
+		account := setupAccount(t, testCtx, cmd, GenerateUniqueEmail(prefix+"-invalidid"))
 
 		opts := OrderCreateOptions{
 			AccountID: account.AccountID,
@@ -794,13 +897,15 @@ func testOrderErrors(t *testing.T, ctx context.Context, cmd ACMECommands, prefix
 			},
 		}
 
-		_, err = cmd.OrderCreate(testCtx, opts)
+		_, err := cmd.OrderCreate(testCtx, opts)
 		require.Error(t, err, "OrderCreate should fail with invalid identifier type")
+		requireCLIRefusal(t, cmd, err, "OrderCreate")
 	})
 
 	t.Run("GetOrderInvalidID", func(t *testing.T) {
 		_, err := cmd.OrderGet(testCtx, "invalid-order-id-!@#$%")
 		require.Error(t, err, "OrderGet should fail with invalid order ID")
+		requireCLIRefusal(t, cmd, err, "OrderGet")
 	})
 }
 
@@ -821,6 +926,7 @@ func testCertificateErrors(t *testing.T, ctx context.Context, cmd ACMECommands, 
 
 		_, err := cmd.CertificateRequest(testCtx, opts)
 		require.Error(t, err, "CertificateRequest should fail with invalid authz type")
+		requireCLIValidation(t, cmd, err, acmecmd.ErrInvalidAuthorizationType{Type: "invalid-authz-type"})
 	})
 
 	t.Run("RequestCertificateInvalidChallengeType", func(t *testing.T) {
@@ -836,6 +942,7 @@ func testCertificateErrors(t *testing.T, ctx context.Context, cmd ACMECommands, 
 
 		_, err := cmd.CertificateRequest(testCtx, opts)
 		require.Error(t, err, "CertificateRequest should fail with invalid challenge type")
+		requireCLIValidation(t, cmd, err, acmecmd.ErrInvalidChallengeType{Type: "invalid-challenge-type"})
 	})
 
 	t.Run("RevokeWithBothURLAndSerialFails", func(t *testing.T) {
@@ -846,6 +953,9 @@ func testCertificateErrors(t *testing.T, ctx context.Context, cmd ACMECommands, 
 		}
 
 		_, err := cmd.CertificateRevoke(testCtx, opts)
+		if requireCLIRefusal(t, cmd, err, "CertificateRevoke") {
+			return
+		}
 		// This should either succeed or fail consistently - implementation dependent
 		if err != nil {
 			t.Logf("Revoke with both URL and serial returned error: %v", err)
@@ -861,5 +971,7 @@ func testCertificateErrors(t *testing.T, ctx context.Context, cmd ACMECommands, 
 
 		_, err := cmd.CertificateRevoke(testCtx, opts)
 		require.Error(t, err, "CertificateRevoke should fail without URL or serial")
+		// platformctl has no revoke verb: the CLI ends on ErrCLINoACMEVerb.
+		requireCLIRefusal(t, cmd, err, "CertificateRevoke")
 	})
 }

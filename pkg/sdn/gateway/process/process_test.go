@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -227,6 +228,11 @@ type fakeNode struct {
 	// status question mid-flight; each holds one call.
 	holdApply  *heldCall
 	holdStatus *heldCall
+	// startingPolls, when positive, is how many more status replies come
+	// from a child whose Gateway.Start is still running; starting marks
+	// the reply being built as one of them.
+	startingPolls int
+	starting      bool
 }
 
 // heldCall holds one call to a fake in the child mid-flight, so a test can
@@ -267,7 +273,16 @@ func (f *fakeNode) appliedVersions() []string {
 	return append([]string(nil), f.applies...)
 }
 
-func (f *fakeNode) GetState() gateway.GatewayState { return gateway.GatewayStateRunning }
+// GetState reports the state of the Status reply ServiceReports just built:
+// Server.Status reads the services first, then the state.
+func (f *fakeNode) GetState() gateway.GatewayState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.starting {
+		return gateway.GatewayStateInitializing
+	}
+	return gateway.GatewayStateRunning
+}
 
 func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
 	f.mu.Lock()
@@ -278,7 +293,19 @@ func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]gateway.ServiceReport(nil), f.services...)
+	f.starting = f.startingPolls > 0
+	if !f.starting {
+		return append([]gateway.ServiceReport(nil), f.services...)
+	}
+	// Mid-Start, every hosted service reads as a handler not yet started.
+	f.startingPolls--
+	reports := make([]gateway.ServiceReport, 0, len(f.services))
+	for _, svc := range f.services {
+		reports = append(reports, gateway.ServiceReport{
+			Name: svc.Name, Health: errors.New("service not active: " + svc.Name),
+		})
+	}
+	return reports
 }
 
 func (f *fakeNode) setHealth(service string, active bool, health error) {
@@ -875,6 +902,34 @@ func TestStartService_ReportsAChildThatDidNotActivateTheService(t *testing.T) {
 	// The stop waited for the child's watch goroutine, and a restart would
 	// have run inside it, so the count is final once StartService returns.
 	assert.Equal(t, 1, launcher.launchCount(), "a process nobody wants is not restarted")
+}
+
+func TestStartService_WaitsOutAChildStillStarting(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.ReadyTimeout = 2 * time.Second })
+	// The child answers before its Gateway.Start returns, and until then
+	// the load balancer reads "service not active". Stopping the child on
+	// that reply canceled the OVS pipeline install in flight (#973).
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = 3
+
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceLoadBalancer))
+	assert.NotContains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM),
+		"a child still starting is not stopped")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestStartService_GivesUpOnAChildThatNeverFinishesStarting(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.ReadyTimeout = 200 * time.Millisecond })
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = math.MaxInt
+
+	err := supervisor.StartService(testContext(t), gateway.ServiceLoadBalancer)
+	var notActive *ErrServiceNotActiveInProcess
+	require.ErrorAs(t, err, &notActive, "the readiness deadline still bounds the wait")
+	assert.Equal(t, gateway.ServiceLoadBalancer, notActive.Service)
+	assert.Contains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM))
 }
 
 func TestStartService_AFailedStartLeavesTheProcessAnotherServiceStillWants(t *testing.T) {
@@ -1815,10 +1870,46 @@ func TestCgroupManager_WritesTheClassLimitsIntoALeaf(t *testing.T) {
 	// before exercising the removal.
 	require.NoError(t, os.Remove(filepath.Join(path, "memory.max")))
 	require.NoError(t, os.Remove(filepath.Join(path, "cpu.max")))
-	require.NoError(t, manager.Remove("proxy"))
+	require.NoError(t, manager.Remove(context.Background(), "proxy"))
 	_, err = os.Stat(path)
 	assert.True(t, os.IsNotExist(err))
-	require.NoError(t, manager.Remove("proxy"), "removing an absent leaf is not an error")
+	require.NoError(t, manager.Remove(context.Background(), "proxy"), "removing an absent leaf is not an error")
+}
+
+// A relaunch reuses the leaf: a swap limit left on it from before must not
+// reach the successor, whose limits come from the class table alone.
+func TestCgroupManager_ARelaunchResetsALeftoverSwapLimit(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	def, err := DefinitionByName("routing")
+	require.NoError(t, err)
+	path := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(path, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(path, "memory.swap.max"), []byte("0"), 0o600))
+
+	leaf, err := manager.Prepare(def)
+	require.NoError(t, err)
+	t.Cleanup(func() { leaf.Close() })
+
+	swap, err := os.ReadFile(filepath.Join(path, "memory.swap.max"))
+	require.NoError(t, err)
+	assert.Equal(t, "max", string(swap))
+}
+
+// Without swap accounting the kernel provides no memory.swap.max, and Prepare
+// must not try to create one.
+func TestCgroupManager_LeavesAnAbsentSwapLimitAbsent(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	def, err := DefinitionByName("routing")
+	require.NoError(t, err)
+
+	leaf, err := manager.Prepare(def)
+	require.NoError(t, err)
+	t.Cleanup(func() { leaf.Close() })
+
+	_, err = os.Stat(filepath.Join(root, "gatewayd", "routing", "memory.swap.max"))
+	assert.True(t, os.IsNotExist(err), "Prepare created memory.swap.max: %v", err)
 }
 
 func TestCgroupManager_DisabledDoesNothing(t *testing.T) {
@@ -1827,7 +1918,7 @@ func TestCgroupManager_DisabledDoesNothing(t *testing.T) {
 	leaf, err := manager.Prepare(Definition{Name: "datapath"})
 	require.NoError(t, err)
 	assert.Nil(t, leaf)
-	require.NoError(t, manager.Remove("datapath"))
+	require.NoError(t, manager.Remove(context.Background(), "datapath"))
 }
 
 func TestCgroupManager_ReportsAnUnwritableTree(t *testing.T) {
@@ -1885,6 +1976,126 @@ func TestCgroupManager_ReportsAControllerItCannotDelegate(t *testing.T) {
 	assert.Equal(t, control, cgroupErr.Path)
 	_, err = os.Stat(filepath.Join(root, "gatewayd", "routing", "memory.max"))
 	assert.True(t, os.IsNotExist(err), "no limit is written below a parent that refused the controller")
+}
+
+// writeLeafFile replaces a fixture interface file in one rename, the way a
+// kernel read sees it: never truncated, never half written.
+func writeLeafFile(t *testing.T, leaf, name, content string) {
+	t.Helper()
+	staged := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(staged, []byte(content), 0o600))
+	require.NoError(t, os.Rename(staged, filepath.Join(leaf, name)))
+}
+
+func TestCgroupManager_RemoveWaitsForTheKernelToEmptyTheLeaf(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	writeLeafFile(t, leaf, "cgroup.events", "populated 1\nfrozen 0\n")
+
+	done := make(chan error, 1)
+	go func() { done <- awaitEmpty(context.Background(), leaf) }()
+	select {
+	case err := <-done:
+		t.Fatalf("awaitEmpty returned %v while the leaf was still populated", err)
+	default:
+	}
+
+	writeLeafFile(t, leaf, "cgroup.events", "populated 0\nfrozen 0\n")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("awaitEmpty did not return after cgroup.events reported populated 0")
+	}
+
+	// An empty leaf needs no wait at all.
+	require.NoError(t, awaitEmpty(context.Background(), leaf))
+}
+
+func TestCgroupManager_RemoveRefusesALeafThatStaysPopulated(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	writeLeafFile(t, leaf, "cgroup.events", "populated 1\nfrozen 0\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := manager.Remove(ctx, "routing")
+	var cgroupErr *ErrCgroup
+	require.ErrorAs(t, err, &cgroupErr)
+	assert.Equal(t, "await empty", cgroupErr.Op)
+	assert.ErrorIs(t, err, context.Canceled)
+	_, err = os.Stat(leaf)
+	assert.NoError(t, err, "a populated leaf is never removed")
+}
+
+func TestCgroupManager_RemoveReportsAnUnreadableEventsFile(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+
+	writeLeafFile(t, leaf, "cgroup.events", "populated yes\n")
+	var format *ErrCgroupFormat
+	require.ErrorAs(t, manager.Remove(context.Background(), "routing"), &format)
+	assert.Equal(t, "populated yes", format.Line)
+
+	writeLeafFile(t, leaf, "cgroup.events", "frozen 0\n")
+	require.ErrorAs(t, manager.Remove(context.Background(), "routing"), &format)
+	assert.Contains(t, format.Error(), "populated missing")
+}
+
+func TestCgroupManager_MemoryReadsTheLeafAccounting(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	writeLeafFile(t, leaf, "memory.current", "1048576\n")
+	writeLeafFile(t, leaf, "memory.peak", "41943040\n")
+	writeLeafFile(t, leaf, "memory.events", "low 0\nhigh 0\nmax 12\noom 3\noom_kill 1\noom_group_kill 0\n")
+
+	usage, err := manager.Memory("routing")
+	require.NoError(t, err)
+	assert.Equal(t, MemoryUsage{Current: 1 << 20, Peak: 40 << 20, Max: 12, OOM: 3, OOMKill: 1}, usage)
+
+	var disabled *CgroupManager
+	usage, err = disabled.Memory("routing")
+	require.NoError(t, err)
+	assert.Zero(t, usage, "a disabled manager accounts nothing")
+}
+
+func TestCgroupManager_MemoryReportsMissingAndMalformedFiles(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+
+	var cgroupErr *ErrCgroup
+	_, err := manager.Memory("routing")
+	require.ErrorAs(t, err, &cgroupErr)
+	assert.Equal(t, "read", cgroupErr.Op)
+	assert.Equal(t, filepath.Join(leaf, "memory.current"), cgroupErr.Path)
+
+	writeLeafFile(t, leaf, "memory.current", "lots\n")
+	var format *ErrCgroupFormat
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, "lots", format.Line)
+
+	writeLeafFile(t, leaf, "memory.current", "4096\n")
+	writeLeafFile(t, leaf, "memory.peak", "8192\n")
+	writeLeafFile(t, leaf, "memory.events", "max 0\noom 0\n")
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, filepath.Join(leaf, "memory.events"), format.Path)
+	assert.Equal(t, "oom_kill missing", format.Line)
+
+	writeLeafFile(t, leaf, "memory.events", "max 0 0\n")
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, "max 0 0", format.Line)
 }
 
 func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
@@ -2550,6 +2761,72 @@ func TestStopService_CleansUpAProcessThatAlreadyExited(t *testing.T) {
 	// budget the previous run exhausted.
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
 	assert.NoError(t, supervisor.ServiceHealth(gateway.ServiceTransit))
+}
+
+// lockedLog is a log sink the supervisor's goroutines can share.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func TestSupervisor_LogsTheLeafMemoryAtARestartAndAStop(t *testing.T) {
+	// The leaf's accounting is the only record of how much memory a class
+	// really uses and of an OOM kill behind a restart (#955), so it is in
+	// the log at both points, read before the leaf is removed.
+	root := t.TempDir()
+	logs := &lockedLog{}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.Cgroups = &CgroupManager{Root: root, Parent: "gatewayd"}
+		c.Logger = slog.New(slog.NewTextHandler(logs, nil))
+		c.RestartBackoff = time.Millisecond
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	writeLeafFile(t, leaf, "memory.current", "1048576\n")
+	writeLeafFile(t, leaf, "memory.peak", "41943040\n")
+	writeLeafFile(t, leaf, "memory.events", "max 9\noom 1\noom_kill 1\n")
+
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	assert.Contains(t, logs.String(),
+		`msg="gatewayd supervisor: process down, restarting" process=routing`)
+	assert.Contains(t, logs.String(), "memory.current=1048576 memory.peak=41943040 memory.oom_kill=1")
+
+	writeLeafFile(t, leaf, "memory.peak", "52428800\n")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
+	assert.Contains(t, logs.String(),
+		`msg="gatewayd supervisor: process memory" process=routing memory.current=1048576 memory.peak=52428800 memory.oom_kill=1`)
+}
+
+func TestSupervisor_LogsAMemoryReadFailureInsteadOfTheAccounting(t *testing.T) {
+	root := t.TempDir()
+	logs := &lockedLog{}
+	supervisor, _, _ := newSupervisor(t, func(c *Config) {
+		c.Cgroups = &CgroupManager{Root: root, Parent: "gatewayd"}
+		c.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	// The fixture leaf has no memory.current: the stop still happens and
+	// the log says why the accounting is missing.
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
+	assert.Contains(t, logs.String(), `msg="gatewayd supervisor: process memory" process=routing memory_error=`)
+	assert.NotContains(t, logs.String(), "memory.peak=")
 }
 
 func TestServiceHealth_ANeverStartedProcessIsNotAStoppedSupervisor(t *testing.T) {

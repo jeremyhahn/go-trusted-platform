@@ -206,10 +206,14 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 
 	// The generate request's name is the key ID (docs/kms/api.md §2).
 	spec := req.GetKeySpec()
+	usage, err := pbUsagesToSDK(spec.GetUsage())
+	if err != nil {
+		return nil, err
+	}
 	sdkReq := &kms.GenerateKeyRequest{
 		Name:               req.GetName(),
 		Algorithm:          pbAlgorithmToSDK(spec.GetAlgorithm()),
-		Usage:              pbUsagesToSDK(spec.GetUsage()),
+		Usage:              usage,
 		Exportable:         spec.GetExportable(),
 		DeletionProtection: spec.GetDeletionProtection(),
 	}
@@ -291,6 +295,35 @@ func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*
 	}, nil
 }
 
+// GetPublicKey returns the DER-encoded (PKIX) public key of an asymmetric
+// key. The SDK serves the current version only, so a request naming any other
+// version is refused rather than answered with the current key.
+func (a *KMSServerAdapter) GetPublicKey(ctx context.Context, req *pb.GetPublicKeyRequest) (*pb.GetPublicKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	resp, err := a.client.GetPublicKey(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "get public key failed: %v", err)
+	}
+	if req.GetVersion() != 0 && req.GetVersion() != uint64(resp.Version) {
+		return nil, status.Errorf(codes.NotFound, "public key version %d of key %s is not the current version %d",
+			req.GetVersion(), req.GetKeyId(), resp.Version)
+	}
+
+	return &pb.GetPublicKeyResponse{
+		KeyId:     resp.KeyID,
+		PublicKey: resp.PublicKey,
+		Algorithm: sdkAlgorithmToPb(resp.Algorithm),
+		Version:   uint64(resp.Version),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
 // ListKeys implements pb.KeyManagementServer.ListKeys.
 func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest) (*pb.ListKeysResponse, error) {
 	if a.client == nil {
@@ -302,9 +335,25 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 		return nil, status.Errorf(errclass.Code(err), "list keys failed: %v", err)
 	}
 
-	keys := make([]*pb.KeyHandle, 0, len(resp.Keys))
-	for _, k := range resp.Keys {
-		keys = append(keys, &pb.KeyHandle{
+	// The SDK ListKeys call takes no paging or filter arguments, so the
+	// adapter applies the request's filter, limit and cursor itself, over a
+	// sorted copy so every page request slices the same order.
+	keys := sortKeyInfos(resp.Keys)
+	if len(req.GetFilter()) > 0 {
+		keys, err = filterKeyInfos(keys, req.GetFilter())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	start, end, nextCursor, hasMore, err := paginateKMSOffset(len(keys), req.GetLimit(), req.GetCursor())
+	if err != nil {
+		return nil, err
+	}
+
+	handles := make([]*pb.KeyHandle, 0, end-start)
+	for _, k := range keys[start:end] {
+		handles = append(handles, &pb.KeyHandle{
 			KeyId:     k.KeyID,
 			Version:   uint64(k.Version),
 			Algorithm: sdkAlgorithmToPb(k.Algorithm),
@@ -312,7 +361,11 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 	}
 
 	return &pb.ListKeysResponse{
-		Keys: keys,
+		Keys:       handles,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+		TotalCount: int32(len(keys)),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
@@ -332,7 +385,9 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 
 	return &pb.RotateKeyResponse{
 		KeyId:      resp.KeyID,
+		OldVersion: rotatedFromVersion(resp.NewVersion),
 		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
@@ -378,7 +433,11 @@ func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyReque
 	}
 	if req.GetKeySpec() != nil {
 		sdkReq.Algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
-		sdkReq.Usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
+		usage, err := pbUsagesToSDK(req.GetKeySpec().GetUsage())
+		if err != nil {
+			return nil, err
+		}
+		sdkReq.Usage = usage
 	}
 
 	resp, err := a.client.ImportKey(ctx, sdkReq)
@@ -530,7 +589,7 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 
 	// Convert protobuf data to SDK format
 	data := make(map[string]interface{})
-	data["_raw"] = req.GetData()
+	data[secretRawKey] = req.GetData()
 
 	sdkReq := &quicbaas.StoreSecretRequest{
 		Path:     req.GetSecretId(),
@@ -568,10 +627,9 @@ func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretR
 		return nil, status.Errorf(codes.NotFound, "secret not found: %v", err)
 	}
 
-	// Extract raw data if available
-	var data []byte
-	if rawData, ok := secret.Data["_raw"].([]byte); ok {
-		data = rawData
+	data, err := secretRawData(req.GetSecretId(), secret.Data)
+	if err != nil {
+		return nil, err
 	}
 
 	return &pb.GetSecretResponse{
@@ -588,21 +646,29 @@ func (a *SecretsServerAdapter) ListSecrets(ctx context.Context, req *pb.ListSecr
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
 	}
 
-	// ListSecretsRequest doesn't have a prefix field, use empty string
-	resp, err := a.client.List(ctx, "")
+	// ListSecretsRequest has no prefix field; GetSecretsByPrefix serves prefixes.
+	paths, err := a.listSecretPaths(ctx, "")
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list secrets failed: %v", err)
+		return nil, err
+	}
+	start, end, nextCursor, hasMore, err := paginateKMSOffset(len(paths), req.GetLimit(), req.GetCursor())
+	if err != nil {
+		return nil, err
 	}
 
-	secrets := make([]*pb.Secret, 0, len(resp.Paths))
-	for _, path := range resp.Paths {
+	secrets := make([]*pb.Secret, 0, end-start)
+	for _, path := range paths[start:end] {
 		secrets = append(secrets, &pb.Secret{
 			SecretId: path,
 		})
 	}
 
 	return &pb.ListSecretsResponse{
-		Secrets: secrets,
+		Secrets:    secrets,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+		TotalCount: int32(len(paths)),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
@@ -621,7 +687,9 @@ func (a *SecretsServerAdapter) DeleteSecret(ctx context.Context, req *pb.DeleteS
 	}
 
 	return &pb.DeleteSecretResponse{
-		SecretId: req.GetSecretId(),
+		SecretId:  req.GetSecretId(),
+		Deleted:   true,
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
@@ -697,9 +765,9 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 	}, nil
 }
 
-// BatchEncrypt implements pb.CryptoServer.BatchEncrypt.
+// EncryptBatch implements pb.CryptoServer.EncryptBatch.
 // It encrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
+func (a *CryptoServerAdapter) EncryptBatch(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
@@ -749,9 +817,9 @@ func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptB
 	}, nil
 }
 
-// BatchDecrypt implements pb.CryptoServer.BatchDecrypt.
+// DecryptBatch implements pb.CryptoServer.DecryptBatch.
 // It decrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
+func (a *CryptoServerAdapter) DecryptBatch(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
@@ -945,6 +1013,98 @@ func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*p
 		Hash:      resp.Hash,
 		Timestamp: time.Now().Unix(),
 	}, nil
+}
+
+// GenerateRandom implements pb.CryptoServer.GenerateRandom by delegating to
+// the SDK crypto client. num_bytes must lie in 1..kmsMaxRandomBytes, the
+// bound the QUIC transport enforces too.
+func (a *CryptoServerAdapter) GenerateRandom(ctx context.Context, req *pb.GenerateRandomRequest) (*pb.GenerateRandomResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	numBytes := req.GetNumBytes()
+	if numBytes <= 0 || numBytes > kmsMaxRandomBytes {
+		return nil, status.Errorf(codes.InvalidArgument, "num_bytes must be between 1 and %d", kmsMaxRandomBytes)
+	}
+
+	resp, err := a.client.GenerateRandom(ctx, &quicbaas.GenerateRandomRequest{NumBytes: int(numBytes)})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "random generation failed: %v", err)
+	}
+
+	return &pb.GenerateRandomResponse{
+		RandomBytes: resp.RandomBytes,
+		Timestamp:   time.Now().Unix(),
+	}, nil
+}
+
+// GenerateDataKey implements pb.CryptoServer.GenerateDataKey by delegating to
+// the SDK crypto client. It returns the data key in plaintext and wrapped by
+// key_id; key_spec.key_size is in bits, and zero leaves the size to the SDK.
+func (a *CryptoServerAdapter) GenerateDataKey(ctx context.Context, req *pb.GenerateDataKeyRequest) (*pb.GenerateDataKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	keySize, err := dataKeyRequestSize(req.GetKeyId(), req.GetKeySpec())
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := a.client.GenerateDataKey(ctx, &quicbaas.GenerateDataKeyRequest{
+		KeyID:   req.GetKeyId(),
+		KeySize: keySize,
+		Context: req.GetContext(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "data key generation failed: %v", err)
+	}
+
+	return &pb.GenerateDataKeyResponse{
+		KeyId:          req.GetKeyId(),
+		Plaintext:      resp.Plaintext,
+		CiphertextBlob: resp.CiphertextBlob,
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// GenerateWrappedDataKey implements pb.CryptoServer.GenerateWrappedDataKey by
+// delegating to the SDK crypto client. Only the data key wrapped by key_id is
+// returned; the plaintext never leaves the service.
+func (a *CryptoServerAdapter) GenerateWrappedDataKey(ctx context.Context, req *pb.GenerateWrappedDataKeyRequest) (*pb.GenerateWrappedDataKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	keySize, err := dataKeyRequestSize(req.GetKeyId(), req.GetKeySpec())
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := a.client.GenerateWrappedDataKey(ctx, &quicbaas.GenerateWrappedDataKeyRequest{
+		KeyID:   req.GetKeyId(),
+		KeySize: keySize,
+		Context: req.GetContext(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "wrapped data key generation failed: %v", err)
+	}
+
+	return &pb.GenerateWrappedDataKeyResponse{
+		KeyId:          req.GetKeyId(),
+		CiphertextBlob: resp.CiphertextBlob,
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// dataKeyRequestSize checks the fields both data-key methods share and
+// returns the requested key size in bits.
+func dataKeyRequestSize(keyID string, spec *pb.KeySpec) (int, error) {
+	if keyID == "" {
+		return 0, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if spec.GetKeySize() < 0 {
+		return 0, status.Error(codes.InvalidArgument, "key_spec.key_size must not be negative")
+	}
+	return int(spec.GetKeySize()), nil
 }
 
 // GenerateHMAC implements pb.CryptoServer.GenerateHMAC by delegating to the
@@ -1197,23 +1357,40 @@ func sdkAlgorithmToPb(alg kms.KeyAlgorithm) pb.KeyAlgorithm {
 }
 
 // pbUsagesToSDK converts protobuf KeyUsage slice to SDK KeyUsage slice.
-func pbUsagesToSDK(usages []pb.KeyUsage) []kms.KeyUsage {
-	result := make([]kms.KeyUsage, 0, len(usages))
+func pbUsagesToSDK(usages []pb.KeyUsage) ([]kms.KeyUsage, error) {
+	return convertKeyUsages(usages, pbKeyUsageToSDK)
+}
+
+// pbKeyUsageToSDK maps each go-quicbaas wire usage to the SDK usages it
+// grants. The SDK KeyUsage has no MAC usage, so an HMAC key is generated
+// with sign and verify, as the REST surface does. It has no derive usage
+// either (go-quicbaas #1778): DERIVE_KEY is absent and therefore refused,
+// not dropped. The proto zero value carries no usage and grants nothing.
+var pbKeyUsageToSDK = map[pb.KeyUsage][]kms.KeyUsage{
+	pb.KeyUsage_KEY_USAGE_UNSPECIFIED:  nil,
+	pb.KeyUsage_KEY_USAGE_ENCRYPT:      {kms.KeyUsageEncrypt},
+	pb.KeyUsage_KEY_USAGE_DECRYPT:      {kms.KeyUsageDecrypt},
+	pb.KeyUsage_KEY_USAGE_SIGN:         {kms.KeyUsageSign},
+	pb.KeyUsage_KEY_USAGE_VERIFY:       {kms.KeyUsageVerify},
+	pb.KeyUsage_KEY_USAGE_WRAP_KEY:     {kms.KeyUsageWrap},
+	pb.KeyUsage_KEY_USAGE_GENERATE_MAC: {kms.KeyUsageSign},
+	pb.KeyUsage_KEY_USAGE_VERIFY_MAC:   {kms.KeyUsageVerify},
+}
+
+// convertKeyUsages converts wire key usages through a usage table. A usage
+// the table does not carry is refused with ErrKMSUnsupportedValue
+// (InvalidArgument), so a key is never created without a usage its caller
+// asked for.
+func convertKeyUsages[In ~int32, Key ~int32, Out any](usages []In, table map[Key][]Out) ([]Out, error) {
+	result := make([]Out, 0, len(usages))
 	for _, u := range usages {
-		switch u {
-		case pb.KeyUsage_KEY_USAGE_ENCRYPT:
-			result = append(result, kms.KeyUsageEncrypt)
-		case pb.KeyUsage_KEY_USAGE_DECRYPT:
-			result = append(result, kms.KeyUsageDecrypt)
-		case pb.KeyUsage_KEY_USAGE_SIGN:
-			result = append(result, kms.KeyUsageSign)
-		case pb.KeyUsage_KEY_USAGE_VERIFY:
-			result = append(result, kms.KeyUsageVerify)
-		case pb.KeyUsage_KEY_USAGE_WRAP_KEY:
-			result = append(result, kms.KeyUsageWrap)
+		granted, ok := table[Key(u)]
+		if !ok {
+			return nil, ErrKMSUnsupportedValue{Kind: "key usage", Value: int32(u)}
 		}
+		result = append(result, granted...)
 	}
-	return result
+	return result, nil
 }
 
 // pbHashAlgorithmToSDK converts a protobuf HashAlgorithm to SDK HashAlgorithm.

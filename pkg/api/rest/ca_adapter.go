@@ -21,6 +21,8 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 )
 
 // =============================================================================
@@ -112,6 +114,11 @@ func (a *CAAuthorityAdapter) Revoke(ctx context.Context, cert *x509.Certificate,
 	return a.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{
 		DeleteKeys: keyAttrs != nil,
 	})
+}
+
+// Renew renews existing the way every transport does (issuance.Renew).
+func (a *CAAuthorityAdapter) Renew(ctx context.Context, existing *x509.Certificate, opts issuance.RenewOptions) (*x509.Certificate, error) {
+	return issuance.Renew(ctx, a.ca, existing, opts)
 }
 
 // CertificateStore returns the CA's certificate store.

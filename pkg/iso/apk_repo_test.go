@@ -48,44 +48,44 @@ func TestAlpineReleaseBranch(t *testing.T) {
 // when a mirror is also supplied, because vmedia installs are offline.
 func TestApkRepositoryLines(t *testing.T) {
 	cases := []struct {
-		name         string
-		cdromPresent bool
-		mirror       string
-		branch       string
-		want         []string
+		name        string
+		offlineRepo bool
+		mirror      string
+		branch      string
+		want        []string
 	}{
 		{
-			name:         "cdrom present wins over mirror",
-			cdromPresent: true,
-			mirror:       "http://10.4.6.11:8080",
-			branch:       "v3.22",
-			want:         []string{"/media/cdrom/apks", "/media/cdrom/apks-prefetch"},
+			name:        "offline repository wins over mirror",
+			offlineRepo: true,
+			mirror:      "http://10.4.6.11:8080",
+			branch:      "v3.22",
+			want:        []string{"/media/cdrom/apks", "/media/cdrom/apks-prefetch"},
 		},
 		{
-			name:         "configured mirror",
-			cdromPresent: false,
-			mirror:       "http://10.4.6.11:8080",
-			branch:       "v3.22",
+			name:        "configured mirror",
+			offlineRepo: false,
+			mirror:      "http://10.4.6.11:8080",
+			branch:      "v3.22",
 			want: []string{
 				"http://10.4.6.11:8080/v3.22/main",
 				"http://10.4.6.11:8080/v3.22/community",
 			},
 		},
 		{
-			name:         "configured mirror with trailing slash is trimmed",
-			cdromPresent: false,
-			mirror:       "http://10.4.6.11:8080/",
-			branch:       "v3.22",
+			name:        "configured mirror with trailing slash is trimmed",
+			offlineRepo: false,
+			mirror:      "http://10.4.6.11:8080/",
+			branch:      "v3.22",
 			want: []string{
 				"http://10.4.6.11:8080/v3.22/main",
 				"http://10.4.6.11:8080/v3.22/community",
 			},
 		},
 		{
-			name:         "public fallback when no cdrom and no mirror",
-			cdromPresent: false,
-			mirror:       "",
-			branch:       "v3.22",
+			name:        "public fallback when no cdrom and no mirror",
+			offlineRepo: false,
+			mirror:      "",
+			branch:      "v3.22",
 			want: []string{
 				PublicAlpineMirror + "/v3.22/main",
 				PublicAlpineMirror + "/v3.22/community",
@@ -94,10 +94,10 @@ func TestApkRepositoryLines(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := apkRepositoryLines(tc.cdromPresent, tc.mirror, tc.branch)
+			got := apkRepositoryLines(tc.offlineRepo, tc.mirror, tc.branch)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("apkRepositoryLines(%v, %q, %q) = %v, want %v",
-					tc.cdromPresent, tc.mirror, tc.branch, got, tc.want)
+					tc.offlineRepo, tc.mirror, tc.branch, got, tc.want)
 			}
 		})
 	}
@@ -115,7 +115,9 @@ func TestBuildAutoinstallScriptRepoDetect(t *testing.T) {
 	wantFragments := []string{
 		`ALPINE_BRANCH="v3.22"`,
 		`grep '^platform_apk_mirror='`,
-		`if [ -d /media/cdrom/apks ]; then`,
+		// The stock /media/cdrom/apks lacks the install's packages: only the
+		// pre-fetched repository makes the install offline.
+		`if [ -d /media/cdrom/apks-prefetch ]; then`,
 		`elif [ -n "$APK_MIRROR" ]; then`,
 		`$APK_MIRROR/$ALPINE_BRANCH/main`,
 		`$PUBLIC_APK_MIRROR/$ALPINE_BRANCH/main`,

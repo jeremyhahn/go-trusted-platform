@@ -482,6 +482,81 @@ func (e ErrEncryptionNotConfigured) Error() string {
 	return fmt.Sprintf("registry: encryption not configured (ref=%s)", e.Reference)
 }
 
+// ErrSigningNotConfigured is returned when a push asks for the image to be
+// signed and the registry was built without a SigningKMSClient (WithSigner):
+// it refuses rather than storing an unsigned image the caller believes is
+// signed.
+type ErrSigningNotConfigured struct {
+	Reference string
+}
+
+func (e ErrSigningNotConfigured) Error() string {
+	return fmt.Sprintf("registry: image signing not configured (ref=%s)", e.Reference)
+}
+
+// ErrManifestSigningFailed is returned when the signer cannot sign a
+// manifest with KeyID. Push stores nothing when it is returned.
+type ErrManifestSigningFailed struct {
+	KeyID string
+	Err   error
+}
+
+func (e ErrManifestSigningFailed) Error() string {
+	return fmt.Sprintf("registry: sign manifest with key %s: %v", e.KeyID, e.Err)
+}
+
+func (e ErrManifestSigningFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrSigningClientRequired is returned by NewSDKSigner when the SDK KMS or
+// crypto client is nil.
+type ErrSigningClientRequired struct{}
+
+func (ErrSigningClientRequired) Error() string {
+	return "registry: the manifest signer needs the SDK KMS and crypto clients"
+}
+
+// ErrInvalidSigningRequest is returned when a sign request has no key ID
+// or a digest that is not SHA-256 sized.
+type ErrInvalidSigningRequest struct {
+	Reason string
+}
+
+func (e ErrInvalidSigningRequest) Error() string {
+	return "registry: invalid signing request: " + e.Reason
+}
+
+// ErrSigningKeyUnavailable is returned when the SDK KMS has no key with the
+// ID a push names. The signer never creates the key.
+type ErrSigningKeyUnavailable struct {
+	KeyID string
+	Err   error
+}
+
+func (e ErrSigningKeyUnavailable) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("registry: signing key %s not found in the KMS", e.KeyID)
+	}
+	return fmt.Sprintf("registry: signing key %s not available in the KMS: %v", e.KeyID, e.Err)
+}
+
+func (e ErrSigningKeyUnavailable) Unwrap() error {
+	return e.Err
+}
+
+// ErrSigningKeyUnsupported is returned when the KMS key a push names cannot
+// sign manifests: its algorithm is not ECDSA P-256 or P-384. The KMS itself
+// enforces the key's usage and policies when it signs.
+type ErrSigningKeyUnsupported struct {
+	KeyID  string
+	Reason string
+}
+
+func (e ErrSigningKeyUnsupported) Error() string {
+	return fmt.Sprintf("registry: signing key %s cannot sign manifests: %s", e.KeyID, e.Reason)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

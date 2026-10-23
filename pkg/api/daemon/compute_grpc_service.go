@@ -16,7 +16,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sort"
 	"strconv"
@@ -925,43 +924,21 @@ func (s *ComputeGRPCService) CreateContainer(ctx context.Context, req *platformv
 		return nil, status.Error(codes.InvalidArgument, "container image is required")
 	}
 
-	// Build device profile from request config
-	profile := &entities.DeviceProfile{
-		Name:  config.GetName(),
-		Model: fmt.Sprintf("container:image=%s", config.GetImage()),
+	creation, err := createContainer(ctx, s.orchestrator, config.GetName(), config.GetImage(), req.GetAttestOnCreate())
+	if errors.As(err, new(ErrContainerAttestNotSupported)) {
+		return nil, status.Error(codes.Unimplemented, "attest-on-create not supported by this orchestrator")
 	}
-
-	// Create the instance using orchestrator
-	instance, err := s.orchestrator.Create(ctx, profile)
 	if err != nil {
 		s.logger.Error(err, "Failed to create container")
 		return nil, status.Error(codes.Internal, "failed to create container: "+err.Error())
 	}
-
-	// Optionally attest the container if requested
-	if req.GetAttestOnCreate() {
-		attester, ok := s.orchestrator.(containerAttester)
-		if !ok {
-			return nil, status.Error(codes.Unimplemented, "attest-on-create not supported by this orchestrator")
-		}
-		if _, attestErr := attester.Attest(ctx, instance.ID); attestErr != nil {
-			s.logger.Error(attestErr, "Container created but attestation failed", "container_id", instance.ID)
-			return &platformv1.CreateContainerResponse{
-				Status: &platformv1.Status{
-					Success: false,
-					Message: "Container created but attestation failed: " + attestErr.Error(),
-				},
-				Container: s.instanceToContainerProto(instance),
-			}, nil
-		}
+	if creation.AttestErr != nil {
+		s.logger.Error(creation.AttestErr, "Container created but attestation failed", "container_id", creation.Instance.ID)
 	}
 
 	return &platformv1.CreateContainerResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "Container created successfully",
-		},
-		Container: s.instanceToContainerProto(instance),
+		Status:    creation.status(),
+		Container: s.instanceToContainerProto(creation.Instance),
 	}, nil
 }
 

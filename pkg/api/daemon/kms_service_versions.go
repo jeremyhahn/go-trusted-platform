@@ -10,6 +10,8 @@ import (
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // ListDEKs returns the DEKs under an optional path prefix.
@@ -69,6 +71,65 @@ func (a *DEKServerAdapter) GetDEKStatus(ctx context.Context, req *pb.GetDEKStatu
 		}
 	}
 	return out, nil
+}
+
+// SetDefaultDEK marks the DEK at path as the default for its path level.
+func (a *DEKServerAdapter) SetDefaultDEK(ctx context.Context, req *pb.SetDefaultDEKRequest) (*pb.SetDefaultDEKResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	resp, err := a.client.SetDefaultDEK(ctx, req.GetPath())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "DEK set-default failed: %v", err)
+	}
+
+	return &pb.SetDefaultDEKResponse{
+		Path:            resp.Path,
+		PreviousDefault: resp.PreviousDefault,
+		Timestamp:       time.Now().Unix(),
+	}, nil
+}
+
+// SetDEKSafety sets the AEAD safety limits of the DEK at path.
+func (a *DEKServerAdapter) SetDEKSafety(ctx context.Context, req *pb.SetDEKSafetyRequest) (*pb.SetDEKSafetyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	err := a.client.SetDEKSafety(ctx, &dekclient.SetDEKSafetyRequest{
+		Path:           req.GetPath(),
+		MaxOperations:  req.GetMaxOperations(),
+		MaxBytes:       req.GetMaxBytes(),
+		WarningPercent: int(req.GetWarningPercent()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "DEK set-safety failed: %v", err)
+	}
+
+	return &pb.SetDEKSafetyResponse{Path: req.GetPath(), Timestamp: time.Now().Unix()}, nil
+}
+
+// ClearDEKSafety removes the custom AEAD safety limits of the DEK at path.
+func (a *DEKServerAdapter) ClearDEKSafety(ctx context.Context, req *pb.ClearDEKSafetyRequest) (*pb.ClearDEKSafetyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	if err := a.client.ClearDEKSafety(ctx, req.GetPath()); err != nil {
+		return nil, status.Errorf(codes.Internal, "DEK clear-safety failed: %v", err)
+	}
+
+	return &pb.ClearDEKSafetyResponse{Path: req.GetPath(), Timestamp: time.Now().Unix()}, nil
 }
 
 // dekInfoToPb converts SDK DEK metadata to its proto form; nil stays nil.
@@ -134,7 +195,7 @@ func (a *SecretsServerAdapter) GetSecretVersion(ctx context.Context, req *pb.Get
 		Version:  int(req.GetVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "secret version not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get secret version failed: %v", err)
 	}
 
 	return &pb.GetSecretVersionResponse{
@@ -155,7 +216,7 @@ func (a *SecretsServerAdapter) ListSecretVersions(ctx context.Context, req *pb.L
 
 	resp, err := a.client.ListVersions(ctx, req.GetSecretId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "secret versions not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "list secret versions failed: %v", err)
 	}
 
 	versions := make([]*pb.SecretVersion, 0, len(resp.Versions))
@@ -186,7 +247,7 @@ func (a *SecretsServerAdapter) RotateSecret(ctx context.Context, req *pb.RotateS
 		Metadata: req.GetMetadata(),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "secret rotation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "secret rotation failed: %v", err)
 	}
 
 	return &pb.RotateSecretResponse{
@@ -214,7 +275,7 @@ func (a *SecretsServerAdapter) RollbackSecret(ctx context.Context, req *pb.Rollb
 		TargetVersion: int(req.GetTargetVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "secret rollback failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "secret rollback failed: %v", err)
 	}
 
 	return &pb.RollbackSecretResponse{
@@ -249,7 +310,7 @@ func (a *SecretsServerAdapter) UpdateSecretStatus(ctx context.Context, req *pb.U
 		Status:   sdkStatus,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "secret status update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "secret status update failed: %v", err)
 	}
 
 	return &pb.UpdateSecretStatusResponse{

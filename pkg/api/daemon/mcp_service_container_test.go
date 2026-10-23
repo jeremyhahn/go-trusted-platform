@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/stretchr/testify/assert"
@@ -129,6 +130,120 @@ func TestMCPContainerCreate_Success(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "container-123", resultMap["id"])
 	assert.Equal(t, "test-container", resultMap["name"])
+	mockOrchestrator.AssertExpectations(t)
+}
+
+// attestingMCPOrchestrator is a MockComputeOrchestrator that can also attest,
+// the capability attest-on-create asks of the orchestrator.
+type attestingMCPOrchestrator struct {
+	*MockComputeOrchestrator
+	attestErr error
+	attested  []string
+}
+
+func (m *attestingMCPOrchestrator) Attest(_ context.Context, id string) (*container.AttestationReport, error) {
+	m.attested = append(m.attested, id)
+	if m.attestErr != nil {
+		return nil, m.attestErr
+	}
+	return &container.AttestationReport{ContainerID: id, Verified: true}, nil
+}
+
+func newCreatedContainerInstance() *compute.Instance {
+	return &compute.Instance{
+		ID:        "container-123",
+		Name:      "test-container",
+		Type:      compute.ComputeTypeContainer,
+		State:     compute.StateStopped,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+}
+
+func TestMCPContainerCreate_AttestOnCreate(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       map[string]interface{}
+		attestErr    error
+		wantAttested []string
+		wantStatus   map[string]interface{}
+	}{
+		{
+			name:         "attests the created container when asked",
+			config:       map[string]interface{}{"attest_on_create": true},
+			wantAttested: []string{"container-123"},
+			wantStatus:   map[string]interface{}{"success": true, "message": "Container created successfully"},
+		},
+		{
+			name:         "reports a failed attestation as not a success",
+			config:       map[string]interface{}{"attest_on_create": true},
+			attestErr:    errors.New("quote verification failed"),
+			wantAttested: []string{"container-123"},
+			wantStatus: map[string]interface{}{
+				"success": false,
+				"message": "Container created but attestation failed: quote verification failed",
+			},
+		},
+		{
+			name:       "does not attest when not asked",
+			config:     nil,
+			wantStatus: map[string]interface{}{"success": true, "message": "Container created successfully"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orchestrator := &attestingMCPOrchestrator{
+				MockComputeOrchestrator: new(MockComputeOrchestrator),
+				attestErr:               tt.attestErr,
+			}
+			orchestrator.On("Create", mock.Anything, mock.Anything).Return(newCreatedContainerInstance(), nil)
+			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+				ComputeOrchestrator: orchestrator,
+				Logger:              slog.Default(),
+			})
+
+			result, err := provider.ContainerCreate(context.Background(), "test-container", "nginx:latest", tt.config)
+
+			assert.NoError(t, err)
+			resultMap, ok := result.(map[string]interface{})
+			assert.True(t, ok)
+			assert.Equal(t, "container-123", resultMap["id"])
+			assert.Equal(t, tt.wantStatus, resultMap["status"])
+			assert.Equal(t, tt.wantAttested, orchestrator.attested)
+			orchestrator.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMCPContainerCreate_AttestOnCreateUnsupportedCreatesNothing(t *testing.T) {
+	mockOrchestrator := new(MockComputeOrchestrator)
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		ComputeOrchestrator: mockOrchestrator,
+		Logger:              slog.Default(),
+	})
+
+	result, err := provider.ContainerCreate(context.Background(), "test-container", "nginx:latest",
+		map[string]interface{}{"attest_on_create": true})
+
+	assert.Nil(t, result)
+	assert.True(t, errors.As(err, new(ErrContainerAttestNotSupported)))
+	mockOrchestrator.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+func TestMCPContainerCreate_NoInstance(t *testing.T) {
+	mockOrchestrator := new(MockComputeOrchestrator)
+	mockOrchestrator.On("Create", mock.Anything, mock.Anything).Return(nil, nil)
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		ComputeOrchestrator: mockOrchestrator,
+		Logger:              slog.Default(),
+	})
+
+	result, err := provider.ContainerCreate(context.Background(), "test-container", "nginx:latest", nil)
+
+	assert.Nil(t, result)
+	assert.True(t, errors.As(err, new(ErrContainerOperationFailed)))
+	assert.True(t, errors.As(err, new(ErrContainerCreateNoInstance)))
 	mockOrchestrator.AssertExpectations(t)
 }
 

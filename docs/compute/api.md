@@ -208,6 +208,34 @@ is InvalidArgument before the VM is touched. An orchestrator that cannot honour
 the options (any but `local-qemu`) answers FailedPrecondition for a non-default
 stop rather than taking a default one.
 
+No transport raises its write timeout for a stop; the reply's deadline moves
+instead. Over REST — the daemon's routes (`pkg/api/rest/compute_handlers.go`)
+and the webservice's (`pkg/webservice/v1/rest/compute/`) — the stop and reboot
+routes move the reply's write deadline to `StopOptions.ReplyWindow`: the
+guest's power-down window (`StopOptions.GuestWait`) plus 30 seconds. The
+daemon's REST middleware writers unwrap, so the move reaches the connection.
+Over MCP every call's write deadline restarts at `RequestTimeout` once its
+reply is ready (`pkg/api/mcp/server.go`). Either way a graceful stop that runs
+past the server's 30-second write timeout still answers instead of closing
+the connection.
+
+No transport puts a deadline of its own on the call either. A gRPC call runs
+until its client's deadline; an MCP tool runs until its HTTP request ends
+(`ToolRegistry.ExecuteTool`, `pkg/api/mcp/tools.go`, adds none), so a reboot,
+a stop window plus a start, finishes over MCP as it does over gRPC. stdio has
+no request to end with its client, so there the server's `RequestTimeout`
+bounds each call, except that `vm_stop` and `vm_reboot` get
+`StopOptions.ReplyWindow` when it is longer, the window REST moves its reply
+deadline to (`toolReplyWindows`, `pkg/api/mcp/tool_reply_window.go`).
+
+The client waits as long. The SDK owns the window
+(`StopReplyWindow` in `sdk/go/services/compute/stop_window.go`) and
+`StopOptions.ReplyWindow` uses its margin, so the two cannot drift. The SDK's
+MCP transport sends `vm_stop` and `vm_reboot` with that window as the
+request's HTTP timeout when it is longer than the client's own
+(`platform.WithTimeout`, 5 seconds by default; `sdk/go/transport/mcp/compute_vm.go`,
+`mcpwire.Client.CallToolWithin`). Every other call keeps the client's timeout.
+
 **List honours `states`, `selector` and `pagination`**
 (`ComputeService.ListVMs`, `pkg/api/daemon/compute_vm_list.go`). `states`
 keeps the VMs in any listed state; an empty list keeps every state.
@@ -282,6 +310,15 @@ transport's class and that no VM is left behind: InvalidArgument over gRPC, the
 Unix socket, QUIC and MCP, HTTP 400 over REST, and `code = InvalidArgument` in
 the CLI's output.
 
+The suite's VMs boot UEFI firmware from a blank disk, so no guest OS answers
+the ACPI power button: every graceful stop runs to the end of its power-down
+window, then SIGTERM ends the process, as the stop contract above says. `VMLifecycle` therefore stops
+with `timeout_seconds` 1, which takes the same graceful path in one second.
+The reboot in `VMSuspendResumeReboot` has no timeout field and spends the
+default 30 seconds. All six transports share the test's five-minute context.
+Each case's cleanup runs on its own 30-second context, so a case that failed
+on that deadline still stops and deletes its VM.
+
 The suite's MCP adapter (`test/integration/compute/mcp_adapter.go`) is the
 compute SDK client over MCP, so every case — create with disks, firmware and
 labels, list by label, forced stop and reboot, and delete with its disks —
@@ -331,7 +368,10 @@ running, or an orchestrator without snapshots, is FailedPrecondition. The
 snapshot's id is its name. `GetSnapshot` answers the one entry of
 `ListSnapshots` with that id (`GetSnapshotResponse.snapshot`), so it fails
 exactly as `ListSnapshots` does, and an id the list does not hold is NotFound
-(`ErrVMSnapshotNotFound`).
+(`ErrVMSnapshotNotFound`). `DeleteSnapshot` looks the snapshot up the same way
+before it deletes: QEMU's `delvm` answers success for a name no disk holds, so
+without the lookup a deleted snapshot would delete again
+(`QEMUOrchestrator.DeleteSnapshot`, `pkg/compute/qemu_snapshot.go`).
 
 The Go SDK carries the snapshot verbs over every transport, returning the
 client's typed error (`ErrCreateSnapshotFailed`, ...,

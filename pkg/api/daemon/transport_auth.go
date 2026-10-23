@@ -38,6 +38,10 @@ const (
 	transportQUIC    = "quic"
 	transportREST    = "rest"
 	transportMCP     = "mcp"
+
+	// transportIAMToken names the IAM VerifyToken verifier, which every
+	// transport shares.
+	transportIAMToken = "iam-token"
 )
 
 // grpcAuthSelection is the authentication the gRPC TCP transport resolved to.
@@ -327,6 +331,22 @@ func buildLocalTokenValidator(config *Config, logger *logging.Logger, transport 
 		logger.Info("platform JWT verification enabled", "transport", transport)
 	}
 	return local
+}
+
+// iamTokenVerifierFor selects the verifier behind IAM VerifyToken: the
+// validator a transport authenticates with when one does, otherwise a local
+// validator over the daemon's QuicBaaS service and platform JWT verifier. An
+// mTLS deployment authenticates callers by certificate, so no transport builds
+// a token validator, yet the tokens those issuers mint must still verify on
+// every transport. It returns a nil interface when no issuer is wired.
+func iamTokenVerifierFor(config *Config, logger *logging.Logger, shared *platformTokenValidator, grpcValidator, quicValidator *grpcTokenValidator) iamTokenVerifier {
+	if verifier := selectIAMTokenVerifier(shared, grpcValidator, quicValidator); verifier != nil {
+		return verifier
+	}
+	if local := buildLocalTokenValidator(config, logger, transportIAMToken); local != nil {
+		return local
+	}
+	return nil
 }
 
 // resolveMTLSClientCAPool returns the client CA pool a transport must verify

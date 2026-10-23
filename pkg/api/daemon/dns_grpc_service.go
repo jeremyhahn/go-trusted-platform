@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -227,8 +228,10 @@ func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZo
 		protoZones = append(protoZones, s.zoneToProto(zone))
 	}
 
+	page, pagination := paginatePage(protoZones, req.GetPagination())
 	return &platformv1.ListZonesResponse{
-		Zones: protoZones,
+		Zones:      page,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -243,6 +246,9 @@ func (s *DNSServiceServer) AddRecord(ctx context.Context, req *platformv1.AddRec
 	}
 	if req.GetRecord() == nil {
 		return nil, status.Error(codes.InvalidArgument, "record is required")
+	}
+	if err := s.validateRecord(req.GetRecord()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	zone, err := s.service.Zone(ctx, req.GetZoneName())
@@ -289,7 +295,9 @@ func (s *DNSServiceServer) DeleteRecord(ctx context.Context, req *platformv1.Del
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Delete record based on type
+	if err := requireRecord(zone, req.GetType(), req.GetName()); err != nil {
+		return nil, err
+	}
 	s.deleteRecordFromZone(zone, req.GetType(), req.GetName())
 
 	if err := s.service.Save(ctx, zone); err != nil {
@@ -318,6 +326,9 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 	if req.GetOldRecord() == nil || req.GetNewRecord() == nil {
 		return nil, status.Error(codes.InvalidArgument, "old and new records are required")
 	}
+	if err := s.validateRecord(req.GetNewRecord()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	zone, err := s.service.Zone(ctx, req.GetZoneName())
 	if err != nil {
@@ -325,8 +336,11 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Delete old record
-	s.deleteRecordFromZone(zone, req.GetOldRecord().GetType(), s.getRecordName(req.GetOldRecord()))
+	oldType, oldName := req.GetOldRecord().GetType(), s.getRecordName(req.GetOldRecord())
+	if err := requireRecord(zone, oldType, oldName); err != nil {
+		return nil, err
+	}
+	s.deleteRecordFromZone(zone, oldType, oldName)
 
 	// Add new record
 	if err := s.addRecordToZone(zone, req.GetNewRecord()); err != nil {
@@ -365,8 +379,10 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 
 	records := s.extractRecords(&zone.RecordSet, req.GetType())
 
+	page, pagination := paginatePage(records, req.GetPagination())
 	return &platformv1.ListRecordsResponse{
-		Records: records,
+		Records:    page,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -766,6 +782,37 @@ func (s *DNSServiceServer) addRecordToZone(zone *entities.Zone, record *platform
 		return ErrUnsupportedRecordType{}
 	}
 	return nil
+}
+
+// validateRecord applies the pkg/dns record checks before a record reaches
+// the zone, so gRPC, Unix, QUIC and MCP refuse the same bad input.
+func (s *DNSServiceServer) validateRecord(record *platformv1.Record) error {
+	if err := dns.ValidateRecordName(s.getRecordName(record)); err != nil {
+		return err
+	}
+	switch record.GetType() {
+	case platformv1.RecordType_RECORD_TYPE_A:
+		return dns.ValidateARecordValue(record.GetA().GetValue())
+	case platformv1.RecordType_RECORD_TYPE_AAAA:
+		return dns.ValidateAAAARecordValue(record.GetAaaa().GetValue())
+	case platformv1.RecordType_RECORD_TYPE_TLSA:
+		return dns.ValidateTLSAUsage(record.GetTlsa().GetUsage())
+	}
+	return nil
+}
+
+// requireRecord refuses an update or delete of a record the zone does not
+// hold: codes.NotFound for a missing record, codes.InvalidArgument for a
+// record type the zone cannot hold.
+func requireRecord(zone *entities.Zone, recordType platformv1.RecordType, name string) error {
+	_, err := dns.FindRecord(&zone.RecordSet, resolveRecordType(recordType), name)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, dns.ErrRecordNotFound) {
+		return status.Error(codes.NotFound, err.Error())
+	}
+	return status.Error(codes.InvalidArgument, err.Error())
 }
 
 func (s *DNSServiceServer) deleteRecordFromZone(zone *entities.Zone, recordType platformv1.RecordType, name string) {

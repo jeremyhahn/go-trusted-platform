@@ -173,6 +173,17 @@ func (e ErrUnknownRegistryEnum) Error() string {
 	return fmt.Sprintf("registry tool result names an unknown %s %q", e.Field, e.Value)
 }
 
+// ErrUnknownContainerState is returned when a container tool's result names a
+// state the daemon's instance states do not have.
+type ErrUnknownContainerState struct {
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownContainerState) Error() string {
+	return fmt.Sprintf("container tool result names an unknown state %q", e.Value)
+}
+
 // ErrFieldNotSupported indicates a request field the MCP tool has no
 // argument for. The adapter refuses it rather than dropping it.
 type ErrFieldNotSupported struct {

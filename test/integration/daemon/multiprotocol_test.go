@@ -22,7 +22,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 // =============================================================================
@@ -380,70 +379,9 @@ func testListServices(t *testing.T, ctx context.Context, adapter DaemonCommands)
 	}
 }
 
-// serviceStatusPollInterval is the interval between service status polls.
-const serviceStatusPollInterval = 200 * time.Millisecond
-
-// serviceStatusPollTimeout is the maximum time to wait for a service status transition.
-const serviceStatusPollTimeout = 15 * time.Second
-
-// waitForServiceStatus polls GetService until the service reaches the expected
-// status or the context deadline is exceeded. Uses a ticker-based retry loop
-// to avoid time.Sleep per project conventions.
-func waitForServiceStatus(
-	ctx context.Context,
-	adapter DaemonCommands,
-	serviceName string,
-	expectedStatus string,
-) (*ServiceInfoResult, error) {
-
-	pollCtx, cancel := context.WithTimeout(ctx, serviceStatusPollTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(serviceStatusPollInterval)
-	defer ticker.Stop()
-
-	for {
-		result, err := adapter.GetService(pollCtx, serviceName)
-		if err != nil {
-			return nil, err
-		}
-		if result.Status == expectedStatus {
-			return result, nil
-		}
-
-		select {
-		case <-pollCtx.Done():
-			return result, ErrServiceStatusTimeout{
-				ServiceName:    serviceName,
-				ExpectedStatus: expectedStatus,
-				ActualStatus:   result.Status,
-			}
-		case <-ticker.C:
-			// Continue polling
-		}
-	}
-}
-
-// ErrServiceStatusTimeout indicates that polling for a service status
-// transition exceeded the allowed timeout.
-type ErrServiceStatusTimeout struct {
-	ServiceName    string
-	ExpectedStatus string
-	ActualStatus   string
-}
-
-// Error returns a human-readable error message.
-func (e ErrServiceStatusTimeout) Error() string {
-	return "service " + e.ServiceName +
-		" did not reach status " + e.ExpectedStatus +
-		" (last observed: " + e.ActualStatus + ")"
-}
-
-// testServiceOperations tests get/start/stop/restart operations.
-// The test drives the full service lifecycle without depending on auto-start
-// timing: GetService → StartService → StopService → Start → RestartService.
+// testServiceOperations tests get on every listed service, and that start,
+// stop and restart of each are refused and leave its status as it was.
 func testServiceOperations(t *testing.T, ctx context.Context, adapter DaemonCommands) {
-	// List services to find one to test with
 	listResult, err := adapter.ListServices(ctx)
 	if err != nil {
 		t.Fatalf("ListServices failed: %v", err)
@@ -453,146 +391,54 @@ func testServiceOperations(t *testing.T, ctx context.Context, adapter DaemonComm
 		t.Fatal("ListServices returned no services - daemon should have registered configured services")
 	}
 
-	// Use the first service for all lifecycle tests
-	targetService := listResult.Services[0].Name
+	// Every service platformd serve registers is a subsystem it owns for the
+	// life of the process (registerConfiguredServices), so start, stop and
+	// restart are each refused with ErrServiceNotControllable and change
+	// nothing (docs/daemon/api.md, "Service start, stop and restart are
+	// refused"). Each service is checked, not the first one listed, because
+	// ListServices ranges over a map and its order changes between calls.
+	for _, listed := range listResult.Services {
+		name := listed.Name
+		t.Run(name, func(t *testing.T) {
+			before, err := adapter.GetService(ctx, name)
+			if err != nil {
+				t.Fatalf("GetService(%s) failed: %v", name, err)
+			}
+			if before.Name != name {
+				t.Errorf("GetService returned wrong service name: expected %s, got %s", name, before.Name)
+			}
+			if before.Status != ServiceStatusRunning && before.Status != ServiceStatusStopped {
+				t.Errorf("GetService(%s) status = %q, want %q or %q: a subsystem is wired or it is not",
+					name, before.Status, ServiceStatusRunning, ServiceStatusStopped)
+			}
 
-	t.Run("GetService", func(t *testing.T) {
-		result, err := adapter.GetService(ctx, targetService)
-		if err != nil {
-			t.Fatalf("GetService(%s) failed: %v", targetService, err)
-		}
+			verbs := map[string]func(context.Context, string) (*ServiceActionResult, error){
+				"start":   adapter.StartService,
+				"stop":    adapter.StopService,
+				"restart": adapter.RestartService,
+			}
+			for verb, call := range verbs {
+				t.Run(verb, func(t *testing.T) {
+					result, err := call(ctx, name)
+					if err == nil {
+						t.Fatalf("%s %s succeeded (%+v), want the not-controllable refusal", verb, name, result)
+					}
+					want := "service " + name + " cannot be started or stopped at runtime"
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("%s %s error = %v, want it to contain %q", verb, name, err, want)
+					}
 
-		if result.Name != targetService {
-			t.Errorf("GetService returned wrong service name: expected %s, got %s",
-				targetService, result.Name)
-		}
-
-		if result.Status == "" {
-			t.Error("Service status should not be empty")
-		}
-
-		validStatuses := map[string]bool{
-			ServiceStatusStopped:  true,
-			ServiceStatusStarting: true,
-			ServiceStatusRunning:  true,
-			ServiceStatusStopping: true,
-			ServiceStatusError:    true,
-		}
-		if !validStatuses[result.Status] {
-			t.Errorf("GetService returned unexpected status %q for service %s",
-				result.Status, result.Name)
-		}
-	})
-
-	// Ensure the service is in a known stopped state before lifecycle tests.
-	// Auto-start may or may not have run, so explicitly stop if running.
-	info, getErr := adapter.GetService(ctx, targetService)
-	if getErr != nil {
-		t.Fatalf("GetService(%s) failed during setup: %v", targetService, getErr)
+					after, err := adapter.GetService(ctx, name)
+					if err != nil {
+						t.Fatalf("GetService(%s) after refused %s failed: %v", name, verb, err)
+					}
+					if after.Status != before.Status {
+						t.Errorf("refused %s changed %s status from %q to %q", verb, name, before.Status, after.Status)
+					}
+				})
+			}
+		})
 	}
-	if info.Status == ServiceStatusRunning {
-		if _, stopErr := adapter.StopService(ctx, targetService); stopErr != nil {
-			t.Fatalf("Failed to stop service %s for lifecycle test setup: %v", targetService, stopErr)
-		}
-		if _, waitErr := waitForServiceStatus(ctx, adapter, targetService, ServiceStatusStopped); waitErr != nil {
-			t.Fatalf("Service %s did not reach stopped state during setup: %v", targetService, waitErr)
-		}
-	}
-
-	t.Run("StartService", func(t *testing.T) {
-		startResult, err := adapter.StartService(ctx, targetService)
-		if err != nil {
-			t.Fatalf("StartService(%s) failed: %v", targetService, err)
-		}
-
-		if !startResult.Success {
-			t.Fatalf("StartService(%s) reported failure: %s",
-				targetService, startResult.Message)
-		}
-
-		if startResult.Service != targetService {
-			t.Errorf("StartService returned wrong service name: expected %s, got %s",
-				targetService, startResult.Service)
-		}
-
-		// Verify the service transitioned to running
-		runInfo, waitErr := waitForServiceStatus(ctx, adapter, targetService, ServiceStatusRunning)
-		if waitErr != nil {
-			t.Fatalf("Service %s did not reach running status: %v (last status: %s)",
-				targetService, waitErr, runInfo.Status)
-		}
-
-		if runInfo.Status != ServiceStatusRunning {
-			t.Errorf("Expected service %s status %s after start, got %s",
-				targetService, ServiceStatusRunning, runInfo.Status)
-		}
-	})
-
-	t.Run("StopService", func(t *testing.T) {
-		stopResult, err := adapter.StopService(ctx, targetService)
-		if err != nil {
-			t.Fatalf("StopService(%s) failed: %v", targetService, err)
-		}
-
-		if !stopResult.Success {
-			t.Fatalf("StopService(%s) reported failure: %s",
-				targetService, stopResult.Message)
-		}
-
-		if stopResult.Service != targetService {
-			t.Errorf("StopService returned wrong service name: expected %s, got %s",
-				targetService, stopResult.Service)
-		}
-
-		// Verify the service transitioned to stopped
-		stopInfo, waitErr := waitForServiceStatus(ctx, adapter, targetService, ServiceStatusStopped)
-		if waitErr != nil {
-			t.Fatalf("Service %s did not reach stopped status: %v (last status: %s)",
-				targetService, waitErr, stopInfo.Status)
-		}
-
-		if stopInfo.Status != ServiceStatusStopped {
-			t.Errorf("Expected service %s status %s after stop, got %s",
-				targetService, ServiceStatusStopped, stopInfo.Status)
-		}
-	})
-
-	t.Run("RestartService", func(t *testing.T) {
-		// Service is stopped from the StopService test; start it so restart is meaningful
-		if _, startErr := adapter.StartService(ctx, targetService); startErr != nil {
-			t.Fatalf("StartService(%s) failed during restart setup: %v", targetService, startErr)
-		}
-		if _, waitErr := waitForServiceStatus(ctx, adapter, targetService, ServiceStatusRunning); waitErr != nil {
-			t.Fatalf("Service %s did not reach running status for restart: %v", targetService, waitErr)
-		}
-
-		restartResult, err := adapter.RestartService(ctx, targetService)
-		if err != nil {
-			t.Fatalf("RestartService(%s) failed: %v", targetService, err)
-		}
-
-		if !restartResult.Success {
-			t.Fatalf("RestartService(%s) reported failure: %s",
-				targetService, restartResult.Message)
-		}
-
-		if restartResult.Service != targetService {
-			t.Errorf("RestartService returned wrong service name: expected %s, got %s",
-				targetService, restartResult.Service)
-		}
-
-		// Verify the service returned to running after restart
-		runInfo, waitErr := waitForServiceStatus(ctx, adapter, targetService, ServiceStatusRunning)
-		if waitErr != nil {
-			t.Fatalf("Service %s did not reach running status after restart: %v (last status: %s)",
-				targetService, waitErr, runInfo.Status)
-		}
-
-		if runInfo.Status != ServiceStatusRunning {
-			t.Errorf("Expected service %s status %s after restart, got %s",
-				targetService, ServiceStatusRunning, runInfo.Status)
-		}
-	})
 }
 
 // =============================================================================

@@ -303,6 +303,31 @@ func TestDNSGetZone_DaemonNative(t *testing.T) {
 		assert.Equal(t, "example.com.", result.Zone.Name)
 	})
 
+	t.Run("carries the SOA", func(t *testing.T) {
+		mock := NewMockDNSService()
+		mock.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			zone := &entities.Zone{Name: zoneName}
+			zone.RecordSet.SOARecord = entities.SOARecord{
+				Name: zoneName, MName: "ns1.test.", RName: "admin.test.",
+				Serial: 7, Refresh: 3600, Retry: 600, Expire: 86400, MinimumTTL: 300, TTL: 3600,
+			}
+			return zone, nil
+		}
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{Zone: "example.com."})
+		resp := handler.HandleRequest(ctx, req)
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+
+		var result DNSGetZoneResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
+		require.NotNil(t, result.Zone)
+		require.NotNil(t, result.Zone.SOA, "GetZone over QUIC dropped the zone's SOA")
+		assert.Equal(t, DNSSOA{
+			Name: "example.com.", MName: "ns1.test.", RName: "admin.test.",
+			Serial: 7, Refresh: 3600, Retry: 600, Expire: 86400, MinimumTTL: 300, TTL: 3600,
+		}, *result.Zone.SOA)
+	})
+
 	t.Run("missing zone", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
 		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{})

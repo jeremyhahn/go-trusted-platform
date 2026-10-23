@@ -332,7 +332,12 @@ func callTool(ctx context.Context, registry *mcp.ToolRegistry, params interface{
 	if !ok {
 		return nil, errBridgeParams{}
 	}
-	return registry.ExecuteTool(ctx, name, args)
+	output, err := registry.ExecuteTool(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
+	// Answered as the MCP server answers tools/call: a CallToolResult.
+	return mcpwire.NewCallToolResult(output)
 }
 
 // assertSameCertificate compares a transport's certificate with the gRPC

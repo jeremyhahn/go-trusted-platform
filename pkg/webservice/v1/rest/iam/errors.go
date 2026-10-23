@@ -217,3 +217,52 @@ type ErrPEPClientMissing struct{}
 func (e ErrPEPClientMissing) Error() string {
 	return "rest/iam: no policy enforcement point is wired to check permissions"
 }
+
+// ErrRoleClientMissing is returned when role references are resolved without
+// an IAM role client to read the tenant's roles through.
+type ErrRoleClientMissing struct{}
+
+func (e ErrRoleClientMissing) Error() string {
+	return "rest/iam: no IAM role client to resolve role references"
+}
+
+// ErrRoleListFailed is returned when the tenant's roles could not be read to
+// resolve role references. Err is the IAM client's error.
+type ErrRoleListFailed struct {
+	TenantID string
+	Err      error
+}
+
+func (e ErrRoleListFailed) Error() string {
+	return fmt.Sprintf("rest/iam: listing the roles of tenant %s: %v", e.TenantID, e.Err)
+}
+
+func (e ErrRoleListFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrIAMClientMissing is returned when a user's roles are set without an IAM
+// client to read and change them through.
+type ErrIAMClientMissing struct{}
+
+func (e ErrIAMClientMissing) Error() string {
+	return "rest/iam: no IAM client to set user roles"
+}
+
+// ErrUserRolesSyncFailed is returned when a user's role set could not be
+// brought to the requested one: assigning or revoking RoleID failed. Roles
+// changed before the failure stay changed. Err is the IAM client's error.
+type ErrUserRolesSyncFailed struct {
+	TenantID string
+	UserID   string
+	RoleID   string
+	Err      error
+}
+
+func (e ErrUserRolesSyncFailed) Error() string {
+	return fmt.Sprintf("rest/iam: setting role %s on user %s in tenant %s: %v", e.RoleID, e.UserID, e.TenantID, e.Err)
+}
+
+func (e ErrUserRolesSyncFailed) Unwrap() error {
+	return e.Err
+}

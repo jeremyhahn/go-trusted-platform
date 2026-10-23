@@ -56,7 +56,10 @@ type mockTPM struct {
 	ekAttrs            *xkmssdk.KeyAttributes
 	ekAttrsErr         error
 	createEKErr        error
-	ekPersisted        bool
+	persisted          bool
+	createdEK          *xkmssdk.KeyAttributes
+	deleteKeyErr       error
+	deleted            *xkmssdk.KeyAttributes
 	ekCert             *x509.Certificate
 	ekCertErr          error
 	provisionEKCertErr error
@@ -107,7 +110,7 @@ type mockTPM struct {
 
 func newMockTPM() *mockTPM {
 	return &mockTPM{
-		config:        &xkmssdk.TPMConfig{UseSimulator: true},
+		config:        &xkmssdk.TPMConfig{UseSimulator: true, EK: &xkmssdk.EKConfig{Handle: 0x81010001}},
 		infoResult:    "mock-tpm-info",
 		deviceResult:  "/dev/tpmrm0",
 		canSealResult: true,
@@ -182,18 +185,34 @@ func (m *mockTPM) ProvisionOwner(auth xkmssdk.Password) (*xkmssdk.KeyAttributes,
 	}
 	return m.ekAttrs, nil
 }
-func (m *mockTPM) Clear(lockoutAuth []byte) error                 { return m.clearErr }
-func (m *mockTPM) EKAttributes() (*xkmssdk.KeyAttributes, error)  { return m.ekAttrs, m.ekAttrsErr }
-func (m *mockTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error { return m.createEKErr }
+func (m *mockTPM) Clear(lockoutAuth []byte) error                { return m.clearErr }
+func (m *mockTPM) EKAttributes() (*xkmssdk.KeyAttributes, error) { return m.ekAttrs, m.ekAttrsErr }
 
-// ReadHandle reports the EK handle occupied only when ekPersisted is set.
+// CreateEK stamps the public key on success, as the backend does once the
+// primary exists.
+func (m *mockTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error {
+	if m.createEKErr != nil {
+		return m.createEKErr
+	}
+	keyAttrs.TPMAttributes.PublicKeyBytes = m.ekAttrs.TPMAttributes.PublicKeyBytes
+	m.createdEK = keyAttrs
+	return nil
+}
+
+// ReadHandle reports a probed handle occupied only when persisted is set.
 func (m *mockTPM) ReadHandle(tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
-	if m.ekPersisted {
+	if m.persisted {
 		return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, nil
 	}
 	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, tpm2.TPMRCHandle
 }
 func (m *mockTPM) Flush(handle tpm2.TPMHandle) {}
+
+// DeleteKey records the key TPM2_EvictControl would evict.
+func (m *mockTPM) DeleteKey(keyAttrs *xkmssdk.KeyAttributes, _ xkmssdk.TPMKeyBackend) error {
+	m.deleted = keyAttrs
+	return m.deleteKeyErr
+}
 func (m *mockTPM) EKCertificate() (*x509.Certificate, error) {
 	if m.ekCertErr != nil {
 		return nil, m.ekCertErr
@@ -519,30 +538,67 @@ func TestTPM2Handler_HandleCreateEK_Error(t *testing.T) {
 func TestTPM2Handler_HandleCreateEK_PersistedEKIsAlreadyExists(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
-	mock.ekPersisted = true
+	mock.persisted = true
 	mock.createEKErr = errors.New("CreateEK must not run on an occupied handle")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
 	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 }
 
-// Sub-opcode 0x05 used to panic the server: template-less EK attributes
-// reached go-tpm's TPMT_PUBLIC marshaller.
-func TestTPM2Handler_HandleCreateEK_TemplateLessAttributesAreRefused(t *testing.T) {
+// Sub-opcode 0x05 used to panic the server, and later refused, when the
+// backend's cached EK attributes carried no template. CreateEK now builds
+// the EK from tpm.ek, so the cached attributes no longer matter (#949).
+func TestTPM2Handler_HandleCreateEK_BuildsTemplateFromConfig(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
 	mock.ekAttrs.TPMAttributes.Template = tpm2.TPMTPublic{}
-	mock.createEKErr = errors.New("CreateEK must not run without a template")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
-	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.NotNil(t, mock.createdEK, "CreateEK reached the backend")
+	assert.Equal(t, tpm2.RSAEKTemplate, mock.createdEK.TPMAttributes.Template)
+	assert.Equal(t, xkmssdk.TPMHandle(0x81010001), mock.createdEK.TPMAttributes.Handle)
 }
 
 func TestTPM2Handler_HandleDeleteEK(t *testing.T) {
-	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteEK}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	t.Run("evicts the persisted EK", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newMockTPM()
+		mock.persisted = true
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteEK}})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var st TPM2StatusResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &st))
+		assert.Equal(t, "EK evicted", st.Message)
+		require.NotNil(t, mock.deleted, "DeleteEK must evict through TPM2_EvictControl")
+		assert.Equal(t, tpm2.TPMHandle(0x81010001), mock.deleted.TPMAttributes.Handle)
+		assert.Equal(t, tpm2.TPMHTPersistent, mock.deleted.TPMAttributes.HandleType)
+	})
+	t.Run("empty handle is NotFound", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newMockTPM()
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteEK}})
+
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+		assert.Nil(t, mock.deleted)
+	})
+	t.Run("eviction failure is an error", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newMockTPM()
+		mock.persisted = true
+		mock.deleteKeyErr = errors.New("TPM_RC_BAD_AUTH")
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteEK}})
+
+		assert.NotEqual(t, quicwire.StatusOK, resp.Status)
+	})
 }
 
 func TestTPM2Handler_HandleGetEKCert_Success(t *testing.T) {
@@ -584,18 +640,64 @@ func TestTPM2Handler_HandleGetSRK(t *testing.T) {
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
+// newSSRKMockTPM is a mock whose tpm.ssrk names the Shared SRK handle and
+// whose handles read back empty, as they do after TPM2_Clear.
+func newSSRKMockTPM() *mockTPM {
+	mock := newMockTPM()
+	mock.config.SSRK = &xkmssdk.SRKConfig{Handle: 0x81000001}
+	return mock
+}
+
+// CreateSRK answers with the key, so a client reads the handle the Shared
+// SRK was persisted at.
 func TestTPM2Handler_HandleCreateSRK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
+	h.SetTPM2Service(newSSRKMockTPM())
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateSRK}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	key := decodeKeyResponse(t, resp)
+	assert.Equal(t, uint32(0x81000001), key.Handle)
+	assert.Equal(t, x509.RSA.String(), key.Algorithm)
 }
 
 func TestTPM2Handler_HandleDeleteSRK(t *testing.T) {
-	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	t.Run("evicts the persisted SSRK", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newSSRKMockTPM()
+		mock.persisted = true
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var st TPM2StatusResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &st))
+		assert.Equal(t, "SRK evicted", st.Message)
+		require.NotNil(t, mock.deleted, "DeleteSRK must evict through TPM2_EvictControl")
+		assert.Equal(t, tpm2.TPMHandle(0x81000001), mock.deleted.TPMAttributes.Handle)
+		assert.Equal(t, tpm2.TPMHTPersistent, mock.deleted.TPMAttributes.HandleType)
+	})
+	t.Run("empty handle is NotFound", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newSSRKMockTPM()
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+		assert.Nil(t, mock.deleted)
+	})
+	t.Run("eviction failure is an error", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newSSRKMockTPM()
+		mock.persisted = true
+		mock.deleteKeyErr = errors.New("TPM_RC_BAD_AUTH")
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+
+		assert.NotEqual(t, quicwire.StatusOK, resp.Status)
+	})
 }
 
 func TestTPM2Handler_HandleGetIAK(t *testing.T) {
@@ -1266,8 +1368,8 @@ func TestTPM2Handler_HandleGetSRK_Error(t *testing.T) {
 
 func TestTPM2Handler_HandleCreateSRK_Error(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	mock := newMockTPM()
-	mock.createSRKErr = errors.New("SRK already exists")
+	mock := newSSRKMockTPM()
+	mock.createSRKErr = errors.New("TPM_RC_BAD_AUTH")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateSRK}})
 	assert.NotEqual(t, quicwire.StatusOK, resp.Status)

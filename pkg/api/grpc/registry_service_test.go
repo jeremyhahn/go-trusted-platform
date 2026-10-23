@@ -24,7 +24,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -1279,6 +1281,32 @@ func TestRegistryGRPCService_Push_ServiceError(t *testing.T) {
 	}
 }
 
+// The Push handler answers a not-configured refusal from the service with
+// FailedPrecondition on the wire, the code the CI leaf saw as Internal.
+func TestRegistryGRPCService_Push_NotConfiguredIsFailedPrecondition(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockRegistryService()
+	mockSvc.pushStreamErr = ErrRegistryNotConfigured{Reason: "registry: image signing not configured (ref=test/repo:v1.0.0)"}
+	grpcSvc := NewRegistryGRPCService(logging.DefaultLogger(), mockSvc)
+
+	stream := newMockPushStream(context.Background(), []*platformv1.PushRequest{
+		{Data: &platformv1.PushRequest_Metadata{Metadata: &platformv1.PushMetadata{
+			Repository:  "test/repo",
+			Tag:         "v1.0.0",
+			Annotations: map[string]string{"sign": "true"},
+		}}},
+	})
+
+	err := grpcSvc.Push(stream)
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("Push error code = %v (%v), want FailedPrecondition", got, err)
+	}
+	if stream.closeSent {
+		t.Error("a refused push sent a response")
+	}
+}
+
 // =============================================================================
 // gRPC Pull Streaming Tests
 // =============================================================================
@@ -1426,5 +1454,49 @@ func TestRegistryGRPCService_Pull_SendMetadataError(t *testing.T) {
 	err := grpcSvc.Pull(req, stream)
 	if err == nil {
 		t.Fatal("expected error for send failure")
+	}
+}
+
+// A malformed reference is the caller's error: the gRPC surface answers
+// InvalidArgument, never Internal (m779, run 58285).
+func TestRegistryErrorStatus_ClientErrorsAreInvalidArgument(t *testing.T) {
+	for _, err := range []error{
+		ErrInvalidArtifactReference{Reference: "Unix-1-push:v1", Reason: "invalid format"},
+		ErrInvalidArtifactDigest{Digest: "sha256:zz"},
+		ErrMissingRepository{},
+		ErrMissingReference{},
+	} {
+		if got := status.Code(RegistryErrorStatus(err)); got != codes.InvalidArgument {
+			t.Errorf("RegistryErrorStatus(%T) code = %v, want InvalidArgument", err, got)
+		}
+	}
+}
+
+func TestRegistryErrorStatus_UnknownErrorIsInternal(t *testing.T) {
+	if got := status.Code(RegistryErrorStatus(errors.New("disk exploded"))); got != codes.Internal {
+		t.Errorf("code = %v, want Internal", got)
+	}
+}
+
+// A push the registry is not configured for (signing or encryption asked of
+// a registry without a signer or encryptor) is a precondition failure the
+// operator fixes, never Internal (m954, #973 run 59851).
+func TestRegistryErrorStatus_NotConfiguredIsFailedPrecondition(t *testing.T) {
+	err := ErrRegistryNotConfigured{Reason: "registry: image signing not configured (ref=apps/web:v1)"}
+	st := RegistryErrorStatus(err)
+	if got := status.Code(st); got != codes.FailedPrecondition {
+		t.Fatalf("RegistryErrorStatus(ErrRegistryNotConfigured) code = %v, want FailedPrecondition", got)
+	}
+	if got := status.Convert(st).Message(); got != err.Reason {
+		t.Errorf("status message = %q, want %q", got, err.Reason)
+	}
+}
+
+// Only the typed error maps to FailedPrecondition: an untyped error that
+// merely reads like one stays Internal.
+func TestRegistryErrorStatus_UntypedNotConfiguredTextIsInternal(t *testing.T) {
+	err := errors.New("registry: image signing not configured")
+	if got := status.Code(RegistryErrorStatus(err)); got != codes.Internal {
+		t.Errorf("RegistryErrorStatus(untyped) code = %v, want Internal", got)
 	}
 }

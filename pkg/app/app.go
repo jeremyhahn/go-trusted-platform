@@ -2101,6 +2101,15 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 			ranFullProvision = true
 		}
 	}
+	// The Shared SRK is created only by a full Provision; a TPM opened with
+	// its EK already resident never runs one, so create it where it is
+	// missing (tpm_ssrk.go). The diskless identity is resident or refused
+	// as a whole (tpm_diskless.go) and is not touched here.
+	if !diskless && app.TPM != nil {
+		if err := app.ensureSSRK(); err != nil {
+			return err
+		}
+	}
 
 	// CRITICAL: Extend PCR 23 with golden measurements on EVERY boot.
 	// PCR values reset to 0 on power cycle. The PlatformSRK policy

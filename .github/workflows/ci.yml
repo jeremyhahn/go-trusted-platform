@@ -266,7 +266,7 @@ jobs:
   # now runs on every PR.
   image:
     name: Devcontainer image [build, test, security, deps-check, trivy image]
-    runs-on: bigdisk
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: needs.changes.outputs.docs_only != 'true'
     needs: [changes]
     timeout-minutes: 120
@@ -475,7 +475,7 @@ jobs:
 
   integration:
     name: Integration [build tag integration]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     # `needs: test` keeps the heavy jobs off the runner at the same time.
     needs: [test]
@@ -509,9 +509,20 @@ jobs:
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
+      # Go on the runner for scripts/foreignfailures (ruling 125, below).
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
       # The runner's ALL_TARGETS (build/docker/devcontainer/run-integration-tests.sh).
+      # CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 keeps the suites' output
+      # in IT_LOG and, when they fail, makes scripts/foreignfailures the step's
+      # verdict: every failed leaf test must be a row of
+      # .github/foreign-failures.tsv, and anything the checker cannot attribute
+      # to a listed test (a build failure, a panic or timeout, an unreadable
+      # log) fails the step. ci-gate reads this job's result unchanged.
       - name: Run integration suite in the integration image
-        run: make integration-test MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE"
+        run: make integration-test MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration.log"
 
       - name: Tear down
         if: always()

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	gojwt "github.com/golang-jwt/jwt/v5"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
@@ -205,6 +207,46 @@ func TestSelectIAMTokenVerifier(t *testing.T) {
 	assert.Nil(t, selectIAMTokenVerifier(nil, nil, nil))
 }
 
+// TestIAMTokenVerifierForMTLS covers the mTLS deployment: certificates
+// authenticate callers, so no transport builds a token validator, yet IAM
+// VerifyToken still answers the tokens the daemon's issuers mint.
+func TestIAMTokenVerifierForMTLS(t *testing.T) {
+	t.Run("a transport validator wins", func(t *testing.T) {
+		shared := &platformTokenValidator{}
+		config := failClosedConfig()
+		config.App = &app.App{}
+		config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
+
+		assert.Same(t, shared, iamTokenVerifierFor(config, logging.DefaultLogger(), shared, nil, nil))
+	})
+
+	t.Run("mTLS falls back to the platform JWT verifier", func(t *testing.T) {
+		config := failClosedConfig()
+		config.EnableMTLS = true
+		config.App = &app.App{}
+		config.PlatformJWTVerifier = alwaysValidJWTVerifier{claims: jwt.TokenClaims{
+			UserIDStr: "42", TenantID: "acme",
+		}}
+
+		tokens := newIAMTokenService(iamTokenVerifierFor(config, logging.DefaultLogger(), nil, nil, nil))
+		verification, err := tokens.Verify(context.Background(), "platform-jwt")
+		require.NoError(t, err)
+		assert.True(t, verification.Valid)
+		require.NotNil(t, verification.Claims)
+		assert.Equal(t, "acme", verification.Claims.TenantID)
+	})
+
+	t.Run("no issuer leaves the service unconfigured", func(t *testing.T) {
+		config := failClosedConfig()
+		config.EnableMTLS = true
+
+		assert.Nil(t, iamTokenVerifierFor(config, logging.DefaultLogger(), nil, nil, nil))
+		_, err := newIAMTokenService(iamTokenVerifierFor(config, logging.DefaultLogger(), nil, nil, nil)).
+			Verify(context.Background(), "platform-jwt")
+		assert.ErrorAs(t, err, &ErrIAMTokenVerifierNotConfigured{})
+	})
+}
+
 // ecJWTVerifier verifies platform JWTs the way the platform JWT service does:
 // an ES256 signature over jwt.TokenClaims, with golang-jwt's expiry check.
 type ecJWTVerifier struct {
@@ -293,6 +335,14 @@ func TestIAMTokenServiceVerifyLocalValidator(t *testing.T) {
 	t.Run("QuicBaaS rejection", func(t *testing.T) {
 		rejecting := fakeQuicBaaSTokenService{resp: &quicbaas.ValidateTokenResponse{Valid: false}}
 		got, err := service(rejecting).Verify(ctx, "opaque-quicbaas-token")
+		require.NoError(t, err)
+		assert.False(t, got.Valid)
+		assert.Equal(t, IAMTokenRejected, got.Reason)
+	})
+
+	t.Run("QuicBaaS refusing the token as unauthorized is a rejection", func(t *testing.T) {
+		refusing := fakeQuicBaaSTokenService{err: sdkerrors.NewUnauthorized("ValidateToken", "invalid token")}
+		got, err := service(refusing).Verify(ctx, "not-a-jwt")
 		require.NoError(t, err)
 		assert.False(t, got.Valid)
 		assert.Equal(t, IAMTokenRejected, got.Reason)

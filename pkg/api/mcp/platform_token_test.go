@@ -82,6 +82,11 @@ func TestAuthorizeTool_ClaimsPath_AllowsGrantedScope(t *testing.T) {
 	if !ok || ac != want {
 		t.Fatal("AuthorizedContext not stashed in returned context")
 	}
+	// The token a tool call presents in its params rides with its grant, so a
+	// handler tells a token's grant from a peer certificate's.
+	if got := TokenFromContext(ctx); got != "tok-1" {
+		t.Errorf("token on the returned context = %q, want tok-1", got)
+	}
 }
 
 func TestAuthorizeTool_ClaimsPath_DeniesMissingScope(t *testing.T) {

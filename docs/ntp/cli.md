@@ -165,7 +165,9 @@ only NTP verb that mutates anything. `status` and `sources` need `ntp:read`.
 **It fails when no time source is reachable** rather than moving the clock on
 stale data. That failure surfaces as a conflict (gRPC `Aborted`, HTTP 409, QUIC
 `StatusAlreadyExists`) with the message
-`ntp: no reachable time source (N configured)`.
+`ntp: no reachable time source (N configured)`. **It also fails when chronyd
+does not control the clock** (started with `-x`, or without `CAP_SYS_TIME`):
+the same conflict, with the message `ntp: chronyd refused the step: …`.
 
 Think before running it. Stepping the clock moves every validity window on the
 node at once: certificates become valid or invalid, tokens expire or un-expire,

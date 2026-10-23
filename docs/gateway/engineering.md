@@ -866,7 +866,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
-| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists |
+| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists, and a `memory.swap.max` the leaf carries reset to `max` (the class table sets no swap limit); `Remove` waits for `populated 0` in the leaf's `cgroup.events` before the rmdir, and `Memory` reads `memory.current`, `memory.peak` and the `memory.events` counters |
 | `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
@@ -1209,6 +1209,19 @@ whose restart budget ran out has no child left, and the teardown still has to
 run: the cgroup leaf outlives the child that was born into it, and the crash
 history has to go so a later start is not judged by the previous run's budget.
 
+**A leaf is removed only once the kernel reports it empty.** A reaped child is
+not yet out of its leaf: the kernel unlinks an exiting task from its cgroup
+after the task's last context switch, which can come after the parent's wait
+returns, and an rmdir in that window fails with `EBUSY`. That is how the proxy
+suite's teardown found a populated leaf under the parent it removed (#955).
+`CgroupManager.Remove` watches the leaf's `cgroup.events` (the kernel raises a
+modify event on it when `populated` changes) and removes the directory at
+`populated 0`. The wait is bounded by `StopTimeout`; a leaf still populated
+then holds a process that outlived its child, and the supervisor logs it
+rather than kill it. Before the removal the supervisor logs the leaf's
+accounting (`process memory`); every `process down, restarting` line carries
+the same fields, so an OOM kill is on record next to the restart it caused.
+
 **An ambiguous datapath is refused, not resolved.** `Apply` and `Snapshot` go
 to the kernel-class process through `datapathClient()`. The class table has one
 today, but it is data rather than a type: two would make map iteration order
@@ -1333,7 +1346,13 @@ child whose configuration enables none of its services stops with
 The child listens **before** it starts its services: a start failure is set
 with `SetStartError` and stays readable over `Status`, so the supervisor
 reports why (`ErrServiceNotActiveInProcess` with the detail) rather than a
-socket that never appeared. The child's IPC policy admits the supervisor's uid
+socket that never appeared. Listening first also means the supervisor can
+read `Status` while `Start` is still running, when every hosted service
+reports "not active" as its health; while the child's state is `STOPPED` or
+`INITIALIZING` and it has set no start error, the supervisor keeps waiting
+(up to `ReadyTimeout`) instead of taking that health as the verdict.
+Stopping the child there would cancel the start in flight, the OVS pipeline
+install among it (#973). The child's IPC policy admits the supervisor's uid
 to the control service; only the kernel-class process also admits the service
 account, and only to `InstallVPNPeer` and `RemoveVPNPeer`, so one parser cannot
 reach another's surface though they share an account, and no parser can send
@@ -1407,7 +1426,11 @@ counters dropped and each gateway cookie cut to its owner id. It then
 - a child with a new PID answers its probe within the relaunch bound: the
   proxy serves, the BGP port accepts, and the datapath child has reprogrammed
   the bridge, its flows and groups equal to the recorded ones and none under a
-  generation the killed child stamped;
+  generation the killed child stamped. A generation is a cookie whose low 32
+  bits are nonzero (`ovs.NewGenerationCookie` never draws 0); the fixed
+  cookies of the base pipeline (`CookiePipeline`) and the overlay's ND punts
+  (`OverlayNDCookie`) are re-installed unchanged on every start and are not
+  generations, so the probe compares their flows but not their cookies;
 - every other child keeps its PID;
 - after `ovs-appctl revalidator/wait` the bridge still holds the recorded flows
   and groups, and a kill of `proxy` or `routing` leaves even the generations
@@ -1417,12 +1440,22 @@ counters dropped and each gateway cookie cut to its owner id. It then
 
 `TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` drives `routing` past
 its limit from outside. It checks the child sits in its own leaf at the class
-`memory.max`, then sets `memory.swap.max` to 0 and lowers the live leaf's
-`memory.max` to 1 MiB. It then asserts the following:
+`memory.max` and that its `oom_score_adj` is not -1000, which would make it
+unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
+`memory.max` to 1 MiB, and asserts the following:
 
-- the kernel's `oom_kill` count in `memory.events` rises;
+- the kernel's `oom_kill` count in `memory.events` has risen by the time the
+  write returns, because the write waits out the kill; a failure here means
+  the child was never killed, not that the relaunch was slow. The test writes
+  through a raw blocking descriptor: `os.OpenFile` leaves a kernfs file
+  `O_NONBLOCK`, and since Linux 6.16 a non-blocking `memory.max` write sets
+  the limit and returns without reclaim or the OOM kill. The leaf's
+  `memory.current`, `memory.peak` and `memory.events` are logged before the
+  limit drops and once the write returns, so the job log shows how far over
+  1 MiB the child was;
 - only that child comes back, with a new PID;
-- the relaunch rewrites the class limit (`Prepare` runs on every launch);
+- the relaunch rewrites the class limit and resets the test's `memory.swap.max`
+  of 0 to `max` (`Prepare` runs on every launch);
 - the proxy loses no request.
 
 `TestGatewaydSupervisorDeathLeavesTheDatapath` kills the supervisor instead
@@ -1439,6 +1472,10 @@ The devcontainer harness delegates `+memory +cpu` at the container's cgroup
 root before the suite runs (`prepare_gatewayd_supervision`). This works the
 way a systemd host does: the root's processes first move to an `init` leaf,
 because a cgroup holding processes cannot enable controllers for its children.
+Every test's teardown logs each running child's leaf accounting before it
+stops gatewayd, the measured basis for the class `MemoryMax` values. It then
+waits, through `CgroupManager.Remove`, for any leaf gatewayd left to report
+`populated 0` before it removes the test's cgroup parent.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
@@ -1446,7 +1483,9 @@ choice, not a documented contract. The supervisor dials a child's socket
 right after exec, before the child listens. With gRPC's default reconnect
 backoff (1s, growing 1.6x) a child that listened a few seconds late was not
 reached until the next retry at 2.6s, 5.2s or 9.3s, which is how the
-datapath relaunch overran this bound (#955). `ipc.Dial` retries a refused
+datapath relaunch in `TestGatewaydSupervisorKillUnderLoad`, and the successor's
+bridge adoption in `TestGatewaydSupervisorDeathLeavesTheDatapath`, overran this
+bound on a run whose head predates the fix (#955). `ipc.Dial` retries a refused
 local socket within 200ms instead
 (`TestDial_ReachesASocketThatListensAfterARefusedConnect`), and the
 supervisor logs `process answering` with the time each child took to
@@ -1648,6 +1687,15 @@ with register 1 bit 0 set. The reply divert matches only packets with that bit
 clear, so the packet then meets the firewall and NAT gates exactly as if the
 load balancer were not installed. The NAT service owns register 0.
 
+The one exception is a direct connection that has the same 4-tuple at the
+backend as a VIP connection. That happens when one address is both a VIP
+client and a direct peer of the backend, and reuses a source port: the
+backend's reply to the direct connection is then `+est+rpl` in the VIP zone,
+and it is reverse-translated as the VIP connection's reply. The backend sees
+both connections as the same 4-tuple, so no flow can tell them apart. The
+prober is such a direct peer: if the gateway's own address is also a client of
+the VIP, a probe can fail this way.
+
 **One backend endpoint, one VIP.** Because the reply divert is keyed on the
 backend's address:port alone, that endpoint's replies can be steered into one
 VIP zone only. A backend `address:port` that already serves another VIP of the
@@ -1802,6 +1850,14 @@ that failed to reverse-translate replies would fail the test. It asserts a TCP
 exchange through a VIP, that a backend stays reachable directly on its service
 port, a hairpin handshake in which the backend sees the VIP as its peer, and
 distribution, stickiness, prober-driven failover and fail-closed behaviour.
+The test dials the VIP from a second address on the root namespace's port, not
+from the address the prober dials from, so that no probe shares a 4-tuple with
+a VIP connection (see the exception above). The test backends count a
+connection only when it sends a request: a probe connects and closes without
+sending one. After the prober rebuilds the group, the test runs `ovs-appctl revalidator/wait`
+before it dials: the kernel keeps the megaflows that selected the old backend
+until a revalidator pass drops them, and an OpenFlow barrier does not wait for
+that.
 
 ## 5a. The overlay mode handler in `modes/`
 
@@ -2231,7 +2287,10 @@ order:
    an attestation time is refused, not dated by when it was recorded.
 5. The verdict names the device's serial whenever the device record has one.
 
-A missing record (allocation, device or verdict) is a denial. Any other read
+A missing record (allocation, device or verdict) is a denial. A platformd that
+runs no attestation reporting service answers every verdict read with
+`FailedPrecondition`: it records no verdict for any device, so that is a
+missing verdict too, not an outage. Any other read
 error is an outage (`ErrOverlayAdmissionUnavailable`). The route is refused
 for now, but the error is not a judgement on the VTEP.
 
@@ -2323,7 +2382,11 @@ and prefix routes, and each MAC route at the VTEP the MAC is active at) back
 through the same route handlers, which run admission again. The replay holds
 the EVPN manager's notification lock, as every route change does, so a
 withdrawal received meanwhile is never undone by a replay of the route it
-withdrew. A replay that fails leaves the VTEP refused for the next one. A
+withdrew. A replay that fails leaves the VTEP refused for the next one and
+is counted in `OverlayModeStatus.RefusedReplays`, which the gateway snapshot
+carries on every transport as `refused_replays` (`refused-replays=` in
+`platformctl sdn gateway snapshot`), so a VTEP the sweep keeps failing to
+replay is visible rather than only logged. A
 refused VTEP whose routes have all been withdrawn is forgotten.
 
 #### Revocation on a failed verdict

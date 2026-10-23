@@ -39,6 +39,10 @@ here.
 binds `-o` to `--output` as a *format*. Cobra resolves the local flag first, so
 inside `vtpm export`, `-o` means the archive path. Use long forms.
 
+**A verb that cannot reach `platformd` fails with `ErrDaemonConnectionRequired`,
+which names the setup failure** — a missing context, an unreadable mTLS file, a
+refused dial — after the fixed text, and unwraps to it (`errors.Is` / `As`).
+
 ---
 
 ## 2. Bundles

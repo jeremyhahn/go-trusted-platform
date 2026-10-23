@@ -14,6 +14,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -77,6 +78,73 @@ type RegistryMetrics struct {
 // StatusResult represents the result of a status query
 type StatusResult struct {
 	Status *RegistryStatus `json:"status" yaml:"status"`
+}
+
+// Registry states printed in the status document's status field.
+const (
+	registryStateRunning  = "running"
+	registryStateDegraded = "degraded"
+)
+
+// The storage component and its backend detail as the registry service
+// reports them (pkg/registry StatusComponentStorage, StatusDetailBackend).
+const (
+	statusComponentStorage = "storage"
+	statusDetailBackend    = "backend"
+)
+
+// statusDocument is the flat document `registry status` prints with
+// --output json or yaml (docs/registry/cli.md §7).
+type statusDocument struct {
+	Healthy        bool               `json:"healthy" yaml:"healthy"`
+	Status         string             `json:"status" yaml:"status"`
+	Version        string             `json:"version" yaml:"version"`
+	Endpoint       string             `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+	UptimeSeconds  int64              `json:"uptime_seconds" yaml:"uptime_seconds"`
+	ImageCount     int64              `json:"image_count" yaml:"image_count"`
+	TotalSize      int64              `json:"total_size" yaml:"total_size"`
+	StorageBackend string             `json:"storage_backend,omitempty" yaml:"storage_backend,omitempty"`
+	Storage        *StorageStatus     `json:"storage,omitempty" yaml:"storage,omitempty"`
+	Attestation    *AttestationStatus `json:"attestation,omitempty" yaml:"attestation,omitempty"`
+	Encryption     *EncryptionStatus  `json:"encryption,omitempty" yaml:"encryption,omitempty"`
+	Metrics        *RegistryMetrics   `json:"metrics,omitempty" yaml:"metrics,omitempty"`
+}
+
+// document flattens the result into the printed status document.
+func (r *StatusResult) document() *statusDocument {
+	if r.Status == nil {
+		return &statusDocument{Status: registryStateDegraded}
+	}
+	doc := &statusDocument{
+		Healthy:       r.Status.Healthy,
+		Status:        registryStateDegraded,
+		Version:       r.Status.Version,
+		Endpoint:      r.Status.Endpoint,
+		UptimeSeconds: r.Status.Uptime,
+		Storage:       r.Status.Storage,
+		Attestation:   r.Status.Attestation,
+		Encryption:    r.Status.Encryption,
+		Metrics:       r.Status.Metrics,
+	}
+	if r.Status.Healthy {
+		doc.Status = registryStateRunning
+	}
+	if r.Status.Storage != nil {
+		doc.ImageCount = r.Status.Storage.ImageCount
+		doc.TotalSize = r.Status.Storage.UsedBytes
+		doc.StorageBackend = r.Status.Storage.Backend
+	}
+	return doc
+}
+
+// MarshalJSON prints the flat status document.
+func (r *StatusResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.document())
+}
+
+// MarshalYAML prints the flat status document.
+func (r *StatusResult) MarshalYAML() (interface{}, error) {
+	return r.document(), nil
 }
 
 // NewStatusCommand creates the status subcommand
@@ -187,6 +255,12 @@ func convertStatusDomainResponse(resp *regsvc.RegistryStatusResult) *StatusResul
 	// Check component health
 	for _, component := range resp.Components {
 		switch component.Name {
+		case statusComponentStorage:
+			if result.Status.Storage == nil {
+				result.Status.Storage = &StorageStatus{}
+			}
+			result.Status.Storage.Backend = component.Details[statusDetailBackend]
+			result.Status.Storage.Healthy = component.Status == regsvc.HealthStatusHealthy
 		case "attestation":
 			if result.Status.Attestation == nil {
 				result.Status.Attestation = &AttestationStatus{}

@@ -209,16 +209,23 @@ func TestOVSDBReconnection(t *testing.T) {
 	// Test disconnect
 	ovs.Disconnect()
 
-	// Wait for the client to observe the disconnect
-	disconnected := func() bool { return !ovs.Connected() }
-	if err := testenv.WaitUntil(ctx, 5*time.Second, "OVSDB client disconnect", disconnected); err != nil {
-		t.Logf("%v", err)
-	}
+	// Disconnect clears the connected flag at once.
+	assert.False(t, ovs.Connected(), "Client should be disconnected")
 
-	// Reconnect
-	err = ovs.Connect(ctx)
-	if err != nil {
-		t.Fatalf("cannot reconnect to OVSDB at %s after a successful connect: %v", ovsdbAddress, err)
+	// libovsdb tears the session down asynchronously: until its disconnect
+	// handler has dropped the closed RPC client, Connect answers
+	// ErrAlreadyConnected, which it returns as nil without dialling. Redial
+	// until a Connect actually reconnects; a real dial error ends the wait.
+	var reconnectErr error
+	reconnected := func() bool {
+		reconnectErr = ovs.Connect(ctx)
+		return reconnectErr != nil || ovs.Connected()
+	}
+	if err := testenv.WaitUntil(ctx, 5*time.Second, "OVSDB client reconnect", reconnected); err != nil {
+		t.Fatalf("OVSDB client at %s did not reconnect after Disconnect: %v", ovsdbAddress, err)
+	}
+	if reconnectErr != nil {
+		t.Fatalf("cannot reconnect to OVSDB at %s after a successful connect: %v", ovsdbAddress, reconnectErr)
 	}
 	assert.True(t, ovs.Connected(), "Client should be reconnected")
 }

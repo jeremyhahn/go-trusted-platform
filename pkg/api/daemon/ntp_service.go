@@ -136,6 +136,7 @@ func ntpErrToGRPC(err error) error {
 
 	var (
 		noSource    ntp.ErrNoReachableSource
+		refused     ntp.ErrStepRefused
 		unavailable ntp.ErrControlUnavailable
 		malformed   ntp.ErrMalformedControlOutput
 		timeout     ntp.ErrSyncTimeout
@@ -148,6 +149,10 @@ func ntpErrToGRPC(err error) error {
 		// The operator asked for a step but there is nothing to step
 		// towards. Aborted is the code protorest maps to 409 Conflict,
 		// which is the documented REST contract for this condition.
+		return status.Error(codes.Aborted, err.Error())
+	case errors.As(err, &refused):
+		// chronyd answered but does not control the clock, so the step
+		// conflicts with how it runs: the same 409 as a step with no source.
 		return status.Error(codes.Aborted, err.Error())
 	case errors.As(err, &unavailable):
 		return status.Error(codes.Unavailable, err.Error())

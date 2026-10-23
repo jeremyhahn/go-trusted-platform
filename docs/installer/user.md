@@ -443,10 +443,11 @@ The autoinstall script reboots at the end, QEMU exits non-zero, and the harness
 treats that as success when the disk exists and is over 100 MB. If you see a
 real failure, the disk will be missing or tiny.
 
-**Recovery reseals against PCRs I did not choose.**
-`platform-initrd recovery` hard-codes its PCR selection to `0,1,2,3,7` and has
-no `--pcrs` flag. If your seal uses a different set, do not rely on recovery's
-automatic reseal — unlock, boot, and reseal from the running system.
+**Recovery's "Attempt to reseal TPM keys" refuses.**
+Expected. The initrd cannot store a new seal (the ESP seal files are written
+only by first boot), so `platform-initrd recovery` does not reseal, and its menu
+option says *"the resealed data cannot be stored"* instead of reporting success.
+Unlock, boot, and reseal from the running system.
 
 ---
 

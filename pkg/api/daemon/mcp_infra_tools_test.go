@@ -79,12 +79,15 @@ func callMCPTool(t *testing.T, provider mcp.ServiceProvider, scope, tool string,
 	return resp
 }
 
-// mcpToolResult returns a successful tool answer as a JSON object.
+// mcpToolResult returns the output of a successful tool call, read from
+// the CallToolResult's text block, as a JSON object.
 func mcpToolResult(t *testing.T, resp mcpwire.JSONRPCResponse) map[string]interface{} {
 	t.Helper()
 	require.Nil(t, resp.Error, "tool answered an error")
-	result, ok := resp.Result.(map[string]interface{})
-	require.True(t, ok, "tool result is %T, want an object", resp.Result)
+	output, err := mcpwire.ToolOutput(resp.Result)
+	require.NoError(t, err)
+	result, ok := output.(map[string]interface{})
+	require.True(t, ok, "tool output is %T, want an object", output)
 	return result
 }
 
