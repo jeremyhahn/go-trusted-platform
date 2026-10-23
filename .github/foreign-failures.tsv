@@ -138,10 +138,11 @@ test	test/integration/iam	TestIAMUnix/DeleteRole	go-quicbaas#1778	first go-quicb
 test	test/integration/iam	TestIAMUnix/ListRoles	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration/kms	TestKMSMultiProtocol/CLI/KeyManagement/DisableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/kms	TestKMSMultiProtocol/CLI/KeyManagement/EnableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
-test	test/integration/kms	TestKMSMultiProtocol/CLI/CryptoOperations	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
+test	test/integration/kms	TestKMSMultiProtocol/CLI/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration/kms	TestKMSMultiProtocol/gRPC/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration/kms	TestKMSMultiProtocol/gRPC/SecretsManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/kms	TestKMSMultiProtocol/gRPC/SecretsManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
+test	test/integration/kms	TestKMSMultiProtocol/QUIC/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration/kms	TestKMSMultiProtocol/QUIC/SecretsManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/kms	TestKMSMultiProtocol/QUIC/SecretsManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/kms	TestKMSMultiProtocol/MCP/KeyManagement/DisableKey	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
