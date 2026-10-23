@@ -352,6 +352,18 @@ func (m *JWTMiddleware) extractClaims(mapClaims jwt.MapClaims) (*JWTClaims, erro
 		claims.Roles = roles
 	}
 
+	// Groups
+	switch groups := mapClaims["groups"].(type) {
+	case []any:
+		for _, g := range groups {
+			if s, ok := g.(string); ok {
+				claims.Groups = append(claims.Groups, s)
+			}
+		}
+	case []string:
+		claims.Groups = groups
+	}
+
 	// MFA status
 	if mfaVerified, ok := mapClaims["mfa_verified"].(bool); ok {
 		claims.MFAVerified = mfaVerified

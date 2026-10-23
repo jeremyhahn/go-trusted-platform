@@ -34,20 +34,27 @@ func newSealCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seal",
 		Short: "Seal data to the TPM",
-		Long: `Seal (encrypt) data to the TPM, protected by its auth value.
+		Long: `Seal (encrypt) data to the TPM, optionally binding it to specific
+PCR values.
 
-PCR-bound sealing is unavailable: the daemon refuses a request with --pcrs
-until go-quicbaas re-exports the TPM policy primitives (go-quicbaas #1171).
-It never seals such a request as an object that ignores the PCRs.
+Sealed data can only be unsealed when the TPM PCR values match the
+values at the time of sealing (if PCR binding is used).
 
 The data should be provided as a base64-encoded string.
+PCR indices should be provided as a comma-separated list of integers.
 
 Examples:
+  # Seal data to the TPM
+  platformctl vtpm seal --bundle-id bundle-123 --data aGVsbG8gd29ybGQ=
+
+  # Seal data bound to specific PCRs
+  platformctl vtpm seal --bundle-id bundle-123 --data aGVsbG8= --pcrs 0,1,7
+
   # Seal data with an auth value
   platformctl vtpm seal --bundle-id bundle-123 --data aGVsbG8= --auth-value mysecret
 
   # Seal and output as JSON
-  platformctl vtpm seal --bundle-id bundle-123 --data aGVsbG8= --auth-value mysecret -o json`,
+  platformctl vtpm seal --bundle-id bundle-123 --data aGVsbG8= -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runSeal(flags, bundleID, data, pcrs, authValue)
@@ -56,7 +63,7 @@ Examples:
 
 	cmd.Flags().StringVar(&bundleID, "bundle-id", "", "bundle ID (required)")
 	cmd.Flags().StringVar(&data, "data", "", "base64-encoded data to seal (required)")
-	cmd.Flags().StringVar(&pcrs, "pcrs", "", "comma-separated list of PCR indices to bind to; refused until go-quicbaas #1171")
+	cmd.Flags().StringVar(&pcrs, "pcrs", "", "comma-separated list of PCR indices to bind to")
 	cmd.Flags().StringVar(&authValue, "auth-value", "", "optional auth value for the sealed data")
 
 	cli.MarkFlagsRequired(cmd, "bundle-id")

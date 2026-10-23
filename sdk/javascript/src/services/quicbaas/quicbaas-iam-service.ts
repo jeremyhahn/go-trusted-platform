@@ -2,7 +2,7 @@
  * QuicBaaS IAM Service
  *
  * Provides identity and access management operations for QuicBaaS including
- * user management and policy attachment.
+ * user management, group management, and policy attachment.
  */
 
 import type { ApiClient } from '../../client/api-client.js';
@@ -20,6 +20,12 @@ import type {
   DeleteQuicBaaSUserResponse,
   ListQuicBaaSUsersRequest,
   ListQuicBaaSUsersResponse,
+  CreateQuicBaaSGroupRequest,
+  CreateQuicBaaSGroupResponse,
+  AddUserToGroupRequest,
+  AddUserToGroupResponse,
+  RemoveUserFromGroupRequest,
+  RemoveUserFromGroupResponse,
   CreateQuicBaaSPolicyRequest,
   CreateQuicBaaSPolicyResponse,
   AttachPolicyRequest,
@@ -42,6 +48,17 @@ import type {
  *   displayName: 'John Doe',
  * });
  *
+ * // Create a group and add user
+ * const group = await client.quicbaas.iam.createGroup({
+ *   name: 'developers',
+ *   description: 'Development team',
+ * });
+ *
+ * await client.quicbaas.iam.addUserToGroup({
+ *   groupId: group.data.group.id,
+ *   userId: user.data.user.id,
+ * });
+ *
  * // Create and attach a policy
  * const policy = await client.quicbaas.iam.createPolicy({
  *   name: 'read-only',
@@ -58,8 +75,8 @@ import type {
  *
  * await client.quicbaas.iam.attachPolicy({
  *   policyId: policy.data.policy.id,
- *   targetType: 'user',
- *   targetId: user.data.user.id,
+ *   targetType: 'group',
+ *   targetId: group.data.group.id,
  * });
  * ```
  */
@@ -140,6 +157,9 @@ export class QuicBaaSIAMService extends BaseService {
     if (request?.status !== undefined) {
       filters.status = request.status;
     }
+    if (request?.groupId !== undefined) {
+      filters.groupId = request.groupId;
+    }
 
     return this.client.get<ListQuicBaaSUsersResponse>(
       this.buildUrl('/iam/users', {
@@ -147,6 +167,50 @@ export class QuicBaaSIAMService extends BaseService {
         limit: request?.pageSize,
         filters,
       })
+    );
+  }
+
+  // =========================================================================
+  // Group Management
+  // =========================================================================
+
+  /**
+   * Create a new group
+   *
+   * @param request - Group creation request
+   * @returns Created group
+   */
+  async createGroup(request: CreateQuicBaaSGroupRequest): Promise<ApiResponse<CreateQuicBaaSGroupResponse>> {
+    return this.client.post<CreateQuicBaaSGroupResponse>(
+      this.buildUrl('/iam/groups'),
+      request
+    );
+  }
+
+  /**
+   * Add a user to a group
+   *
+   * @param request - Add user to group request
+   * @returns Operation result
+   */
+  async addUserToGroup(request: AddUserToGroupRequest): Promise<ApiResponse<AddUserToGroupResponse>> {
+    return this.client.post<AddUserToGroupResponse>(
+      this.buildUrl(`/iam/groups/${this.encodePathSegment(request.groupId)}/members`),
+      { userId: request.userId }
+    );
+  }
+
+  /**
+   * Remove a user from a group
+   *
+   * @param request - Remove user from group request
+   * @returns Operation result
+   */
+  async removeUserFromGroup(request: RemoveUserFromGroupRequest): Promise<ApiResponse<RemoveUserFromGroupResponse>> {
+    return this.client.delete<RemoveUserFromGroupResponse>(
+      this.buildUrl(
+        `/iam/groups/${this.encodePathSegment(request.groupId)}/members/${this.encodePathSegment(request.userId)}`
+      )
     );
   }
 
@@ -168,28 +232,30 @@ export class QuicBaaSIAMService extends BaseService {
   }
 
   /**
-   * Attach a policy to a user
+   * Attach a policy to a user or group
    *
    * @param request - Attach policy request
    * @returns Operation result
    */
   async attachPolicy(request: AttachPolicyRequest): Promise<ApiResponse<AttachPolicyResponse>> {
+    const targetPath = request.targetType === 'user' ? 'users' : 'groups';
     return this.client.post<AttachPolicyResponse>(
-      this.buildUrl(`/iam/users/${this.encodePathSegment(request.targetId)}/policies`),
+      this.buildUrl(`/iam/${targetPath}/${this.encodePathSegment(request.targetId)}/policies`),
       { policyId: request.policyId }
     );
   }
 
   /**
-   * Detach a policy from a user
+   * Detach a policy from a user or group
    *
    * @param request - Detach policy request
    * @returns Operation result
    */
   async detachPolicy(request: DetachPolicyRequest): Promise<ApiResponse<DetachPolicyResponse>> {
+    const targetPath = request.targetType === 'user' ? 'users' : 'groups';
     return this.client.delete<DetachPolicyResponse>(
       this.buildUrl(
-        `/iam/users/${this.encodePathSegment(request.targetId)}/policies/${this.encodePathSegment(request.policyId)}`
+        `/iam/${targetPath}/${this.encodePathSegment(request.targetId)}/policies/${this.encodePathSegment(request.policyId)}`
       )
     );
   }

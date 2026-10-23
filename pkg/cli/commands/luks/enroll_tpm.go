@@ -25,6 +25,7 @@ type enrollTPMFlags struct {
 	device             string
 	existingPassphrase string
 	pcrs               []int32
+	handle             string
 }
 
 // newEnrollTPMCommand creates the "luks enroll-tpm" subcommand.
@@ -34,9 +35,8 @@ func newEnrollTPMCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "enroll-tpm",
 		Short: "Enroll a TPM2-sealed keyslot",
-		Long: `Add a TPM2-sealed keyslot to a LUKS device. The passphrase is sealed under
-the Platform SRK and bound to the platform PCR policy; --pcrs applies only
-when platformd seals under the Shared SRK for systemd-cryptsetup.`,
+		Long: `Add a TPM2-sealed keyslot to a LUKS device, bound to the given PCRs and
+persistent NV handle.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEnrollTPM(getFlags(), f)
 		},
@@ -45,6 +45,7 @@ when platformd seals under the Shared SRK for systemd-cryptsetup.`,
 	cmd.Flags().StringVar(&f.device, "device", "", "LUKS device path (auto-detected if empty)")
 	cmd.Flags().StringVar(&f.existingPassphrase, "existing-passphrase", "", "existing passphrase")
 	cmd.Flags().Int32SliceVar(&f.pcrs, "pcrs", nil, "PCR indices to bind to (comma-separated)")
+	cmd.Flags().StringVar(&f.handle, "handle", "", "persistent NV handle (for example 0x81000003)")
 
 	return cmd
 }
@@ -76,6 +77,7 @@ func runEnrollTPM(commonFlags *cli.CommonFlags, f *enrollTPMFlags) error {
 		Device:             device,
 		ExistingPassphrase: f.existingPassphrase,
 		PCRs:               f.pcrs,
+		Handle:             f.handle,
 	})
 	if err != nil {
 		return err

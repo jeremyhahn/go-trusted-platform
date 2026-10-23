@@ -1,5 +1,7 @@
 # RATS and attestation reference standards
 
+> **Status: REFERENCE** · Last verified: 2026-10-20
+
 The standards in this directory are copied verbatim and never edited; a new revision replaces its file. Pinned drafts have a standards-watch line in [ROADMAP.md](../../../ROADMAP.md) Dependencies.
 
 | File | Title | Status | Implemented in |
@@ -12,4 +14,4 @@ The standards in this directory are copied verbatim and never edited; a new revi
 | [rfc10013.txt](rfc10013.txt) | Entity Attestation Token (EAT) Measured Component | RFC | `pkg/attestation/`; `pkg/policy/opa/policies/` |
 | [rfc9683.txt](rfc9683.txt) | Remote Integrity Verification of Network Devices Containing Trusted Platform Modules | RFC | `pkg/sdn/policy/` quarantine and remediation; enrollment paths (`pkg/device/`, `pkg/webservice/v1/device/`, `pkg/api/daemon/`, `pkg/installer/`, `pkg/firstboot/`) |
 | [draft-ietf-rats-corim-11.txt](draft-ietf-rats-corim-11.txt) | Concise Reference Integrity Manifest (CoRIM) | pinned draft, revision -11 | `pkg/attestation/`; `pkg/policy/opa/policies/` |
-| [draft-ietf-lamps-csr-attestation-29.txt](draft-ietf-lamps-csr-attestation-29.txt) | Use of Remote Attestation with Certification Signing Requests | pinned draft, revision -29 | enrollment paths (`pkg/device/`, `pkg/webservice/v1/device/`, `pkg/api/daemon/`, `pkg/installer/`, `pkg/firstboot/`) |
+| [draft-ietf-lamps-csr-attestation-30.txt](draft-ietf-lamps-csr-attestation-30.txt) | Use of Remote Attestation with Certification Signing Requests | pinned draft, revision -30 | enrollment paths (`pkg/device/`, `pkg/webservice/v1/device/`, `pkg/api/daemon/`, `pkg/installer/`, `pkg/firstboot/`) |

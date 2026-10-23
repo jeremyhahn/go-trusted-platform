@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -32,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 const (
@@ -373,7 +373,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 func cleanupBridges(t *testing.T, ctx context.Context, client *ovs.Client, bridges ...string) {
 	for _, bridge := range bridges {
 		// Use ovs-vsctl for reliable cleanup
-		exec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-br", bridge).Run()
+		boundedexec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-br", bridge).Run()
 	}
 }
 
@@ -385,7 +385,7 @@ func createBridgeViaOVS(t *testing.T, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-br", name)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-br", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to create bridge %s via ovs-vsctl: %v, output: %s", name, err, output)
@@ -399,14 +399,14 @@ func configureBridgeForOpenFlow(t *testing.T, bridgeName string, protocol string
 	defer cancel()
 
 	// Set protocols
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
 		fmt.Sprintf("protocols=%s", protocol))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to set protocols on bridge %s: %v, output: %s", bridgeName, err, output)
 	}
 
 	// Set fail_mode
-	cmd = exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
+	cmd = boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
 		fmt.Sprintf("fail_mode=%s", failMode))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to set fail_mode on bridge %s: %v, output: %s", bridgeName, err, output)
@@ -579,7 +579,7 @@ func addPortViaOVS(t *testing.T, bridgeName, portName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to add port %s to %s: %s", portName, bridgeName, output)
 
@@ -594,7 +594,7 @@ func deletePortViaOVS(t *testing.T, bridgeName, portName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-port", bridgeName, portName)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-port", bridgeName, portName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to delete port %s from %s: %s", portName, bridgeName, output)
 }
@@ -608,7 +608,7 @@ func getOFPortViaOVS(t *testing.T, portName string) int32 {
 	// Wait for OVS to assign the ofport
 	var ofport int32
 	assigned := func() bool {
-		cmd := exec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portName, "ofport")
+		cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portName, "ofport")
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "Failed to get ofport for %s: %s", portName, output)
 
@@ -631,7 +631,7 @@ func setPortVLANViaOVS(t *testing.T, portName string, vlan uint16) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "port", portName, fmt.Sprintf("tag=%d", vlan))
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "port", portName, fmt.Sprintf("tag=%d", vlan))
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set VLAN %d on port %s: %s", vlan, portName, output)
 }
@@ -642,7 +642,7 @@ func getPortVLANViaOVS(t *testing.T, portName string) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "get", "port", portName, "tag")
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "port", portName, "tag")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to get VLAN for %s: %s", portName, output)
 

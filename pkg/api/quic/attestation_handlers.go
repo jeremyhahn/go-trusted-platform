@@ -69,6 +69,15 @@ var (
 	ErrAttestationInvalidPCRIndex = errors.New("invalid PCR index (valid: 0-23)")
 )
 
+// AttestationStatusCarrier is an error from an AttestationServiceInterface
+// that names the QUIC status it must be answered with. The daemon's service
+// adapter returns one for every refusal, so QUIC carries the class the other
+// transports carry instead of one guessed from the message.
+type AttestationStatusCarrier interface {
+	error
+	QUICStatus() byte
+}
+
 // AttestationServiceInterface defines the interface for attestation operations.
 type AttestationServiceInterface interface {
 	// GetManifest retrieves an existing attestation manifest by ID or the current manifest.
@@ -1650,6 +1659,11 @@ func (h *AttestationHandler) errorResponse(status byte, err error) *quicwire.Res
 
 // attestationErrorResponse maps attestation errors to appropriate status codes
 func (h *AttestationHandler) attestationErrorResponse(err error) *quicwire.Response {
+	var carrier AttestationStatusCarrier
+	if errors.As(err, &carrier) {
+		return h.errorResponse(carrier.QUICStatus(), err)
+	}
+
 	var status byte
 
 	switch {

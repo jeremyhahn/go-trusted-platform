@@ -75,3 +75,59 @@ func (e *DetailError) Error() string {
 func (e *DetailError) Unwrap() error {
 	return e.Err
 }
+
+// CleanupError reports a failure together with the failure of the cleanup
+// that followed it, so the leftover state the cleanup was meant to remove is
+// reported instead of hidden. errors.Is and errors.As match either error.
+type CleanupError struct {
+	Err     error
+	Cleanup error
+}
+
+// Error implements the error interface.
+func (e *CleanupError) Error() string {
+	return e.Err.Error() + " (cleanup failed: " + e.Cleanup.Error() + ")"
+}
+
+// Unwrap returns both the original failure and the cleanup failure.
+func (e *CleanupError) Unwrap() []error {
+	return []error{e.Err, e.Cleanup}
+}
+
+// ZoneError reports an operation that failed on one zone. Op is the verb
+// ("sign", "save"), so the message reads "failed to sign zone example.com.".
+type ZoneError struct {
+	Op   string
+	Zone string
+	Err  error
+}
+
+// Error renders the operation, the zone and the cause.
+func (e *ZoneError) Error() string {
+	return "failed to " + e.Op + " zone " + e.Zone + ": " + e.Err.Error()
+}
+
+// Unwrap returns the cause.
+func (e *ZoneError) Unwrap() error {
+	return e.Err
+}
+
+// RecordError reports a record operation that failed on one owner name. Op is
+// the verb ("add", "find"), so the message reads
+// "failed to add SRV record _sip._tcp.example.com.: ...".
+type RecordError struct {
+	Op   string
+	Type string
+	Name string
+	Err  error
+}
+
+// Error renders the operation, the record type, the owner name and the cause.
+func (e *RecordError) Error() string {
+	return "failed to " + e.Op + " " + e.Type + " record " + e.Name + ": " + e.Err.Error()
+}
+
+// Unwrap returns the cause.
+func (e *RecordError) Unwrap() error {
+	return e.Err
+}

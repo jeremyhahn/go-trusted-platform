@@ -14,14 +14,14 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.IAM` carries the service in-process.
 
-gRPC: `PlatformIAMService`, **34 RPCs** — the largest service in the platform
+gRPC: `PlatformIAMService`, **41 RPCs** — the largest service in the platform
 (`pkg/api/grpc/proto/iam.proto`).
 REST: `/api/v1/iam`, in **two parallel trees** — see §2.
-QUIC: 16 IAM opcodes (`sdk/go/wire/quicwire/protocol.go`) — users
-`0xA9`–`0xAD`, roles `0xB5`–`0xBA`, and the extended range `0xF7`–`0xFB` —
-plus tenant records under the `OpIAMCategory` (`0x51`) category
-(`iam_opcodes.go`). The full byte map is §5a.
-MCP: 19 `iam_*` tools; 15 answer through `IAMGRPCService`, `iam_verify_token`
+QUIC: 22 IAM opcodes (`sdk/go/wire/quicwire/protocol.go`) — users
+`0xA9`–`0xAD`, roles `0xB5`–`0xBA`, groups `0xBB`–`0xBF`, and the extended
+range `0xF6`–`0xFB` — plus tenant records under the `OpIAMCategory` (`0x51`)
+category (`iam_opcodes.go`). The full byte map is §5a.
+MCP: 25 `iam_*` tools; 21 answer through `IAMGRPCService`, `iam_verify_token`
 through `IAMTokenService`, and 3 refuse (§8).
 
 ---
@@ -34,6 +34,7 @@ unscoped path **and** a tenant-scoped path, both dispatching to the same handler
 | Capability | Unscoped | Tenant-scoped |
 |---|---|---|
 | Users | `/api/v1/iam/users` | `/api/v1/iam/tenants/{tenant}/users` |
+| Groups | `/api/v1/iam/groups` | `/api/v1/iam/tenants/{tenant}/groups` |
 | Roles | `/api/v1/iam/roles` | `/api/v1/iam/tenants/{tenant}/roles` |
 | Policies | `/api/v1/iam/policies` | `/api/v1/iam/tenants/{tenant}/policies` |
 | Applications | `/api/v1/iam/apps` | `/api/v1/iam/tenants/{tenant}/apps` |
@@ -55,12 +56,13 @@ the target is explicit — the CLI takes the same position by making
 `<tenant-id>` a required positional argument.
 
 The Go SDK's REST transport sends the item operations — Get, Update, Delete,
-AssignRole, RevokeRole on users and roles — to the tenant-scoped form, so the request's `tenant_id` reaches the
+AssignRole, RevokeRole, AddGroupMember, RemoveGroupMember on users, roles and
+groups — to the tenant-scoped form, so the request's `tenant_id` reaches the
 guard exactly as it does on gRPC (#401). Update is the `PUT` on the item; the
 SDK previously had no route for it and posted to an unserved
 `/api/v1/platformiam/update*`. An empty `tenant_id` is refused with
 `InvalidArgument` before anything is sent. The REST handlers answer a single
-user, role or tenant as the bare resource; the SDK places it in the
+user, role, group or tenant as the bare resource; the SDK places it in the
 reply's resource field (`IAMUserResponse.user`, ...), so Create, Get and Update
 return the resource over REST as they do over gRPC. Create and List still use the
 unscoped form, but they carry the request's `tenant_id` in the body, so a
@@ -86,15 +88,29 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 `iam_update_user` does not exist — user updates are REST, gRPC, QUIC and
 embedded only.
 
+Create user takes an email and no required username. The IAM SDK refuses an
+empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it
+from the email's local part (`alice@acme.test` → `alice`), or uses the whole
+address when it has no local part (`UsernameFromEmail` in
+`pkg/webservice/v1/rest/iam/mirror.go`). REST also accepts an explicit
+`username`.
+
 ## 4. Groups
 
-**There are no IAM groups.** go-quicbaas v0.13 removed them, and every
-transport followed: the group RPCs and their field numbers are `reserved` in
-`iam.proto`, and QUIC opcodes `0xBB`–`0xBF` and `0xF6` stay reserved so an old
-client gets "unknown opcode" rather than a different operation. Access is
-granted through roles. `CheckPermission` / `TestPolicy` still accept a
-subject's `groups`, because the SDK policy subject carries them for ABAC
-conditions.
+| Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
+|---|---|---|---|---|---|
+| Create group | `POST /api/v1/iam/groups` | ✅ | `0xBB` | `iam_create_group`, `iam:write` | ✅ |
+| List groups | `GET /api/v1/iam/groups` | ✅ | `0xBE` | `iam_list_groups`, `iam:read` | ✅ |
+| Get group | `GET /api/v1/iam/groups/{id}` | ✅ | `0xBD` | `iam_get_group`, `iam:read` | ✅ |
+| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Delete group | `DELETE /api/v1/iam/groups/{id}` | ✅ | `0xBC` | `iam_delete_group`, `iam:delete` | ✅ |
+| Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
+| Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
+
+**Group membership is present on every transport except the CLI and the
+embedded transport.** On the CLI both verbs are unimplemented stubs — see
+[cli.md](cli.md) §4; on the embedded transport go-quicbaas registers no handler
+for them — see [SPEC](../SPEC.md#interfaces).
 
 ## 5. Roles, policies and applications
 
@@ -109,10 +125,10 @@ conditions.
 | Rotate app secret | `POST /api/v1/iam/apps/{id}/rotate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 
 **Policies and applications have no MCP tools and no QUIC opcodes.**
-Nineteen `iam_*` tools cover users, roles, tenants, tokens and the permission
-check — neither the authorization policies themselves nor OAuth applications.
-QUIC has no IAM policy, application or role-update byte; the SDK's QUIC
-transport cannot reach those RPCs.
+Twenty-five `iam_*` tools cover users, groups, roles, tenants, tokens and the
+permission check — neither the authorization policies themselves nor OAuth
+applications. QUIC has no IAM policy, application, role-update or
+group-update byte; the SDK's QUIC transport cannot reach those RPCs.
 
 `/policies/validate` and `/policies/test` are registered **before**
 `/policies/{id}`, so `validate` and `test` are not swallowed as policy ids.
@@ -137,6 +153,12 @@ Every IAM byte the daemon dispatches (`handleIAMOperation`,
 | `0xB8` | `OpIAMRoleList` | List roles |
 | `0xB9` | `OpIAMRoleAssign` | Assign role to user |
 | `0xBA` | `OpIAMRoleRevoke` | Revoke role from user |
+| `0xBB` | `OpIAMGroupCreate` | Create group |
+| `0xBC` | `OpIAMGroupDelete` | Delete group |
+| `0xBD` | `OpIAMGroupGet` | Get group |
+| `0xBE` | `OpIAMGroupList` | List groups |
+| `0xBF` | `OpIAMGroupAddMember` | Add group member |
+| `0xF6` | `OpIAMGroupRemoveMember` | Remove group member |
 | `0xF7` | `OpIAMCheckPermission` | Check permission |
 | `0xF8` | `OpIAMAuthenticate` | Authenticate (daemon-native, not `IAMGRPCService`) |
 | `0xF9` | `OpIAMTokenCreate` | Create token — refused, `StatusNotImplemented` |
@@ -145,7 +167,9 @@ Every IAM byte the daemon dispatches (`handleIAMOperation`,
 | `0x51` | `OpIAMCategory` | Tenant records; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
 
 The bytes between the IAM ranges belong to other services: `0xB0`–`0xB4` are
-SDN and `0xF0`–`0xF5` are DEK operations.
+SDN and `0xF0`–`0xF5` are reserved `OpDEK*` bytes the daemon does not serve
+(DEK is KMS extended category `0xCD`, subs `0x08`–`0x0D`,
+[`docs/kms/api.md`](../kms/api.md) §4).
 
 ## 6. Tenants, tokens and authentication
 
@@ -222,14 +246,14 @@ service that failed to start — every such call answers
 `StatusUnavailable` on QUIC), while `iam_verify_token` still verifies.
 
 **`POST /api/v1/iam/tenants` is not `POST /api/v1/tenants`.** The first creates
-an IAM scoping boundary for users, roles and policies. The second
+an IAM scoping boundary for users, groups, roles and policies. The second
 allocates a VLAN, a bridge, a keyspace and a DEK
 ([`docs/tenant/`](../tenant/)). Two routes, one word, two meanings — raised as an
 owner question.
 
 ---
 
-## 6. The WebAuthn user mirror
+## 7. The WebAuthn user mirror
 
 A user created through the WebAuthn registration flow is **mirrored** into the
 stack's IAM tenant by `QuicBaaSUserMirror`
@@ -246,7 +270,7 @@ look.
 
 ---
 
-## 7. Authorization
+## 8. Authorization
 
 **REST is gated at the route.** Every `/api/v1/iam/**` route requires an
 authenticated caller holding the `admin` role, and the tenant-lifecycle routes
@@ -288,9 +312,14 @@ before any IAM lookup or write.
 On gRPC, QUIC and MCP the check is `authorizeIAMTenant`
 (`pkg/api/daemon/iam_tenant_authz.go`); MCP reaches it because its IAM tools
 answer through the same `IAMGRPCService` methods. It covers every user, role,
-policy and application RPC, `CheckPermission`, and `GetTenant`,
-`UpdateTenant` and `DeleteTenant`. It does not cover `CreateTenant`,
-`ListTenants` or the token RPCs. The platform `TenantService` lifecycle RPCs have their own binding,
+group, policy and application RPC, `CheckPermission`, and `GetTenant`,
+`UpdateTenant` and `DeleteTenant`. `CreateTenant` and `ListTenants` act
+across tenants, so they admit the system tenant only, the rule REST applies
+with `RequireSystemTenant`: `authorizeSystemCaller` (same file) refuses any
+other tenant-bound caller with `PermissionDenied` (`ErrTenantSystemOnly`), and
+the unbound Unix operator is admitted. The daemon hands the service its
+system tenant with `SetSystemTenant`; without one, no tenant-bound caller is
+admitted. The token RPCs carry no tenant check. The platform `TenantService` lifecycle RPCs have their own binding,
 `authorizeTenant` (`pkg/api/daemon/tenant_grpc_authz.go`,
 [`docs/tenant/api.md`](../tenant/api.md) §7). A daemon run with `SkipIAMValidation`
 has no caller identity and serves the named tenant.
@@ -303,7 +332,7 @@ Through the Go SDK's REST transport, an item operation reaches the scoped form
 (§2). The `403` surfaces as `PermissionDenied` and a missing tenant as
 `InvalidArgument`, the same codes gRPC returns.
 
-**`PlatformIAMService` is in the gRPC scope catalog** with **34 methods
+**`PlatformIAMService` is in the gRPC scope catalog** with **41 methods
 mapped** — the largest entry in the catalog, resource `iam`, actions
 `read`/`write`/`delete`.
 
@@ -317,16 +346,16 @@ on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
 ([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,
 and the catalog could not give one byte both meanings' scopes.
 
-**Sixteen of the 19 `iam_*` MCP tools are in the MCP authorization map
+**Twenty-two of the 25 `iam_*` MCP tools are in the MCP authorization map
 (#304)**, each with the `resource:action` of the `PlatformIAMService` method
 it answers through (`pkg/api/grpc/method_permissions.go`;
 `toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
 
 | Scope | Tools |
 |---|---|
-| `iam:write` | `iam_create_user`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_tenant` |
-| `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_tenant` |
-| `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
+| `iam:write` | `iam_create_user`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
+| `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_group`, `iam_delete_tenant` |
+| `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_group`, `iam_list_groups`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
 
 A caller without the tool's scope is denied before the tool runs. Each tool
 gives the result and error class of its gRPC method: the tool calls that
@@ -382,20 +411,20 @@ handle, which deletes nothing, as gRPC `DeleteEK`/`DeleteSRK` do.
 `platform_tpm_iak_delete` refuses with `FailedPrecondition`, as `iak_delete`
 and gRPC `DeleteAK` do (#704).
 
-**The KMS and secret MCP tools are classified (#304).** Each of the 20 `kms_*`
-and 6 `secret_*` tools carries the scope of the gRPC method it mirrors
+**The KMS, secret and DEK MCP tools are classified (#304).** Each of the 29
+`kms_*`, 11 `secret_*` and 6 `dek_*` tools carries the scope of the gRPC method it mirrors
 (`pkg/api/grpc/method_permissions.go`), so it answers a caller holding that
 scope and refuses everyone else with `PermissionDenied` before the handler
 runs:
 
 | Scope | MCP tools |
 |---|---|
-| `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_decrypt`, `kms_verify`, `kms_random` |
-| `kms:write` | `kms_generate_key`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_sign`, `kms_generate_data_key`, `kms_generate_wrapped_data_key` |
-| `kms:delete` | `kms_delete_key` |
-| `secrets:read` | `secret_get`, `secret_get_rotation_policy` |
-| `secrets:write` | `secret_store`, `secret_set_rotation_policy` |
-| `secrets:list` | `secret_list` |
+| `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_list_key_versions`, `kms_decrypt`, `kms_batch_decrypt`, `kms_verify`, `kms_hash`, `kms_verify_hmac`, `kms_random`, `dek_list`, `dek_get`, `dek_status` |
+| `kms:write` | `kms_generate_key`, `kms_import_key`, `kms_update_key_status`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_batch_encrypt`, `kms_sign`, `kms_hmac`, `kms_rewrap`, `kms_generate_data_key`, `kms_generate_wrapped_data_key`, `dek_create`, `dek_rotate` |
+| `kms:delete` | `kms_delete_key`, `dek_delete` |
+| `secrets:read` | `secret_get`, `secret_get_rotation_policy`, `secret_get_version` |
+| `secrets:write` | `secret_store`, `secret_set_rotation_policy`, `secret_rotate`, `secret_rollback`, `secret_update_status` |
+| `secrets:list` | `secret_list`, `secret_list_versions` |
 | `secrets:delete` | `secret_delete` |
 
 `kms_decrypt`, `kms_generate_data_key` and `secret_get` answer key or secret
@@ -598,13 +627,13 @@ clean-up rows in [SPEC.md §Interfaces](../SPEC.md#interfaces) move to go-qrdb.
 
 ---
 
-## 8. Status and error mapping
+## 9. Status and error mapping
 
 | QUIC byte | Name | REST | IAM cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
 | `0x01` | `StatusInvalidRequest` | 400 | Malformed user, role or policy document |
-| `0x02` | `StatusNotFound` | 404 | Unknown user, role, policy, app or tenant |
+| `0x02` | `StatusNotFound` | 404 | Unknown user, group, role, policy, app or tenant |
 | `0x03` | `StatusUnauthorized` | 401 | Authentication failed; token invalid or revoked |
 | `0x04` | `StatusInternalError` | 500 | Backend failure |
 | `0x06` | `StatusAlreadyExists` | 409 | Name already in use |
@@ -618,8 +647,8 @@ Distinguish that from a 400 for a malformed request body.
 
 ---
 
-## 9. Versioning
+## 10. Versioning
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. The two
-parallel tenant trees in §2 and the two meanings of "tenant" in §5 are
+parallel tenant trees in §2 and the two meanings of "tenant" in §6 are
 duplications awaiting an owner ruling.

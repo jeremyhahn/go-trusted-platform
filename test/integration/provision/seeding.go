@@ -37,7 +37,6 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	devicesdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 	eabsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/eab"
-	provisionsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/provision"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -77,12 +76,6 @@ type lifecycleFixture struct {
 	// pkg/eab Service.Validate).
 	eabKeyID string
 	eabHMAC  string
-
-	// configDelivery is a gRPC-backed provisioning client used only for
-	// seeding steps (e.g. creating a pending session for the CLI adapter,
-	// whose pre-enrollment verbs are intentionally not daemon-transport
-	// commands). Seeding is setup, not the operation under test.
-	configDelivery *provisionsdk.Client
 }
 
 // dialSeedConn opens the mTLS gRPC connection used by the seeding clients
@@ -146,7 +139,6 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 				},
 			},
 		},
-		configDelivery: provisionsdk.NewClientFromGRPC(platformv1.NewConfigDeliveryServiceClient(conn)),
 	}
 
 	configJSON, err := json.Marshal(fixture.config)
@@ -259,9 +251,9 @@ func newSelfSignedEKCert(t *testing.T) (pemStr, b64DER string) {
 // fetchRequest builds a FetchConfigRequest carrying the fixture's EAB
 // credentials AND its presented EK certificate for the given device
 // identity and nonce. Presenting the matching EK certificate keeps the
-// delivered path reachable with RequireEKMatch enforced; requests whose
-// identity matches no profile are unaffected (the EK gate runs only
-// after a profile matched).
+// delivered path reachable with RequireEKMatch enforced. A request whose
+// identity matches no profile never reaches the EK gate: the credential's
+// profile binding refuses it first.
 func (f *lifecycleFixture) fetchRequest(ekSerial, mac, nonce string) *platformv1.FetchConfigRequest {
 	return &platformv1.FetchConfigRequest{
 		EkSerial:   ekSerial,
@@ -271,33 +263,6 @@ func (f *lifecycleFixture) fetchRequest(ekSerial, mac, nonce string) *platformv1
 		EabHmac:    f.eabHMAC,
 		Nonce:      nonce,
 	}
-}
-
-// createPendingSession creates a pending provisioning session over the
-// seeding gRPC path: a fresh single-use nonce plus the fixture's valid EAB
-// credentials for a device identity that matches no profile. Used to stage
-// sessions for adapters (the CLI) whose designed verb set starts at
-// fulfillment.
-func (f *lifecycleFixture) createPendingSession(t *testing.T, ctx context.Context) string {
-	t.Helper()
-
-	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
-	defer cancel()
-
-	nonce, err := f.configDelivery.GetNonce(callCtx)
-	if err != nil {
-		t.Fatalf("seeding: GetNonce failed: %v", err)
-	}
-	resp, err := f.configDelivery.FetchConfig(callCtx,
-		f.fetchRequest(uniqueID("provision-mp-staged"), "", nonce))
-	if err != nil {
-		t.Fatalf("seeding: FetchConfig for unknown device failed (want pending session): %v", err)
-	}
-	pending := resp.GetPending()
-	if pending == nil || pending.GetSessionId() == "" {
-		t.Fatalf("seeding: expected pending session for unknown device, got: %+v", resp)
-	}
-	return pending.GetSessionId()
 }
 
 // assertConfigJSONEqual verifies that configJSON decodes to exactly the

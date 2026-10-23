@@ -70,6 +70,9 @@ func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMet
 	if err != nil {
 		return nil, status.Errorf(errclass.Code(err), "get key metadata failed: %v", err)
 	}
+	if meta == nil {
+		return nil, ErrKMSNilMetadata{}
+	}
 
 	return &pb.GetKeyMetadataResponse{
 		Metadata:  sdkKeyMetadataToPb(meta),
@@ -96,6 +99,9 @@ func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.Update
 	})
 	if err != nil {
 		return nil, status.Errorf(errclass.Code(err), "key metadata update failed: %v", err)
+	}
+	if meta == nil {
+		return nil, ErrKMSNilMetadata{}
 	}
 
 	return &pb.UpdateKeyMetadataResponse{

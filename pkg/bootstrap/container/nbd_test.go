@@ -259,20 +259,27 @@ func (h *logSignal) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *logSignal) WithGroup(string) slog.Handler { return h }
 
 // nbdStartConfig is a container config on loopback that serves the
-// manifest's diskless-nbd nodes on nbdListen.
+// manifest's diskless-nbd nodes on nbdListen. An empty nbdListen gets a
+// free loopback port distinct from the container's other TCP ports.
 func nbdStartConfig(t *testing.T, nbdListen string) (config *ServerConfig, deviceScriptPort int) {
 	t.Helper()
 	dataDir := testDataDir(t, x86Set())
 	manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
 	require.NoError(t, os.WriteFile(manifestPath, []byte(nbdManifest), 0o600))
 
+	// One allocation per protocol, so no two listeners share a port (#936).
+	tcpPorts := freeTCPPorts(t, 3)
+	udpPorts := freeUDPPorts(t, 2)
+	if nbdListen == "" {
+		nbdListen = net.JoinHostPort("127.0.0.1", strconv.Itoa(tcpPorts[2]))
+	}
 	nbdConfig := validNBDConfig(t)
 	nbdConfig.ListenAddr = nbdListen
-	deviceScriptPort = freeTCPPort(t)
+	deviceScriptPort = tcpPorts[0]
 	return &ServerConfig{
 		Interface:        "lo",
-		HTTPPort:         freeTCPPort(t),
-		TFTPPort:         freeUDPPort(t),
+		HTTPPort:         tcpPorts[1],
+		TFTPPort:         udpPorts[0],
 		DeviceScriptPort: deviceScriptPort,
 		FirmwareDir:      fixtureFirmwareDir(t),
 		FirmwareOffline:  true,
@@ -284,7 +291,7 @@ func nbdStartConfig(t *testing.T, nbdListen string) (config *ServerConfig, devic
 			RangeStart: "127.0.0.2",
 			RangeEnd:   "127.0.0.3",
 			SubnetMask: "255.255.255.0",
-			Port:       freeUDPPort(t),
+			Port:       udpPorts[1],
 		},
 		NBD: nbdConfig,
 	}, deviceScriptPort
@@ -294,8 +301,8 @@ func nbdStartConfig(t *testing.T, nbdListen string) (config *ServerConfig, devic
 // that the NBD export server answers on its address with the newstyle
 // greeting, and that stopping the container closes it.
 func TestStart_ServesNBDForDisklessNBDNodes(t *testing.T) {
-	nbdAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(freeTCPPort(t)))
-	config, _ := nbdStartConfig(t, nbdAddr)
+	config, _ := nbdStartConfig(t, "")
+	nbdAddr := config.NBD.ListenAddr
 	listening := newLogSignal("nbd export server listening")
 	srv, err := NewServer(config, slog.New(listening))
 	require.NoError(t, err)

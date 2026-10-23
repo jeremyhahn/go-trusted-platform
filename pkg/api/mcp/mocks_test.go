@@ -167,6 +167,15 @@ type mockServiceProvider struct {
 	kmsDecryptFunc         func(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
 	kmsSignFunc            func(ctx context.Context, req *KMSSignRequest) (interface{}, error)
 	kmsVerifyFunc          func(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
+	kmsHashFunc            func(ctx context.Context, req *KMSHashRequest) (interface{}, error)
+	kmsHMACFunc            func(ctx context.Context, req *KMSHMACRequest) (interface{}, error)
+	kmsVerifyHMACFunc      func(ctx context.Context, req *KMSVerifyHMACRequest) (interface{}, error)
+	kmsRewrapFunc          func(ctx context.Context, req *KMSRewrapRequest) (interface{}, error)
+	kmsImportKeyFunc       func(ctx context.Context, req *KMSImportKeyRequest) (interface{}, error)
+	kmsUpdateKeyStatusFunc func(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error)
+	kmsListKeyVersionsFunc func(ctx context.Context, req *KMSListKeyVersionsRequest) (interface{}, error)
+	kmsBatchEncryptFunc    func(ctx context.Context, req *KMSBatchEncryptRequest) (interface{}, error)
+	kmsBatchDecryptFunc    func(ctx context.Context, req *KMSBatchDecryptRequest) (interface{}, error)
 	kmsGenerateRandomFunc  func(ctx context.Context, numBytes int) ([]byte, error)
 
 	// KMS lifecycle
@@ -185,6 +194,19 @@ type mockServiceProvider struct {
 	secretDeleteFunc            func(ctx context.Context, secretID string) error
 	secretSetRotationPolicyFunc func(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
 	secretGetRotationPolicyFunc func(ctx context.Context, secretID string) (interface{}, error)
+	secretGetVersionFunc        func(ctx context.Context, secretID string, version uint64) (interface{}, error)
+	secretListVersionsFunc      func(ctx context.Context, secretID string, limit int) (interface{}, error)
+	secretRotateFunc            func(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
+	secretRollbackFunc          func(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
+	secretUpdateStatusFunc      func(ctx context.Context, secretID, status string) (interface{}, error)
+
+	// DEK
+	dekCreateFunc func(ctx context.Context, req *DEKCreateRequest) (interface{}, error)
+	dekListFunc   func(ctx context.Context, req *DEKListRequest) (interface{}, error)
+	dekGetFunc    func(ctx context.Context, path string) (interface{}, error)
+	dekStatusFunc func(ctx context.Context, path string) (interface{}, error)
+	dekRotateFunc func(ctx context.Context, path string, background bool) (interface{}, error)
+	dekDeleteFunc func(ctx context.Context, req *DEKDeleteRequest) (interface{}, error)
 
 	// IDevID/IAK
 	idevidGenerateFunc     func(ctx context.Context, req *IDevIDGenerateMCPRequest) (interface{}, error)
@@ -205,6 +227,13 @@ type mockServiceProvider struct {
 	iakExistsFunc          func(ctx context.Context) (bool, error)
 	deviceAttributesFunc   func(ctx context.Context) (interface{}, error)
 	activateCredentialFunc func(ctx context.Context, credentialBlob []byte, secret []byte) ([]byte, error)
+	// IAM Group
+	iamCreateGroupFunc       func(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
+	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) (interface{}, error)
+	iamGetGroupFunc          func(ctx context.Context, tenantID, groupID string) (interface{}, error)
+	iamListGroupsFunc        func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
+	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
 
 	// IAM Tenant
 	iamCreateTenantFunc func(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
@@ -1527,6 +1556,63 @@ func (m *mockServiceProvider) IAMAuthenticate(ctx context.Context, req *IAMAuthe
 	return nil, nil
 }
 
+// IAM Group implementations
+func (m *mockServiceProvider) IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error) {
+	if m.iamCreateGroupFunc != nil {
+		return m.iamCreateGroupFunc(ctx, req)
+	}
+	return map[string]interface{}{
+		"id":          req.ID,
+		"tenant_id":   req.TenantID,
+		"name":        req.Name,
+		"description": req.Description,
+	}, nil
+}
+
+func (m *mockServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
+	if m.iamDeleteGroupFunc != nil {
+		return m.iamDeleteGroupFunc(ctx, tenantID, groupID)
+	}
+	return mockIAMSuccess(), nil
+}
+
+func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
+	if m.iamGetGroupFunc != nil {
+		return m.iamGetGroupFunc(ctx, tenantID, groupID)
+	}
+	return map[string]interface{}{
+		"id":        groupID,
+		"tenant_id": tenantID,
+		"name":      "test-group",
+	}, nil
+}
+
+func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
+	if m.iamListGroupsFunc != nil {
+		return m.iamListGroupsFunc(ctx, tenantID, page)
+	}
+	return map[string]interface{}{
+		"groups": []map[string]interface{}{
+			{"id": "group-1", "tenant_id": tenantID, "name": "group-1"},
+		},
+		"pagination": map[string]interface{}{"total_count": 1, "page": page.Page, "page_size": page.PageSize},
+	}, nil
+}
+
+func (m *mockServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
+	if m.iamAddGroupMemberFunc != nil {
+		return m.iamAddGroupMemberFunc(ctx, tenantID, groupID, userID)
+	}
+	return mockIAMSuccess(), nil
+}
+
+func (m *mockServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
+	if m.iamRemoveGroupMemberFunc != nil {
+		return m.iamRemoveGroupMemberFunc(ctx, tenantID, groupID, userID)
+	}
+	return mockIAMSuccess(), nil
+}
+
 // IAM Tenant implementations
 func (m *mockServiceProvider) IAMCreateTenant(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error) {
 	if m.iamCreateTenantFunc != nil {
@@ -1673,6 +1759,69 @@ func (m *mockServiceProvider) KMSVerify(ctx context.Context, req *KMSVerifyReque
 	return nil, nil
 }
 
+func (m *mockServiceProvider) KMSHash(ctx context.Context, req *KMSHashRequest) (interface{}, error) {
+	if m.kmsHashFunc != nil {
+		return m.kmsHashFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSHMAC(ctx context.Context, req *KMSHMACRequest) (interface{}, error) {
+	if m.kmsHMACFunc != nil {
+		return m.kmsHMACFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSVerifyHMAC(ctx context.Context, req *KMSVerifyHMACRequest) (interface{}, error) {
+	if m.kmsVerifyHMACFunc != nil {
+		return m.kmsVerifyHMACFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSRewrap(ctx context.Context, req *KMSRewrapRequest) (interface{}, error) {
+	if m.kmsRewrapFunc != nil {
+		return m.kmsRewrapFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSImportKey(ctx context.Context, req *KMSImportKeyRequest) (interface{}, error) {
+	if m.kmsImportKeyFunc != nil {
+		return m.kmsImportKeyFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error) {
+	if m.kmsUpdateKeyStatusFunc != nil {
+		return m.kmsUpdateKeyStatusFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSListKeyVersions(ctx context.Context, req *KMSListKeyVersionsRequest) (interface{}, error) {
+	if m.kmsListKeyVersionsFunc != nil {
+		return m.kmsListKeyVersionsFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSBatchEncrypt(ctx context.Context, req *KMSBatchEncryptRequest) (interface{}, error) {
+	if m.kmsBatchEncryptFunc != nil {
+		return m.kmsBatchEncryptFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSBatchDecrypt(ctx context.Context, req *KMSBatchDecryptRequest) (interface{}, error) {
+	if m.kmsBatchDecryptFunc != nil {
+		return m.kmsBatchDecryptFunc(ctx, req)
+	}
+	return nil, nil
+}
+
 func (m *mockServiceProvider) KMSGenerateRandom(ctx context.Context, numBytes int) ([]byte, error) {
 	if m.kmsGenerateRandomFunc != nil {
 		return m.kmsGenerateRandomFunc(ctx, numBytes)
@@ -1771,6 +1920,83 @@ func (m *mockServiceProvider) SecretGetRotationPolicy(ctx context.Context, secre
 		return m.secretGetRotationPolicyFunc(ctx, secretID)
 	}
 	return map[string]interface{}{"secret_id": secretID}, nil
+}
+
+func (m *mockServiceProvider) SecretGetVersion(ctx context.Context, secretID string, version uint64) (interface{}, error) {
+	if m.secretGetVersionFunc != nil {
+		return m.secretGetVersionFunc(ctx, secretID, version)
+	}
+	return map[string]interface{}{"secret_id": secretID, "version": version}, nil
+}
+
+func (m *mockServiceProvider) SecretListVersions(ctx context.Context, secretID string, limit int) (interface{}, error) {
+	if m.secretListVersionsFunc != nil {
+		return m.secretListVersionsFunc(ctx, secretID, limit)
+	}
+	return map[string]interface{}{"secret_id": secretID}, nil
+}
+
+func (m *mockServiceProvider) SecretRotate(ctx context.Context, req *SecretRotateRequest) (interface{}, error) {
+	if m.secretRotateFunc != nil {
+		return m.secretRotateFunc(ctx, req)
+	}
+	return map[string]interface{}{"secret_id": req.SecretID}, nil
+}
+
+func (m *mockServiceProvider) SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error) {
+	if m.secretRollbackFunc != nil {
+		return m.secretRollbackFunc(ctx, secretID, targetVersion)
+	}
+	return map[string]interface{}{"secret_id": secretID}, nil
+}
+
+func (m *mockServiceProvider) SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error) {
+	if m.secretUpdateStatusFunc != nil {
+		return m.secretUpdateStatusFunc(ctx, secretID, status)
+	}
+	return map[string]interface{}{"secret_id": secretID, "status": status}, nil
+}
+
+func (m *mockServiceProvider) DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error) {
+	if m.dekCreateFunc != nil {
+		return m.dekCreateFunc(ctx, req)
+	}
+	return map[string]interface{}{"path": req.Path}, nil
+}
+
+func (m *mockServiceProvider) DEKList(ctx context.Context, req *DEKListRequest) (interface{}, error) {
+	if m.dekListFunc != nil {
+		return m.dekListFunc(ctx, req)
+	}
+	return map[string]interface{}{"deks": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) DEKGet(ctx context.Context, path string) (interface{}, error) {
+	if m.dekGetFunc != nil {
+		return m.dekGetFunc(ctx, path)
+	}
+	return map[string]interface{}{"path": path}, nil
+}
+
+func (m *mockServiceProvider) DEKStatus(ctx context.Context, path string) (interface{}, error) {
+	if m.dekStatusFunc != nil {
+		return m.dekStatusFunc(ctx, path)
+	}
+	return map[string]interface{}{"path": path}, nil
+}
+
+func (m *mockServiceProvider) DEKRotate(ctx context.Context, path string, background bool) (interface{}, error) {
+	if m.dekRotateFunc != nil {
+		return m.dekRotateFunc(ctx, path, background)
+	}
+	return map[string]interface{}{"path": path}, nil
+}
+
+func (m *mockServiceProvider) DEKDelete(ctx context.Context, req *DEKDeleteRequest) (interface{}, error) {
+	if m.dekDeleteFunc != nil {
+		return m.dekDeleteFunc(ctx, req)
+	}
+	return map[string]interface{}{"success": true}, nil
 }
 
 // newTestLogger creates a logger that discards output for testing.

@@ -54,7 +54,10 @@ message ProxyAuthRequirements {
   bool require_attestation = 5;
   // Maximum accepted attestation age in nanoseconds.
   int64 attestation_max_age_nanos = 6;
-  repeated string required_roles = 7;
+  // required_roles was removed (#926): a route's permission is
+  // required_scopes, decided by IAM, never a role list.
+  reserved 7;
+  reserved "required_roles";
   repeated string required_scopes = 8;
   string opa_policy = 9;
   // Operator-assigned platform network zone for token-authenticated

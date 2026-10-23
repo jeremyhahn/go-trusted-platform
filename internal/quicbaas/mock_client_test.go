@@ -431,6 +431,12 @@ func (m *MockClient) DEK() quicbaas.DEKClient {
 	return m.dekClient
 }
 
+// Discovery returns the service-discovery registry. The mock returns nil;
+// platform consumers of MockClient do not exercise discovery.
+func (m *MockClient) Discovery() (*quicbaas.DiscoveryRegistry, error) {
+	return nil, nil
+}
+
 // SetDEK sets the DEK client.
 func (m *MockClient) SetDEK(c quicbaas.DEKClient) {
 	m.mu.Lock()
@@ -693,17 +699,11 @@ func (m *MockClient) TenantMgmtService() quicbaas.TenantService { return nil }
 // Project returns nil (stub for testing).
 func (m *MockClient) Project() quicbaas.ProjectClient { return nil }
 
-// Agents returns nil (stub for testing).
-func (m *MockClient) Agents() quicbaas.AgentsClient { return nil }
-
 // Account returns nil (stub for testing).
 func (m *MockClient) Account() quicbaas.AccountClient { return nil }
 
 // Orchestrator returns nil (stub for testing).
 func (m *MockClient) Orchestrator() quicbaas.OrchestratorClient { return nil }
-
-// Registry returns nil (stub for testing).
-func (m *MockClient) Registry() quicbaas.RegistryClient { return nil }
 
 // Verify MockClient implements quicbaas.Client. This assertion is the
 // source of truth for keeping the mock in lock-step with upstream.

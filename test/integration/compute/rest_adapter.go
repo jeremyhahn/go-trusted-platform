@@ -25,6 +25,8 @@ import (
 	"strconv"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -51,6 +53,31 @@ type ErrRESTRequestFailed struct {
 func (e ErrRESTRequestFailed) Error() string {
 	return fmt.Sprintf("compute: REST error [%s]: %s (status: %d, body: %s)",
 		e.Operation, e.Message, e.StatusCode, e.Body)
+}
+
+// restStatusCodes inverts the daemon's gRPC-code-to-HTTP-status mapping
+// (pkg/webservice/v1/rest/internal/protorest.WriteError), so a REST refusal
+// carries the same gRPC code the other transports report.
+var restStatusCodes = map[int]codes.Code{
+	http.StatusBadRequest:         codes.InvalidArgument,
+	http.StatusUnauthorized:       codes.Unauthenticated,
+	http.StatusForbidden:          codes.PermissionDenied,
+	http.StatusNotFound:           codes.NotFound,
+	http.StatusConflict:           codes.AlreadyExists,
+	http.StatusTooManyRequests:    codes.ResourceExhausted,
+	http.StatusNotImplemented:     codes.Unimplemented,
+	http.StatusServiceUnavailable: codes.Unavailable,
+	http.StatusGatewayTimeout:     codes.DeadlineExceeded,
+}
+
+// GRPCStatus lets status.Code read the refusal's gRPC code through the SDK
+// client's wrapping error. A status the daemon does not emit is Unknown.
+func (e ErrRESTRequestFailed) GRPCStatus() *status.Status {
+	code, ok := restStatusCodes[e.StatusCode]
+	if !ok {
+		code = codes.Unknown
+	}
+	return status.New(code, e.Error())
 }
 
 // ErrRESTSetupFailed indicates the REST endpoint is unreachable.
@@ -229,6 +256,9 @@ func listVMsQuery(in *pb.ListVMsRequest) url.Values {
 // that serves its RPC. ComputeCommands drives only the nine VM RPCs below; the
 // embedded interface is nil and never reached.
 type restComputeClient struct {
+	// The embedded client is nil: it only completes the interface. Every
+	// RPC a RESTAdapter method calls must have a REST method below, or the
+	// call dereferences the nil client and panics.
 	pb.ComputeServiceClient
 
 	adapter *RESTAdapter
@@ -268,6 +298,58 @@ func (c *restComputeClient) GetVM(ctx context.Context, in *pb.GetVMRequest, _ ..
 
 func (c *restComputeClient) ListVMs(ctx context.Context, in *pb.ListVMsRequest, _ ...grpc.CallOption) (*pb.ListVMsResponse, error) {
 	return restRPC[pb.ListVMsResponse](ctx, c.adapter, http.MethodGet, computeVMsPath, listVMsQuery(in), nil)
+}
+
+// computeMigrationsPath is the REST root of the migration receiver routes.
+const computeMigrationsPath = "/api/v1/compute/migrations"
+
+// snapshotPath builds /api/v1/compute/vms/{id}/snapshots[/{snapshotId}[/action]].
+func snapshotPath(vmID, snapshotID, action string) string {
+	path := vmPath(vmID, "snapshots")
+	if snapshotID != "" {
+		path += "/" + url.PathEscape(snapshotID)
+	}
+	if action != "" {
+		path += "/" + action
+	}
+	return path
+}
+
+func (c *restComputeClient) CreateSnapshot(ctx context.Context, in *pb.CreateSnapshotRequest, _ ...grpc.CallOption) (*pb.CreateSnapshotResponse, error) {
+	return restRPC[pb.CreateSnapshotResponse](ctx, c.adapter, http.MethodPost, snapshotPath(in.GetVmId(), "", ""), nil, in)
+}
+
+func (c *restComputeClient) RestoreSnapshot(ctx context.Context, in *pb.RestoreSnapshotRequest, _ ...grpc.CallOption) (*pb.RestoreSnapshotResponse, error) {
+	return restRPC[pb.RestoreSnapshotResponse](ctx, c.adapter, http.MethodPost, snapshotPath(in.GetVmId(), in.GetSnapshotId(), "restore"), nil, nil)
+}
+
+func (c *restComputeClient) DeleteSnapshot(ctx context.Context, in *pb.DeleteSnapshotRequest, _ ...grpc.CallOption) (*pb.DeleteSnapshotResponse, error) {
+	return restRPC[pb.DeleteSnapshotResponse](ctx, c.adapter, http.MethodDelete, snapshotPath(in.GetVmId(), in.GetSnapshotId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) ListSnapshots(ctx context.Context, in *pb.ListSnapshotsRequest, _ ...grpc.CallOption) (*pb.ListSnapshotsResponse, error) {
+	return restRPC[pb.ListSnapshotsResponse](ctx, c.adapter, http.MethodGet, snapshotPath(in.GetVmId(), "", ""), nil, nil)
+}
+
+func (c *restComputeClient) GetSnapshot(ctx context.Context, in *pb.GetSnapshotRequest, _ ...grpc.CallOption) (*pb.GetSnapshotResponse, error) {
+	return restRPC[pb.GetSnapshotResponse](ctx, c.adapter, http.MethodGet, snapshotPath(in.GetVmId(), in.GetSnapshotId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) PrepareMigration(ctx context.Context, in *pb.PrepareMigrationRequest, _ ...grpc.CallOption) (*pb.PrepareMigrationResponse, error) {
+	return restRPC[pb.PrepareMigrationResponse](ctx, c.adapter, http.MethodPost, computeMigrationsPath+"/prepare", nil, in)
+}
+
+func (c *restComputeClient) FinalizeMigration(ctx context.Context, in *pb.FinalizeMigrationRequest, _ ...grpc.CallOption) (*pb.FinalizeMigrationResponse, error) {
+	path := computeMigrationsPath + "/" + url.PathEscape(in.GetReceiverId()) + "/finalize"
+	return restRPC[pb.FinalizeMigrationResponse](ctx, c.adapter, http.MethodPost, path, nil, in)
+}
+
+func (c *restComputeClient) AttestVM(ctx context.Context, in *pb.AttestVMRequest, _ ...grpc.CallOption) (*pb.AttestVMResponse, error) {
+	return restRPC[pb.AttestVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetVmId(), "attest"), nil, in)
+}
+
+func (c *restComputeClient) VerifyVMAttestation(ctx context.Context, in *pb.VerifyVMAttestationRequest, _ ...grpc.CallOption) (*pb.VerifyVMAttestationResponse, error) {
+	return restRPC[pb.VerifyVMAttestationResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetVmId(), "attest/verify"), nil, in)
 }
 
 // =============================================================================
@@ -415,6 +497,31 @@ func (a *RESTAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOpt
 // RestoreSnapshot restores a VM from a snapshot via the REST SDK client.
 func (a *RESTAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
 	return a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// GetSnapshot returns one VM snapshot via the REST SDK client.
+func (a *RESTAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver via the REST SDK client.
+func (a *RESTAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.client.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, err
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver via the REST SDK client.
+func (a *RESTAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	return a.client.FinalizeMigration(ctx, receiverID, commit)
 }
 
 // DeleteSnapshot deletes a VM snapshot via the REST SDK client.

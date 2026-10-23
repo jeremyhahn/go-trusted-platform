@@ -256,16 +256,16 @@ func (r *ToolRegistry) registerVTPMTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_seal",
-		Description: "Seal data to the vTPM; PCR-bound sealing is refused until go-quicbaas #1171",
+		Description: "Seal data to TPM PCR state",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"name":       map[string]interface{}{"type": "string", "description": "Name of the vTPM instance"},
 				"data":       map[string]interface{}{"type": "string", "description": "Base64-encoded data to seal"},
-				"pcrs":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "PCR indices to bind to; refused until go-quicbaas #1171"},
+				"pcrs":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "PCR indices for sealing policy"},
 				"auth_value": map[string]interface{}{"type": "string", "description": "Optional authorization value required to unseal"},
 			},
-			"required": []string{"name", "data"},
+			"required": []string{"name", "data", "pcrs"},
 		},
 	})
 
@@ -1642,6 +1642,20 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	case "iam_authenticate":
 		return r.executeIAMAuthenticate(ctx, args)
 
+	// IAM Group Operations
+	case "iam_create_group":
+		return r.executeIAMCreateGroup(ctx, args)
+	case "iam_delete_group":
+		return r.executeIAMDeleteGroup(ctx, args)
+	case "iam_get_group":
+		return r.executeIAMGetGroup(ctx, args)
+	case "iam_list_groups":
+		return r.executeIAMListGroups(ctx, args)
+	case "iam_add_group_member":
+		return r.executeIAMAddGroupMember(ctx, args)
+	case "iam_remove_group_member":
+		return r.executeIAMRemoveGroupMember(ctx, args)
+
 	// IAM Tenant Operations
 	case "iam_create_tenant":
 		return r.executeIAMCreateTenant(ctx, args)
@@ -2146,9 +2160,21 @@ func (r *ToolRegistry) registerKMSTools() {
 	// Register cryptographic operation tools
 	r.registerKMSCryptoTools()
 
+	// Register hash, HMAC and rewrap tools
+	r.registerKMSDigestTools()
+
+	// Register key import, key status and key version tools
+	r.registerKMSKeyAdminTools()
+
+	// Register batch encrypt and decrypt tools
+	r.registerKMSBatchTools()
+
 	// Register random byte generation tool
 	r.registerKMSRandomTools()
 
 	// Register data key tools (envelope encryption)
 	r.registerKMSDataKeyTools()
+
+	// Register DEK management tools
+	r.registerDEKTools()
 }

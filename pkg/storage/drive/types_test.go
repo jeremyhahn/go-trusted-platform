@@ -67,8 +67,8 @@ func TestDefaultTPMSealingConfig(t *testing.T) {
 		t.Errorf("expected KeySlot 1, got %d", config.KeySlot)
 	}
 
-	if config.TPMPolicy != "platform" {
-		t.Errorf("expected TPMPolicy platform, got %q", config.TPMPolicy)
+	if !config.PCRPolicy {
+		t.Error("expected PCRPolicy to be true")
 	}
 
 	if len(config.PCRSelection) != 6 {

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,6 +34,7 @@ import (
 type kmsCapture struct {
 	method string
 	path   string
+	query  url.Values
 	body   map[string]interface{}
 }
 
@@ -48,6 +50,7 @@ func kmsAdapter(t *testing.T, payload string) (*Adapter, *kmsCapture) {
 		}
 		captured.method = r.Method
 		captured.path = r.URL.Path
+		captured.query = r.URL.Query()
 		_ = json.NewDecoder(r.Body).Decode(&captured.body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

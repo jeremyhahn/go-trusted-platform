@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -51,12 +52,18 @@ func (g *GRPCAdapter) Name() string {
 	return "gRPC"
 }
 
+// platformdGRPCEndpoint is the platformd gRPC address: PLATFORM_GRPC_ENDPOINT
+// when set, otherwise the suite's PlatformdGRPC endpoint.
+func platformdGRPCEndpoint() string {
+	if endpoint := os.Getenv("PLATFORM_GRPC_ENDPOINT"); endpoint != "" {
+		return endpoint
+	}
+	return GetServiceEndpoints().PlatformdGRPC
+}
+
 // Setup initializes the gRPC connection to platformd.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv("PLATFORM_GRPC_ENDPOINT")
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformdGRPC
-	}
+	endpoint := platformdGRPCEndpoint()
 
 	conn, err := grpc.NewClient(endpoint,
 		helpers.GRPCTransportCredentials(),
@@ -304,16 +311,17 @@ func (g *GRPCAdapter) Status(ctx context.Context, name string, enabled bool) (*S
 		return nil, ErrGRPCCallFailed{Method: "UpdateSecretStatus", Err: err}
 	}
 
-	statusStr := "disabled"
-	if resp.Status == pb.SecretStatus_SECRET_STATUS_ENABLED {
-		statusStr = "enabled"
-	}
-
 	return &StatusResult{
 		SecretID:  resp.SecretId,
-		Status:    statusStr,
+		Status:    secretStatusName(resp.GetStatus()),
 		Timestamp: grpcUnixToTime(resp.Timestamp),
 	}, nil
+}
+
+// secretStatusName is the enum name without its SECRET_STATUS_ prefix, e.g.
+// "ENABLED", the form the REST API reports.
+func secretStatusName(status pb.SecretStatus) string {
+	return strings.TrimPrefix(status.String(), "SECRET_STATUS_")
 }
 
 // Policy retrieves the rotation policy for a secret via gRPC.

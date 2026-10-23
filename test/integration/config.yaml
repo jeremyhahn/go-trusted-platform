@@ -60,7 +60,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         - algorithm: ECDSA
@@ -70,7 +70,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -103,7 +103,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         - algorithm: ECDSA
@@ -113,7 +113,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 10
@@ -135,7 +135,7 @@ certificate-authority:
 # =============================================================================
 # TPM 2.0 CONFIGURATION
 # =============================================================================
-# Required for CA identities whose keys set tpm-policy: platform. The platform
+# Required for CA identities that set platform-policy: true. The platform
 # PCR + bank are needed when the CA is configured to use TPM-bound platform
 # policy. Integration tests run against swtpm started by the test harness:
 # device is the socket start_swtpm in run-integration-tests.sh serves. The
@@ -233,6 +233,32 @@ dns:
           - name: "@"
             value: ns1.integration.internal.
             ttl: 300
+
+# =============================================================================
+# TIME SYNCHRONIZATION
+# =============================================================================
+# Enables the NTP service the ntp suite drives on every transport. Without
+# an ntp: section platformd never touches chrony and every NTP call answers
+# "not configured" (docs/ntp/user.md).
+#
+# platformd renders /etc/chrony/chrony.conf from this section. The
+# devcontainer has no OpenRC, so run-integration-tests.sh starts chronyd on
+# the rendered file itself, with -x: chronyd never adjusts the system clock,
+# which the container shares with the CI host.
+#
+# The one upstream is the loopback, where nothing serves NTP (a consume-only
+# node renders port 0), so no source ever becomes reachable: a step is always
+# the documented refusal, never a clock change. No startup gate: there is
+# nothing to wait for.
+ntp:
+  enabled: true
+  mode: consume
+  consume:
+    upstream:
+      - address: 127.0.0.1
+        iburst: true
+    startup-gate:
+      block-until-synced: false
 
 # =============================================================================
 # SDN CONFIGURATION

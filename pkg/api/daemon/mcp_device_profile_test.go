@@ -52,6 +52,7 @@ func TestMCPDeviceProfile_NotFound(t *testing.T) {
 		"profile_find_matching":  {"serial": "SN999"},
 		"profile_find_by_mac":    {"mac_address": "02:00:00:00:00:99"},
 		"profile_find_by_serial": {"serial": "SN999"},
+		"profile_find_config":    {"ek_serial": "EK-NONE"},
 	}
 	for tool, args := range calls {
 		t.Run(tool, func(t *testing.T) {
@@ -95,6 +96,23 @@ func TestMCPDeviceProfileFindByMACAndSerial(t *testing.T) {
 	assert.Equal(t, bySerial.ID, toolResultID(t, result))
 }
 
+func TestMCPDeviceProfileFindConfig(t *testing.T) {
+	registry, svcs := newMCPDeviceTemplateRegistry(t)
+	ctx := context.Background()
+	byEK := &entities.DeviceProfile{ID: 8311, Name: "cfg-ek", EKSerial: "EK-8311"}
+	byMAC := &entities.DeviceProfile{ID: 8312, Name: "cfg-mac", MACAddress: "52:54:00:aa:bb:12"}
+	require.NoError(t, svcs.profiles.Save(ctx, byEK))
+	require.NoError(t, svcs.profiles.Save(ctx, byMAC))
+
+	result, err := registry.ExecuteTool(ctx, "profile_find_config", map[string]interface{}{"ek_serial": "EK-8311"})
+	require.NoError(t, err)
+	assert.Equal(t, byEK.ID, toolResultID(t, result))
+
+	result, err = registry.ExecuteTool(ctx, "profile_find_config", map[string]interface{}{"mac_address": "52:54:00:aa:bb:12"})
+	require.NoError(t, err)
+	assert.Equal(t, byMAC.ID, toolResultID(t, result))
+}
+
 func TestMCPDeviceProfileFindByMACAndSerial_NoProfileService(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 	var unavailable ErrServiceNotAvailable
@@ -103,5 +121,8 @@ func TestMCPDeviceProfileFindByMACAndSerial_NoProfileService(t *testing.T) {
 	require.ErrorAs(t, err, &unavailable)
 
 	_, err = provider.DeviceProfileFindBySerial(context.Background(), "SN300")
+	require.ErrorAs(t, err, &unavailable)
+
+	_, err = provider.DeviceProfileFindConfig(context.Background(), "EK-8311", "")
 	require.ErrorAs(t, err, &unavailable)
 }

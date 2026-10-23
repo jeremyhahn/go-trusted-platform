@@ -77,15 +77,19 @@ func (s *RESTServer) SetGatewayBGPService(controller GatewayBGPController) {
 	s.logger.Info("Gateway BGP REST service wired into gateway handlers")
 }
 
-// SetGatewayPerfService wires the perf backend into the gateway REST
-// handlers. Must be called after SetGatewayIPAMService; a nil backend
-// leaves the perf routes returning 503.
-func (s *RESTServer) SetGatewayPerfService(backend GatewayPerfInterface) {
-	if backend == nil || s.gatewayHandlers == nil {
+// SetGatewayBackends points the gateway REST load-balancer, NAT64 and perf
+// routes at the shared gateway service (#660). A backend the service lacks
+// leaves its routes returning 503.
+func (s *RESTServer) SetGatewayBackends(backends GatewayBackendSource) {
+	if backends == nil {
 		return
 	}
-	s.gatewayHandlers.SetPerfService(newGatewayPerfRESTService(backend))
-	s.logger.Info("Gateway perf REST service wired into gateway handlers")
+	if s.gatewayService == nil {
+		s.SetGatewayIPAMService(nil, nil)
+	}
+	s.gatewayService.backends = backends
+	s.gatewayHandlers.SetPerfService(newGatewayPerfRESTService(backends))
+	s.logger.Info("Gateway LB, NAT64 and perf REST services wired into gateway handlers")
 }
 
 // SetZoneService wires the zone service into the SDN REST handlers.

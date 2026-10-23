@@ -41,6 +41,14 @@ func TestErrMissingEmail_Error(t *testing.T) {
 	}
 }
 
+func TestErrMissingGroupID_Error(t *testing.T) {
+	err := ErrMissingGroupID{}
+	expected := "group ID is required"
+	if err.Error() != expected {
+		t.Errorf("ErrMissingGroupID.Error() = %q, want %q", err.Error(), expected)
+	}
+}
+
 func TestErrMissingRoleID_Error(t *testing.T) {
 	err := ErrMissingRoleID{}
 	expected := "role ID is required"
@@ -119,6 +127,43 @@ func TestErrUserNotFound_Error(t *testing.T) {
 			err := ErrUserNotFound{TenantID: tt.tenantID, UserID: tt.userID}
 			if err.Error() != tt.expected {
 				t.Errorf("ErrUserNotFound.Error() = %q, want %q", err.Error(), tt.expected)
+			}
+		})
+	}
+}
+
+func TestErrGroupNotFound_Error(t *testing.T) {
+	tests := []struct {
+		name     string
+		tenantID string
+		groupID  string
+		expected string
+	}{
+		{
+			name:     "basic group not found",
+			tenantID: "tenant-1",
+			groupID:  "group-1",
+			expected: "group not found: tenant=tenant-1, group=group-1",
+		},
+		{
+			name:     "empty tenant ID",
+			tenantID: "",
+			groupID:  "group-2",
+			expected: "group not found: tenant=, group=group-2",
+		},
+		{
+			name:     "empty group ID",
+			tenantID: "tenant-2",
+			groupID:  "",
+			expected: "group not found: tenant=tenant-2, group=",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ErrGroupNotFound{TenantID: tt.tenantID, GroupID: tt.groupID}
+			if err.Error() != tt.expected {
+				t.Errorf("ErrGroupNotFound.Error() = %q, want %q", err.Error(), tt.expected)
 			}
 		})
 	}
@@ -311,12 +356,14 @@ func TestErrorTypesImplementError(t *testing.T) {
 	var _ error = ErrMissingTenantID{}
 	var _ error = ErrMissingUserID{}
 	var _ error = ErrMissingEmail{}
+	var _ error = ErrMissingGroupID{}
 	var _ error = ErrMissingRoleID{}
 	var _ error = ErrMissingRole{}
 	var _ error = ErrMissingPolicyName{}
 	var _ error = ErrMissingClientID{}
 	var _ error = ErrMissingAppName{}
 	var _ error = ErrUserNotFound{}
+	var _ error = ErrGroupNotFound{}
 	var _ error = ErrRoleNotFound{}
 	var _ error = ErrTenantNotFound{}
 	var _ error = ErrPolicyNotFound{}
@@ -330,6 +377,7 @@ func TestErrorTypesAreDistinct(t *testing.T) {
 		"missing tenant":  ErrMissingTenantID{},
 		"missing user":    ErrMissingUserID{},
 		"missing email":   ErrMissingEmail{},
+		"missing group":   ErrMissingGroupID{},
 		"missing role id": ErrMissingRoleID{},
 		"missing role":    ErrMissingRole{},
 		"missing policy":  ErrMissingPolicyName{},

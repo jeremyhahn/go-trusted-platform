@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"math"
 
 	"google.golang.org/grpc/codes"
@@ -564,6 +566,44 @@ func (e ErrQUICOperationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrQUICAttestationRefused carries a refusal from the shared attestation
+// gRPC servicer to the daemon-native QUIC attestation handler. QUICStatus
+// gives it the status the daemon's quote opcodes (0x70-0x72) give the same
+// gRPC class, so one refusal reads the same on every attestation opcode.
+type ErrQUICAttestationRefused struct {
+	Op    string
+	Cause error
+}
+
+func (e ErrQUICAttestationRefused) Error() string {
+	return fmt.Sprintf("attestation %s refused: %v", e.Op, e.Cause)
+}
+
+func (e ErrQUICAttestationRefused) Unwrap() error {
+	return e.Cause
+}
+
+// QUICStatus is the QUIC status for the refusal's gRPC class.
+func (e ErrQUICAttestationRefused) QUICStatus() byte {
+	return grpcCodeToQUICStatus(e.Cause)
+}
+
+// ErrQUICAttestationNoService refuses a daemon-native QUIC attestation
+// operation that no transport serves (device workload attestation, reports,
+// policies: docs/attestation/api.md §2, docs/13 G7).
+type ErrQUICAttestationNoService struct {
+	Op string
+}
+
+func (e ErrQUICAttestationNoService) Error() string {
+	return fmt.Sprintf("attestation %s is not served by any transport (docs/13 G7)", e.Op)
+}
+
+// QUICStatus is StatusNotImplemented: the opcode is in range, nothing serves it.
+func (e ErrQUICAttestationNoService) QUICStatus() byte {
+	return quicwire.StatusNotImplemented
+}
+
 // ErrQUICServerNotConfigured is returned when QUIC server is not configured
 type ErrQUICServerNotConfigured struct{}
 
@@ -1011,6 +1051,26 @@ func (e ErrIAMRoleAlreadyExists) Error() string {
 	return fmt.Sprintf("IAM role already exists: %s in tenant %s", e.RoleID, e.TenantID)
 }
 
+// ErrIAMGroupNotFound is returned when a group is not found
+type ErrIAMGroupNotFound struct {
+	TenantID string
+	GroupID  string
+}
+
+func (e ErrIAMGroupNotFound) Error() string {
+	return fmt.Sprintf("IAM group not found: %s in tenant %s", e.GroupID, e.TenantID)
+}
+
+// ErrIAMGroupAlreadyExists is returned when attempting to create a group that already exists
+type ErrIAMGroupAlreadyExists struct {
+	TenantID string
+	GroupID  string
+}
+
+func (e ErrIAMGroupAlreadyExists) Error() string {
+	return fmt.Sprintf("IAM group already exists: %s in tenant %s", e.GroupID, e.TenantID)
+}
+
 // ErrIAMTenantNotFound is returned when a tenant is not found
 type ErrIAMTenantNotFound struct {
 	TenantID string
@@ -1158,6 +1218,17 @@ type ErrIAMRoleRevocationFailed struct {
 
 func (e ErrIAMRoleRevocationFailed) Error() string {
 	return fmt.Sprintf("IAM failed to revoke role %s from user %s: %s", e.RoleID, e.UserID, e.Reason)
+}
+
+// ErrIAMGroupMembershipFailed is returned when group membership operation fails
+type ErrIAMGroupMembershipFailed struct {
+	GroupID string
+	UserID  string
+	Reason  string
+}
+
+func (e ErrIAMGroupMembershipFailed) Error() string {
+	return fmt.Sprintf("IAM group membership operation failed for user %s in group %s: %s", e.UserID, e.GroupID, e.Reason)
 }
 
 // ErrIAMTokenNotFound is returned when a token is not found

@@ -63,13 +63,13 @@ entropy the cap allows:
 
 | Config field | Why it is a TPM auth value |
 |--------------|----------------------------|
-| `webservice(s)[*].key.password` | `tpm-policy: platform` seals the password to the TPM as a keyed-hash object whose `UserAuth` is this value |
-| `acme.client.account.key.password` | same tpm-policy sealing; also the `TPM2_Create` `UserAuth` when `store: tpm2` |
+| `webservice(s)[*].key.password` | `platform-policy: true` seals the password to the TPM as a keyed-hash object whose `UserAuth` is this value |
+| `acme.client.account.key.password` | same platform-policy sealing; also the `TPM2_Create` `UserAuth` when `store: tpm2` |
 | `tpm.platform-srk.srk-auth` | Platform SRK authorization value |
 | `certificate-authority.identity[*].keystores.tpm2.srk-auth` | CA TPM keystore SRK authorization value |
 
-`tpm-policy: platform` is the trigger, **not** `store:`. A key with
-`store: software` and `tpm-policy: platform` still has its configured password
+`platform-policy: true` is the trigger, **not** `store:`. A key with
+`store: software` and `platform-policy: true` still has its configured password
 sealed into a TPM keyed-hash object, so the 32-byte cap applies.
 
 Fields that are **not** TPM auth values keep `enc=base64` and its full

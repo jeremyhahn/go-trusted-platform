@@ -369,7 +369,7 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 func TestPolicy_EveryContractMethodIsPlaced(t *testing.T) {
 	// A method added to ipc.proto without a policy entry would be refused
 	// to everyone, the supervisor included; this fails before that ships.
-	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc} {
+	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc, ipcv1.GatewayServicesService_ServiceDesc} {
 		for _, m := range desc.Methods {
 			method := "/" + desc.ServiceName + "/" + m.MethodName
 			if _, ok := methodAdmissions[method]; !ok {
@@ -526,6 +526,62 @@ func TestDial_RejectsAnEmptyPath(t *testing.T) {
 	}
 }
 
+// The supervisor dials a child right after exec and polls Status until the
+// child listens. With gRPC's default backoff the channel stayed shut for at
+// least 800ms after the first refused connect (1s base, 20% jitter), so a
+// child that listened a moment late was not reached until long after it
+// served — the relaunch timeouts of #955. The poll bound sits below that.
+func TestDial_ReachesASocketThatListensAfterARefusedConnect(t *testing.T) {
+	const reachBound = 600 * time.Millisecond
+
+	dir, err := os.MkdirTemp("/tmp", "gwipc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "p.sock")
+
+	client, err := Dial(path)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+	if _, err := client.Status(testContext(t)); err == nil {
+		t.Fatal("Status succeeded with nothing listening")
+	}
+
+	srv := NewServer(&fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	if err := srv.Listen(path, 0o600, -1); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve() }()
+	t.Cleanup(func() {
+		srv.Stop()
+		if err := <-served; err != nil {
+			t.Errorf("Serve returned %v", err)
+		}
+	})
+
+	listened := time.Now()
+	deadline := time.NewTimer(reachBound)
+	defer deadline.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		_, err := client.Status(testContext(t))
+		if err == nil {
+			t.Logf("reached %v after the socket listened", time.Since(listened).Round(time.Millisecond))
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("Status still failing %v after the socket listened: %v", reachBound, err)
+		case <-poll.C:
+		}
+	}
+}
+
 func TestErrors_Messages(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -537,6 +593,11 @@ func TestErrors_Messages(t *testing.T) {
 		{&ErrDocument{Document: "snapshot", Cause: errors.New("bad")}, "gatewayd ipc: snapshot document: bad"},
 		{&ErrRemoteApply{Message: "x"}, "gatewayd ipc: datapath apply failed: x"},
 		{&ErrServerNotListening{}, "gatewayd ipc: server has no listener; call Listen first"},
+		{&ErrRemoteService{Message: "m"}, "m"},
+		{&ErrRemoteService{Sentinel: errors.New("sentinel")}, "sentinel"},
+		{&ErrServiceUnreachable{Socket: "/s", Service: "nat64", Cause: errors.New("eof")}, "gatewayd ipc: nat64 unreachable on \"/s\": eof"},
+		{&ErrConntrackZone{Zone: -1}, "gatewayd ipc: conntrack zone -1 is out of range"},
+		{&ErrVIPKey{Address: "x", Cause: errors.New("bad")}, "gatewayd ipc: VIP address \"x\": bad"},
 		{
 			&ErrSocketGroup{Path: "/p", Want: 65534, Got: 0, Cause: errors.New("denied")},
 			"gatewayd ipc: socket \"/p\" has group 0, not 65534, and cannot be given it " +
@@ -550,7 +611,8 @@ func TestErrors_Messages(t *testing.T) {
 	}
 	cause := errors.New("cause")
 	if !errors.Is(&ErrSocketPath{Cause: cause}, cause) || !errors.Is(&ErrDocument{Cause: cause}, cause) ||
-		!errors.Is(&ErrSocketGroup{Cause: cause}, cause) {
+		!errors.Is(&ErrSocketGroup{Cause: cause}, cause) || !errors.Is(&ErrVIPKey{Cause: cause}, cause) ||
+		!errors.Is(&ErrServiceUnreachable{Cause: cause}, cause) || !errors.Is(&ErrRemoteService{Sentinel: cause}, cause) {
 		t.Fatal("Unwrap does not reach the cause")
 	}
 }

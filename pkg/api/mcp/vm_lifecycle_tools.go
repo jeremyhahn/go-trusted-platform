@@ -86,6 +86,14 @@ var vmLifecycleTools = map[string]vmLifecycleTool{
 		description: "Resume a suspended VM",
 		binding:     grpcToolMethod(platformv1.ComputeServiceServer.ResumeVM, "id"),
 	},
+	"vm_migration_prepare": {
+		description: "Prepare this host to receive a migrating VM: spec describes the guest (memory_mb, cpus, disk_size, boot_mode, secure_boot, enable_kvm, tpm_enabled, network_mode, mac_address, arch); answers the receiver_id, port and tls_hostname the source dials",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.PrepareMigration, "spec"),
+	},
+	"vm_migration_finalize": {
+		description: "Finalize a received migration by receiver_id: commit keeps the VM, false discards it",
+		binding:     grpcToolMethod(platformv1.ComputeServiceServer.FinalizeMigration, "receiver_id"),
+	},
 }
 
 // registerVMLifecycleTools registers the VM lifecycle tools.

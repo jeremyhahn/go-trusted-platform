@@ -364,7 +364,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_seal",
-		Description: "Seal data to the vTPM; PCR-bound sealing is refused until go-quicbaas #1171",
+		Description: "Seal data to the TPM state, optionally binding to PCR values",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -379,7 +379,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 				"pcrs": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "integer"},
-					"description": "PCR indices to bind to (0-23); refused until go-quicbaas #1171",
+					"description": "PCR indices for sealing policy (0-23)",
 				},
 				"auth_value": map[string]interface{}{
 					"type":        "string",

@@ -143,6 +143,7 @@ webservice:
     signature-algorithm: SHA256-RSAPSS
     hash: SHA-256
     store: software
+    platform-policy: false
   certificate:
     valid: 365
     subject:

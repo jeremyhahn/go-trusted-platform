@@ -28,7 +28,7 @@ proto; [api.md](api.md) gives each RPC's row on every transport.
 | Endorsement key | `CreateEK`, `GetEK`, `DeleteEK`, `GetEKCertificate`, `ImportEKCertificate` | §4 |
 | Storage root key | `CreateSRK`, `GetSRK`, `DeleteSRK` | §4 |
 | Attestation key | `CreateAK`, `GetAK`, `DeleteAK` (refused with `FailedPrecondition`: the IAK is not evicted) | §4 |
-| Sealing | `Seal`, `Unseal` (a `Seal` under a password; naming PCRs is refused with `FailedPrecondition` until go-quicbaas #1171) | §5 |
+| Sealing | `Seal`, `Unseal` | §5 |
 | Attestation and PCRs | `Quote`, `VerifyQuote`, `Certify`, `GetEventLog`, `GetPCRs`, `ExtendPCR` | §5 |
 | Credential activation | `MakeCredential`, `ActivateCredential` | §7 |
 | NVRAM | `DefineNVRAM`, `WriteNVRAM`, `ReadNVRAM`, `UndefineNVRAM` | §6 |

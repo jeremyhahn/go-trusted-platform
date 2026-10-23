@@ -119,6 +119,45 @@ func TestPrintAppDetails_NoResourcePrefix(t *testing.T) {
 // printGroupDetails Tests
 // =============================================================================
 
+func TestPrintGroupDetails_Full(t *testing.T) {
+	output := &bytes.Buffer{}
+	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
+
+	now := time.Now()
+	group := &iamsvc.Group{
+		ID:          "group-1",
+		TenantID:    "tenant-1",
+		Name:        "admins",
+		Description: "Admin group",
+		Members:     []string{"user-1", "user-2"},
+		CreatedAt:   now,
+		UpdatedAt:   &now,
+	}
+
+	printGroupDetails(printer, group)
+	out := output.String()
+	assert.Contains(t, out, "group-1")
+	assert.Contains(t, out, "admins")
+	assert.Contains(t, out, "Admin group")
+	assert.Contains(t, out, "user-1")
+}
+
+func TestPrintGroupDetails_Minimal(t *testing.T) {
+	output := &bytes.Buffer{}
+	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
+
+	group := &iamsvc.Group{
+		ID:        "group-2",
+		TenantID:  "tenant-1",
+		CreatedAt: time.Now(),
+	}
+
+	printGroupDetails(printer, group)
+	out := output.String()
+	assert.Contains(t, out, "group-2")
+	assert.Contains(t, out, "(none)")
+}
+
 // =============================================================================
 // printRoleDetails Tests
 // =============================================================================
@@ -177,6 +216,7 @@ func TestPrintUserDetails_Full(t *testing.T) {
 		Email:       "admin@example.com",
 		Name:        "Admin User",
 		Roles:       []string{"admin"},
+		Groups:      []string{"admins"},
 		Attributes:  map[string]string{"dept": "eng"},
 		MfaVerified: true,
 		CreatedAt:   now,

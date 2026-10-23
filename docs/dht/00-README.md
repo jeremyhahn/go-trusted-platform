@@ -1,5 +1,7 @@
 # Trusted DHT Design Documentation
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 Part of [go-trusted-platform](https://github.com/jeremyhahn/go-trusted-platform) - implemented in `pkg/dht/`.
 
 A Distributed Hash Table for the Trusted Computing Platform, providing decentralized key-value storage, consensus, reputation, and cryptographic services. The DHT integrates directly with platform services including TPM 2.0, XKMS (hardware RNG), certificate authority, and QuicBaaS storage.

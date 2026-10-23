@@ -153,9 +153,10 @@ type EnrollTPMRequest struct {
 	Device string `json:"device" yaml:"device"`
 	// ExistingPassphrase is an existing passphrase for the device.
 	ExistingPassphrase string `json:"existing_passphrase" yaml:"existing_passphrase"`
-	// PCRs are the PCR indices to bind to. Only a Shared SRK sealer accepts
-	// them; a Platform SRK seal is bound to the platform PCR policy.
+	// PCRs are the PCR indices to bind to.
 	PCRs []int32 `json:"pcrs,omitempty" yaml:"pcrs,omitempty"`
+	// Handle is the persistent NV handle (for example 0x81000003).
+	Handle string `json:"handle,omitempty" yaml:"handle,omitempty"`
 }
 
 // EnrollTPMResponse returns the enrolled slot index.

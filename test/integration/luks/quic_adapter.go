@@ -242,7 +242,7 @@ func (q *QUICAdapter) EnrollTPM(ctx context.Context, req *lukssdk.EnrollTPMReque
 	}
 	in := &quicwire.LUKSEnrollTPMReq{
 		Device: req.Device, ExistingPassphrase: req.ExistingPassphrase,
-		PCRs: req.PCRs,
+		PCRs: req.PCRs, Handle: req.Handle,
 	}
 	var wire quicwire.LUKSEnrollTPMResp
 	if err := q.sendSub(ctx, quicwire.LUKSSubEnrollTPM, in, &wire); err != nil {

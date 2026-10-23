@@ -20,7 +20,8 @@
 	"Versions": ["v1.1.0", "v1.2.0", "v1.3.0"],
 	"Update": {
 		"Path": "example.com/behind",
-		"Version": "v1.3.0"
+		"Version": "v1.3.0",
+		"Time": "2026-09-01T12:00:00Z"
 	}
 }
 {

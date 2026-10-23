@@ -75,10 +75,6 @@ func (f *fakeAppCache) UpdateCacheConfig(_ context.Context, req *cache.UpdateCac
 }
 
 type fakeAppScheduler struct {
-	// Client supplies the node and placement methods the scheduler
-	// service never calls; reaching one panics on the nil interface.
-	scheduler.Client
-
 	err     error
 	jobID   uint64
 	created *scheduler.CreateJobRequest

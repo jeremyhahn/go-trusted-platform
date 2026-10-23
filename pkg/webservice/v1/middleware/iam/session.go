@@ -25,6 +25,7 @@ type iamSession struct {
 	mfaVerified         bool
 	mfaTimestamp        time.Time
 	roleSet             map[string]struct{}
+	groupSet            map[string]struct{}
 	attestationVerified bool
 	attestationTime     time.Time
 	deviceID            string
@@ -37,13 +38,17 @@ func NewIAMSession(user *iamsdk.User) IAMSession {
 	}
 
 	session := &iamSession{
-		user:    user,
-		roleSet: make(map[string]struct{}, len(user.Roles)),
+		user:     user,
+		roleSet:  make(map[string]struct{}, len(user.Roles)),
+		groupSet: make(map[string]struct{}, len(user.Groups)),
 	}
 
-	// Pre-compute the role set for O(1) lookups
+	// Pre-compute role and group sets for O(1) lookups
 	for _, role := range user.Roles {
 		session.roleSet[role] = struct{}{}
+	}
+	for _, group := range user.Groups {
+		session.groupSet[group] = struct{}{}
 	}
 
 	// MFA is not asserted by this constructor. iam.User no longer carries an
@@ -131,9 +136,26 @@ func (s *iamSession) Roles() []string {
 	return roles
 }
 
+// Groups returns the user's group memberships.
+func (s *iamSession) Groups() []string {
+	if s.user == nil {
+		return nil
+	}
+	// Return a copy to prevent modification
+	groups := make([]string, len(s.user.Groups))
+	copy(groups, s.user.Groups)
+	return groups
+}
+
 // HasRole checks if the user has a specific role.
 func (s *iamSession) HasRole(role string) bool {
 	_, ok := s.roleSet[role]
+	return ok
+}
+
+// HasGroup checks if the user is a member of a specific group.
+func (s *iamSession) HasGroup(group string) bool {
+	_, ok := s.groupSet[group]
 	return ok
 }
 
@@ -208,6 +230,7 @@ func (s *iamSession) ToSubject() *iamsdk.CheckSubject {
 		ID:         s.user.ID,
 		TenantID:   s.user.TenantID,
 		Roles:      s.user.Roles,
+		Groups:     s.user.Groups,
 		Attributes: attrs,
 	}
 

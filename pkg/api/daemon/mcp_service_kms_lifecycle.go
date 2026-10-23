@@ -426,3 +426,120 @@ func (p *MCPServiceProvider) SecretGetRotationPolicy(ctx context.Context, secret
 
 	return resp, nil
 }
+
+// SecretGetVersion retrieves one version of a secret.
+func (p *MCPServiceProvider) SecretGetVersion(ctx context.Context, secretID string, version uint64) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	if version == 0 {
+		return nil, ErrKMSInvalidParameter{Parameter: "version", Reason: "version is required"}
+	}
+
+	resp, err := p.secretsService.GetSecretVersion(ctx, &baasservice.GetSecretVersionRequest{
+		SecretID: secretID,
+		Version:  version,
+	})
+	if err != nil {
+		return nil, ErrSecretNotFound{SecretID: secretID}
+	}
+
+	return resp, nil
+}
+
+// SecretListVersions lists the versions of a secret without their data.
+func (p *MCPServiceProvider) SecretListVersions(ctx context.Context, secretID string, limit int) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+
+	resp, err := p.secretsService.ListSecretVersions(ctx, &baasservice.ListSecretVersionsRequest{
+		SecretID: secretID,
+		Limit:    limit,
+	})
+	if err != nil {
+		return nil, ErrSecretNotFound{SecretID: secretID}
+	}
+
+	return resp, nil
+}
+
+// SecretRotate stores new data as the secret's next version.
+func (p *MCPServiceProvider) SecretRotate(ctx context.Context, req *mcp.SecretRotateRequest) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if req == nil || req.SecretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	if len(req.NewData) == 0 {
+		return nil, ErrKMSInvalidParameter{Parameter: "new_data", Reason: "new secret data is required"}
+	}
+
+	resp, err := p.secretsService.RotateSecret(ctx, &baasservice.RotateSecretRequest{
+		SecretID: req.SecretID,
+		NewData:  req.NewData,
+		Metadata: req.Metadata,
+	})
+	if err != nil {
+		return nil, ErrSecretsOperationFailed{Operation: "RotateSecret", Cause: err}
+	}
+
+	p.logger.Info("secret rotated", "secret_id", req.SecretID)
+	return resp, nil
+}
+
+// SecretRollback makes an earlier version's data the secret's newest version.
+func (p *MCPServiceProvider) SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	if targetVersion == 0 {
+		return nil, ErrKMSInvalidParameter{Parameter: "target_version", Reason: "target version is required"}
+	}
+
+	resp, err := p.secretsService.RollbackSecret(ctx, &baasservice.RollbackSecretRequest{
+		SecretID:      secretID,
+		TargetVersion: targetVersion,
+	})
+	if err != nil {
+		return nil, ErrSecretsOperationFailed{Operation: "RollbackSecret", Cause: err}
+	}
+
+	p.logger.Info("secret rolled back", "secret_id", secretID, "target_version", targetVersion)
+	return resp, nil
+}
+
+// SecretUpdateStatus enables, disables or soft-deletes a secret.
+func (p *MCPServiceProvider) SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	secretStatus := baasservice.SecretStatus(status)
+	if !secretStatus.IsValid() {
+		return nil, ErrKMSInvalidParameter{Parameter: "status", Reason: "status must be enabled, disabled or deleted"}
+	}
+
+	resp, err := p.secretsService.UpdateSecretStatus(ctx, &baasservice.UpdateSecretStatusRequest{
+		SecretID: secretID,
+		Status:   secretStatus,
+	})
+	if err != nil {
+		return nil, ErrSecretsOperationFailed{Operation: "UpdateSecretStatus", Cause: err}
+	}
+
+	p.logger.Info("secret status updated", "secret_id", secretID, "status", status)
+	return resp, nil
+}

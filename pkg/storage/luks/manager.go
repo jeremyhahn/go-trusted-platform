@@ -178,10 +178,10 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	}
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:            keyName,
-		KeyType:       xkmssdk.KeyTypeHMAC,
-		TPMPolicy:     tpmConfig.TPMPolicy,
-		TPMAttributes: &xkmssdk.TPMAttributes{},
+		CN:             keyName,
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: tpmConfig.PCRPolicy,
+		TPMAttributes:  &xkmssdk.TPMAttributes{},
 	}
 
 	// Set parent to SRK
@@ -192,7 +192,7 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	attrs.Parent = srkAttrs
 
 	// Seal the key to TPM
-	m.logger.Debugf("Sealing key to TPM (TPM policy: %q)", tpmConfig.TPMPolicy)
+	m.logger.Debugf("Sealing key to TPM (PCR policy: %v)", tpmConfig.PCRPolicy)
 	sealOpts := &xkmssdk.SealOptions{
 		KeyAttributes: attrs,
 	}
@@ -305,9 +305,9 @@ func (m *Manager) UnlockWithTPM(ctx context.Context, part *drive.PartitionConfig
 	}
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:        keyName,
-		KeyType:   xkmssdk.KeyTypeHMAC,
-		TPMPolicy: tpmConfig.TPMPolicy,
+		CN:             keyName,
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: tpmConfig.PCRPolicy,
 	}
 
 	// Set parent to SRK

@@ -24,10 +24,10 @@ import (
 
 // requireNAT64 refuses when no translator backend is wired.
 func (s *gatewayRESTService) requireNAT64() (GatewayNAT64Interface, error) {
-	if s.nat64 == nil {
+	if s.backends == nil || s.backends.NAT64() == nil {
 		return nil, rest.ErrNAT64NotConfigured{}
 	}
-	return s.nat64, nil
+	return s.backends.NAT64(), nil
 }
 
 // mapNAT64Error converts NAT64 errors to typed REST errors.

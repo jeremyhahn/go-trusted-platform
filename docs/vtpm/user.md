@@ -99,29 +99,25 @@ the verifier gave you — never a constant checked into a script.
 
 ```bash
 platformctl vtpm seal --bundle-id web-01-tpm \
-    --data "$(base64 -w0 secret.bin)" --auth-value "$AUTH"
+    --data "$(base64 -w0 secret.bin)" --pcrs 0,7 --auth-value "$AUTH"
 
 platformctl vtpm unseal --bundle-id web-01-tpm \
     --sealed-data "$SEALED" --auth-value "$AUTH"
 ```
 
-Three things to know:
+Three things people get wrong:
 
 **Encodings differ between flags.** `seal --data` and `unseal --sealed-data` are
 base64; `pcr extend --data` and `quote --nonce` are hex. Read the flag.
 
-**PCR-bound sealing is unavailable — `--pcrs` on seal is refused.** The go-xkms
-release the platform builds against seals an object with a PCR selection but no
-policy digest as an object protected only by `--auth-value`, which unseals
-whatever the PCRs hold. Binding it needs the PolicyPCR digest or a named TPM
-policy, and go-quicbaas does not re-export either yet (go-quicbaas #1171). Until
-it does, a seal that names PCRs fails, and the error names #1171. The platform
-never seals it in a way the PCRs do not protect. Unsealing blobs that already
-exist is unchanged.
+**`--pcrs` on seal binds the blob to those PCR values.** It unseals only while
+they still match. That is the point — and it is also why an unseal that worked
+yesterday fails after a firmware or bootloader change. Sealing to PCRs is a
+deliberate fragility.
 
 **`--auth-value` must match between seal and unseal**, and it is a secret. Do
 not type it as a literal argument in an interactive shell; a shell with history
-will record it. It is the only thing protecting a sealed blob today.
+will record it.
 
 ---
 

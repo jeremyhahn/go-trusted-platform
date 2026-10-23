@@ -89,7 +89,7 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 
 | Tool | Description |
 |------|-------------|
-| `platform_tpm_seal` | Seal data to TPM (PCR binding refused until go-quicbaas #1171) |
+| `platform_tpm_seal` | Seal data to TPM with optional PCR policy |
 | `platform_tpm_unseal` | Unseal TPM-sealed data |
 | `platform_tpm_random` | Generate random bytes from TPM RNG |
 
@@ -158,6 +158,8 @@ Get TPM device information and capabilities.
 ```json
 {
   "info": "...",
+  "version": "2.0",
+  "pcr_banks": ["sha1", "sha256"],
   "manufacturer": "IFX",
   "model": "SLB9670",
   "firmware_version": "7.85",
@@ -171,8 +173,9 @@ Get TPM device information and capabilities.
 ```
 
 `info` is the TPM's text summary. The fixed-property keys are absent when that
-read fails; `is_simulator` comes from the TPM configuration. Values shown are
-examples.
+read fails; `is_simulator` comes from the TPM configuration. `pcr_banks` names
+the banks the TPM allocates and is empty when the PCR read fails. Values shown
+are examples.
 
 ### platform_tpm_provision
 
@@ -551,13 +554,7 @@ Generate cryptographically secure random bytes from the TPM hardware RNG.
 
 ### platform_tpm_seal
 
-Seal data to the TPM.
-
-**PCR-bound sealing is unavailable.** A call that passes `pcrs` fails with
-`ErrPCRBoundSealUnavailable`, and the message names go-quicbaas #1171. Binding
-the object to PCRs needs the TPM PolicyPCR primitives, which go-quicbaas does
-not re-export yet. Without them the object would be sealed in a way the PCRs do
-not protect, so the tool refuses before the TPM is reached.
+Seal data to the TPM, optionally binding to PCR state.
 
 **Input Schema:**
 ```json
@@ -571,7 +568,7 @@ not protect, so the tool refuses before the TPM is reached.
     "pcrs": {
       "type": "array",
       "items": {"type": "integer"},
-      "description": "PCR indices to bind to (0-23); refused until go-quicbaas #1171"
+      "description": "PCR indices for sealing policy (0-23)"
     },
     "cn": {
       "type": "string",

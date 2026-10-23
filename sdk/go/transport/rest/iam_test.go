@@ -14,7 +14,8 @@ import (
 )
 
 // TestIAMResourceReplies_BareResourceLandsOnTheReply pins the IAM reply
-// decoding (#401): the REST handlers answer the bare user, role or tenant, and the reply must carry it in its resource field, as gRPC's does.
+// decoding (#401): the REST handlers answer the bare user, role, group or
+// tenant, and the reply must carry it in its resource field, as gRPC's does.
 // Before the decoders protojson discarded every field and the SDK returned a
 // nil resource with no error.
 func TestIAMResourceReplies_BareResourceLandsOnTheReply(t *testing.T) {
@@ -46,6 +47,15 @@ func TestIAMResourceReplies_BareResourceLandsOnTheReply(t *testing.T) {
 				return reply.(*platformv1.IAMRoleResponse).GetRole().GetDescription()
 			},
 			want: "ops",
+		},
+		{
+			name:       "CreateGroup",
+			grpcMethod: platformv1.PlatformIAMService_CreateGroup_FullMethodName,
+			req:        &platformv1.CreateIAMGroupRequest{TenantId: "acme", Name: "ops"},
+			resp:       &platformv1.IAMGroupResponse{},
+			payload:    `{"id":"g-3","tenant_id":"acme","name":"ops","members":["u-7"]}`,
+			got:        func(reply proto.Message) string { return reply.(*platformv1.IAMGroupResponse).GetGroup().GetId() },
+			want:       "g-3",
 		},
 		{
 			name:       "UpdateTenant",

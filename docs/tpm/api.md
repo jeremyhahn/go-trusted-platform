@@ -136,6 +136,16 @@ fields. Parse the structured fields. If the underlying `FixedProperties` read
 fails the call still succeeds with the text fallback and empty structured
 fields — check for an empty `Manufacturer` before trusting them.
 
+**`Info` reports the TPM version and the allocated PCR banks on every
+transport.** The version is `TPM_VERSION_2_0` on gRPC/Unix and REST and the
+string `"2.0"` (`tpmattrs.Version`) on QUIC (`version`), MCP (`version`) and
+`platformctl tpm info -o json`. The PCR banks come from one reader,
+`tpmattrs.ActivePCRBanks`, which reads PCR 0 of every bank the TPM allocates:
+`PcrBanks` (`PCR_BANK_SHA1`, `PCR_BANK_SHA256`, ...) on gRPC/Unix and REST, and
+lower-case hash names (`sha1`, `sha256`, ...) in `pcr_banks` on QUIC, MCP and
+the CLI. Like the `FixedProperties` fields this read fails soft: a TPM that
+refuses it returns an empty bank list and the call still succeeds.
+
 **`Info` also publishes the configured SRK handles**, so a client probes the real
 handle instead of assuming the default. Every transport carries the same two
 keys, as `0x%08X` strings, built by `tpmsrk.InfoProperties`: `platform_srk_handle`
@@ -339,12 +349,6 @@ JSON names. Over Unix, MCP and embedded the SDK refuses `Quote` with
 not touched; `VerifyQuote` works there. The
 cross-transport tests are `pkg/api/daemon/tpm_quote_transport_parity_test.go`.
 
-**Seal refuses `pcr_indices` on REST, gRPC, Unix and MCP.** PCR-bound sealing is
-unavailable until go-quicbaas re-exports the TPM PolicyPCR primitives
-(go-quicbaas #1171). Without them go-xkms would seal an object the PCRs do not
-protect, so `Seal` returns `FailedPrecondition`. Unseal is unchanged. The
-contract is in [engineering.md](engineering.md) §6.
-
 **There is no `platform_policy` field on `SealRequest` on any transport.**
 Sealing under the platform PCR policy is a server-side property of how the
 parent key was created, not a per-request option. The CLI's `--policy` flag has
@@ -544,7 +548,7 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID CSR and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete`. The exception is `LDevIDCSR` (`0x1D`): the daemon serves it with `IDevIDService.CreateLDevID`, so it takes `idevid:write` |
 | QUIC device-identity opcodes | **scoped** with their gRPC `IDevIDService` twins' scopes (#304): `idevid:read` for info, has, get-cert and device attributes; `idevid:write` for generate, CSR, install-cert and activate-credential; `idevid:delete` for the deletes. One `idevid:*` grant covers the same operation on gRPC, QUIC and MCP |
 | REST — web service | route-level middleware only; no per-operation TPM scope (below) |
-| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). The bearer token is checked by the shared platform-token validator: no token is `401` (`ErrTPMTokenRequired`), a token without the scope or no validator configured is `403` (`ErrTPMForbidden`) |
+| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). Each route goes through the listener's shared `ScopeGuard` (`pkg/api/rest/route_scope.go`), as every other daemon REST route does: a bearer platform token must grant the route's scope, and without one a verified operator client certificate (`*:*`) is accepted. No credential or a rejected token is `401` (`ErrRouteUnauthenticated`); a token without the scope, or no guard, is `403` (`ErrRouteForbidden`) |
 | REST — daemon listener, `rest_idevid.go` | no per-operation scope; mTLS only |
 
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
@@ -584,11 +588,11 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x02` | `StatusNotFound` | 404 | `NotFound` | upstream error text matching `not found` / `does not exist` / `no such` |
 | `0x03` | `StatusUnauthorized` | 401 | `Unauthenticated` | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | `Internal` | `ErrTPM2OperationFailed`, `ErrTPM2EncodingFailed`, anything unclassified |
-| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | upstream text matching `already exists` / `duplicate` |
+| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | `tpmek.ErrEKExists` (Create EK at an occupied EK handle); upstream text matching `already exists` / `duplicate` |
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| — | — | — | `FailedPrecondition` | upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrEKTemplateUnavailable` (Create EK with EK attributes that carry no creation template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line

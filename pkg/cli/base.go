@@ -176,7 +176,7 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		// Set the protocol-specific address
 		opts = append(opts, protocolAddress(proto, ctx.Remote.Server)...)
 
-		tlsConfig, err := buildTLSConfig(ctx.Remote)
+		tlsConfig, err := buildTLSConfig(ctx.Remote.CACert, ctx.Remote.ClientCert, ctx.Remote.ClientKey)
 		if err != nil {
 			return nil, err
 		}
@@ -198,7 +198,17 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		return nil, ErrInvalidContext{Context: string(ctx.Type)}
 	}
 
-	opts = append(opts, resolveContextQuicBaaSOptions(ctx)...)
+	quicbaasOpts := resolveContextQuicBaaSOptions(ctx)
+	if len(quicbaasOpts) > 0 {
+		quicbaasTLS, err := resolveContextQuicBaaSTLS(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if quicbaasTLS != nil {
+			quicbaasOpts = append(quicbaasOpts, platform.WithQuicBaaSTLSConfig(quicbaasTLS))
+		}
+	}
+	opts = append(opts, quicbaasOpts...)
 	return platform.NewOptions(opts...), nil
 }
 
@@ -260,37 +270,56 @@ func resolveContextQuicBaaSOptions(ctx *Context) []platform.Option {
 	return opts
 }
 
-// buildTLSConfig creates a TLS configuration from remote context settings.
-// Supports two modes:
+// resolveContextQuicBaaSTLS builds the TLS configuration of the quicbaas
+// connection from the context's TLS files: a local context's
+// quicbaas_ca_cert, quicbaas_client_cert and quicbaas_client_key, or a
+// remote context's ca_cert, client_cert and client_key. The quicbaas SDK
+// refuses every connection without TLS, the Unix transport included, so
+// these files must reach it; without them Client.QuicBaaS() reports
+// ErrQuicBaaSTLSNotConfigured. Other context types return nil.
+func resolveContextQuicBaaSTLS(ctx *Context) (*tls.Config, error) {
+	switch {
+	case ctx.Type == ContextTypeLocal && ctx.Local != nil:
+		return buildTLSConfig(ctx.Local.QuicBaaSCACert, ctx.Local.QuicBaaSClientCert, ctx.Local.QuicBaaSClientKey)
+	case ctx.Type == ContextTypeRemote && ctx.Remote != nil:
+		return buildTLSConfig(ctx.Remote.CACert, ctx.Remote.ClientCert, ctx.Remote.ClientKey)
+	default:
+		return nil, nil
+	}
+}
+
+// buildTLSConfig creates a TLS configuration from a context's CA
+// certificate, client certificate and client key files. No file at all
+// returns nil. Supports two modes:
 //   - CA-only: only CACert is set, provides server TLS verification without
 //     client certificate authentication (one-way TLS).
 //   - mTLS: CACert, ClientCert, and ClientKey are set, provides mutual TLS.
-func buildTLSConfig(remote *RemoteContext) (*tls.Config, error) {
-	if remote.ClientCert == "" && remote.ClientKey == "" && remote.CACert == "" {
+func buildTLSConfig(caCert, clientCert, clientKey string) (*tls.Config, error) {
+	if clientCert == "" && clientKey == "" && caCert == "" {
 		return nil, nil
 	}
 
 	// CA-only mode: server TLS verification without client certificates.
 	// This serves a remote context that connects to the control plane before
 	// the client has been issued a client certificate.
-	hasClientCert := remote.ClientCert != "" || remote.ClientKey != ""
-	if !hasClientCert && remote.CACert != "" {
-		return buildCACertOnlyTLSConfig(remote.CACert)
+	hasClientCert := clientCert != "" || clientKey != ""
+	if !hasClientCert && caCert != "" {
+		return buildCACertOnlyTLSConfig(caCert)
 	}
 
 	// mTLS mode: full mutual TLS with client certificate
 	var mtlsOpts []auth.MTLSOption
 
-	if remote.CACert != "" {
-		mtlsOpts = append(mtlsOpts, auth.WithCAFile(remote.CACert))
+	if caCert != "" {
+		mtlsOpts = append(mtlsOpts, auth.WithCAFile(caCert))
 	}
 
-	if remote.ClientCert != "" {
-		mtlsOpts = append(mtlsOpts, auth.WithCertFile(remote.ClientCert))
+	if clientCert != "" {
+		mtlsOpts = append(mtlsOpts, auth.WithCertFile(clientCert))
 	}
 
-	if remote.ClientKey != "" {
-		mtlsOpts = append(mtlsOpts, auth.WithKeyFile(remote.ClientKey))
+	if clientKey != "" {
+		mtlsOpts = append(mtlsOpts, auth.WithKeyFile(clientKey))
 	}
 
 	// Create mTLS provider to build the TLS config

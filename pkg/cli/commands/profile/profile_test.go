@@ -163,5 +163,5 @@ func TestNewCommand_Verbs(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names = append(names, sub.Name())
 	}
-	assert.ElementsMatch(t, []string{"get", "list", "delete", "match"}, names)
+	assert.ElementsMatch(t, []string{"get", "list", "delete", "match", "find-config"}, names)
 }

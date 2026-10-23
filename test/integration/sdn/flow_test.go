@@ -18,11 +18,11 @@ package sdn
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -332,7 +332,7 @@ func addFlow(bridge, flow string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "add-flow", bridge, flow)
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "add-flow", bridge, flow)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to add flow: %v, output: %s", err, output)
@@ -344,7 +344,7 @@ func deleteFlow(bridge, match string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "del-flows", bridge, match)
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "del-flows", bridge, match)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete flow: %v, output: %s", err, output)
@@ -356,7 +356,7 @@ func listFlows(bridge string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "dump-flows", bridge)
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "dump-flows", bridge)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to list flows: %v, output: %s", err, output)
@@ -369,7 +369,7 @@ func addFlowTable(bridge string, table int, flow string) error {
 	defer cancel()
 
 	fullFlow := fmt.Sprintf("table=%d,%s", table, flow)
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "add-flow", bridge, fullFlow)
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "add-flow", bridge, fullFlow)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to add flow to table: %v, output: %s", err, output)
@@ -381,7 +381,7 @@ func listFlowsTable(bridge string, table int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "dump-flows", bridge,
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "dump-flows", bridge,
 		fmt.Sprintf("table=%d", table))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -394,7 +394,7 @@ func getFlowStats(bridge string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "dump-flows", bridge, "--verbose")
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "dump-flows", bridge, "--verbose")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get flow stats: %v, output: %s", err, output)
@@ -406,7 +406,7 @@ func modifyFlow(bridge, flow string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-ofctl", "mod-flows", bridge, flow)
+	cmd := boundedexec.CommandContext(ctx, "ovs-ofctl", "mod-flows", bridge, flow)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to modify flow: %v, output: %s", err, output)

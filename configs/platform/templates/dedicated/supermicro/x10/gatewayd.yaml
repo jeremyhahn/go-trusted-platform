@@ -20,7 +20,7 @@
 # environment's tunnel point-to-point range (10.4.128.0/22; its first /31,
 # 10.4.128.0/31, is the reserved gateway HA sync link). A deployment
 # replaces them; nothing here is a default. Secrets are references only —
-# `kms://` and `secret://` resolve through the platform key store at start
+# `kms://` references resolve through the platform key store at start
 # (handbook conventions/configuration.md §4).
 
 gateway:
@@ -64,7 +64,7 @@ gateway:
   # One tunnel per uplink to the upstream relay. `type: gre` is what a relay
   # typically speaks. A relay that terminates ESP takes `transport: ipsec` with
   # an `ipsec:` section whose `key-ref` names the key in the platform secret
-  # store (kms:// or secret://), never the key itself; see docs/gateway/user.md.
+  # store (kms://), never the key itself; see docs/gateway/user.md.
   tunnels:
     - name: gre-relay-ispa
       type: gre

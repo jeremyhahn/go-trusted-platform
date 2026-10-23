@@ -28,7 +28,11 @@ REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 — see §3).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
 `sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
-(`pkg/api/daemon/quic_service.go:522`).
+and `0x7C`–`0x7F` (`pkg/api/daemon/quic_attestation.go`). The manifest and
+collection opcodes call the same gRPC servicer through
+`pkg/api/daemon/quic_attestation_adapter.go`, so each answers with its gRPC
+twin's result and error class; `0x77` has no report store behind any transport
+and answers `StatusNotImplemented`.
 MCP: the `attestation_*` tools. The five manifest tools call the gRPC
 `AttestationService` methods (`pkg/api/daemon/mcp_attestation_manifests.go`), so
 each answers with its gRPC twin's result and error class. The five quote and
@@ -43,13 +47,13 @@ refused (§5).
 |---|---|---|---|---|---|
 | List manifests | `GET /api/v1/attestation/manifests` | `ListManifests` | `MISSING — docs/13 G7` | `attestation_list_manifests` | ✅ |
 | Get manifest | `GET /api/v1/attestation/manifests/{id}` | `GetManifest` | `OpAttestGetManifest` (`0x76`) | `attestation_get_manifest` | ✅ |
-| Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | ✅ |
+| Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | refused — every transport answers `ErrTPMSessionNotConfigured` ([engineering](engineering.md) §3a) |
 | Verify manifest | `POST /api/v1/attestation/manifests/verify` | `VerifyManifest` | `OpAttestVerifyManifest` (`0x7D`) | `attestation_verify_manifest` | ✅ |
 | Delete manifest | `DELETE /api/v1/attestation/manifests/{id}` | `DeleteManifest` | `MISSING — docs/13 G7` | `attestation_delete_manifest` | ✅ |
 | Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `attestation_get_quote` (HTTPS only) | refused — no TLS (§5.1a) |
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
-| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `attestation_collect_vm` | ✅ |
+| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) — without a TPM session it carries `ErrTPMSessionNotConfigured` as the other transports do (gRPC `Internal`, QUIC `StatusInternalError`) | `attestation_collect_vm` | ✅ |
 | Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `attestation_collect_container` | ✅ |
 | Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `MISSING — docs/13 G7` | — |
 | Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
@@ -88,8 +92,10 @@ The REST adapter in `test/integration/attestation/rest_adapter.go` calls only
 these routes. The suite verbs no route serves — VM identity, a separate
 manifest-signing step, push, and the workload chain — return `ErrRESTNoRoute`
 instead of calling a path the daemon never registered (#546).
-`BuildManifest` signs as it builds, and `VerifyManifest` fetches the stored
-manifest and posts it to `/manifests/verify`, which takes the manifest itself.
+`BuildManifest` posts to `/manifests/build`, which the daemon answers with
+`ErrTPMSessionNotConfigured` ([engineering](engineering.md) §3a).
+`VerifyManifest` fetches the stored manifest and posts it to
+`/manifests/verify`, which takes the manifest itself.
 
 `VerifyManifest` does not check a manifest signature. A request that carries a
 public key is refused `FailedPrecondition`

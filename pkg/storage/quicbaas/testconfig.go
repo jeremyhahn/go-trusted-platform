@@ -56,6 +56,9 @@ func TestConfig(t TestingT) *Config {
 		Compression:       "none",
 		SyncWrites:        false,
 		RequestTimeout:    30 * time.Second,
+		// Serve every service the build carries: a WITH_VECTOR=1 build
+		// (the integration build) runs the vector service.
+		Vector: &VectorServiceConfig{Enabled: vectorCompiled},
 	}
 }
 

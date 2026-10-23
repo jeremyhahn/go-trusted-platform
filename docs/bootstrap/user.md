@@ -1,6 +1,6 @@
 # Bootstrap — Using It
 
-> **Status: NORMATIVE** · Scope: operating `platformctl bootstrap`, `platformctl firstboot` and the day-zero flow · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: operating `platformctl bootstrap`, `platformctl firstboot` and the day-zero flow · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -319,8 +319,11 @@ platformctl firstboot
 
 It reads the disk key out of the encrypted container the installer left behind,
 seals it into the machine's TPM against the boot measurements, unlocks the disk,
-copies the platform state onto it, and — only once sealing worked — securely
-erases the container.
+and copies the platform state onto it. It keeps the container. The next boot
+that unlocks the disk with the TPM seal (`TPM-PCR`) proves the seal, and only
+then is the container securely erased
+([architecture](architecture.md#phase-3a--node-first-boot-on-the-node-concurrent-with-the-wait-above),
+seal confirmation).
 
 **There is no default set of measurements.** Without a configured or supplied
 PCR list the command refuses to run rather than sealing against a guess.
@@ -372,6 +375,7 @@ Controllers almost always present self-signed, frequently expired certificates.
 | `spki` | You obtained the certificate fingerprint out of band — put it in `bmc_spki_pin` |
 | `ca-file` | Your controllers were issued certificates by a CA whose bundle you have |
 | `dane` | You publish TLSA records for your controllers |
+| `tofu` | Neither of the above: the controller's own certificate is pinned on first contact |
 
 **Captured pins do not survive the run.** They live in memory for one
 `bootstrap run` and are gone afterwards. That means a controller certificate that
@@ -466,10 +470,6 @@ tooling or the remote console, then re-run with
 `--skip-virtual-media-mount` — boot device, power cycle, health wait and unmount
 still run.
 
-**"deploy" fails immediately with a manifest-path error.**
-`platformctl bootstrap deploy` cannot currently deploy to a Linux target on its
-own. Use `platformctl bootstrap run`, which performs the same phase correctly.
-
 **The bootstrap container is still running after a successful-looking run.**
 The health gate did not pass, so teardown was skipped on purpose — that container
 may be the only DHCP and DNS on the provisioning network. Confirm the platform's
@@ -499,9 +499,10 @@ it.
 **The encrypted installer container is key material.** It holds the disk key in
 plaintext, protected by a well-known password whose only purpose is to stop a
 discarded disk from yielding a key to a casual reader. It is not access control.
-It is erased once sealing succeeds — and preserved when sealing fails, so a
-machine left in that state is a machine whose disk key is recoverable by anyone
-holding the disk. Resolve a failed seal; do not live with one.
+It is erased only once a later boot unlocks the disk with the TPM seal, and
+kept until then, so a machine whose seal never works is a machine whose disk
+key is recoverable by anyone holding the disk. Resolve a failed seal; do not
+live with one.
 
 ---
 

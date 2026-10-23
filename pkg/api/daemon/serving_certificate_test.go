@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,13 +45,15 @@ func newLoopbackServingCert(t *testing.T, serial int64) tls.Certificate {
 // presentedSerial completes a TLS 1.3 handshake with addr, trusting roots,
 // and returns the serial of the leaf the server presented. Dialing an IP
 // sends no SNI, the case where crypto/tls would otherwise prefer
-// Certificates[0] over GetCertificate.
+// Certificates[0] over GetCertificate. It offers h2 because the gRPC server
+// refuses a handshake that negotiates no ALPN protocol.
 func presentedSerial(t *testing.T, addr string, roots *x509.CertPool) *big.Int {
 	t.Helper()
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
 		RootCAs:    roots,
 		MinVersion: tls.VersionTLS13,
+		NextProtos: []string{"h2"},
 	})
 	require.NoError(t, err)
 	defer conn.Close()
@@ -84,6 +87,43 @@ func TestDaemon_MCPHTTPPresentsRenewedTLSIdentity(t *testing.T) {
 	require.NoError(t, serving.Store(renewed))
 	assert.Equal(t, int64(2), presentedSerial(t, addr, roots).Int64(),
 		"the next handshake presents the renewed certificate without a restart")
+}
+
+// TestDaemon_GRPCTCPPresentsRenewedTLSIdentity proves the gRPC TCP listener
+// of a running daemon presents a renewed TLSIdentity on the next handshake
+// (#36): its credentials read the identity per handshake instead of pinning
+// the certificate it started with.
+func TestDaemon_GRPCTCPPresentsRenewedTLSIdentity(t *testing.T) {
+	first := newLoopbackServingCert(t, 1)
+	renewed := newLoopbackServingCert(t, 2)
+	roots := x509.NewCertPool()
+	roots.AddCert(first.Leaf)
+	roots.AddCert(renewed.Leaf)
+
+	serving, err := NewServingCertificate(first)
+	require.NoError(t, err)
+	config := testConfig(filepath.Join(t.TempDir(), "platformd.sock"))
+	config.EnableREST = false
+	config.EnableGRPCTCP = true
+	config.GRPCListenAddr = "127.0.0.1:0"
+	config.TLSCertificate = nil
+	config.TLSIdentity = serving
+
+	d, err := New(config)
+	require.NoError(t, err)
+	require.NoError(t, d.Start(context.Background()))
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		assert.NoError(t, d.Stop(ctx))
+	}()
+
+	addr := d.grpcListener.Addr().String()
+	assert.Equal(t, int64(1), presentedSerial(t, addr, roots).Int64())
+
+	require.NoError(t, serving.Store(renewed))
+	assert.Equal(t, int64(2), presentedSerial(t, addr, roots).Int64(),
+		"the next gRPC handshake presents the renewed certificate without a restart")
 }
 
 func TestNewServerTLSConfig_TLSIdentityReadsPerHandshake(t *testing.T) {

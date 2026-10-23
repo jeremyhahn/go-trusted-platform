@@ -296,7 +296,7 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
    ⇒ switch_root
 ```
 
-**First provision, the EK and recovery (owner ruling 2026-10-17).** This is the
+**First provision, the EK and recovery.** This is the
 contract; the implementation is tracked by #951, and until it lands the code
 still behaves as the superseded text in
 [docs/bootstrap/architecture.md](../bootstrap/architecture.md) (rejected

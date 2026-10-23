@@ -88,6 +88,9 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"vm snapshot restore", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotRestore, OpcodePermission{Resource: "vm", Action: "write"}},
 		{"vm snapshot delete", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotDelete, OpcodePermission{Resource: "vm", Action: "delete"}},
 		{"vm snapshot list", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotList, OpcodePermission{Resource: "vm", Action: "read"}},
+		{"vm snapshot get", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotGet, OpcodePermission{Resource: "vm", Action: "read"}},
+		{"vm prepare migration", quicwire.OpVMExtendedCategory, quicwire.OpVMPrepareMigration, OpcodePermission{Resource: "vm", Action: "write"}},
+		{"vm finalize migration", quicwire.OpVMExtendedCategory, quicwire.OpVMFinalizeMigration, OpcodePermission{Resource: "vm", Action: "write"}},
 		{"vm attest", quicwire.OpVMExtendedCategory, quicwire.OpVMAttest, OpcodePermission{Resource: "vm", Action: "read"}},
 		{"vm verify attest", quicwire.OpVMExtendedCategory, quicwire.OpVMVerifyAttest, OpcodePermission{Resource: "vm", Action: "read"}},
 		{"eab revoke", quicwire.OpProvisioningCategory, quicwire.EABSubRevokeCredential, OpcodePermission{Resource: "eab", Action: "write"}},
@@ -95,6 +98,7 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"device disable", quicwire.OpProvisioningCategory, quicwire.DeviceSubDisable, OpcodePermission{Resource: "device", Action: "write"}},
 		{"device enable", quicwire.OpProvisioningCategory, quicwire.DeviceSubEnable, OpcodePermission{Resource: "device", Action: "write"}},
 		{"device profile match", quicwire.OpProvisioningCategory, quicwire.DeviceSubFindMatchingProfile, OpcodePermission{Resource: "device", Action: "read"}},
+		{"device find config", quicwire.OpProvisioningCategory, quicwire.DeviceSubFindConfigForDevice, OpcodePermission{Resource: "device", Action: "read"}},
 		{"pxe get device by mac", quicwire.OpProvisioningCategory, quicwire.PXESubGetDeviceByMAC, OpcodePermission{Resource: "pxe", Action: "read"}},
 		{"pxe set device enrolled", quicwire.OpProvisioningCategory, quicwire.PXESubSetDeviceEnrolled, OpcodePermission{Resource: "pxe", Action: "write"}},
 		{"pxe get events", quicwire.OpProvisioningCategory, quicwire.PXESubGetEvents, OpcodePermission{Resource: "pxe", Action: "read"}},
@@ -117,6 +121,21 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"tpm2 clear", quicwire.OpTPM2Category, quicwire.SubOpTPM2Clear, OpcodePermission{Resource: "tpm", Action: "delete"}},
 		{"tpm2 certify", quicwire.OpTPM2Category, quicwire.SubOpTPM2Certify, OpcodePermission{Resource: "tpm", Action: "read"}},
 		{"secrets delete", quicwire.OpSecretsCategory, quicwire.SecretsSubDelete, OpcodePermission{Resource: "secrets", Action: "delete"}},
+		// The list subs need secrets:list, as ListSecrets and
+		// ListSecretVersions do on gRPC and secret_list* on MCP.
+		{"secrets list", quicwire.OpSecretsCategory, quicwire.SecretsSubList, OpcodePermission{Resource: "secrets", Action: "list"}},
+		{"secrets list versions", quicwire.OpSecretsCategory, quicwire.SecretsSubListVersions, OpcodePermission{Resource: "secrets", Action: "list"}},
+		{"secrets get version", quicwire.OpSecretsCategory, quicwire.SecretsSubGetVersion, OpcodePermission{Resource: "secrets", Action: "read"}},
+		{"secrets rotate", quicwire.OpSecretsCategory, quicwire.SecretsSubRotate, OpcodePermission{Resource: "secrets", Action: "write"}},
+		{"secrets rollback", quicwire.OpSecretsCategory, quicwire.SecretsSubRollback, OpcodePermission{Resource: "secrets", Action: "write"}},
+		{"secrets update status", quicwire.OpSecretsCategory, quicwire.SecretsSubUpdateStatus, OpcodePermission{Resource: "secrets", Action: "write"}},
+		// The DEK subs carry their gRPC DEKManagement method's scope.
+		{"dek create", quicwire.OpKMSExtendedCategory, quicwire.KMSSubCreateDEK, OpcodePermission{Resource: "kms", Action: "write"}},
+		{"dek list", quicwire.OpKMSExtendedCategory, quicwire.KMSSubListDEKs, OpcodePermission{Resource: "kms", Action: "read"}},
+		{"dek get", quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetDEK, OpcodePermission{Resource: "kms", Action: "read"}},
+		{"dek status", quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetDEKStatus, OpcodePermission{Resource: "kms", Action: "read"}},
+		{"dek rotate", quicwire.OpKMSExtendedCategory, quicwire.KMSSubRotateDEK, OpcodePermission{Resource: "kms", Action: "write"}},
+		{"dek delete", quicwire.OpKMSExtendedCategory, quicwire.KMSSubDeleteDEK, OpcodePermission{Resource: "kms", Action: "delete"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

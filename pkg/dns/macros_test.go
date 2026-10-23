@@ -14,6 +14,7 @@
 package dns
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -87,7 +88,7 @@ func TestSetupMacros(t *testing.T) {
 		},
 	}
 
-	setupMacros()
+	assert.NoError(t, setupMacros())
 
 	assert.Equal(t, "192.168.1.1", macros["PRIVATE_IPv4"])
 	assert.Equal(t, "fe80::1", macros["PRIVATE_IPv6"])
@@ -199,7 +200,7 @@ func TestSetupMacros_NilPublicServer(t *testing.T) {
 		},
 	}
 
-	setupMacros()
+	assert.NoError(t, setupMacros())
 
 	assert.Equal(t, "192.168.1.1", macros["PRIVATE_IPv4"])
 	assert.Equal(t, "internal.local.", macros["PRIVATE_DOMAIN"])
@@ -224,7 +225,7 @@ func TestSetupMacros_NilInternalServer(t *testing.T) {
 		InternalServer: nil, // Explicitly nil
 	}
 
-	setupMacros()
+	assert.NoError(t, setupMacros())
 
 	assert.Equal(t, "8.8.8.8", macros["PUBLIC_IPv4"])
 	assert.Equal(t, "example.com.", macros["PUBLIC_DOMAIN"])
@@ -246,12 +247,50 @@ func TestSetupMacros_BothServersNil(t *testing.T) {
 		InternalServer: nil,
 	}
 
-	setupMacros()
+	assert.NoError(t, setupMacros())
 
 	assert.Equal(t, "192.168.1.1", macros["PRIVATE_IPv4"])
 	assert.Equal(t, "8.8.8.8", macros["PUBLIC_IPv4"])
 	assert.Empty(t, macros["PUBLIC_DOMAIN"])
 	assert.Empty(t, macros["PRIVATE_DOMAIN"])
+}
+
+func TestSetupMacros_HostnameLookupFails(t *testing.T) {
+	origLookup := lookupHostname
+	origConfig := Configuration
+	origHostname := macros["HOSTNAME"]
+	t.Cleanup(func() {
+		lookupHostname = origLookup
+		Configuration = origConfig
+		macros["HOSTNAME"] = origHostname
+	})
+
+	errNoHostname := errors.New("uname failed")
+	lookupHostname = func() (string, error) { return "", errNoHostname }
+	Configuration = &Config{}
+	macros["HOSTNAME"] = "previous-host"
+
+	err := setupMacros()
+
+	assert.ErrorIs(t, err, ErrHostnameLookup)
+	assert.ErrorIs(t, err, errNoHostname)
+	assert.Equal(t, "previous-host", macros["HOSTNAME"], "a failed lookup changes no macro")
+}
+
+func TestSetupMacros_UsesTheLookedUpHostname(t *testing.T) {
+	origLookup := lookupHostname
+	origConfig := Configuration
+	t.Cleanup(func() {
+		lookupHostname = origLookup
+		Configuration = origConfig
+	})
+
+	lookupHostname = func() (string, error) { return "ns1", nil }
+	Configuration = &Config{InternalServer: &InternalServer{Zone: entities.Zone{Name: "example.internal."}}}
+
+	assert.NoError(t, setupMacros())
+	assert.Equal(t, "ns1", macros["HOSTNAME"])
+	assert.Equal(t, "ns1.example.internal.", macros["PRIVATE_FQDN"])
 }
 
 // TestExpandVar_NoMacroInString verifies ExpandVar with no macro syntax.

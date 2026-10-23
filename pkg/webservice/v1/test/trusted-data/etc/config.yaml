@@ -163,7 +163,7 @@ webservice:
   key:
     hash: SHA-256
     algorithm: ECDSA
-    tpm-policy: platform
+    platform-policy: true
     signature-algorithm: ECDSA-SHA256
     store: tpm2
     ecc:
@@ -210,7 +210,7 @@ webservices:
   key:
     hash: SHA-256
     algorithm: ECDSA
-    tpm-policy: platform
+    platform-policy: true
     signature-algorithm: ECDSA-SHA256
     store: tpm2
     ecc:

@@ -50,7 +50,7 @@ authorization decision point.
 | REST adapter | `pkg/webservice/v1/rest/iam/` | this repo |
 | **WebAuthn user mirror** | `pkg/webservice/v1/rest/iam/mirror.go` | this repo |
 | Service, adapter, stub, health | `pkg/api/daemon/iam_*.go` | this repo |
-| gRPC `PlatformIAMService` (34 RPCs) | `pkg/api/grpc/iam_service.go` | this repo |
+| gRPC `PlatformIAMService` (41 RPCs) | `pkg/api/grpc/iam_service.go` | this repo |
 | QUIC handlers | `pkg/api/quic/iam_handlers.go`, `pkg/api/daemon/quic_iam.go` | this repo |
 | MCP tools | `pkg/api/mcp/iam_tools.go` | this repo |
 | CLI | `pkg/cli/commands/iam/` | this repo |
@@ -67,8 +67,8 @@ through `services/iam`.
 
 - **`POST /api/v1/tenants`** — a *platform* tenant: a VLAN, a bridge, a
   keyspace, a DEK and a quota. [`docs/tenant/`](../tenant/).
-- **`POST /api/v1/iam/tenants`** — an *IAM scope* for users, roles, policies
-  and applications.
+- **`POST /api/v1/iam/tenants`** — an *IAM scope* for users, groups, roles,
+  policies and applications.
 
 One word, two operations, and creating one does not create the other. **Which
 should be authoritative — or whether the IAM tree should defer to the platform
@@ -115,7 +115,7 @@ registration's mirror failed with `iam.role: not_found`.
 
 ## Trust boundaries
 
-1. **Caller → IAM.** On gRPC, all 34 methods are scoped. A platform token is
+1. **Caller → IAM.** On gRPC, all 41 methods are scoped. A platform token is
    checked against its `scp` claim. A token without scope claims is checked
    by the IAM PEP ([`docs/daemon/api.md`](../daemon/api.md) §5). **On MCP** each
    `iam_*` tool needs the scope of its gRPC twin; `iam_authenticate` is open,
@@ -133,6 +133,8 @@ registration's mirror failed with `iam.role: not_found`.
 - **It does not let an application secret be read.**
 - **It does not manage platform tenancy** despite having routes with "tenant"
   in them.
+- **It does not offer group membership changes from the CLI** — those two verbs
+  are unimplemented stubs ([cli.md](cli.md) §3), not a scope decision.
 
 ## System Overview
 
@@ -151,7 +153,7 @@ registration's mirror failed with `iam.role: not_found`.
 │  │  │  Manager    │  │   Store     │  │   FIDO2     │  │   OIDC     │     │  │
 │  │  │             │  │             │  │             │  │            │     │  │
 │  │  │ • Isolation │  │ • Users     │  │ • Register  │  │ • Provider │     │  │
-│  │  │ • Quotas    │  │             │  │ • Authn     │  │ • Consumer │     │  │
+│  │  │ • Quotas    │  │ • Groups    │  │ • Authn     │  │ • Consumer │     │  │
 │  │  │ • Settings  │  │ • Roles     │  │ • Creds     │  │ • Tokens   │     │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘     │  │
 │  │                                                                        │  │
@@ -203,9 +205,10 @@ Manages multi-tenant isolation:
 
 ### Identity Store
 
-User and role management:
+User, group, and role management:
 
 - User registration and profile management
+- Group membership and hierarchy
 - Role assignments and permissions
 - Custom attributes for ABAC
 
@@ -256,6 +259,7 @@ __iam:tenant:{tenant_id}:settings            -> Tenant settings
 
 Identity:
 __iam:tenant:{tenant_id}:user:{user_id}      -> User record
+__iam:tenant:{tenant_id}:group:{group_id}    -> Group record
 __iam:tenant:{tenant_id}:role:{role_id}      -> Role record
 
 Credentials:
@@ -465,7 +469,7 @@ Request                   Policy Engine                 Decision
 │   ┌───────────────────────────────────────────────────────────────────────┐ │
 │   │  • Resource Pattern Trie: O(k) lookup                                 │ │
 │   │  • Deny Rule Bloom Filter: Quick check for potential denies           │ │
-│   │  • Subject Selector Index: Fast policy lookup by role                 │ │
+│   │  • Subject Selector Index: Fast policy lookup by role/group           │ │
 │   └───────────────────────────────────────────────────────────────────────┘ │
 │                                                                             │
 │   Phase 4: Caching                                                          │
@@ -500,6 +504,7 @@ Per-request authorization (~2-5us typical):
 │   Tenant A (acme-corp)                                                      │
 │   ┌───────────────────────────────────────────────────────────────────────┐ │
 │   │  __iam:tenant:acme-corp:user:*                                        │ │
+│   │  __iam:tenant:acme-corp:group:*                                       │ │
 │   │  __iam:tenant:acme-corp:policy:*                                      │ │
 │   │  keys/tenant/acme-corp/**  (KMS keys)                                 │ │
 │   └───────────────────────────────────────────────────────────────────────┘ │
@@ -507,6 +512,7 @@ Per-request authorization (~2-5us typical):
 │   Tenant B (globex-inc)                                                     │
 │   ┌───────────────────────────────────────────────────────────────────────┐ │
 │   │  __iam:tenant:globex-inc:user:*                                       │ │
+│   │  __iam:tenant:globex-inc:group:*                                      │ │
 │   │  __iam:tenant:globex-inc:policy:*                                     │ │
 │   │  keys/tenant/globex-inc/**  (KMS keys)                                │ │
 │   └───────────────────────────────────────────────────────────────────────┘ │

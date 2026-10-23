@@ -1,12 +1,13 @@
 # Remote-Access VPN — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl vpn` · Last verified: 2026-10-16
+> **Status: NORMATIVE** · Scope: `platformctl vpn` · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > Partial today: the operator verbs ship (#584 PR 3); `connect`, `connect --foreground`, `disconnect`, `lease`, `posture` and `renew` exist with their exit codes, the verbs that talk to a gateway present this host's TPM device identity, and `connect` brings up the leased WireGuard or MASQUE data plane; `connect` and `renew` sign the fido2 person factor with a FIDO2 authenticator, while a PIV signer waits on the SDK; the gateway listener they call exists (#557).
 > `platformctl vpn peer|status|posture-policy` exist (`pkg/cli/commands/vpn`)
 > and are exercised over every transport by `test/integration/vpn/`. The
 > client verbs are tested against a stand-in for the gateway's admission
-> listener, which does not exist yet (#557). A host without a TPM device
+> listener: the listener exists (#557), but `gatewayd` does not open it on a
+> deployed gateway yet. A host without a TPM device
 > identity exits 1 with "this host has no TPM device identity for the VPN
 > client: <reason>".
 > Feature folder: [architecture.md](architecture.md) · [engineering.md](engineering.md) ·

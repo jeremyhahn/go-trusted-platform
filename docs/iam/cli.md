@@ -11,6 +11,7 @@
 ```
 platformctl iam
     user     Manage users
+    group    Manage groups
     role     Manage roles
     policy   Manage authorization policies
     app      Manage OAuth applications
@@ -38,10 +39,9 @@ at the CLI.
 | `--verbose` | `-v` | `false` | |
 | `--no-color` | | `false` | `NO_COLOR` |
 
-The `iam` subgroups use long-form `--tenant` with no short.
-
-There is no `iam group`: go-quicbaas v0.13 removed IAM groups, so access is
-granted through roles alone.
+`iam group` binds `-t` to `--tenant`, `-n` to `--name` and `-d` to
+`--description`. The other subgroups use long-form `--tenant` with no short.
+**That inconsistency is in the code**; use long forms.
 
 ---
 
@@ -49,16 +49,16 @@ granted through roles alone.
 
 | Verb | Positional | Flags |
 |---|---|---|
-| `create` | — | `--tenant` (required), `--email` (required), `--name`, `--roles`, `--attributes` |
+| `create` | — | `--tenant` (required), `--email` (required), `--name`, `--roles`, `--groups`, `--attributes` |
 | `get` | `<tenant-id> <user-id>` | — |
 | `list` | — | `--tenant` (required) |
-| `update` | — | `--tenant` (required), `--user-id` (required), `--email`, `--name`, `--roles`, `--attributes` |
+| `update` | — | `--tenant` (required), `--user-id` (required), `--email`, `--name`, `--roles`, `--groups`, `--attributes` |
 | `delete` | `<tenant-id> <user-id>` | — |
 | `assign-role` | `<tenant-id> <user-id> <role>` | — |
 | `revoke-role` | `<tenant-id> <user-id> <role>` | — |
 
 **`update` replaces rather than merges.** The help text says so explicitly for
-`--roles` and `--attributes`: *"(replaces existing)"*. Passing
+`--roles`, `--groups` and `--attributes`: *"(replaces existing)"*. Passing
 `--roles admin` on a user who had `admin,operator` leaves them with `admin`
 alone. To add a role, use `assign-role`.
 
@@ -66,7 +66,7 @@ alone. To add a role, use `assign-role`.
 
 ```bash
 platformctl iam user create --tenant tenant-a --email ops@example.com \
-    --name "Ops" --roles operator
+    --name "Ops" --roles operator --groups platform-ops
 platformctl iam user get tenant-a u-0f21
 platformctl iam user assign-role tenant-a u-0f21 admin
 platformctl iam user revoke-role tenant-a u-0f21 admin
@@ -74,7 +74,35 @@ platformctl iam user revoke-role tenant-a u-0f21 admin
 
 ---
 
-## 3. `platformctl iam role`
+## 3. `platformctl iam group`
+
+| Verb | Positional | Flags |
+|---|---|---|
+| `create` | `<group-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d` |
+| `get` | `<tenant-id> <group-id>` | — |
+| `list` | — | `--tenant`/`-t` (required) |
+| `update` | `<group-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d` |
+| `delete` | `<tenant-id> <group-id>` | — |
+| `add-member` | `<tenant-id> <group-id> <user-id>` | **NOT IMPLEMENTED** |
+| `remove-member` | `<tenant-id> <group-id> <user-id>` | **NOT IMPLEMENTED** |
+
+**Group membership cannot be changed from the CLI.** Both verbs are marked
+"(not yet implemented)" in `pkg/cli/commands/iam/group*.go`. Use REST or MCP:
+
+```bash
+curl -s -X POST   https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/g-01/members/u-0f21
+curl -s -X DELETE https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/g-01/members/u-0f21
+```
+
+The MCP tools `iam_add_group_member` and `iam_remove_group_member` also work.
+
+As a partial workaround, `iam user create --groups ...` and
+`iam user update --groups ...` set a user's group list — remembering that
+`update` **replaces** it.
+
+---
+
+## 4. `platformctl iam role`
 
 | Verb | Positional | Flags |
 |---|---|---|
@@ -86,7 +114,7 @@ platformctl iam user revoke-role tenant-a u-0f21 admin
 
 ---
 
-## 4. `platformctl iam policy`
+## 5. `platformctl iam policy`
 
 | Verb | Positional | Purpose |
 |---|---|---|
@@ -111,7 +139,7 @@ platformctl iam policy create   --tenant tenant-a ...
 
 ---
 
-## 5. `platformctl iam app`
+## 6. `platformctl iam app`
 
 OAuth applications.
 
@@ -140,10 +168,11 @@ platformctl iam app rotate-secret tenant-a c-9a3f
 
 ---
 
-## 6. What the CLI does not cover
+## 7. What the CLI does not cover
 
 | Capability | Reach it with |
 |---|---|
+| Group membership add / remove | REST, gRPC, QUIC, MCP |
 | Authenticate | gRPC, QUIC, MCP |
 | Create / verify / revoke a token | gRPC, QUIC (`0xF9`–`0xFB`), MCP |
 | Check a permission | gRPC, QUIC, MCP |
@@ -154,7 +183,7 @@ with its own CLI: `platformctl tenant` ([`docs/tenant/`](../tenant/)).
 
 ---
 
-## 7. Parity gap
+## 8. Parity gap
 
 `conventions/feature-docs.md` §4 requires every verb here to have a
 `CommandDefinition` in the integration parity suite. **No `CommandDefinition`

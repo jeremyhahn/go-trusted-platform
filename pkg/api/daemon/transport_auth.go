@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
@@ -279,6 +280,27 @@ func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *l
 		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
 	}
 	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
+}
+
+// newMCPPeerAuthenticator builds the authenticator that admits a tokenless
+// MCP-over-HTTP request by its verified client certificate, the credential
+// REST, gRPC and QUIC accept under mTLS. It returns nil without mTLS: the MCP
+// listener then requests no client certificate and only bearer tokens
+// authenticate.
+func newMCPPeerAuthenticator(config *Config, logger *logging.Logger) (mcp.PeerAuthenticator, error) {
+	clientCAPool, err := resolveMTLSClientCAPool(config, transportMCP)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAPool == nil {
+		return nil, nil
+	}
+	mtlsAuth, err := auth.NewMTLSAdapterFromRoots(logger, clientCAPool)
+	if err != nil {
+		return nil, ErrTLSConfigFailed{Reason: "MCP mTLS auth: " + err.Error()}
+	}
+	logger.Info("MCP server: mTLS authentication enabled")
+	return mtlsPeerAuthenticator{authenticator: mtlsAuth}, nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the

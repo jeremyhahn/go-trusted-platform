@@ -54,7 +54,7 @@ type TPMCommands interface {
 	Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error)
 
 	// Event Log Commands (platformctl tpm eventlog)
-	EventLog(ctx context.Context, path string) (*EventLogResult, error)
+	EventLog(ctx context.Context) (*EventLogResult, error)
 }
 
 // =============================================================================
@@ -161,11 +161,10 @@ type EKDeleteResult struct {
 
 // SRKCreateOptions contains options for creating an SRK.
 type SRKCreateOptions struct {
-	Algorithm  string
-	Handle     uint32
-	Password   string
-	Persistent bool
-	Policy     bool
+	Algorithm      string
+	Persistent     bool
+	Parent         uint32
+	ParentPassword string
 }
 
 // SRKCreateResult contains the result of an SRK creation.

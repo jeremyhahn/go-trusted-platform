@@ -7,6 +7,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -117,4 +118,156 @@ func dekUsagePercent(info *dekclient.DEKInfo) float64 {
 		percent = max(percent, float64(info.BytesUsed)*100/float64(info.MaxBytesUsed))
 	}
 	return percent
+}
+
+// GetSecretVersion retrieves one version of a secret, including its data.
+func (a *SecretsServerAdapter) GetSecretVersion(ctx context.Context, req *pb.GetSecretVersionRequest) (*pb.GetSecretVersionResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+
+	info, err := a.client.GetVersion(ctx, &secretsclient.GetSecretVersionRequest{
+		SecretID: req.GetSecretId(),
+		Version:  int(req.GetVersion()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "secret version not found: %v", err)
+	}
+
+	return &pb.GetSecretVersionResponse{
+		Version:   secretVersionToPb(info),
+		Data:      info.Data,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// ListSecretVersions lists the versions of a secret without their data.
+func (a *SecretsServerAdapter) ListSecretVersions(ctx context.Context, req *pb.ListSecretVersionsRequest) (*pb.ListSecretVersionsResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+
+	resp, err := a.client.ListVersions(ctx, req.GetSecretId())
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "secret versions not found: %v", err)
+	}
+
+	versions := make([]*pb.SecretVersion, 0, len(resp.Versions))
+	for i := range resp.Versions {
+		versions = append(versions, secretVersionToPb(&resp.Versions[i]))
+	}
+	return &pb.ListSecretVersionsResponse{
+		Versions:  versions,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// RotateSecret stores new data as the secret's next version.
+func (a *SecretsServerAdapter) RotateSecret(ctx context.Context, req *pb.RotateSecretRequest) (*pb.RotateSecretResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+	if len(req.GetNewData()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "new_data is required")
+	}
+
+	resp, err := a.client.Rotate(ctx, &secretsclient.RotateSecretRequest{
+		SecretID: req.GetSecretId(),
+		NewData:  req.GetNewData(),
+		Metadata: req.GetMetadata(),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "secret rotation failed: %v", err)
+	}
+
+	return &pb.RotateSecretResponse{
+		SecretId:   resp.SecretID,
+		OldVersion: uint64(resp.OldVersion),
+		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
+	}, nil
+}
+
+// RollbackSecret makes an earlier version's data the secret's newest version.
+func (a *SecretsServerAdapter) RollbackSecret(ctx context.Context, req *pb.RollbackSecretRequest) (*pb.RollbackSecretResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+	if req.GetTargetVersion() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "target_version is required")
+	}
+
+	resp, err := a.client.Rollback(ctx, &secretsclient.RollbackSecretRequest{
+		SecretID:      req.GetSecretId(),
+		TargetVersion: int(req.GetTargetVersion()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "secret rollback failed: %v", err)
+	}
+
+	return &pb.RollbackSecretResponse{
+		SecretId:   resp.SecretID,
+		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
+	}, nil
+}
+
+// secretStatusFromPb maps the proto secret status to the SDK status.
+var secretStatusFromPb = map[pb.SecretStatus]secretsclient.SecretStatus{
+	pb.SecretStatus_SECRET_STATUS_ENABLED:  secretsclient.SecretStatusEnabled,
+	pb.SecretStatus_SECRET_STATUS_DISABLED: secretsclient.SecretStatusDisabled,
+	pb.SecretStatus_SECRET_STATUS_DELETED:  secretsclient.SecretStatusDeleted,
+}
+
+// UpdateSecretStatus enables, disables or soft-deletes a secret.
+func (a *SecretsServerAdapter) UpdateSecretStatus(ctx context.Context, req *pb.UpdateSecretStatusRequest) (*pb.UpdateSecretStatusResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+	sdkStatus, ok := secretStatusFromPb[req.GetStatus()]
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported secret status %s", req.GetStatus())
+	}
+
+	err := a.client.UpdateStatus(ctx, &secretsclient.UpdateSecretStatusRequest{
+		SecretID: req.GetSecretId(),
+		Status:   sdkStatus,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "secret status update failed: %v", err)
+	}
+
+	return &pb.UpdateSecretStatusResponse{
+		SecretId:  req.GetSecretId(),
+		Status:    req.GetStatus(),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// secretVersionToPb converts SDK secret version metadata to its proto form.
+// The data is not part of pb.SecretVersion; callers that return it carry it
+// separately.
+func secretVersionToPb(info *secretsclient.SecretVersionInfo) *pb.SecretVersion {
+	return &pb.SecretVersion{
+		SecretId:  info.SecretID,
+		Version:   uint64(info.Version),
+		Metadata:  info.Metadata,
+		CreatedAt: unixOrZero(info.CreatedAt),
+		CreatedBy: info.CreatedBy,
+	}
 }

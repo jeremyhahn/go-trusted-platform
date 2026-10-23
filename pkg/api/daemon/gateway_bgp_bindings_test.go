@@ -473,7 +473,7 @@ func newBGPParityTransports(t *testing.T, speaker BGPSpeakerInterface) bgpParity
 		svc.SetBGPSpeaker(speaker)
 	}
 	logger := logging.DefaultLogger()
-	adapter := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, svc)
+	adapter := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, svc, nil)
 	restServer := newTestRESTServerForPhase35(t)
 	restServer.SetGatewayBGPService(svc)
 	return bgpParityTransports{
@@ -636,7 +636,7 @@ func TestGatewayBGP_QUICClientReceivesEveryPeerAndPrefix(t *testing.T) {
 	logger := logging.DefaultLogger()
 	bundle := testutil.GenerateTestTLSBundle(t)
 	handler := newTestQUICServiceHandler(logger, mtlsQUICAuth(t, bundle), WithQUICGatewayHandler(
-		quic.NewGatewayHandler(logger, newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, svc))))
+		quic.NewGatewayHandler(logger, newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, svc, nil))))
 	conn := newPhase35QUICClient(t, handler, bundle).Connection()
 	ctx := context.Background()
 

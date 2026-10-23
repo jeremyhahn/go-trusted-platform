@@ -142,9 +142,9 @@ func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, an
 
 	var certCN string
 	if cpCfg.CertFile != "" {
-		cert, err := tls.LoadX509KeyPair(cpCfg.CertFile, cpCfg.KeyFile)
+		cert, err := loadNodeIdentity(cpCfg)
 		if err != nil {
-			return nil, "", &proxysvc.ErrCertificateLoadFailed{CertFile: cpCfg.CertFile, Cause: err}
+			return nil, "", err
 		}
 		certCN, err = clientCertCommonName(&cert)
 		if err != nil {

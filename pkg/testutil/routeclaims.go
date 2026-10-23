@@ -53,20 +53,51 @@ var DaemonOnlyPrefixes = map[string]string{
 	"sdn/gateway/nat64":   "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/overlay": "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/perf":    "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
+
+	// The webservice router serves the rest of /kms by key name in the path;
+	// export, the batch operations and rewrap are the daemon's alone. A
+	// placeholder segment matches any one segment, whatever its name.
+	"kms/batch-decrypt":    "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
+	"kms/batch-encrypt":    "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
+	"kms/keys/{id}/export": "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
+	"kms/rewrap":           "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
 }
 
 // DaemonOnlyPrefixOf returns the DaemonOnlyPrefixes entry path falls under.
+// Entries and paths are compared segment by segment, and a placeholder
+// segment in an entry matches any placeholder or literal segment of path.
 func DaemonOnlyPrefixOf(path string) (string, bool) {
 	rest, ok := strings.CutPrefix(path, "/api/v1/")
 	if !ok {
 		return "", false
 	}
+	segments := strings.Split(rest, "/")
 	for prefix := range DaemonOnlyPrefixes {
-		if rest == prefix || strings.HasPrefix(rest, prefix+"/") {
+		if hasSegmentPrefix(segments, strings.Split(prefix, "/")) {
 			return prefix, true
 		}
 	}
 	return "", false
+}
+
+// hasSegmentPrefix reports whether segments starts with prefix, where a
+// placeholder in prefix stands for any one non-empty segment.
+func hasSegmentPrefix(segments, prefix []string) bool {
+	if len(segments) < len(prefix) {
+		return false
+	}
+	for i, want := range prefix {
+		if isPlaceholder(want) {
+			if segments[i] == "" {
+				return false
+			}
+			continue
+		}
+		if segments[i] != want {
+			return false
+		}
+	}
+	return true
 }
 
 // routePlaceholder matches a mux path variable, with or without a pattern:

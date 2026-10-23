@@ -45,8 +45,11 @@ var vmSubOpcodes = map[string]byte{
 	platformv1.ComputeService_RestoreSnapshot_FullMethodName:     quicwire.OpVMSnapshotRestore,
 	platformv1.ComputeService_DeleteSnapshot_FullMethodName:      quicwire.OpVMSnapshotDelete,
 	platformv1.ComputeService_ListSnapshots_FullMethodName:       quicwire.OpVMSnapshotList,
+	platformv1.ComputeService_GetSnapshot_FullMethodName:         quicwire.OpVMSnapshotGet,
 	platformv1.ComputeService_AttestVM_FullMethodName:            quicwire.OpVMAttest,
 	platformv1.ComputeService_VerifyVMAttestation_FullMethodName: quicwire.OpVMVerifyAttest,
+	platformv1.ComputeService_PrepareMigration_FullMethodName:    quicwire.OpVMPrepareMigration,
+	platformv1.ComputeService_FinalizeMigration_FullMethodName:   quicwire.OpVMFinalizeMigration,
 }
 
 // TestVMMethodsRouteToTheVMCategory pins the wire contract: a wrong
@@ -188,6 +191,16 @@ func TestVMCRUDMethodsSendThePBRequest(t *testing.T) {
 			want: "vm-6",
 		},
 		{
+			method: platformv1.ComputeService_GetSnapshot_FullMethodName,
+			args:   &platformv1.GetSnapshotRequest{VmId: "vm-6", SnapshotId: "snap-6"},
+			decode: func(t *testing.T, body []byte) string {
+				var req platformv1.GetSnapshotRequest
+				decodeVMBody(t, body, &req)
+				return req.GetVmId() + "/" + req.GetSnapshotId()
+			},
+			want: "vm-6/snap-6",
+		},
+		{
 			method: platformv1.ComputeService_AttestVM_FullMethodName,
 			args:   &platformv1.AttestVMRequest{VmId: "vm-7", Nonce: []byte("n1"), PcrIndices: []uint32{0, 7}},
 			decode: func(t *testing.T, body []byte) string {
@@ -206,6 +219,26 @@ func TestVMCRUDMethodsSendThePBRequest(t *testing.T) {
 				return req.GetVmId() + "/" + string(req.GetQuote()) + "/" + req.GetSignatureAlgorithm()
 			},
 			want: "vm-8/q/SHA256-RSAPSS",
+		},
+		{
+			method: platformv1.ComputeService_PrepareMigration_FullMethodName,
+			args:   &platformv1.PrepareMigrationRequest{VmName: "web", Mode: "live", Spec: &platformv1.VMMigrationSpec{MemoryMb: 2048, Cpus: 2}},
+			decode: func(t *testing.T, body []byte) string {
+				var req platformv1.PrepareMigrationRequest
+				decodeVMBody(t, body, &req)
+				return fmt.Sprintf("%s/%s/%d/%d", req.GetVmName(), req.GetMode(), req.GetSpec().GetMemoryMb(), req.GetSpec().GetCpus())
+			},
+			want: "web/live/2048/2",
+		},
+		{
+			method: platformv1.ComputeService_FinalizeMigration_FullMethodName,
+			args:   &platformv1.FinalizeMigrationRequest{ReceiverId: "recv-1", Commit: true},
+			decode: func(t *testing.T, body []byte) string {
+				var req platformv1.FinalizeMigrationRequest
+				decodeVMBody(t, body, &req)
+				return fmt.Sprintf("%s/%v", req.GetReceiverId(), req.GetCommit())
+			},
+			want: "recv-1/true",
 		},
 	}
 
@@ -337,8 +370,11 @@ func TestVMCRUDMethodsKeepTheDaemonErrorClass(t *testing.T) {
 		{platformv1.ComputeService_RestoreSnapshot_FullMethodName, &platformv1.RestoreSnapshotRequest{VmId: "vm-1", SnapshotId: "gone"}, quicwire.StatusNotFound, codes.NotFound},
 		{platformv1.ComputeService_DeleteSnapshot_FullMethodName, &platformv1.DeleteSnapshotRequest{VmId: "vm-1", SnapshotId: "gone"}, quicwire.StatusNotFound, codes.NotFound},
 		{platformv1.ComputeService_ListSnapshots_FullMethodName, &platformv1.ListSnapshotsRequest{VmId: "vm-1"}, quicwire.StatusFailedPrecondition, codes.FailedPrecondition},
+		{platformv1.ComputeService_GetSnapshot_FullMethodName, &platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "gone"}, quicwire.StatusNotFound, codes.NotFound},
 		{platformv1.ComputeService_AttestVM_FullMethodName, &platformv1.AttestVMRequest{}, quicwire.StatusInvalidArgument, codes.InvalidArgument},
 		{platformv1.ComputeService_VerifyVMAttestation_FullMethodName, &platformv1.VerifyVMAttestationRequest{VmId: "gone"}, quicwire.StatusNotFound, codes.NotFound},
+		{platformv1.ComputeService_PrepareMigration_FullMethodName, &platformv1.PrepareMigrationRequest{VmName: "web"}, quicwire.StatusInvalidArgument, codes.InvalidArgument},
+		{platformv1.ComputeService_FinalizeMigration_FullMethodName, &platformv1.FinalizeMigrationRequest{ReceiverId: "nope"}, quicwire.StatusNotFound, codes.NotFound},
 	}
 
 	for _, tt := range tests {

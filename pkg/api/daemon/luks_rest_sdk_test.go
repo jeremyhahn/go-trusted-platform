@@ -229,13 +229,13 @@ func luksRESTCases() []luksRESTCase {
 		{"EnrollTPM", true,
 			func(ctx context.Context, c *lukssdk.GRPCClient, device string) (any, error) {
 				return c.EnrollTPM(ctx, &lukssdk.EnrollTPMRequest{
-					Device: device, ExistingPassphrase: luksTestExisting, PCRs: []int32{0, 7},
+					Device: device, ExistingPassphrase: luksTestExisting, PCRs: []int32{0, 7}, Handle: "0x81000003",
 				})
 			},
 			isLUKSError[*lukssdk.ErrEnrollTPMFailed],
 			func(t *testing.T, reply any, b *luksWireBackend) {
 				if b.tpm == nil || b.tpm.Device != "/dev/sda" || b.tpm.ExistingPassphrase != luksTestExisting ||
-					!slices.Equal(b.tpm.PCRs, []int32{0, 7}) {
+					!slices.Equal(b.tpm.PCRs, []int32{0, 7}) || b.tpm.Handle != "0x81000003" {
 					t.Errorf("backend got %+v", b.tpm)
 				}
 				if got := reply.(*lukssdk.EnrollTPMResponse); got.Slot != 3 || got.TokenID != "tpm-tok" {

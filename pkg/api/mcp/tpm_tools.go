@@ -431,7 +431,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Seal
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_seal",
-		Description: "Seal data to the TPM; PCR-bound sealing is refused until go-quicbaas #1171",
+		Description: "Seal data to the TPM, optionally binding to PCR state",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -442,7 +442,7 @@ func (r *ToolRegistry) registerTPMTools() {
 				"pcrs": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "integer"},
-					"description": "PCR indices to bind to (0-23); refused until go-quicbaas #1171",
+					"description": "PCR indices for sealing policy (0-23)",
 				},
 				"cn": map[string]interface{}{
 					"type":        "string",

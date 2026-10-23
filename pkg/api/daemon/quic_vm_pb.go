@@ -25,7 +25,8 @@ import (
 // =============================================================================
 //
 // The operational VM verbs (GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk,
-// MigrateVM) share the same converged wire contract as the unary container
+// MigrateVM, and the destination-side PrepareMigration and FinalizeMigration)
+// share the same converged wire contract as the unary container
 // verbs: the canonical QUIC payload is the platform.v1 ComputeService protobuf
 // request/response message, and the daemon decodes the SAME pb message the SDK
 // QUIC adapter sent and delegates to the shared *ComputeGRPCService — the same
@@ -34,7 +35,7 @@ import (
 // behind decoding into the exact pb message rather than a flat local struct).
 //
 // These verbs collide with other top-level ranges (metrics/disk/migrate reuse
-// the 0xCC-0xD0 bytes that are top-level category opcodes), so remote transports
+// the 0xCC-0xD2 bytes that are top-level category opcodes), so remote transports
 // carry them as sub-opcodes in payload[0] under quicwire.OpVMExtendedCategory
 // (0x69); see handleVMServiceOperation. The interactive AttachVMConsole /
 // SendVMConsoleInput and the streaming GetVMLogs RPCs are server-streaming and
@@ -45,7 +46,8 @@ import (
 // DeleteVM (OpVMCreate..OpVMList, 0x60-0x65), RebootVM, SuspendVM and
 // ResumeVM (OpVMRestart, OpVMSuspend, OpVMResume, 0xB6-0xB8), the snapshot
 // verbs CreateSnapshot, RestoreSnapshot, DeleteSnapshot and ListSnapshots
-// (OpVMSnapshotCreate..OpVMSnapshotList, 0xBB-0xBE), and AttestVM and
+// (OpVMSnapshotCreate..OpVMSnapshotList, 0xBB-0xBE) and GetSnapshot
+// (OpVMSnapshotGet, 0xBA), and AttestVM and
 // VerifyVMAttestation (OpVMAttest 0xB9, OpVMVerifyAttest 0xBF) converge the
 // same way, as sub-opcodes under OpVMExtendedCategory. Their errors take the
 // shared errclass QUIC status, so a missing VM answers StatusNotFound and a
@@ -74,6 +76,7 @@ var vmPBHandlers = map[byte]vmPBHandler{
 	quicwire.OpVMSnapshotRestore: vmPBUnary("VMSnapshotRestore", (*ComputeGRPCService).RestoreSnapshot, vmPBClassFailure),
 	quicwire.OpVMSnapshotDelete:  vmPBUnary("VMSnapshotDelete", (*ComputeGRPCService).DeleteSnapshot, vmPBClassFailure),
 	quicwire.OpVMSnapshotList:    vmPBUnary("VMSnapshotList", (*ComputeGRPCService).ListSnapshots, vmPBClassFailure),
+	quicwire.OpVMSnapshotGet:     vmPBUnary("VMSnapshotGet", (*ComputeGRPCService).GetSnapshot, vmPBClassFailure),
 	quicwire.OpVMAttest:          vmPBUnary("VMAttest", (*ComputeGRPCService).AttestVM, vmPBClassFailure),
 	quicwire.OpVMVerifyAttest:    vmPBUnary("VMVerifyAttest", (*ComputeGRPCService).VerifyVMAttestation, vmPBClassFailure),
 	quicwire.OpVMMetrics:         vmPBUnary("VMMetrics", (*ComputeGRPCService).GetVMMetrics, (*QUICServiceHandler).grpcStatusToQUICResponse),
@@ -81,6 +84,9 @@ var vmPBHandlers = map[byte]vmPBHandler{
 	quicwire.OpVMDetachDisk:      vmPBUnary("VMDetachDisk", (*ComputeGRPCService).DetachDisk, (*QUICServiceHandler).grpcStatusToQUICResponse),
 	quicwire.OpVMResizeDisk:      vmPBUnary("VMResizeDisk", (*ComputeGRPCService).ResizeDisk, (*QUICServiceHandler).grpcStatusToQUICResponse),
 	quicwire.OpVMMigrate:         vmPBUnary("VMMigrate", (*ComputeGRPCService).MigrateVM, (*QUICServiceHandler).grpcStatusToQUICResponse),
+
+	quicwire.OpVMPrepareMigration:  vmPBUnary("VMPrepareMigration", (*ComputeGRPCService).PrepareMigration, (*QUICServiceHandler).grpcStatusToQUICResponse),
+	quicwire.OpVMFinalizeMigration: vmPBUnary("VMFinalizeMigration", (*ComputeGRPCService).FinalizeMigration, (*QUICServiceHandler).grpcStatusToQUICResponse),
 }
 
 // vmPBUnary builds the handler for one unary ComputeService VM method: it

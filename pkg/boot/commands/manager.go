@@ -230,6 +230,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 		Backend:      nil, // Will be created by TPM2
 		BlobStore:    nil, // Optional
 		CertStore:    nil, // Optional
+		SignerStore:  nil, // Optional
 	}
 
 	// In initramfs environment, TPM device may exist but not be ready yet

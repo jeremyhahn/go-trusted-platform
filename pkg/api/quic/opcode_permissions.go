@@ -261,6 +261,7 @@ var (
 
 	secretsRead   = OpcodePermission{Resource: "secrets", Action: actionRead}
 	secretsWrite  = OpcodePermission{Resource: "secrets", Action: actionWrite}
+	secretsList   = OpcodePermission{Resource: "secrets", Action: actionList}
 	secretsDelete = OpcodePermission{Resource: "secrets", Action: actionDelete}
 
 	switchRead  = OpcodePermission{Resource: "switch", Action: actionRead}
@@ -472,21 +473,27 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpDaemonListProtocols:  platformRead,
 
 	// IAM users, roles, groups and tokens (gRPC PlatformIAMService)
-	quicwire.OpIAMUserCreate:      iamWrite,
-	quicwire.OpIAMUserDelete:      iamDelete,
-	quicwire.OpIAMUserGet:         iamRead,
-	quicwire.OpIAMUserList:        iamRead,
-	quicwire.OpIAMUserUpdate:      iamWrite,
-	quicwire.OpIAMRoleCreate:      iamWrite,
-	quicwire.OpIAMRoleDelete:      iamDelete,
-	quicwire.OpIAMRoleGet:         iamRead,
-	quicwire.OpIAMRoleList:        iamRead,
-	quicwire.OpIAMRoleAssign:      iamWrite,
-	quicwire.OpIAMRoleRevoke:      iamWrite,
-	quicwire.OpIAMCheckPermission: iamRead,
-	quicwire.OpIAMTokenCreate:     iamWrite,
-	quicwire.OpIAMTokenRevoke:     iamWrite,
-	quicwire.OpIAMTokenVerify:     iamRead,
+	quicwire.OpIAMUserCreate:        iamWrite,
+	quicwire.OpIAMUserDelete:        iamDelete,
+	quicwire.OpIAMUserGet:           iamRead,
+	quicwire.OpIAMUserList:          iamRead,
+	quicwire.OpIAMUserUpdate:        iamWrite,
+	quicwire.OpIAMRoleCreate:        iamWrite,
+	quicwire.OpIAMRoleDelete:        iamDelete,
+	quicwire.OpIAMRoleGet:           iamRead,
+	quicwire.OpIAMRoleList:          iamRead,
+	quicwire.OpIAMRoleAssign:        iamWrite,
+	quicwire.OpIAMRoleRevoke:        iamWrite,
+	quicwire.OpIAMGroupCreate:       iamWrite,
+	quicwire.OpIAMGroupDelete:       iamDelete,
+	quicwire.OpIAMGroupGet:          iamRead,
+	quicwire.OpIAMGroupList:         iamRead,
+	quicwire.OpIAMGroupAddMember:    iamWrite,
+	quicwire.OpIAMGroupRemoveMember: iamWrite,
+	quicwire.OpIAMCheckPermission:   iamRead,
+	quicwire.OpIAMTokenCreate:       iamWrite,
+	quicwire.OpIAMTokenRevoke:       iamWrite,
+	quicwire.OpIAMTokenVerify:       iamRead,
 
 	// Platform tenancy (gRPC TenantService): quotas, usage, sync and DEK
 	// custody, so the tenant scopes. IAM tenant records have their own
@@ -715,6 +722,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpVMSnapshotRestore: vmWrite,
 		quicwire.OpVMSnapshotDelete:  vmDelete,
 		quicwire.OpVMSnapshotList:    vmRead,
+		quicwire.OpVMSnapshotGet:     vmRead,
 		quicwire.OpVMAttest:          vmRead,
 		quicwire.OpVMVerifyAttest:    vmRead,
 		quicwire.OpVMMetrics:         vmRead,
@@ -722,6 +730,9 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpVMDetachDisk:      vmWrite,
 		quicwire.OpVMResizeDisk:      vmWrite,
 		quicwire.OpVMMigrate:         vmWrite,
+
+		quicwire.OpVMPrepareMigration:  vmWrite,
+		quicwire.OpVMFinalizeMigration: vmWrite,
 
 		quicwire.OpContainerCreate:  containerWrite,
 		quicwire.OpContainerStart:   containerWrite,
@@ -879,15 +890,26 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.KMSSubGetKeyPolicy:           kmsRead,
 		quicwire.KMSSubGetSupportedAlgorithms: kmsRead,
 		quicwire.KMSSubSignCSR:                CASignCSRPermission,
+		quicwire.KMSSubCreateDEK:              kmsWrite,
+		quicwire.KMSSubListDEKs:               kmsRead,
+		quicwire.KMSSubGetDEK:                 kmsRead,
+		quicwire.KMSSubGetDEKStatus:           kmsRead,
+		quicwire.KMSSubRotateDEK:              kmsWrite,
+		quicwire.KMSSubDeleteDEK:              kmsDelete,
 	},
 
 	quicwire.OpSecretsCategory: {
 		quicwire.SecretsSubStore:             secretsWrite,
 		quicwire.SecretsSubGet:               secretsRead,
-		quicwire.SecretsSubList:              secretsRead,
+		quicwire.SecretsSubList:              secretsList,
 		quicwire.SecretsSubDelete:            secretsDelete,
 		quicwire.SecretsSubSetRotationPolicy: secretsWrite,
 		quicwire.SecretsSubGetRotationPolicy: secretsRead,
+		quicwire.SecretsSubGetVersion:        secretsRead,
+		quicwire.SecretsSubListVersions:      secretsList,
+		quicwire.SecretsSubRotate:            secretsWrite,
+		quicwire.SecretsSubRollback:          secretsWrite,
+		quicwire.SecretsSubUpdateStatus:      secretsWrite,
 	},
 
 	// Provisioning: config delivery, EAB credentials and device profile
@@ -919,8 +941,13 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubDisable:             deviceWrite,
 		quicwire.DeviceSubEnable:              deviceWrite,
 		quicwire.DeviceSubTemplateCreate:      deviceWrite,
+		quicwire.DeviceSubTemplateGet:         deviceRead,
+		quicwire.DeviceSubTemplateList:        deviceRead,
+		quicwire.DeviceSubTemplateUpdate:      deviceWrite,
+		quicwire.DeviceSubTemplateDelete:      deviceDelete,
 		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
 		quicwire.DeviceSubFindMatchingProfile: deviceRead,
+		quicwire.DeviceSubFindConfigForDevice: deviceRead,
 
 		// The PXEService methods without a direct opcode, scoped as on gRPC.
 		quicwire.PXESubGetDeviceByMAC:    pxeRead,

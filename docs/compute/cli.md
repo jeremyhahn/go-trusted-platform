@@ -64,7 +64,7 @@ the first thing that costs someone a minute.
 | `--cpus` | | uint | `2` | vCPU cores |
 | `--memory` | | uint | `2048` | Memory in MB |
 | `--disk-size` | | uint | `20` | Boot disk size in GB |
-| `--firmware` | | string | `uefi` | `bios`, `uefi`, `uefi-secure-boot` |
+| `--firmware` | | string | `uefi` | `uefi`, `uefi-secure-boot`; the daemon refuses `bios` |
 | `--secure-boot` | | bool | `false` | Enable UEFI Secure Boot |
 | `--tpm` | | bool | `true` | Attach a virtual TPM 2.0 (vTPM); `--tpm=false` creates the VM without one |
 | `--boot-device` | | string | `disk` | `disk`, `cdrom`, `network` |
@@ -244,7 +244,7 @@ This is the **only attestation verb in the entire CLI** — see
 | Exec in a container | REST, gRPC, QUIC, MCP |
 | Attest a VM | REST, gRPC, QUIC, MCP |
 | Console attach | gRPC streaming only |
-| Two-phase migration (`Prepare` / `Finalize`) | gRPC only |
+| Two-phase migration (`Prepare` / `Finalize`) | REST, gRPC, QUIC, MCP |
 
 ---
 

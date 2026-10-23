@@ -574,9 +574,8 @@ func (a *QUICAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions
 // Operations with no QUIC opcode
 //
 // Each returns surface.ErrNoSurface naming the gap. docs/device/api.md §2-4
-// records these as MISSING on QUIC; the template rows are a deliberate
-// design decision rather than an untracked hole. The error is returned
-// rather than faked so the absence stays visible in the suite.
+// records these as MISSING on QUIC. The error is returned rather than faked
+// so the absence stays visible in the suite.
 // =============================================================================
 
 func (a *QUICAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProfileByMACAddressOptions) (*FindProfileByMACAddressResult, error) {
@@ -587,13 +586,43 @@ func (a *QUICAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileB
 	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindProfileBySerial", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile lookup by serial"}
 }
 
+// =============================================================================
+// Profile matching and config lookup
+//
+// DeviceSubFindMatchingProfile and DeviceSubFindConfigForDevice delegate to
+// the gRPC DeviceService handlers (docs/device/api.md §3.7).
+// =============================================================================
+
 func (a *QUICAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindMatchingProfile", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile matching"}
+	req := &pb.FindMatchingProfileRequest{
+		MacAddress: opts.MACAddress,
+		Serial:     opts.Serial,
+		Model:      opts.Model,
+	}
+	var resp pb.FindMatchingProfileResponse
+	if err := a.callCategory(ctx, "FindMatchingProfile",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubFindMatchingProfile, req, &resp); err != nil {
+		return nil, err
+	}
+	return &FindMatchingProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 func (a *QUICAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindConfigForDevice", Reason: "docs/device/api.md §3 records QUIC as MISSING for config lookup"}
+	req := &pb.FindConfigForDeviceRequest{
+		EkSerial:   opts.EKSerial,
+		MacAddress: opts.MACAddress,
+	}
+	var resp pb.FindConfigForDeviceResponse
+	if err := a.callCategory(ctx, "FindConfigForDevice",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubFindConfigForDevice, req, &resp); err != nil {
+		return nil, err
+	}
+	return &FindConfigForDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
+
+// =============================================================================
+// Templates
+// =============================================================================
 
 // CreateTemplate stores a template through OpProvisioningCategory +
 // DeviceSubTemplateCreate, served by the shared gRPC service.
@@ -606,20 +635,64 @@ func (a *QUICAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpt
 	return &CreateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
+// GetTemplate reads a template through OpProvisioningCategory +
+// DeviceSubTemplateGet (0x2A).
 func (a *QUICAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetTemplate", Reason: templateNoSurfaceReason}
+	id, err := parseID("GetTemplate", "template", opts.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	var resp pb.DeviceTemplateGetResponse
+	if err := a.callCategory(ctx, "GetTemplate",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateGet, &pb.DeviceTemplateGetRequest{Id: id}, &resp); err != nil {
+		return nil, err
+	}
+	return &GetTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
+// UpdateTemplate replaces a template through OpProvisioningCategory +
+// DeviceSubTemplateUpdate (0x2C).
 func (a *QUICAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "UpdateTemplate", Reason: templateNoSurfaceReason}
+	id, err := parseID("UpdateTemplate", "template", opts.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	var resp pb.DeviceTemplateUpdateResponse
+	if err := a.callCategory(ctx, "UpdateTemplate",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateUpdate, templateUpdateRequest(id, opts), &resp); err != nil {
+		return nil, err
+	}
+	return &UpdateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
+// DeleteTemplate removes a template through OpProvisioningCategory +
+// DeviceSubTemplateDelete (0x2D).
 func (a *QUICAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "DeleteTemplate", Reason: templateNoSurfaceReason}
+	id, err := parseID("DeleteTemplate", "template", opts.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	var resp pb.DeviceTemplateDeleteResponse
+	if err := a.callCategory(ctx, "DeleteTemplate",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateDelete, &pb.DeviceTemplateDeleteRequest{Id: id}, &resp); err != nil {
+		return nil, err
+	}
+	return &DeleteTemplateResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
+// ListTemplates pages templates through OpProvisioningCategory +
+// DeviceSubTemplateList (0x2B).
 func (a *QUICAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListTemplates", Reason: templateNoSurfaceReason}
+	req, err := templateListRequest("QUIC", opts)
+	if err != nil {
+		return nil, err
+	}
+	var resp pb.DeviceTemplateListResponse
+	if err := a.callCategory(ctx, "ListTemplates",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateList, req, &resp); err != nil {
+		return nil, err
+	}
+	return templateListResult(&resp), nil
 }
 
 // CreateProfileFromTemplate builds a profile through OpProvisioningCategory
@@ -644,9 +717,3 @@ func (a *QUICAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 	}
 	return &CreateProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
-
-// templateNoSurfaceReason cites the recorded decision rather than treating
-// the absence as an oversight: docs/device/api.md §4 states that template
-// read, update, delete and list are REST-only; only CreateTemplate and
-// CreateProfileFromTemplate are on the wire.
-const templateNoSurfaceReason = "docs/device/api.md §4 records template read/update/delete/list as REST-only"

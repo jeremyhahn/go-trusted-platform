@@ -84,7 +84,6 @@ declare -A TARGET_PACKAGES=(
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
-    [invitation]="./test/integration/invitation/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
     [ipxe-tftp]="./test/integration/ipxe/..."
@@ -98,7 +97,6 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
-    [user-registration]="./test/integration/user_registration/..."
     [vtpm]="./test/integration/vtpm/..."
 )
 
@@ -131,8 +129,14 @@ declare -A TARGET_ENV=(
 # diskimage suite boots an aarch64 guest under TCG emulation, where a first
 # boot through firstboot provisioning takes tens of minutes. The root package
 # and testenv-enrollment carry the enrollment test's own 30-minute context;
-# e2e carries a 45-minute one.
+# e2e carries a 45-minute one. sdn gets 5 minutes: every ovs-vsctl and
+# ovs-ofctl call it makes has a 30-second deadline (test/integration/helpers/
+# boundedexec), so a wedged OVS fails the call instead of eating the default.
+# iso gets 35 minutes: the 20-minute install budget (vmInstallTimeout) plus the
+# ISO build and customize steps; a guest stuck at its GRUB menu fails in 2.
 declare -A TARGET_TIMEOUTS=(
+    [sdn]="5m"
+    [iso]="35m"
     [diskimage]="90m"
     [netboot]="40m"
     [nat64]="15m"
@@ -169,8 +173,9 @@ declare -A TARGET_NO_DAEMON=(
     [sdk]=1
 )
 
-# The suites `all` runs, in order, on the one shared platformd: the
-# daemon-free suites first, then every daemon-backed one. Left out, each for
+# The suites `all` runs on the one shared platformd: the daemon-free suites
+# first, all at once (run_concurrent), then every daemon-backed one, one at a
+# time in list order. Left out, each for
 # a reason the suite itself sets: cold-start and barrier-gate need the shared
 # daemon NOT running; bmc needs platformd started against the vBMC config;
 # diskimage, netboot, nat64 and ipsec need inputs only their make targets
@@ -185,12 +190,22 @@ declare -A TARGET_NO_DAEMON=(
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
 # FIPS_MODULE_SIGNING_KEY).
+# tpm runs last: its Clear case issues TPM2_Clear on the shared daemon's
+# swtpm (docs/tpm/security.md), which flushes the owner-hierarchy SRKs that
+# seal the daemon's platform-policy key passwords. After it the daemon can
+# no longer sign a TLS handshake, so every gRPC, QUIC and MCP dial a later
+# suite makes ends in "tls: internal error" (vtpm, #949).
+# compute is not in the list: it drives VMs, and the shared daemon serves the
+# container orchestrator the container suite needs (one orchestrator serves
+# both), so it answers every VM spec "not supported" (#949). `all` ends with
+# it, after tpm, on a fresh swtpm and a platformd started on the local QEMU
+# provider, as the compute target does.
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
-    root acme attestation authenticode ca ceremony cli compute
-    container daemon device dns fido2 iam invitation iso kms luks network
+    root acme attestation authenticode ca ceremony cli
+    container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm user-registration vpn vtpm
+    secrets tenant vpn vtpm tpm
 )
 
 RUN_TARGET="all"
@@ -305,6 +320,42 @@ restore_workspace_ownership() {
         || echo "WARNING: could not restore ownership under ${dir}"
 }
 
+# chronyd paths (start_chronyd): the Debian chrony package's defaults, which
+# pkg/ntp DefaultPaths also renders and drives.
+CHRONYD_CONF="/etc/chrony/chrony.conf"
+CHRONYD_RUN_DIR="/run/chrony"
+CHRONYD_SOCK="${CHRONYD_RUN_DIR}/chronyd.sock"
+CHRONYD_PID_FILE="${CHRONYD_RUN_DIR}/chronyd.pid"
+# The reference chronyd (start_ntp_reference) that serves the config's
+# loopback upstream. Its files sit beside the daemon chronyd's under their
+# own names. A config under /run/chrony-reference/ failed with "Could not
+# open ... Permission denied" although root wrote it and the container is
+# privileged: only a mandatory access control profile refuses root there,
+# and the chrony package's AppArmor profile for /usr/sbin/chronyd (loaded on
+# the CI host, so it confines chronyd in this container too) allows reads
+# of /etc/chrony/ and writes to /run/chrony/ only. That left the daemon's
+# chronyd with no source and the ntp component degraded (#949).
+NTP_REFERENCE_CONF="/etc/chrony/reference.conf"
+NTP_REFERENCE_PID_FILE="${CHRONYD_RUN_DIR}/reference.pid"
+
+# stop_platformd stops platformd and the chronyd pair start_platformd starts
+# with it (the daemon's chronyd and its loopback reference).
+stop_platformd() {
+    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
+        kill "$PLATFORMD_PID" 2>/dev/null || true
+        wait "$PLATFORMD_PID" 2>/dev/null || true
+    fi
+    PLATFORMD_PID=""
+
+    if [ -f "${CHRONYD_PID_FILE}" ]; then
+        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
+    fi
+    if [ -f "${NTP_REFERENCE_PID_FILE}" ]; then
+        kill "$(cat "${NTP_REFERENCE_PID_FILE}")" 2>/dev/null || true
+    fi
+}
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -314,12 +365,8 @@ cleanup() {
     echo ""
     echo "=== Cleaning up integration test environment ==="
 
-    # Stop platformd
-    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
-        kill "$PLATFORMD_PID" 2>/dev/null || true
-        wait "$PLATFORMD_PID" 2>/dev/null || true
-    fi
+    # Stop platformd and its chronyd
+    stop_platformd
 
     # Stop vBMC
     if [ -n "$VBMC_PID" ] && kill -0 "$VBMC_PID" 2>/dev/null; then
@@ -507,21 +554,8 @@ build_binaries() {
     fi
     echo "Module dependencies downloaded"
 
-    # Pre-compile all test packages to cache build artifacts.
-    # This prevents 'go test' from spending its timeout on compilation.
-    #
-    # `go vet`, not `go test -count=0`: -count=0 still runs every TestMain,
-    # and test/integration/bmc's TestMain fails hard when it runs before the
-    # mTLS trio is set (which is exactly this point of the run), so the old step printed a bare FAIL through `tail -5` and
-    # "continued anyway". vet type-checks and compiles the test packages
-    # under the same tags without executing anything, so a failure here is a
-    # real compile error and stops the run with the file:line on screen.
-    echo "Pre-compiling test packages..."
-    if ! go vet -tags "${BUILD_TAGS}" ./test/integration/...; then
-        echo "ERROR: integration test packages do not compile (see above)"
-        exit 1
-    fi
-    echo "Test packages pre-compiled"
+    # No whole-tree pre-compile of ./test/integration/... here: compile_check
+    # vets each selected target's package on its own (CA m639).
 
     # ldflags to inject version and name into binaries
     LDFLAGS="-X github.com/jeremyhahn/go-trusted-platform/pkg/app.Version=0.0.0-test -X github.com/jeremyhahn/go-trusted-platform/pkg/app.Name=trusted-platform"
@@ -554,9 +588,60 @@ build_binaries() {
     echo "=== Binaries built ==="
 }
 
+# compile_check type-checks and compiles one target's package under the run's
+# tags without executing anything, so a compile error stops that target with
+# the file:line on screen. `go vet`, not `go test -count=0`: -count=0 still
+# runs every TestMain, and test/integration/bmc's TestMain fails hard before
+# the mTLS trio is set. vet compiles the package's dependencies into the same
+# build cache the target's `go test` then reuses, and it links nothing, so the
+# check adds only the analysis. It replaces a whole-tree vet of
+# ./test/integration/... that compiled every package, selected or not, before
+# the first test (CA m639).
+compile_check() {
+    local target="$1"
+    local pkg="${TARGET_PACKAGES[$target]}"
+    if ! go vet -tags "${BUILD_TAGS}" "$pkg"; then
+        echo "ERROR: $pkg ($target) does not compile (see above)"
+        return 1
+    fi
+}
+
 # =============================================================================
 # vBMC Setup (bmc integration target only)
 # =============================================================================
+
+# build_gatewayd builds gatewayd into /tmp beside platformd, once per run.
+build_gatewayd() {
+    if [ -x /tmp/gatewayd ] && [ -n "${GATEWAYD_PATH:-}" ]; then
+        return 0
+    fi
+    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/gatewayd ./cmd/gatewayd/; then
+        echo "FATAL: gatewayd build failed"
+        exit 1
+    fi
+    export GATEWAYD_PATH=/tmp/gatewayd
+    echo "gatewayd built: ${GATEWAYD_PATH}"
+}
+
+# prepare_iso_customize builds what `platformctl iso customize` stages from
+# beside platformd and fails without (pkg/iso/customize.go StageMedia):
+# platform-initrd, which dracut calls at boot to unlock the root, and gatewayd,
+# which the gateway-role single-node template the iso suite bakes in needs
+# (pkg/iso/gatewayd.go). platform-initrd comes from its own make target, which
+# owns its build tags; GOFLAGS=-buildvcs=false for the reason build_binaries
+# gives.
+prepare_iso_customize() {
+    echo "=== Preparing iso customize binaries ==="
+    if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
+        platform-initrd PLATFORM_INITRD=/tmp/platform-initrd; then
+        echo "FATAL: platform-initrd build failed"
+        exit 1
+    fi
+    echo "platform-initrd built: /tmp/platform-initrd"
+    build_gatewayd
+}
 
 # prepare_gatewayd_supervision readies the proxy suite's supervised-process
 # tests (#557): it builds gatewayd, which those tests run as a real
@@ -568,14 +653,7 @@ build_binaries() {
 # the step docker-in-docker takes for the same reason.
 prepare_gatewayd_supervision() {
     echo "=== Preparing gatewayd supervision ==="
-    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
-        -ldflags "${LDFLAGS}" \
-        -o /tmp/gatewayd ./cmd/gatewayd/; then
-        echo "FATAL: gatewayd build failed"
-        exit 1
-    fi
-    export GATEWAYD_PATH=/tmp/gatewayd
-    echo "gatewayd built: ${GATEWAYD_PATH}"
+    build_gatewayd
 
     local root=/sys/fs/cgroup
     if [ ! -f "${root}/cgroup.controllers" ]; then
@@ -720,6 +798,79 @@ TRUSTEOF
     echo "=== vBMC started ==="
 }
 
+# chronyd backs the ntp suite. platformd renders /etc/chrony/chrony.conf from
+# the config's ntp: section and enables chronyd through OpenRC, which this
+# Debian container does not have, so the runner starts chronyd on the rendered
+# file. -x keeps chronyd off the system clock: the container shares the CI
+# host's kernel clock, and no suite may move it. A config without an ntp:
+# section renders nothing, and chronyd is not started. The paths are set
+# beside cleanup(), which stops chronyd.
+#
+# The daemon's chronyd consumes 127.0.0.1, which start_ntp_reference serves,
+# and the runner waits for it to synchronise: an unsynchronised clock is the
+# documented degraded `ntp` health component (docs/health/api.md), and a
+# degraded component makes the aggregate health answer of every transport
+# not-healthy, so every suite that asserts a healthy platform would fail.
+start_chronyd() {
+    if [ ! -f "${CHRONYD_CONF}" ]; then
+        echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
+        return 0
+    fi
+    # chronyd drops to _chrony and opens its command socket only when the
+    # socket's directory is owned by that user and closed to others; a
+    # root-owned 0755 directory leaves it running with "Disabled command
+    # socket", so every chronyc poll platformd makes fails (#949).
+    # The reference chronyd keeps its pid file in the same directory.
+    install -d -m 0750 -o _chrony -g _chrony "${CHRONYD_RUN_DIR}"
+    start_ntp_reference
+    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
+    if ! chronyd -x -f "${CHRONYD_CONF}"; then
+        echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
+        return 0
+    fi
+    for _ in $(seq 1 10); do
+        if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
+            echo "chronyd ready"
+            # waitsync <tries> <max-correction> <max-skew> <interval>: 30
+            # one-second polls; 0 leaves the correction and skew unbounded.
+            if chronyc -n -h "${CHRONYD_SOCK}" waitsync 30 0 0 1 >/dev/null 2>&1; then
+                echo "chronyd synchronised to the reference"
+            else
+                echo "WARNING: chronyd did not synchronise to the reference within 30s; the ntp health component stays degraded"
+            fi
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
+# start_ntp_reference runs a second chronyd as the harness's time source: it
+# serves its own clock on 127.0.0.1:123 as a local stratum-8 reference, which
+# the daemon's consume-mode chronyd (rendered with `port 0`, so the two never
+# share a port) synchronises to. Like the daemon's chronyd it runs with -x and
+# never moves the clock the container shares with the CI host, and it has no
+# command socket (`cmdport 0`, `bindcmdaddress /`), so every chronyc call the
+# daemon makes still reaches the daemon's chronyd.
+start_ntp_reference() {
+    echo "=== Starting the reference chronyd on 127.0.0.1:123 ==="
+    cat > "${NTP_REFERENCE_CONF}" << NTPREFEOF
+bindaddress 127.0.0.1
+allow 127.0.0.1
+local stratum 8
+cmdport 0
+bindcmdaddress /
+pidfile ${NTP_REFERENCE_PID_FILE}
+NTPREFEOF
+    # Without the reference the daemon's chronyd never synchronises, the ntp
+    # component stays degraded and every transport's aggregate health is
+    # not-healthy, so the suites would fail far from this cause.
+    if ! chronyd -x -f "${NTP_REFERENCE_CONF}"; then
+        echo "FATAL: the reference chronyd failed to start on ${NTP_REFERENCE_CONF}; the daemon's chronyd has no source"
+        exit 1
+    fi
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -790,6 +941,8 @@ start_platformd() {
                 sleep 1
             done
 
+            start_chronyd
+
             echo "=== platformd ready ==="
             return 0
         fi
@@ -856,6 +1009,11 @@ setup_env_vars() {
     export PLATFORM_CLIENT_CERT="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CLIENT_KEY="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CA_CERT="/tmp/platformd-integration/tls/ca-bundle.crt"
+    # The same issuer's bundle for the fixed non-system tenant
+    # harness-tenant, written before client-bundle.pem: the suites that
+    # assert what a tenant outside the system tenant is refused use it.
+    export PLATFORM_TENANT_CLIENT_CERT="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
+    export PLATFORM_TENANT_CLIENT_KEY="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
 
     # REST endpoint (mTLS requires HTTPS)
     export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
@@ -908,6 +1066,8 @@ setup_env_vars() {
     echo "  PLATFORM_CLIENT_CERT=$PLATFORM_CLIENT_CERT (bundle)"
     echo "  PLATFORM_CLIENT_KEY=$PLATFORM_CLIENT_KEY (bundle)"
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
+    echo "  PLATFORM_TENANT_CLIENT_CERT=$PLATFORM_TENANT_CLIENT_CERT (bundle)"
+    echo "  PLATFORM_TENANT_CLIENT_KEY=$PLATFORM_TENANT_CLIENT_KEY (bundle)"
     echo "  PLATFORM_REST_ENDPOINT=$PLATFORM_REST_ENDPOINT"
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"
@@ -932,6 +1092,13 @@ echo ""
 
 # Phase 1: Build binaries
 build_binaries
+
+# A single target's package is checked here, before OVS, swtpm or platformd
+# start, so a compile error ends the run with the file:line first. `all`
+# checks each package just before its own run (run_test).
+if [ "$RUN_TARGET" != "all" ] && ! compile_check "$RUN_TARGET"; then
+    exit 1
+fi
 
 # Phase 2: Setup infrastructure
 setup_devices
@@ -1053,6 +1220,12 @@ else
     fi
 fi
 
+# The iso suite's customize step stages platform-initrd and gatewayd from
+# beside /tmp/platformd.
+if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "all" ]; then
+    prepare_iso_customize
+fi
+
 # Phase 3: Configure environment for test adapters
 setup_env_vars
 
@@ -1065,13 +1238,37 @@ echo ""
 # Track overall result
 RESULT=0
 
+# Per-target outcome (PASS or FAIL) and the targets in run order, for the
+# summary.
+declare -A TARGET_RESULT=()
+RAN_TARGETS=()
+
+# record_result notes one target's outcome for the summary and folds a
+# failure into RESULT.
+record_result() {
+    local target="$1"
+    local rc="$2"
+    RAN_TARGETS+=("$target")
+    if [ "$rc" -eq 0 ]; then
+        TARGET_RESULT[$target]="PASS"
+    else
+        TARGET_RESULT[$target]="FAIL"
+        RESULT=1
+    fi
+}
+
 # run_test runs one target's package with that target's timeout and -run
-# filter, recording a failure in RESULT.
+# filter, and returns non-zero when it fails.
 run_test() {
     local target="$1"
     local pkg="${TARGET_PACKAGES[$target]}"
     echo ""
     echo "--- Testing $pkg ($target) ---"
+    # A single target was checked before any daemon started (Main).
+    if [ "$RUN_TARGET" = "all" ] && ! compile_check "$target"; then
+        echo "--- FAIL: $pkg ---"
+        return 1
+    fi
     local timeout="${TARGET_TIMEOUTS[$target]:-10m}"
     local run_args=()
     if [ -n "${TARGET_RUN[$target]:-}" ]; then
@@ -1085,17 +1282,73 @@ run_test() {
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"
-        RESULT=1
+        return 1
     fi
 }
 
-if [ "$RUN_TARGET" = "all" ]; then
-    # Every suite in ALL_TARGETS, on the one shared platformd.
-    for target in "${ALL_TARGETS[@]}"; do
-        run_test "$target"
+# run_concurrent runs the given targets at once. Each writes its own log,
+# printed whole as soon as that target ends, so the suites' -v output never
+# interleaves.
+run_concurrent() {
+    local log_dir="/tmp/integration-logs"
+    rm -rf "$log_dir"
+    mkdir -p "$log_dir"
+    local -A pid_target=()
+    local target pid rc
+    for target in "$@"; do
+        run_test "$target" > "$log_dir/$target.log" 2>&1 &
+        pid_target[$!]="$target"
     done
+    while [ "${#pid_target[@]}" -gt 0 ]; do
+        pid=""
+        wait -n -p pid "${!pid_target[@]}"
+        rc=$?
+        # wait returns without a pid only when a signal interrupts it.
+        if [ -z "$pid" ]; then
+            continue
+        fi
+        target="${pid_target[$pid]}"
+        unset "pid_target[$pid]"
+        echo ""
+        echo "=== ${target} log ==="
+        cat "$log_dir/$target.log"
+        record_result "$target" "$rc"
+    done
+}
+
+if [ "$RUN_TARGET" = "all" ]; then
+    # The daemon-free suites of ALL_TARGETS (TARGET_NO_DAEMON) run at once:
+    # none shares state with another or with platformd. Every daemon-backed
+    # suite then runs alone on the one shared platformd, in list order.
+    DAEMON_FREE_TARGETS=()
+    DAEMON_TARGETS=()
+    for target in "${ALL_TARGETS[@]}"; do
+        if [ -n "${TARGET_NO_DAEMON[$target]:-}" ]; then
+            DAEMON_FREE_TARGETS+=("$target")
+        else
+            DAEMON_TARGETS+=("$target")
+        fi
+    done
+    run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    for target in "${DAEMON_TARGETS[@]}"; do
+        run_test "$target"
+        record_result "$target" "$?"
+    done
+
+    # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
+    # one) and platformd on the local QEMU provider.
+    echo "=== compute: restarting platformd on the local QEMU provider ==="
+    stop_platformd
+    if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
+        run_test compute
+        record_result compute "$?"
+    else
+        echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
+        record_result compute 1
+    fi
 else
     run_test "$RUN_TARGET"
+    record_result "$RUN_TARGET" "$?"
 fi
 
 echo ""
@@ -1117,6 +1370,10 @@ echo "=== end platformd diagnostics ==="
 
 echo ""
 echo "============================================="
+for target in "${RAN_TARGETS[@]}"; do
+    echo "  ${TARGET_RESULT[$target]}  ${target}"
+done
+echo "---------------------------------------------"
 if [ $RESULT -eq 0 ]; then
     echo "  ALL INTEGRATION TESTS PASSED"
 else

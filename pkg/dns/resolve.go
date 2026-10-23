@@ -98,6 +98,27 @@ var resolvedValues = map[string]func(rs *entities.RecordSet) []string{
 	"TXT": func(rs *entities.RecordSet) []string {
 		return recordValues(rs.TXTRecords, func(r *entities.TXTRecord) string { return r.Value })
 	},
+	"SRV": func(rs *entities.RecordSet) []string {
+		return recordValues(rs.SRVRecords, func(r *entities.SRVRecord) string {
+			return rdata(&dns.SRV{Priority: r.Priority, Weight: r.Weight, Port: r.Port, Target: r.Target})
+		})
+	},
+	"CAA": func(rs *entities.RecordSet) []string {
+		return recordValues(rs.CAARecords, func(r *entities.CAARecord) string {
+			return rdata(&dns.CAA{Flag: r.Flags, Tag: r.Tag, Value: r.Value})
+		})
+	},
+	"TLSA": func(rs *entities.RecordSet) []string {
+		return recordValues(rs.TLSARecords, func(r *entities.TLSARecord) string {
+			return rdata(&dns.TLSA{Usage: r.Usage, Selector: r.Selector, MatchingType: r.MatchingType, Certificate: r.Data})
+		})
+	},
+}
+
+// rdata renders the RDATA of rr in its presentation form (RFC 1035 §5.1),
+// the form AddRecord parses for the type.
+func rdata(rr dns.RR) string {
+	return strings.TrimPrefix(rr.String(), rr.Header().String())
 }
 
 // ResolveName answers name from the managed zones. It is the one resolution

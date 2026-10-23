@@ -16,7 +16,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // MCPAdapterError represents an error from the MCP adapter
@@ -514,28 +513,14 @@ func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions)
 // The device_template_create tool takes and returns the config as YAML
 // text, while the entity carries it as bytes.
 func (a *MCPAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	args := map[string]interface{}{
-		"tenant_id":   opts.TenantID,
-		"name":        opts.Name,
-		"description": opts.Description,
-		"role":        string(opts.Role),
-		"config":      string(opts.Config),
-	}
-	if opts.MatchRules != nil {
-		args["match_rules"] = opts.MatchRules
-	}
+	args := templateToolArgs(opts.TenantID, opts.Name, opts.Description, opts.Role, opts.Config, opts.MatchRules)
 	result, err := a.callTool(ctx, "device_template_create", args)
 	if err != nil {
 		return nil, err
 	}
 
 	var template entities.DeviceTemplate
-	configAsBytes := func(obj map[string]interface{}) {
-		if config, ok := obj["config"].(string); ok {
-			obj["config"] = base64.StdEncoding.EncodeToString([]byte(config))
-		}
-	}
-	if err := decodeToolEntity("CreateTemplate", result, &template, configAsBytes); err != nil {
+	if err := decodeToolEntity("CreateTemplate", result, &template, templateConfigAsBytes); err != nil {
 		return nil, err
 	}
 	return &CreateTemplateResult{Template: &template}, nil
@@ -543,22 +528,113 @@ func (a *MCPAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpti
 
 // GetTemplate retrieves a template by ID via MCP.
 func (a *MCPAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetTemplate"}
+	result, err := a.callTool(ctx, "device_template_get", map[string]interface{}{"id": opts.TemplateID})
+	if err != nil {
+		return nil, err
+	}
+
+	var template entities.DeviceTemplate
+	if err := decodeToolEntity("GetTemplate", result, &template, templateConfigAsBytes); err != nil {
+		return nil, err
+	}
+	return &GetTemplateResult{Template: &template}, nil
 }
 
-// UpdateTemplate updates an existing template via MCP.
+// UpdateTemplate replaces a stored template via device_template_update,
+// which takes the device_template_create arguments plus the id.
 func (a *MCPAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "UpdateTemplate"}
+	args := templateToolArgs(opts.TenantID, opts.Name, opts.Description, opts.Role, opts.Config, opts.MatchRules)
+	args["id"] = opts.TemplateID
+	result, err := a.callTool(ctx, "device_template_update", args)
+	if err != nil {
+		return nil, err
+	}
+
+	var template entities.DeviceTemplate
+	if err := decodeToolEntity("UpdateTemplate", result, &template, templateConfigAsBytes); err != nil {
+		return nil, err
+	}
+	return &UpdateTemplateResult{Template: &template}, nil
 }
 
-// DeleteTemplate removes a template via MCP.
+// DeleteTemplate removes a template via device_template_delete, which
+// answers {"success": true, "id": "<id>"}.
 func (a *MCPAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "DeleteTemplate"}
+	result, err := a.callTool(ctx, "device_template_delete", map[string]interface{}{"id": opts.TemplateID})
+	if err != nil {
+		return nil, err
+	}
+
+	var deleted struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(result, &deleted); err != nil {
+		return nil, &MCPAdapterError{Operation: "DeleteTemplate", Message: "failed to parse response: " + err.Error()}
+	}
+	return &DeleteTemplateResult{Success: deleted.Success}, nil
 }
 
-// ListTemplates lists all templates via MCP.
+// ListTemplates pages templates via device_template_list, which pages by
+// page and page_size; Limit is the page size and Offset selects the page.
+// The tool has no role argument, so a role filter is refused.
 func (a *MCPAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "ListTemplates"}
+	if opts.Role != "" {
+		return nil, ErrNoListFilter{Transport: "MCP", Operation: "ListTemplates", Filter: "role"}
+	}
+	args := map[string]interface{}{}
+	if opts.Limit > 0 {
+		args["page_size"] = opts.Limit
+		args["page"] = opts.Offset/opts.Limit + 1
+	}
+	result, err := a.callTool(ctx, "device_template_list", args)
+	if err != nil {
+		return nil, err
+	}
+
+	var page struct {
+		Templates []json.RawMessage `json:"templates"`
+		Total     int               `json:"total"`
+	}
+	if err := json.Unmarshal(result, &page); err != nil {
+		return nil, &MCPAdapterError{Operation: "ListTemplates", Message: "failed to parse response: " + err.Error()}
+	}
+
+	listResult := &ListTemplatesResult{
+		Templates: make([]*entities.DeviceTemplate, 0, len(page.Templates)),
+		Total:     page.Total,
+	}
+	for _, raw := range page.Templates {
+		var template entities.DeviceTemplate
+		if err := decodeToolEntity("ListTemplates", raw, &template, templateConfigAsBytes); err != nil {
+			return nil, err
+		}
+		listResult.Templates = append(listResult.Templates, &template)
+	}
+	return listResult, nil
+}
+
+// templateToolArgs builds the device_template_create arguments, which
+// device_template_update shares. config travels as YAML text.
+func templateToolArgs(tenantID, name, description string, role entities.DeviceRole, config []byte, rules *entities.ProfileMatchRules) map[string]interface{} {
+	args := map[string]interface{}{
+		"tenant_id":   tenantID,
+		"name":        name,
+		"description": description,
+		"role":        string(role),
+		"config":      string(config),
+	}
+	if rules != nil {
+		args["match_rules"] = rules
+	}
+	return args
+}
+
+// templateConfigAsBytes turns a template result's config text into the
+// base64 form the entity's []byte Config decodes from.
+func templateConfigAsBytes(obj map[string]interface{}) {
+	if config, ok := obj["config"].(string); ok {
+		obj["config"] = base64.StdEncoding.EncodeToString([]byte(config))
+	}
 }
 
 // CreateProfileFromTemplate creates a profile from a template via MCP.
@@ -622,7 +698,18 @@ func decodeDomainEntity(data []byte, entity any, fixup func(map[string]interface
 
 // FindConfigForDevice finds the config for a device via MCP.
 func (a *MCPAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "FindConfigForDevice"}
+	args := map[string]interface{}{}
+	if opts.EKSerial != "" {
+		args["ek_serial"] = opts.EKSerial
+	}
+	if opts.MACAddress != "" {
+		args["mac_address"] = opts.MACAddress
+	}
+	profile, err := a.callProfileTool(ctx, "FindConfigForDevice", "profile_find_config", args)
+	if err != nil {
+		return nil, err
+	}
+	return &FindConfigForDeviceResult{Profile: profile}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device via MCP.
@@ -638,11 +725,8 @@ func (a *MCPAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfi
 	}
 
 	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "AssignProfileToDevice",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	if err := decodeToolEntity("AssignProfileToDevice", result, &profile, nil); err != nil {
+		return nil, err
 	}
 
 	return &AssignProfileToDeviceResult{Profile: &profile}, nil

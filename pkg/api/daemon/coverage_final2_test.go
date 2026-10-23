@@ -532,6 +532,7 @@ func TestCoverageFinal2QUICHandlerRoutingAllRanges(t *testing.T) {
 		// IAM Role (0xB5-0xBA)
 		{"iam_role", quicwire.OpIAMRoleCreate},
 		// IAM Group (0xBB-0xBF)
+		{"iam_group", quicwire.OpIAMGroupCreate},
 		// KMS (0xC0-0xCF)
 		{"kms", quicwire.OpKMSGenerateKey},
 		// KMS Crypto (0xD0-0xDA)
@@ -697,8 +698,8 @@ func TestCoverageFinal2QUICHandlerIAMExtended(t *testing.T) {
 	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
-	// IAM extended (0xF7-0xFB)
-	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAMCheckPermission, Payload: []byte{}})
+	// IAM extended (0xF6-0xFB)
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAMGroupRemoveMember, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}

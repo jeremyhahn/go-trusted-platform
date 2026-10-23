@@ -37,6 +37,7 @@ service ComputeService {
   rpc RestoreSnapshot(RestoreSnapshotRequest) returns (RestoreSnapshotResponse);
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
   rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
 
   // VM migration
   rpc MigrateVM(MigrateVMRequest) returns (MigrateVMResponse);
@@ -536,6 +537,15 @@ message ListSnapshotsRequest {
 
 message ListSnapshotsResponse {
   repeated Snapshot snapshots = 1;
+}
+
+message GetSnapshotRequest {
+  string vm_id = 1;
+  string snapshot_id = 2;
+}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
 }
 
 // Migration request/response

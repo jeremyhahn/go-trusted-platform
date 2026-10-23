@@ -209,7 +209,7 @@ acme:
         debug: true
         hash: SHA-256
         password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
-        tpm-policy: platform
+        platform-policy: true
         rsa:
           size: 2048
         signature-algorithm: SHA256-RSAPSS
@@ -323,7 +323,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA
@@ -334,7 +334,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -345,7 +345,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 ECDSA
@@ -356,7 +356,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 Ed25519
@@ -367,7 +367,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -405,7 +405,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA
@@ -416,7 +416,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -427,7 +427,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 ECDSA
@@ -438,7 +438,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 Ed25519
@@ -449,7 +449,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
       valid: 10
       subject:
@@ -510,7 +510,7 @@ webservice:
     hash: SHA-256
     store: software
     password: "kms://webservice/key/password?ensure=true&len=32&enc=raw"
-    tpm-policy: platform
+    platform-policy: true
     debug: true
   certificate:
     subject:

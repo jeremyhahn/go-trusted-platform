@@ -172,16 +172,13 @@ platformctl luks enroll-fido2 --device /dev/<device> \
 | `--device` | string | auto-detect | no |
 | `--existing-passphrase` | string | | yes |
 | `--pcrs` | int32 list, comma-separated | none | no |
-
-The passphrase is sealed under the Platform SRK and bound to the platform PCR
-policy, so no PCRs are given. `--pcrs` applies only when platformd seals under
-the Shared SRK (systemd-cryptsetup); under the Platform SRK it is refused.
+| `--handle` | string, persistent handle such as `0x81000003` | | no |
 
 Output: `slot`, `token_id`.
 
 ```
 platformctl luks enroll-tpm --device /dev/<device> \
-    --existing-passphrase '<existing>'
+    --existing-passphrase '<existing>' --pcrs 7,9 --handle 0x81000003
 ```
 
 ### `luks enroll-recovery`

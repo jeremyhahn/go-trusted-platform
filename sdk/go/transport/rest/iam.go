@@ -7,7 +7,7 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// The IAM REST handlers answer a single user, role or tenant as the
+// The IAM REST handlers answer a single user, role, group or tenant as the
 // bare resource (pkg/webservice/v1/rest/iam/types.go UserResponse, ...),
 // while the gRPC reply wraps it in a field (IAMUserResponse.user, ...). The
 // JSON field names of the two match, so the resource decodes as-is; without
@@ -45,6 +45,11 @@ func init() {
 			platformv1.PlatformIAMService_CreateRole_FullMethodName,
 			platformv1.PlatformIAMService_GetRole_FullMethodName,
 			platformv1.PlatformIAMService_UpdateRole_FullMethodName,
+		}},
+		{"group", iamResourceDecoder(func() proto.Message { return &platformv1.IAMGroup{} }), []string{
+			platformv1.PlatformIAMService_CreateGroup_FullMethodName,
+			platformv1.PlatformIAMService_GetGroup_FullMethodName,
+			platformv1.PlatformIAMService_UpdateGroup_FullMethodName,
 		}},
 		{"tenant", iamResourceDecoder(func() proto.Message { return &platformv1.IAMTenant{} }), []string{
 			platformv1.PlatformIAMService_CreateTenant_FullMethodName,

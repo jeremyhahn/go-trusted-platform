@@ -66,6 +66,7 @@ platformd connection. The quicbaasd connection is resolved separately:
 |---|---|---|
 | Address | `PLATFORMCTL_QUICBAAS_ADDR`; the context's `quicbaas_addr` | Local context: `/run/quicbaas.sock`. Remote context: the context's `server` |
 | Transport | `PLATFORMCTL_QUICBAAS_TRANSPORT`; the context's `quicbaas_transport` | Local context: `unix`. Remote context: the context's platformd protocol |
+| TLS | Local context: `quicbaas_ca_cert`, `quicbaas_client_cert`, `quicbaas_client_key`. Remote context: its `ca_cert`, `client_cert`, `client_key` | None |
 
 Transport values are `unix`, `grpc`, `rest`, `quic` and `mcp`. Empty, `grpc` or
 an unknown value lets the quicbaas SDK auto-detect from the address: an HTTP URL
@@ -73,6 +74,13 @@ means REST, a `.sock` path means Unix, and anything else means gRPC. `embedded`
 is listed as accepted in the code comments but is treated as unknown.
 
 With no resolvable address, every verb fails with `ErrQuicBaaSNotConfigured`.
+
+**TLS is required on every transport, Unix included.** The quicbaas SDK refuses
+to build a client without it, and the CLI never falls back to plaintext. A
+context with no quicbaas TLS files fails every verb with
+`ErrQuicBaaSTLSNotConfigured` (wrapped in `ErrQuicBaaSInitFailed`). The local
+context's TLS fields are separate from platformd's connection, which uses peer
+credentials on its Unix socket and no TLS.
 
 ## 3. Output
 

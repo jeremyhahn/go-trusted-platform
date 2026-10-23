@@ -30,7 +30,6 @@ import (
 
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
-	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +43,7 @@ func newSimulatedHostTPM(t *testing.T) *xkmsTPM {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sim.Close()) })
 
-	config := simulatedHostTPMConfig(t)
+	config := simulatedHostTPMConfig()
 	tpm, err := xkmssdk.NewTPM2(&xkmssdk.TPMParams{
 		Config:    config,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -67,23 +66,14 @@ func newSimulatedHostTPM(t *testing.T) *xkmsTPM {
 	return &xkmsTPM{TrustedPlatformModule: tpm, idevid: config.IDevID}
 }
 
-// literalHierarchyAuth wraps value as a TPM hierarchy auth secret. Each
-// config field gets its own value: a SecretValue has a single owner.
-func literalHierarchyAuth(t *testing.T, value string) *quicbaassecret.SecretValue {
-	t.Helper()
-	auth, err := quicbaassecret.NewSecretValue("", []byte(value), quicbaassecret.StrategyLiteral)
-	require.NoError(t, err)
-	return auth
-}
-
-func simulatedHostTPMConfig(t *testing.T) *xkmssdk.TPMConfig {
+func simulatedHostTPMConfig() *xkmssdk.TPMConfig {
 	rsa2048 := func() *xkmssdk.RSAConfig { return &xkmssdk.RSAConfig{KeySize: 2048} }
 	return &xkmssdk.TPMConfig{
 		Hash: "SHA-256",
 		EK: &xkmssdk.EKConfig{
 			CertHandle:    0x01C00002,
 			Handle:        0x81010001,
-			HierarchyAuth: literalHierarchyAuth(t, xkmssdk.DEFAULT_PASSWORD),
+			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
 			RSAConfig:     rsa2048(),
 		},
 		IdentityProvisioningStrategy: "IAK_IDEVID_SINGLE_PASS",
@@ -110,7 +100,7 @@ func simulatedHostTPMConfig(t *testing.T) *xkmssdk.TPMConfig {
 		GoldenPCRs:      []uint{0, 7},
 		SSRK: &xkmssdk.SRKConfig{
 			Handle:        0x81000001,
-			HierarchyAuth: literalHierarchyAuth(t, xkmssdk.DEFAULT_PASSWORD),
+			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
 			KeyAlgorithm:  x509.RSA.String(),
 			RSAConfig:     rsa2048(),
 		},

@@ -29,18 +29,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// freePort returns a TCP port with nothing on it, and a UDP port likewise.
-func freeTCPPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port
-}
-
 // readinessManifest writes the minimum on-disk state NewServer needs.
 func readinessManifest(t *testing.T) (manifestPath, dataDir string) {
 	t.Helper()
@@ -84,10 +72,11 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 	defer squatter.Close()
 	tftpPort := squatter.LocalAddr().(*net.UDPAddr).Port
 
-	devScriptPort := freeTCPPort(t)
+	tcpPorts := freeTCPPorts(t, 2)
+	devScriptPort := tcpPorts[0]
 	cfg := &ServerConfig{
 		Interface:        "lo",
-		HTTPPort:         freeTCPPort(t),
+		HTTPPort:         tcpPorts[1],
 		TFTPPort:         tftpPort,
 		DeviceScriptPort: devScriptPort,
 		FirmwareDir:      fixtureFirmwareDir(t),
@@ -102,7 +91,8 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 			SubnetMask: "255.255.255.0",
 			// Never the real 67: it is privileged, globally unique, and
 			// owned by the host rather than this test.
-			Port: freeUDPPort(t),
+			// The squatter still holds the TFTP port, so this one differs.
+			Port: freeUDPPorts(t, 1)[0],
 		},
 	}
 
@@ -157,8 +147,8 @@ func TestIPXEServerReady_ClosesOnlyAfterEveryListenerBinds(t *testing.T) {
 		// Loopback names the server IP outright: auto-detection wants a
 		// routable interface, and the hermetic test container has only lo.
 		BindHost:        "127.0.0.1",
-		HTTPPort:        freeTCPPort(t),
-		TFTPPort:        freeUDPPort(t),
+		HTTPPort:        freeTCPPorts(t, 1)[0],
+		TFTPPort:        freeUDPPorts(t, 1)[0],
 		EnableDHCP:      false,
 		FirmwareDir:     fixtureFirmwareDir(t),
 		FirmwareOffline: true,
@@ -194,7 +184,7 @@ func TestIPXEServerReady_StaysOpenWhenAListenerCannotBind(t *testing.T) {
 		// Loopback names the server IP outright: auto-detection wants a
 		// routable interface, and the hermetic test container has only lo.
 		BindHost: "127.0.0.1",
-		HTTPPort: freeTCPPort(t),
+		HTTPPort: freeTCPPorts(t, 1)[0],
 		TFTPPort: squatter.LocalAddr().(*net.UDPAddr).Port,
 		// Without the fixture the TFTP server fetches firmware from
 		// boot.ipxe.org before it binds, and on a runner with no egress
@@ -233,17 +223,6 @@ func TestIPXEServerReady_StaysOpenWhenAListenerCannotBind(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("neither Ready nor Start settled within the deadline")
 	}
-}
-
-func freeUDPPort(t *testing.T) int {
-	t.Helper()
-	c, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen udp: %v", err)
-	}
-	port := c.LocalAddr().(*net.UDPAddr).Port
-	_ = c.Close()
-	return port
 }
 
 // fixtureFirmwareDir returns a directory holding placeholder iPXE firmware

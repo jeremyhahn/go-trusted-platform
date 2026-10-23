@@ -56,6 +56,7 @@ func newUserCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var email string
 	var name string
 	var roles string
+	var groups string
 	var attributes string
 
 	cmd := &cobra.Command{
@@ -80,7 +81,7 @@ Examples:
 				return ErrMissingEmail{}
 			}
 			flags := getFlags()
-			return runUserCreate(flags, tenantID, email, name, roles, attributes)
+			return runUserCreate(flags, tenantID, email, name, roles, groups, attributes)
 		},
 	}
 
@@ -88,6 +89,7 @@ Examples:
 	cmd.Flags().StringVar(&email, "email", "", "user email address (required)")
 	cmd.Flags().StringVar(&name, "name", "", "user display name")
 	cmd.Flags().StringVar(&roles, "roles", "", "comma-separated list of roles to assign")
+	cmd.Flags().StringVar(&groups, "groups", "", "comma-separated list of groups to add user to")
 	cmd.Flags().StringVar(&attributes, "attributes", "", "comma-separated key=value pairs for custom attributes")
 
 	return cmd
@@ -149,6 +151,7 @@ func newUserUpdateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var email string
 	var name string
 	var roles string
+	var groups string
 	var attributes string
 
 	cmd := &cobra.Command{
@@ -170,7 +173,7 @@ Examples:
 				return ErrMissingUserID{}
 			}
 			flags := getFlags()
-			return runUserUpdate(flags, tenantID, userID, email, name, roles, attributes)
+			return runUserUpdate(flags, tenantID, userID, email, name, roles, groups, attributes)
 		},
 	}
 
@@ -179,6 +182,7 @@ Examples:
 	cmd.Flags().StringVar(&email, "email", "", "new email address")
 	cmd.Flags().StringVar(&name, "name", "", "new display name")
 	cmd.Flags().StringVar(&roles, "roles", "", "comma-separated list of roles (replaces existing)")
+	cmd.Flags().StringVar(&groups, "groups", "", "comma-separated list of groups (replaces existing)")
 	cmd.Flags().StringVar(&attributes, "attributes", "", "comma-separated key=value pairs (replaces existing)")
 
 	return cmd
@@ -240,7 +244,7 @@ Examples:
 	return cmd
 }
 
-func runUserCreate(flags *cli.CommonFlags, tenantID, email, name, roles, attributes string) error {
+func runUserCreate(flags *cli.CommonFlags, tenantID, email, name, roles, groups, attributes string) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -251,7 +255,7 @@ func runUserCreate(flags *cli.CommonFlags, tenantID, email, name, roles, attribu
 	ctx := base.Context()
 
 	user, err := sdkClient.CreateUserDomain(ctx, tenantID, email, name,
-		parseStringSlice(roles), parseAttributes(attributes))
+		parseStringSlice(roles), parseStringSlice(groups), parseAttributes(attributes))
 	if err != nil {
 		return &WrappedError{Msg: "failed to create user", Err: err}
 	}
@@ -359,7 +363,7 @@ func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 	}
 }
 
-func runUserUpdate(flags *cli.CommonFlags, tenantID, userID, email, name, roles, attributes string) error {
+func runUserUpdate(flags *cli.CommonFlags, tenantID, userID, email, name, roles, groups, attributes string) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -370,7 +374,7 @@ func runUserUpdate(flags *cli.CommonFlags, tenantID, userID, email, name, roles,
 	ctx := base.Context()
 
 	user, err := sdkClient.UpdateUserDomain(ctx, tenantID, userID, email, name,
-		parseStringSlice(roles), parseAttributes(attributes))
+		parseStringSlice(roles), parseStringSlice(groups), parseAttributes(attributes))
 	if err != nil {
 		return &WrappedError{Msg: "failed to update user", Err: err}
 	}
@@ -504,6 +508,7 @@ func printUserDetails(printer *cli.Printer, user *iamsvc.User) {
 		printer.PrintKeyValue("Name", user.Name)
 	}
 	printer.PrintKeyValue("Roles", formatStringSlice(user.Roles))
+	printer.PrintKeyValue("Groups", formatStringSlice(user.Groups))
 	if len(user.Attributes) > 0 {
 		printer.PrintKeyValue("Attributes", formatAttributes(user.Attributes))
 	}

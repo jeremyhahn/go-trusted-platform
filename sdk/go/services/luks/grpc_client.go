@@ -168,6 +168,7 @@ func (c *GRPCClient) EnrollTPM(ctx context.Context, req *EnrollTPMRequest) (*Enr
 		Device:             req.Device,
 		ExistingPassphrase: req.ExistingPassphrase,
 		Pcrs:               req.PCRs,
+		Handle:             req.Handle,
 	})
 	if err != nil {
 		return nil, &ErrEnrollTPMFailed{Cause: err}

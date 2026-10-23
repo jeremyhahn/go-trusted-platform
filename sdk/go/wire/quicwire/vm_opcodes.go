@@ -45,6 +45,8 @@ const (
 
 	// OpVMAttest generates a vTPM quote for a running VM
 	OpVMAttest byte = 0xB9
+	// OpVMSnapshotGet returns one VM snapshot by id
+	OpVMSnapshotGet byte = 0xBA
 	// OpVMSnapshotCreate creates a snapshot of a VM
 	OpVMSnapshotCreate byte = 0xBB
 

@@ -37,7 +37,6 @@ import (
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 
-	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	// QuicBaaS ObjectStorage client
@@ -54,7 +53,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
@@ -147,14 +145,6 @@ func newKeyBackend(logger *logging.Logger, path string) (xkmssdk.TPMKeyBackend, 
 		return nil, &WrappedError{Msg: "failed to create storage backend", Err: err}
 	}
 	return xkmssdk.NewFileBackend(logger.Slog(), storageBackend), nil
-}
-
-// platformKeyBackend opens the file backend holding the blobs of the TPM
-// keys created under the Platform SRK: the TPM itself, the platform key
-// store and the ACME TPM adapter (its device-attest-01 certificate key) all
-// keep their keys there.
-func (app *App) platformKeyBackend() (xkmssdk.TPMKeyBackend, error) {
-	return newKeyBackend(app.Logger, fmt.Sprintf("%s/platform/keystore", app.PlatformDir))
 }
 
 // initXKMSService initializes the global XKMS service with the appropriate backends
@@ -2235,7 +2225,8 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 // and un-attested connection. A TPM software simulator is used if enabled
 // in the TPM section of the platform configuration file.
 func (app *App) OpenTPM(initialize bool) error {
-	backend, err := app.platformKeyBackend()
+	path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
+	backend, err := newKeyBackend(app.Logger, path)
 	if err != nil {
 		return err
 	}
@@ -2362,7 +2353,8 @@ func (app *App) OpenTPM(initialize bool) error {
 func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 	app.Logger.Info("Initializing platform (TPM 2.0) key store")
 	if app.PlatformKS == nil {
-		backend, err := app.platformKeyBackend()
+		path := fmt.Sprintf("%s/platform/keystore", app.PlatformDir)
+		backend, err := newKeyBackend(app.Logger, path)
 		if err != nil {
 			return err
 		}
@@ -2411,7 +2403,7 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 				// (firstboot leaves it so, docs/installer/factory-reset.md),
 				// the SRK is created under it, and ownership is taken
 				// below.
-				useDefaults := app.TPMConfig.SSRK == nil || app.TPMConfig.SSRK.HierarchyAuth == nil
+				useDefaults := app.TPMConfig.SSRK == nil || app.TPMConfig.SSRK.HierarchyAuth == ""
 				if useDefaults {
 					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is unauthenticated (SSRK.HierarchyAuth empty), initializing with defaults")
 					if err := ks.InitializeWithDefaults(); err != nil {
@@ -2659,11 +2651,7 @@ func (app *App) provisionTPMHierarchies(soPIN xkmssdk.Password) error {
 	if app.TPMConfig.SSRK == nil {
 		app.TPMConfig.SSRK = &xkmssdk.SRKConfig{}
 	}
-	ssrkAuth, err := sealHierarchyAuth(soPIN)
-	if err != nil {
-		return err
-	}
-	app.TPMConfig.SSRK.HierarchyAuth = ssrkAuth
+	app.TPMConfig.SSRK.HierarchyAuth = string(soPIN.Bytes())
 	// Mirror for EK — Provision() also sets the ENDORSEMENT hierarchy
 	// auth to soPIN. Any downstream CreatePrimary under EH (e.g. the
 	// IDevID key minted during ACME enroll-01 challenge setup) must
@@ -2674,11 +2662,7 @@ func (app *App) provisionTPMHierarchies(soPIN xkmssdk.Password) error {
 	if app.TPMConfig.EK == nil {
 		app.TPMConfig.EK = &xkmssdk.EKConfig{}
 	}
-	ekAuth, err := sealHierarchyAuth(soPIN)
-	if err != nil {
-		return err
-	}
-	app.TPMConfig.EK.HierarchyAuth = ekAuth
+	app.TPMConfig.EK.HierarchyAuth = string(soPIN.Bytes())
 	return nil
 }
 
@@ -2808,14 +2792,10 @@ func (app *App) CompletePlatformIdentity(
 				app.Logger.Info("Resolved PREFERRED_IP for ACME enrollment", "ip", enrollmentIP)
 			}
 
-			tpmKeys, err := app.platformKeyBackend()
-			if err != nil {
-				return nil, err
-			}
 			enrollConfig := &trustedca.ACMEEnrollmentConfig{
 				Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
 				IPAddress:  enrollmentIP,
-				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM, tpmKeys),
+				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
 				CommonName: app.enrollmentName(),
 			}
 			enrollResult, err := app.ACMEClient.EnrollDevice(enrollCtx, enrollConfig)
@@ -3200,14 +3180,10 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 				defer cancel()
 
 				// Request EK certificate from Enterprise CA using endorse-01 challenge
-				tpmKeys, err := app.platformKeyBackend()
-				if err != nil {
-					return nil, err
-				}
 				ekConfig := &trustedca.ACMEEnrollmentConfig{
 					Challenge:  "endorse-01",
 					IPAddress:  enrollmentIP,
-					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM, tpmKeys),
+					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
 					CommonName: app.enrollmentName(),
 				}
 				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
@@ -3227,20 +3203,14 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 
 			// Write the EK cert to TPM NV RAM
 			// Get hierarchy auth from config since ekAttrs from KeyAttributes() doesn't include it
-			provisionEKCert := func(hierarchyAuth []byte) error {
-				return app.TPM.ProvisionEKCert(hierarchyAuth, ekCert.Raw)
-			}
-			var provisionErr error
-			switch {
-			case app.TPMConfig.EK.HierarchyAuth != nil:
-				provisionErr = app.TPMConfig.EK.HierarchyAuth.WithBytes(provisionEKCert)
-			case ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil:
-				provisionErr = provisionEKCert(ekAttrs.TPMAttributes.HierarchyAuth.Bytes())
-			default:
-				provisionErr = provisionEKCert(nil)
+			var hierarchyAuth []byte
+			if app.TPMConfig.EK.HierarchyAuth != "" {
+				hierarchyAuth = []byte(app.TPMConfig.EK.HierarchyAuth)
+			} else if ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil {
+				hierarchyAuth = ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
 			}
 
-			if err := provisionErr; err != nil {
+			if err := app.TPM.ProvisionEKCert(hierarchyAuth, ekCert.Raw); err != nil {
 				// NOTE: TPM simulator throws an error here for certs
 				// greater than 1024 bytes. To work around this, a warning
 				// is emitted and the cert-handle attribute is ignored so
@@ -3741,7 +3711,7 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 	// Set up PlatformPassword before any certificate operations if PlatformPolicy is enabled.
 	// This is needed both for loading existing certs and creating new ones.
 	var platformPassword xkmssdk.Password
-	if keyAttrs.TPMPolicy == common.TPMPolicyPlatform && app.TPM != nil && app.PlatformKS != nil {
+	if keyAttrs.PlatformPolicy && app.TPM != nil && app.PlatformKS != nil {
 		// Ensure parent SRK attributes are set
 		if keyAttrs.Parent == nil {
 			keyAttrs.Parent = app.PlatformKS.SRKAttributes()
@@ -4890,24 +4860,4 @@ func assertNoUnresolvedKMSURI(fieldName, v string) error {
 			"security field is consumed", fieldName, v)}
 	}
 	return nil
-}
-
-// sealHierarchyAuth seals the security officer PIN as a TPM hierarchy auth
-// value. An absent PIN yields nil: the hierarchy keeps its TCG factory
-// state (empty auth). Each SecretValue has a single owner, so every config
-// field that carries the PIN needs its own call.
-func sealHierarchyAuth(pin xkmssdk.Password) (*quicbaassecret.SecretValue, error) {
-	if pin == nil {
-		return nil, nil
-	}
-	value := pin.Bytes()
-	if len(value) == 0 {
-		return nil, nil
-	}
-	defer clear(value)
-	sv, err := quicbaassecret.NewSecretValue("", value, quicbaassecret.StrategyLiteral)
-	if err != nil {
-		return nil, &WrappedError{Msg: "failed to seal TPM hierarchy auth", Err: err}
-	}
-	return sv, nil
 }

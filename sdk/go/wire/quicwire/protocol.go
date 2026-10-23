@@ -300,9 +300,12 @@ const (
 	OpIAMRoleAssign byte = 0xB9
 	OpIAMRoleRevoke byte = 0xBA
 
-	// 0xBB-0xBF and 0xF6 carried the IAM group operations, removed with
-	// IAM groups in go-quicbaas v0.13. They stay reserved so an old client
-	// gets "unknown opcode" rather than a different operation.
+	// IAM Group Operations (0xBB-0xBF)
+	OpIAMGroupCreate    byte = 0xBB
+	OpIAMGroupDelete    byte = 0xBC
+	OpIAMGroupGet       byte = 0xBD
+	OpIAMGroupList      byte = 0xBE
+	OpIAMGroupAddMember byte = 0xBF
 
 	// KMS Key Management Operations (0xC0-0xCF)
 	OpKMSGenerateKey     byte = 0xC0
@@ -352,12 +355,13 @@ const (
 	OpDEKRotate    byte = 0xF4
 	OpDEKGetStatus byte = 0xF5
 
-	// IAM Extended Operations (0xF7-0xFB)
-	OpIAMCheckPermission byte = 0xF7
-	OpIAMAuthenticate    byte = 0xF8
-	OpIAMTokenCreate     byte = 0xF9
-	OpIAMTokenRevoke     byte = 0xFA
-	OpIAMTokenVerify     byte = 0xFB
+	// IAM Extended Operations (0xF6-0xFB)
+	OpIAMGroupRemoveMember byte = 0xF6
+	OpIAMCheckPermission   byte = 0xF7
+	OpIAMAuthenticate      byte = 0xF8
+	OpIAMTokenCreate       byte = 0xF9
+	OpIAMTokenRevoke       byte = 0xFA
+	OpIAMTokenVerify       byte = 0xFB
 
 	// PXE Extended Operations (0xFC-0xFF)
 	OpPXEAuthorize    byte = 0xFC
@@ -948,6 +952,14 @@ var opcodeNames = map[byte]string{
 	OpIAMRoleList:   "IAMRoleList",
 	OpIAMRoleAssign: "IAMRoleAssign",
 	OpIAMRoleRevoke: "IAMRoleRevoke",
+
+	// IAM Group Operations
+	OpIAMGroupCreate:       "IAMGroupCreate",
+	OpIAMGroupDelete:       "IAMGroupDelete",
+	OpIAMGroupGet:          "IAMGroupGet",
+	OpIAMGroupList:         "IAMGroupList",
+	OpIAMGroupAddMember:    "IAMGroupAddMember",
+	OpIAMGroupRemoveMember: "IAMGroupRemoveMember",
 
 	// IAM Permission/Auth Operations
 	OpIAMCheckPermission: "IAMCheckPermission",

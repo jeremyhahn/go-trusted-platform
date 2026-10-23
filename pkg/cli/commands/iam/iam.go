@@ -24,10 +24,11 @@ func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "iam",
 		Short: "Identity and Access Management operations",
-		Long: `Manage users, roles, tenants, policies, and applications.
+		Long: `Manage users, groups, roles, tenants, policies, and applications.
 
 The IAM subsystem provides comprehensive identity and access management including:
   - User management (create, update, delete, list)
+  - Group management with membership control
   - Role management with assignment capabilities
   - Tenant administration
   - Policy creation and validation
@@ -52,6 +53,7 @@ Examples:
 
 	// Add subcommands
 	cmd.AddCommand(NewUserCommand(getFlags))
+	cmd.AddCommand(NewGroupCommand(getFlags))
 	cmd.AddCommand(NewRoleCommand(getFlags))
 	cmd.AddCommand(NewTenantCommand(getFlags))
 	cmd.AddCommand(NewPolicyCommand(getFlags))

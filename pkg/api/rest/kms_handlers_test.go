@@ -1163,6 +1163,26 @@ func TestHandleExportKey(t *testing.T) {
 		assert.Equal(t, uint64(2), svc.lastExportKeyReq.Version)
 	})
 
+	t.Run("refuses a malformed numeric parameter", func(t *testing.T) {
+		for _, query := range []string{"wrapping_algorithm=aes", "format=-x", "version=-1", "version=two"} {
+			t.Run(query, func(t *testing.T) {
+				svc := newMockKMSService()
+				_, router := setupKMSTestHandler(svc)
+
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/kms/keys/test-key-123/export?"+query, nil)
+				w := httptest.NewRecorder()
+
+				router.ServeHTTP(w, req)
+
+				resp := w.Result()
+				defer resp.Body.Close()
+
+				assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+				assert.Nil(t, svc.lastExportKeyReq, "a refused request must not reach the service")
+			})
+		}
+	})
+
 	t.Run("returns error when key not exportable", func(t *testing.T) {
 		svc := newMockKMSService()
 		svc.exportKeyErr = ErrKMSKeyNotExportable{KeyID: "test-key-123"}

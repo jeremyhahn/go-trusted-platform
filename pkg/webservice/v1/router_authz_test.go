@@ -1417,7 +1417,8 @@ func TestServiceRegistryEndpoint_SurvivesTheGatedPlatformSubtree(t *testing.T) {
 
 // computeProbes are the compute and curated-image routes chosen for blast
 // radius. `container exec` is arbitrary code execution inside a workload;
-// `vm migrate` moves a workload to another host.
+// `vm migrate` moves a workload to another host, and `migration prepare`
+// and `migration finalize` land one on this host.
 var computeProbes = []struct {
 	name   string
 	method string
@@ -1426,6 +1427,8 @@ var computeProbes = []struct {
 	{"vm create", http.MethodPost, "/api/v1/compute/vms"},
 	{"vm delete", http.MethodDelete, "/api/v1/compute/vms/v1"},
 	{"vm migrate", http.MethodPost, "/api/v1/compute/vms/v1/migrate"},
+	{"migration prepare", http.MethodPost, "/api/v1/compute/migrations/prepare"},
+	{"migration finalize", http.MethodPost, "/api/v1/compute/migrations/r1/finalize"},
 	{"vm snapshot restore", http.MethodPost, "/api/v1/compute/vms/v1/snapshots/s1/restore"},
 	{"vm disk detach", http.MethodDelete, "/api/v1/compute/vms/v1/disks/d1"},
 	{"vm list", http.MethodGet, "/api/v1/compute/vms"},
@@ -1450,6 +1453,7 @@ func TestComputeRoutes_AreRegisteredAndGated(t *testing.T) {
 	for _, want := range []string{
 		"POST /api/v1/compute/vms",
 		"POST /api/v1/compute/vms/{id}/migrate",
+		"POST /api/v1/compute/migrations/prepare",
 		"POST /api/v1/compute/containers/{id}/exec",
 		"POST /api/v1/compute/images",
 		"DELETE /api/v1/compute/images/{repository:.+}",
@@ -1997,13 +2001,13 @@ func TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate(t *testing.T) {
 // matching only it answers 404).
 //
 // It requires the count rather than merely the presence: rest/iam/router.go
-// registers each capability twice (docs/iam/api.md §2) — 26 flat routes and
-// 31 tenant-scoped ones — and a fixture that silently lost one tree would
+// registers each capability twice (docs/iam/api.md §2) — 33 flat routes and
+// 38 tenant-scoped ones — and a fixture that silently lost one tree would
 // otherwise pass the per-route assertions over the other.
 func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
 	t.Helper()
 
-	const wantIAMRoutes = 57
+	const wantIAMRoutes = 71
 	var routes []string
 	for _, route := range testutil.WalkRoutes(t, router) {
 		_, template := splitRoute(route)
@@ -2110,8 +2114,8 @@ func TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession(t *testing.T) {
 		assert.NotEqualf(t, http.StatusUnauthorized, code, "%s refused the admin authentication", route)
 		assert.NotEqualf(t, http.StatusForbidden, code, "%s refused the admin authorization", route)
 	}
-	require.Equal(t, 31, tenantGuarded, "tenant-record plus tenant-scoped routes")
-	require.Equal(t, 26, flat, "flat routes")
+	require.Equal(t, 38, tenantGuarded, "tenant-record plus tenant-scoped routes")
+	require.Equal(t, 33, flat, "flat routes")
 }
 
 // TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle is the other half of

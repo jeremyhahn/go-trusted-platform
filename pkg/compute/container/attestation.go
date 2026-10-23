@@ -16,6 +16,7 @@ package container
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -528,6 +529,40 @@ func (e *UnmeasuredLaunchError) Error() string {
 
 // Unwrap returns the sentinel and the cause for errors.Is support.
 func (e *UnmeasuredLaunchError) Unwrap() []error {
+	if e.Cause == nil {
+		return []error{ErrAttestationFailed}
+	}
+	return []error{ErrAttestationFailed, e.Cause}
+}
+
+// MeasuredRuntimes names the container runtimes the trust stack measures
+// launches through.
+var MeasuredRuntimes = []string{"docker", "podman"}
+
+// MeasuredRuntimeUnavailableError refuses a container launch on a host that
+// has a TPM but no container runtime to measure the launch with. A TPM host
+// never starts a workload unmeasured (default deny,
+// plans/trusted-service-plane.md §3 item 5): only a host without a TPM runs
+// containers unmeasured.
+type MeasuredRuntimeUnavailableError struct {
+	// Runtimes names the runtimes that were looked for and not found.
+	Runtimes []string
+
+	// Cause is the trust stack's error.
+	Cause error
+}
+
+func (e *MeasuredRuntimeUnavailableError) Error() string {
+	msg := "container launch refused: the host has a TPM but no container runtime (" +
+		strings.Join(e.Runtimes, " or ") + ") to measure the launch"
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+// Unwrap exposes ErrAttestationFailed and the trust stack's error.
+func (e *MeasuredRuntimeUnavailableError) Unwrap() []error {
 	if e.Cause == nil {
 		return []error{ErrAttestationFailed}
 	}

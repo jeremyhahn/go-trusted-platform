@@ -13,17 +13,10 @@
 
 package iso
 
-import "fmt"
-
-// ErrDaemonConnectionRequired is returned when a command requires daemon connection
-// but dual-mode is not yet implemented.
-type ErrDaemonConnectionRequired struct {
-	Command string
-}
-
-func (e ErrDaemonConnectionRequired) Error() string {
-	return fmt.Sprintf("daemon connection required for '%s' command - dual-mode will be added later", e.Command)
-}
+import (
+	"fmt"
+	"time"
+)
 
 // ErrInvalidArchitecture is returned when an invalid architecture is specified.
 type ErrInvalidArchitecture struct {
@@ -52,6 +45,17 @@ type ErrISONotFound struct {
 
 func (e ErrISONotFound) Error() string {
 	return fmt.Sprintf("ISO file not found: %s", e.Path)
+}
+
+// ErrVMTimeout is returned when a test VM is still running when the
+// test's --timeout expires: the guest never powered off, so QEMU was
+// killed and the software TPM stopped.
+type ErrVMTimeout struct {
+	Timeout time.Duration
+}
+
+func (e ErrVMTimeout) Error() string {
+	return fmt.Sprintf("the VM did not power off within --timeout %s; QEMU and the software TPM were stopped", e.Timeout)
 }
 
 // ErrDirectoryNotFound is returned when a directory is not found.

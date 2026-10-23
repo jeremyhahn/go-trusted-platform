@@ -56,7 +56,7 @@ func luksSDKCalls(device string) []sdkCall {
 			}, &platformv1.LUKSEnrollFIDO2Response{}},
 		{platformv1.LUKSService_EnrollTPM_FullMethodName,
 			&platformv1.LUKSEnrollTPMRequest{
-				Device: device, ExistingPassphrase: luksTestExisting, Pcrs: []int32{0, 7},
+				Device: device, ExistingPassphrase: luksTestExisting, Pcrs: []int32{0, 7}, Handle: "0x81000003",
 			}, &platformv1.LUKSEnrollTPMResponse{}},
 		{platformv1.LUKSService_EnrollRecovery_FullMethodName,
 			&platformv1.LUKSEnrollRecoveryRequest{Device: device, ExistingPassphrase: luksTestExisting},

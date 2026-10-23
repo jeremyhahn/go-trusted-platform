@@ -64,6 +64,7 @@ var luksRequestEncoders = map[string]categoryRequestEncoder{
 				Device:             r.GetDevice(),
 				ExistingPassphrase: r.GetExistingPassphrase(),
 				PCRs:               r.GetPcrs(),
+				Handle:             r.GetHandle(),
 			}, nil
 		}),
 	platformv1.LUKSService_EnrollRecovery_FullMethodName: requestEncoder(platformv1.LUKSService_EnrollRecovery_FullMethodName,

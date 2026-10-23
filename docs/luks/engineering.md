@@ -98,7 +98,7 @@
 | Info | header metadata | `SectorSize` defaults to `luks2.DefaultSectorSize`; `MetadataJSON` is the raw JSON area |
 | EnrollPassphrase | `AddKey` | |
 | EnrollFIDO2 | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` / `ImportToken` | an enrolling handler imports its own token JSON; otherwise a `fido2-manual` token is written; a failed token write removes the keyslot (§2.8) |
-| EnrollTPM | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` | the handler seals under the Platform SRK and refuses `--pcrs` there; no token JSON is `ErrLUKSTokenMissing` and removes the keyslot (§2.8) |
+| EnrollTPM | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` | the handler seals to `--handle` / `--pcrs`; no token JSON is `ErrLUKSTokenMissing` and removes the keyslot (§2.8) |
 | EnrollRecovery | `AddRecoveryKey` | |
 | RemoveKey | `KillKeyslot` | destructive |
 | TestUnlock | `ListKeyslots` | **checks only that the slot exists**; no key material is tried |

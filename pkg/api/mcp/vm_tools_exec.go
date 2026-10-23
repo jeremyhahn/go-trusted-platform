@@ -118,8 +118,7 @@ type VMProvider interface {
 	// VMSnapshotCreate creates a VM snapshot, as CreateSnapshot does.
 	VMSnapshotCreate(ctx context.Context, req *platformv1.CreateSnapshotRequest) (interface{}, error)
 
-	// VMSnapshotGet returns a single snapshot by id. It has no RPC of its
-	// own: it is ListSnapshots filtered to the snapshot.
+	// VMSnapshotGet returns a single snapshot by id (GetSnapshot).
 	VMSnapshotGet(ctx context.Context, vmID, snapshotID string) (interface{}, error)
 
 	// VMSnapshotList lists a VM's snapshots, as ListSnapshots does.

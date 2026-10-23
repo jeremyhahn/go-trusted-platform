@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
@@ -97,15 +96,15 @@ func (s *TPMNoPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 	}
 
 	// Set PlatformPolicy on parent SRK so CreateSession uses correct auth
-	srkAttrs.TPMPolicy = common.PlatformTPMPolicy(platformPolicy)
+	srkAttrs.PlatformPolicy = platformPolicy
 
 	// Create key attributes for unsealing
 	// The sealed OBJECT has NO PCR policy, but parent SRK may have platform policy
 	attrs := &xkmssdk.KeyAttributes{
-		CN:        "luks-root-nopcr",
-		KeyType:   xkmssdk.KeyTypeHMAC,
-		TPMPolicy: "", // NO PCR policy on sealed OBJECT
-		Parent:    srkAttrs,
+		CN:             "luks-root-nopcr",
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: false, // NO PCR policy on sealed OBJECT
+		Parent:         srkAttrs,
 	}
 
 	// Load sealed data from files
@@ -184,14 +183,14 @@ func (s *TPMNoPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 	}
 
 	// Set PlatformPolicy on parent SRK so CreateSession uses correct auth
-	srkAttrs.TPMPolicy = common.PlatformTPMPolicy(platformPolicy)
+	srkAttrs.PlatformPolicy = platformPolicy
 
 	// Create key attributes for TPM sealing WITHOUT PCR policy on the sealed OBJECT
 	attrs := &xkmssdk.KeyAttributes{
-		CN:        "luks-root-nopcr",
-		KeyType:   xkmssdk.KeyTypeHMAC,
-		TPMPolicy: "", // NO PCR policy on sealed OBJECT - allows first boot to succeed
-		Parent:    srkAttrs,
+		CN:             "luks-root-nopcr",
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: false, // NO PCR policy on sealed OBJECT - allows first boot to succeed
+		Parent:         srkAttrs,
 	}
 
 	// Get the backend for storing sealed data

@@ -38,7 +38,7 @@ in [`docs/kms/api.md`](../kms/api.md) — not here.
 |---|---|---|---|---|---|---|
 | Build a resolver registry | `App.SetupSecretResolvers(ctx, *SecretsConfig)` | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design |
 | Resolve all secret URIs in the running config | `App.ProcessSecrets(ctx, *SecretsConfig)` | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design |
-| Resolve a single URI | `registry.Resolve` / a resolver's `Resolve(ctx, raw)` | `MISSING` | `MISSING` | `MISSING` | `MISSING` | `MISSING` |
+| Resolve a single URI | `registry.Resolve` / a resolver's `Resolve(ctx, raw)` | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design |
 | Classify a string as a secret URI | `bootstrap.IsSecretURI(s)` | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design |
 | Expand a short `kms://` path | `bootstrap.ExpandShortKMSPath(path, tenantID, nodeID)` | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design |
 | Back up / rewrite / restore a config file | `bootstrap.ConfigWriter` (`Backup`, `UpdateSecretReferences`, `DryRun`, `Restore`) | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design | `MISSING` — by design |
@@ -48,11 +48,10 @@ in [`docs/kms/api.md`](../kms/api.md) — not here.
 
 **`MISSING` — by design** is not a `docs/13` gap. Exposing config-secret
 resolution over a transport would create a credential oracle; the absence is the
-control. No status service will be built either (owner ruling, 2026-10-17):
-reporting resolution status stays the local `secrets status` command.
+control. There is no status service either: reporting resolution status stays
+the local `secrets status` command.
 
-The other rows are by design for these reasons, accepted by the owner on
-2026-10-17:
+The other rows are by design for these reasons:
 
 - **Classify a string, expand a short `kms://` path:** computable client-side.
   Both are pure functions of their arguments, so a client computes them itself
@@ -67,6 +66,11 @@ The other rows are by design for these reasons, accepted by the owner on
   which today reports only counts and path lists; the consumer row is in
   [`docs/SPEC.md`](../SPEC.md#interfaces) and go-quicbaas writes the matching
   row.
+
+Resolving a single URI is that oracle in its plainest form (§1, reason 2), so
+it has no transport. A remote client that needs a `kms://` value reads it from
+the secret store (**not this feature**, below) under that store's `secrets:*`
+scope.
 
 **not this feature**: the secret store's CRUD lives on the KMS surface
 ([`docs/kms/api.md`](../kms/api.md)) and on the platform-wide QUIC

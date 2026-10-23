@@ -5,7 +5,7 @@
 
 ## Overview
 
-IAM (Identity and Access Management) in Trusted Platform is powered by go-quicbaas's IAM subsystem. The platform wraps QuicBaaS's IAMServiceClient to provide tenant management, user/role management, ABAC policy enforcement, and OIDC federation.
+IAM (Identity and Access Management) in Trusted Platform is powered by go-quicbaas's IAM subsystem. The platform wraps QuicBaaS's IAMServiceClient to provide tenant management, user/group/role management, ABAC policy enforcement, and OIDC federation.
 
 ## Configuration File Location
 
@@ -205,6 +205,7 @@ tenant, err := iamClient.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{
 | Resource | Isolation |
 |----------|-----------|
 | Users | Per-tenant |
+| Groups | Per-tenant |
 | Roles | Per-tenant |
 | Policies | Per-tenant |
 | Applications | Per-tenant |
@@ -313,6 +314,7 @@ argon2:
 ### Policy Best Practices
 
 - Use least-privilege policies
+- Assign roles via groups, not directly to users
 - Audit policy changes via the audit service
 - Test policies before production deployment
 
@@ -364,7 +366,7 @@ Check: Identity field present in certificate
 
 ```
 Check: Policy syntax is valid YAML
-Check: Subject has required roles
+Check: Subject has required roles/groups
 Check: Resource path matches policy rules
 Check: Tenant context is correct
 ```

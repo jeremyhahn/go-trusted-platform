@@ -395,15 +395,7 @@ message DeleteAKResponse {
 
 ### Seal
 
-Seals data to the TPM as an object protected by `password`.
-
-**PCR-bound sealing is unavailable.** A request that sets `pcr_indices` fails
-with `FAILED_PRECONDITION`, and the message names go-quicbaas #1171. Binding the
-object to PCRs needs the TPM PolicyPCR primitives, which go-quicbaas does not
-re-export yet. Without them the object would be sealed in a way the PCRs do not
-protect, so the server refuses it. `pcr_indices` and `pcr_bank` stay in the
-message for the day the re-export lands.
-
+Seals data to the TPM with optional PCR policy.
 
 **Request:**
 ```protobuf
@@ -432,9 +424,10 @@ message SealResponse {
 **Example:**
 ```go
 response, err := client.Seal(ctx, &platformv1.SealRequest{
-    Data:     []byte("my-secret-data"),
-    Cn:       "app-secret",
-    Password: sealPassword,
+    Data:       []byte("my-secret-data"),
+    Cn:         "app-secret",
+    PcrIndices: []uint32{7, 8, 9},
+    PcrBank:    platformv1.PCRBank_PCR_BANK_SHA256,
 })
 ```
 
@@ -845,7 +838,7 @@ gRPC status codes:
 | `INVALID_ARGUMENT` | Invalid request parameters |
 | `UNAVAILABLE` | The daemon has no TPM |
 | `PERMISSION_DENIED` | Authorization failed |
-| `FAILED_PRECONDITION` | PCR mismatch, TPM not ready, or a `Seal` naming PCRs (refused until go-quicbaas #1171); `IDevIDService.DeleteIDevID` and `DeleteIAK` and `TPMService.DeleteAK`, always |
+| `FAILED_PRECONDITION` | PCR mismatch or TPM not ready; `IDevIDService.DeleteIDevID` and `DeleteIAK` and `TPMService.DeleteAK`, always |
 | `INTERNAL` | Server error |
 
 `IDevIDService.DeleteIDevID` and `DeleteIAK` are refused until the owner rules

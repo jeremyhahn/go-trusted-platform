@@ -303,7 +303,7 @@ bytes for `base64`/`hex`/`raw` and digits for `numeric`; `base64` is
 `webservice(s)[*].key.password`, `acme.client.account.key.password`,
 `tpm.platform-srk.srk-auth`,
 `certificate-authority.identity[*].keystores.tpm2.srk-auth`. The trigger is
-`tpm-policy: platform`, not `store:`.
+`platform-policy: true`, not `store:`.
 
 ## 8. Error semantics
 

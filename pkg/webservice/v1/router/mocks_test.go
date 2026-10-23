@@ -146,15 +146,6 @@ func (m *MockRestServicer) CABundleHandler(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusOK)
 }
 
-func (m *MockRestServicer) HealthHandler(w http.ResponseWriter, r *http.Request) {
-	m.Called(w, r)
-	w.WriteHeader(http.StatusOK)
-}
-
-func (m *MockRestServicer) TenantAuthMiddleware(next http.Handler) http.Handler {
-	return next
-}
-
 // MockWebAuthnRestHandler implements webauthn.RestHandler for testing
 // Note: webauthn.RestHandler embeds middleware.AuthMiddleware
 type MockWebAuthnRestHandler struct {

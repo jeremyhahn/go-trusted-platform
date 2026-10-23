@@ -38,9 +38,117 @@ func assertNoCtxErr(t *testing.T, err error) {
 // Group run* — validation + no-context paths
 // =============================================================================
 
+func TestRunGroupCreate_MissingTenant(t *testing.T) {
+	err := runGroupCreate(noCtxFlags(), "", "grp-1", "name", "desc")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingTenantID{}, err)
+}
+
+func TestRunGroupCreate_NoContext(t *testing.T) {
+	err := runGroupCreate(noCtxFlags(), "tenant-1", "grp-1", "name", "desc")
+	assertNoCtxErr(t, err)
+}
+
+func TestRunGroupGet_MissingTenant(t *testing.T) {
+	err := runGroupGet(noCtxFlags(), "", "grp-1")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingTenantID{}, err)
+}
+
+func TestRunGroupGet_MissingGroupID(t *testing.T) {
+	err := runGroupGet(noCtxFlags(), "tenant-1", "")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingGroupID{}, err)
+}
+
+func TestRunGroupGet_NoContext(t *testing.T) {
+	err := runGroupGet(noCtxFlags(), "tenant-1", "grp-1")
+	assertNoCtxErr(t, err)
+}
+
+func TestRunGroupList_MissingTenant(t *testing.T) {
+	err := runGroupList(noCtxFlags(), "", 1, 50)
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingTenantID{}, err)
+}
+
+func TestRunGroupList_NoContext(t *testing.T) {
+	err := runGroupList(noCtxFlags(), "tenant-1", 1, 50)
+	assertNoCtxErr(t, err)
+}
+
+func TestRunGroupUpdate_MissingTenant(t *testing.T) {
+	err := runGroupUpdate(noCtxFlags(), "", "grp-1", "name", "desc")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingTenantID{}, err)
+}
+
+func TestRunGroupUpdate_MissingGroupID(t *testing.T) {
+	err := runGroupUpdate(noCtxFlags(), "tenant-1", "", "name", "desc")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingGroupID{}, err)
+}
+
+func TestRunGroupUpdate_NoContext(t *testing.T) {
+	err := runGroupUpdate(noCtxFlags(), "tenant-1", "grp-1", "name", "desc")
+	assertNoCtxErr(t, err)
+}
+
+func TestRunGroupDelete_MissingTenant(t *testing.T) {
+	err := runGroupDelete(noCtxFlags(), "", "grp-1")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingTenantID{}, err)
+}
+
+func TestRunGroupDelete_MissingGroupID(t *testing.T) {
+	err := runGroupDelete(noCtxFlags(), "tenant-1", "")
+	require.Error(t, err)
+	assert.IsType(t, ErrMissingGroupID{}, err)
+}
+
+func TestRunGroupDelete_NoContext(t *testing.T) {
+	err := runGroupDelete(noCtxFlags(), "tenant-1", "grp-1")
+	assertNoCtxErr(t, err)
+}
+
 // =============================================================================
 // Group command construction — RunE invocation
 // =============================================================================
+
+func TestGroupCreateCommand_RunE_NoContext(t *testing.T) {
+	cmd := newGroupCreateCommand(noCtxFlags)
+	cmd.SetArgs([]string{"grp-1", "--tenant", "t-1"})
+	err := cmd.Execute()
+	assertNoCtxErr(t, err)
+}
+
+func TestGroupGetCommand_RunE_NoContext(t *testing.T) {
+	cmd := newGroupGetCommand(noCtxFlags)
+	cmd.SetArgs([]string{"tenant-1", "grp-1"})
+	err := cmd.Execute()
+	assertNoCtxErr(t, err)
+}
+
+func TestGroupListCommand_RunE_NoContext(t *testing.T) {
+	cmd := newGroupListCommand(noCtxFlags)
+	cmd.SetArgs([]string{"--tenant", "t-1"})
+	err := cmd.Execute()
+	assertNoCtxErr(t, err)
+}
+
+func TestGroupUpdateCommand_RunE_NoContext(t *testing.T) {
+	cmd := newGroupUpdateCommand(noCtxFlags)
+	cmd.SetArgs([]string{"grp-1", "--tenant", "t-1"})
+	err := cmd.Execute()
+	assertNoCtxErr(t, err)
+}
+
+func TestGroupDeleteCommand_RunE_NoContext(t *testing.T) {
+	cmd := newGroupDeleteCommand(noCtxFlags)
+	cmd.SetArgs([]string{"tenant-1", "grp-1"})
+	err := cmd.Execute()
+	assertNoCtxErr(t, err)
+}
 
 // =============================================================================
 // Role run* — validation + no-context paths
@@ -153,7 +261,7 @@ func TestRunTenantDelete_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestRunUserCreate_NoContext(t *testing.T) {
-	err := runUserCreate(noCtxFlags(), "t-1", "user@test.com", "Test User", "admin", "key=val")
+	err := runUserCreate(noCtxFlags(), "t-1", "user@test.com", "Test User", "admin", "grp-1", "key=val")
 	assertNoCtxErr(t, err)
 }
 
@@ -168,7 +276,7 @@ func TestRunUserList_NoContext(t *testing.T) {
 }
 
 func TestRunUserUpdate_NoContext(t *testing.T) {
-	err := runUserUpdate(noCtxFlags(), "t-1", "user-1", "user@test.com", "Updated", "admin", "k=v")
+	err := runUserUpdate(noCtxFlags(), "t-1", "user-1", "user@test.com", "Updated", "admin", "grp-1", "k=v")
 	assertNoCtxErr(t, err)
 }
 

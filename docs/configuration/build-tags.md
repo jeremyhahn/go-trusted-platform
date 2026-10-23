@@ -1,6 +1,6 @@
 # Build Tags Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-13
+> **Status: REFERENCE** · Last verified: 2026-10-18
 > The `WITH_*` Makefile variables and the Go build tags each one adds to `BUILD_TAGS`.
 
 This document describes all build tags used in go-trusted-platform for conditional compilation and feature selection.
@@ -21,6 +21,26 @@ The default list is:
 ```
 iam rest quic mcp cluster gms_pure_go raft timeseries qrdb_ts pkcs8 frost local objstore codec_json codec_msgpack codec_cbor
 ```
+
+### `GO_BUILD_TAGS`
+
+ci-template v1.21 passes the repository's tag set to `make lint`, `build`,
+`coverage`, `security` and `integration-test` as `GO_BUILD_TAGS`, space
+separated (handbook `software/conventions/devcontainer.md` §6). The Makefile
+appends it to `BUILD_TAGS` after every `WITH_*` append, so every `go build`,
+`go test`, `go vet`, `TEST_BUILD_TAGS`, the integration runner and
+`print-build-tags` see it. golangci-lint, gosec and govulncheck, which do not
+read `BUILD_TAGS`, receive `GO_BUILD_TAGS` alone as `--build-tags`/`-tags`,
+comma separated. Empty or unset, it changes nothing.
+
+```
+make -s print-build-tags GO_BUILD_TAGS='probe_a probe_b'
+# ... codec_cbor probe_a probe_b
+```
+
+`make check-go-build-tags`, a prerequisite of `make test`, dry-runs (`make -n`)
+each of those targets plus `test` with a probe tag and fails if the tag does
+not reach a command.
 
 **Important**: Native go-trusted-platform services (TPM, vTPM, attestation, device, SDN, DNS, etc.) have NO build tags. They are CORE features and are ALWAYS compiled into every build.
 
@@ -49,6 +69,17 @@ than qrdb's feature-disabled stub: `WITH_TIMESERIES` adds
 | `WITH_TIMESERIES` | 1 | TimeSeries service (`timeseries` + `qrdb_ts`) |
 | `WITH_VECTOR` | 0 | Vector database service (`vector` + `qrdb_vector`) |
 | `WITH_RAG` | 0 | RAG service (`rag` + `qrdb_vector`; requires `WITH_VECTOR=1`, or make stops with an error) |
+
+A build with the vector tags also needs `quicbaas.vector.enabled: true` before
+the embedded server serves the Vector service. Validate refuses that setting in
+a build without the tags. Without the service, every call on the platform's SDK
+client `Vector()` fails at once with `ErrVectorUnavailable`, whose reason names
+the missing build or the disabled setting.
+
+Integration builds (`TEST_BUILD_TAGS`, used by `make integration-test` and every
+`make integration-test-<suite>`) always carry `vector qrdb_vector`, and
+`quicbaas.TestConfig` enables the service in such a build. That way the
+quicbaas and sdk suites' Vector assertions run against a real vector store.
 
 ## qrdb Optional Feature Tags
 

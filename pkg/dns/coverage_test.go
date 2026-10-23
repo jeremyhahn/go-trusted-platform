@@ -196,8 +196,7 @@ func TestCoverage_Service_GetRecord_UnsupportedType(t *testing.T) {
 	mockDAO.AddZone(zone)
 
 	_, err := svc.GetRecord(ctx, "www.example.com", "UNSUPPORTED")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported record type")
+	assert.ErrorIs(t, err, ErrRecordTypeNotSupported)
 }
 
 func TestCoverage_Service_GetRecord_AllTypes(t *testing.T) {
@@ -316,8 +315,7 @@ func TestCoverage_Service_Resolve_NotFound(t *testing.T) {
 	mockDAO.AddZone(zone)
 
 	_, err := svc.Resolve(ctx, "missing.example.com", "A")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no records found")
+	assert.ErrorIs(t, err, ErrRecordNotFound)
 }
 
 func TestCoverage_Service_Resolve_UnsupportedType(t *testing.T) {
@@ -334,8 +332,7 @@ func TestCoverage_Service_Resolve_UnsupportedType(t *testing.T) {
 	mockDAO.AddZone(zone)
 
 	_, err := svc.Resolve(ctx, "www.example.com", "UNSUPPORTED")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported record type")
+	assert.ErrorIs(t, err, ErrRecordTypeNotSupported)
 }
 
 func TestCoverage_Service_Resolve_AllTypes(t *testing.T) {
@@ -400,24 +397,63 @@ func TestCoverage_ExtractHostnameFromCN(t *testing.T) {
 	}
 }
 
-func TestCoverage_ExtractZoneName(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"fully qualified", "www.example.com", "example.com"},
-		{"deep subdomain", "a.b.c.example.com", "example.com"},
-		{"single label", "example", "example"},
-		{"two labels", "example.com", "example.com"},
+func TestZoneForName_LongestStoredSuffix(t *testing.T) {
+	mockDAO := mocks.NewMockZoneDAO()
+	for _, name := range []string{"example.com.", "internal.example.com."} {
+		mockDAO.AddZone(&entities.Zone{ID: util.NewID([]byte(name)), Name: name, TenantID: "platform"})
+	}
+	svc := &Service{
+		params:  &Params{TenantID: "platform", Config: &Config{Logger: logging.DefaultLogger()}},
+		zoneDAO: mockDAO,
 	}
 
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"www.internal.example.com.", "internal.example.com."},
+		{"a.b.internal.example.com", "internal.example.com."},
+		{"internal.example.com.", "internal.example.com."},
+		{"www.example.com.", "example.com."},
+		{"example.com", "example.com."},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractZoneName(tt.input)
-			assert.Equal(t, tt.expected, result)
+			zone, err := svc.zoneForName(context.Background(), tt.name)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, zone.Name)
 		})
 	}
+}
+
+func TestZoneForName_Failures(t *testing.T) {
+	newService := func(dao *mocks.MockZoneDAO) *Service {
+		return &Service{
+			params:  &Params{TenantID: "platform", Config: &Config{Logger: logging.DefaultLogger()}},
+			zoneDAO: dao,
+		}
+	}
+
+	t.Run("no zone holds the name", func(t *testing.T) {
+		_, err := newService(mocks.NewMockZoneDAO()).zoneForName(context.Background(), "www.example.com.")
+		assert.ErrorIs(t, err, ErrZoneNotFound)
+	})
+
+	t.Run("a lookup error is returned, not skipped", func(t *testing.T) {
+		mockDAO := mocks.NewMockZoneDAO()
+		mockDAO.AddZone(&entities.Zone{ID: util.NewID([]byte("example.com.")), Name: "example.com.", TenantID: "platform"})
+		mockDAO.GetFunc = func(context.Context, uint64) (*entities.Zone, error) { return nil, mocks.ErrMockGet }
+		_, err := newService(mockDAO).zoneForName(context.Background(), "www.example.com.")
+		assert.ErrorIs(t, err, mocks.ErrMockGet)
+	})
+
+	t.Run("another tenant's subzone is refused, not bypassed", func(t *testing.T) {
+		mockDAO := mocks.NewMockZoneDAO()
+		mockDAO.AddZone(&entities.Zone{ID: util.NewID([]byte("example.com.")), Name: "example.com.", TenantID: "platform"})
+		mockDAO.AddZone(&entities.Zone{ID: util.NewID([]byte("internal.example.com.")), Name: "internal.example.com.", TenantID: "other"})
+		_, err := newService(mockDAO).zoneForName(context.Background(), "www.internal.example.com.")
+		assert.ErrorIs(t, err, ErrUnauthorizedZoneAccess)
+	})
 }
 
 func TestCoverage_Service_AddRecord_AllTypes(t *testing.T) {
@@ -467,9 +503,8 @@ func TestCoverage_Service_AddRecord_UnsupportedType(t *testing.T) {
 	}
 	mockDAO.AddZone(zone)
 
-	err := svc.AddRecord(ctx, "www.example.com", "SRV", "target", 3600)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported record type")
+	err := svc.AddRecord(ctx, "www.example.com", "PTR", "target.example.com.", 3600)
+	assert.ErrorIs(t, err, ErrRecordTypeNotSupported)
 }
 
 func TestCoverage_Service_DeleteRecord_AllTypes(t *testing.T) {
@@ -517,9 +552,8 @@ func TestCoverage_Service_DeleteRecord_UnsupportedType(t *testing.T) {
 	}
 	mockDAO.AddZone(zone)
 
-	err := svc.DeleteRecord(ctx, "www.example.com", "SRV")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported record type")
+	err := svc.DeleteRecord(ctx, "www.example.com", "PTR")
+	assert.ErrorIs(t, err, ErrRecordTypeNotSupported)
 }
 
 func TestCoverage_IsRunning_WhenNotStarted(t *testing.T) {
@@ -620,8 +654,7 @@ func TestCoverage_Service_RegisterWebservice_NoMatchingZone(t *testing.T) {
 	ctx := context.Background()
 
 	err := svc.RegisterWebservice(ctx, "server.unknown.net")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "does not match any configured zone")
+	assert.ErrorIs(t, err, ErrCNOutsideZones)
 }
 
 func TestCoverage_Service_RegisterWebservice_InternalZone_NoIP(t *testing.T) {
@@ -1055,8 +1088,7 @@ func TestCoverage_SignZoneIfEnabled_NoAdapterOrKeyStore(t *testing.T) {
 	// HARD FAIL: DNSSEC enabled but no backend configured. The function
 	// must not silently skip — operators required this behavior in 2026-04
 	// after a regression where unsigned zones were persisted as "signed".
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no key store and no XKMS adapter are configured")
+	assert.ErrorIs(t, err, ErrNoDNSSECSigner)
 }
 
 func TestCoverage_SetDNSSECKeyStore(t *testing.T) {
@@ -1414,35 +1446,6 @@ func TestCoverage_QuicbaasAlgorithmToString(t *testing.T) {
 	}
 }
 
-func TestCoverage_GenerateLocalPublicKey(t *testing.T) {
-	tests := []struct {
-		name    string
-		alg     kms.KeyAlgorithm
-		wantErr bool
-	}{
-		{"RSA2048", kms.AlgorithmRSA2048, false},
-		{"RSA4096", kms.AlgorithmRSA4096, false},
-		{"ECDSAP256", kms.AlgorithmECDSAP256, false},
-		{"ECDSAP384", kms.AlgorithmECDSAP384, false},
-		{"ED25519", kms.AlgorithmED25519, false},
-		{"unsupported", kms.KeyAlgorithm(255), true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pubKey, pemStr, err := generateLocalPublicKey(tt.alg)
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, pubKey)
-				assert.NotEmpty(t, pemStr)
-				assert.Contains(t, pemStr, "PUBLIC KEY")
-			}
-		})
-	}
-}
-
 func TestCoverage_EncodePublicKeyToPEM(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -1690,8 +1693,8 @@ func TestCoverage_ProcessZone_EmptyName(t *testing.T) {
 	zone := entities.Zone{Name: ""}
 
 	err := processZone(zone, mockDAO, "internal")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not defined in configuration")
+	assert.ErrorIs(t, err, ErrServerZoneUndefined)
+	assert.Contains(t, err.Error(), "internal server")
 }
 
 func TestCoverage_ProcessZone_NewZone(t *testing.T) {
@@ -1717,6 +1720,48 @@ func TestCoverage_ProcessZone_NewZone(t *testing.T) {
 	err := processZone(zone, mockDAO, "public")
 	require.NoError(t, err)
 	assert.Equal(t, 1, mockDAO.ZoneCount())
+}
+
+func TestProcessZone_FailureNamesTheZone(t *testing.T) {
+	origConfig := Configuration
+	defer func() { Configuration = origConfig }()
+	Configuration = &Config{Logger: logging.DefaultLogger()}
+
+	cases := map[string]struct {
+		breakDAO func(*mocks.MockZoneDAO)
+		op       string
+		cause    error
+	}{
+		"lookup": {
+			breakDAO: func(m *mocks.MockZoneDAO) {
+				m.GetByNameFunc = func(context.Context, string) (*entities.Zone, error) { return nil, mocks.ErrMockGet }
+			},
+			op:    "look up",
+			cause: mocks.ErrMockGet,
+		},
+		"save": {
+			breakDAO: func(m *mocks.MockZoneDAO) {
+				m.SaveFunc = func(context.Context, *entities.Zone) error { return mocks.ErrMockSave }
+			},
+			op:    "save",
+			cause: mocks.ErrMockSave,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mockDAO := mocks.NewMockZoneDAO()
+			tc.breakDAO(mockDAO)
+
+			err := processZone(entities.Zone{Name: "newzone.com."}, mockDAO, "public")
+
+			var zoneErr *ZoneError
+			require.ErrorAs(t, err, &zoneErr)
+			assert.Equal(t, tc.op, zoneErr.Op)
+			assert.Equal(t, "newzone.com.", zoneErr.Zone)
+			assert.ErrorIs(t, err, tc.cause)
+			assert.Equal(t, "failed to "+tc.op+" zone newzone.com.: "+tc.cause.Error(), err.Error())
+		})
+	}
 }
 
 func TestCoverage_ProcessZone_ExistingZone(t *testing.T) {

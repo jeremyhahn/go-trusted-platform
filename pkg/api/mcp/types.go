@@ -114,6 +114,7 @@ type IAMCreateUserRequest struct {
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -133,6 +134,14 @@ type IAMAuthenticateRequest struct {
 	Password    string `json:"password" secret:"true"`
 	TOTPCode    string `json:"totp_code,omitempty"`
 	Certificate string `json:"certificate,omitempty"`
+}
+
+// IAMCreateGroupRequest represents a group creation request for MCP.
+type IAMCreateGroupRequest struct {
+	TenantID    string `json:"tenant_id"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // IAMCreateTenantRequest represents a tenant creation request for MCP.
@@ -172,6 +181,7 @@ type IAMListUsersRequest struct {
 	Pagination  IAMPagination `json:"pagination,omitempty"`
 	EmailFilter string        `json:"email_filter,omitempty"`
 	RoleFilter  string        `json:"role_filter,omitempty"`
+	GroupFilter string        `json:"group_filter,omitempty"`
 }
 
 // IAMCheckPermissionRequest represents a policy decision request for MCP,
@@ -245,6 +255,41 @@ type SecretSetRotationPolicyRequest struct {
 	RetainVersions  int    `json:"retain_versions,omitempty"`
 }
 
+// SecretRotateRequest is the decoded input of the secret_rotate tool.
+type SecretRotateRequest struct {
+	SecretID string            `json:"secret_id"`
+	NewData  []byte            `json:"new_data"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// DEKCreateRequest is the decoded input of the dek_create tool. Its fields
+// are the quicbaas.kms.v1 CreateDEKRequest fields; Algorithm is the
+// quicbaas.kms.v1 KeyAlgorithm number.
+type DEKCreateRequest struct {
+	Path           string            `json:"path"`
+	Algorithm      int32             `json:"algorithm,omitempty"`
+	Description    string            `json:"description,omitempty"`
+	MaxOperations  uint64            `json:"max_operations,omitempty"`
+	MaxBytes       uint64            `json:"max_bytes,omitempty"`
+	WarningPercent int32             `json:"warning_percent,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+}
+
+// DEKListRequest is the decoded input of the dek_list tool.
+type DEKListRequest struct {
+	Prefix    string `json:"prefix,omitempty"`
+	Recursive bool   `json:"recursive,omitempty"`
+	Limit     int32  `json:"limit,omitempty"`
+	Cursor    string `json:"cursor,omitempty"`
+}
+
+// DEKDeleteRequest is the decoded input of the dek_delete tool.
+type DEKDeleteRequest struct {
+	Path      string `json:"path"`
+	Force     bool   `json:"force,omitempty"`
+	MigrateTo string `json:"migrate_to,omitempty"`
+}
+
 // KMSEncryptRequest represents an encryption request for MCP.
 type KMSEncryptRequest struct {
 	KeyID     string `json:"key_id"`
@@ -277,6 +322,101 @@ type KMSVerifyRequest struct {
 	Signature     []byte `json:"signature"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
 	KeyVersion    int    `json:"key_version,omitempty"`
+}
+
+// KMSHashRequest represents a keyless hash request for MCP. HashAlgorithm
+// is a platform.v1 HashAlgorithm value; zero selects SHA-256.
+type KMSHashRequest struct {
+	Data          []byte `json:"data"`
+	HashAlgorithm int32  `json:"algorithm,omitempty"`
+}
+
+// KMSHMACRequest represents an HMAC generation request for MCP.
+type KMSHMACRequest struct {
+	KeyID         string `json:"key_id"`
+	Message       []byte `json:"message"`
+	HashAlgorithm int32  `json:"hash_algorithm,omitempty"`
+}
+
+// KMSVerifyHMACRequest represents an HMAC verification request for MCP.
+type KMSVerifyHMACRequest struct {
+	KeyID         string `json:"key_id"`
+	Message       []byte `json:"message"`
+	HMAC          []byte `json:"hmac"`
+	HashAlgorithm int32  `json:"hash_algorithm,omitempty"`
+	KeyVersion    uint64 `json:"key_version,omitempty"`
+}
+
+// KMSRewrapRequest represents a rewrap request for MCP. SourceVersion must
+// be zero: the SDK rewrap request has no source version, so a non-zero value
+// is refused rather than ignored.
+type KMSRewrapRequest struct {
+	KeyID         string `json:"key_id"`
+	Ciphertext    []byte `json:"ciphertext"`
+	Context       []byte `json:"context,omitempty"`
+	Nonce         []byte `json:"nonce,omitempty"`
+	SourceVersion uint64 `json:"source_version,omitempty"`
+}
+
+// KMSImportKeyRequest imports existing key material. Algorithm and Usage carry
+// the platform.v1 KMSKeyAlgorithm and KeyUsage numbers, as in the gRPC
+// ImportKeyRequest key_spec.
+type KMSImportKeyRequest struct {
+	Name               string            `json:"name,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	KeyMaterial        []byte            `json:"key_material"`
+	WrappingKeyID      string            `json:"wrapping_key_id,omitempty"`
+	Algorithm          int32             `json:"algorithm,omitempty"`
+	KeySize            int32             `json:"key_size,omitempty"`
+	Usage              []int32           `json:"usage,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
+}
+
+// KMSUpdateKeyStatusRequest sets the platform.v1 KeyStatus of a key, or of
+// one key version when Version is non-zero.
+type KMSUpdateKeyStatusRequest struct {
+	KeyID   string `json:"key_id"`
+	Version uint64 `json:"version,omitempty"`
+	Status  int32  `json:"status"`
+}
+
+// KMSListKeyVersionsRequest lists a key's versions with offset-cursor
+// pagination.
+type KMSListKeyVersionsRequest struct {
+	KeyID  string `json:"key_id"`
+	Limit  int32  `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// KMSBatchEncryptItem is one plaintext of a batch encrypt request.
+type KMSBatchEncryptItem struct {
+	ItemID    string `json:"item_id,omitempty"`
+	Plaintext []byte `json:"plaintext"`
+	Context   []byte `json:"context,omitempty"`
+	Nonce     []byte `json:"nonce,omitempty"`
+}
+
+// KMSBatchEncryptRequest encrypts every item under one key.
+type KMSBatchEncryptRequest struct {
+	KeyID string                `json:"key_id"`
+	Items []KMSBatchEncryptItem `json:"items"`
+}
+
+// KMSBatchDecryptItem is one ciphertext of a batch decrypt request.
+type KMSBatchDecryptItem struct {
+	ItemID     string `json:"item_id,omitempty"`
+	Ciphertext []byte `json:"ciphertext"`
+	Context    []byte `json:"context,omitempty"`
+	Nonce      []byte `json:"nonce,omitempty"`
+	KeyVersion uint64 `json:"key_version,omitempty"`
+}
+
+// KMSBatchDecryptRequest decrypts every item under one key.
+type KMSBatchDecryptRequest struct {
+	KeyID string                `json:"key_id"`
+	Items []KMSBatchDecryptItem `json:"items"`
 }
 
 // TPMVerifyQuoteRequest represents a TPM quote verification request for MCP,
@@ -688,6 +828,14 @@ type ServiceProvider interface {
 	IAMCheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error)
 	IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
 
+	// IAM Group operations
+	IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
+	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
+	IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
+	IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
+	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
+
 	// IAM Tenant operations
 	IAMCreateTenant(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
 	IAMDeleteTenant(ctx context.Context, tenantID string) (interface{}, error)
@@ -723,12 +871,34 @@ type ServiceProvider interface {
 	SecretDelete(ctx context.Context, secretID string) error
 	SecretSetRotationPolicy(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
 	SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error)
+	SecretGetVersion(ctx context.Context, secretID string, version uint64) (interface{}, error)
+	SecretListVersions(ctx context.Context, secretID string, limit int) (interface{}, error)
+	SecretRotate(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
+	SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
+	SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error)
+
+	// DEK operations
+	DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error)
+	DEKList(ctx context.Context, req *DEKListRequest) (interface{}, error)
+	DEKGet(ctx context.Context, path string) (interface{}, error)
+	DEKStatus(ctx context.Context, path string) (interface{}, error)
+	DEKRotate(ctx context.Context, path string, background bool) (interface{}, error)
+	DEKDelete(ctx context.Context, req *DEKDeleteRequest) (interface{}, error)
 
 	// KMS Cryptographic operations
 	KMSEncrypt(ctx context.Context, req *KMSEncryptRequest) (interface{}, error)
 	KMSDecrypt(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
 	KMSSign(ctx context.Context, req *KMSSignRequest) (interface{}, error)
 	KMSVerify(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
+	KMSHash(ctx context.Context, req *KMSHashRequest) (interface{}, error)
+	KMSHMAC(ctx context.Context, req *KMSHMACRequest) (interface{}, error)
+	KMSVerifyHMAC(ctx context.Context, req *KMSVerifyHMACRequest) (interface{}, error)
+	KMSRewrap(ctx context.Context, req *KMSRewrapRequest) (interface{}, error)
+	KMSImportKey(ctx context.Context, req *KMSImportKeyRequest) (interface{}, error)
+	KMSUpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error)
+	KMSListKeyVersions(ctx context.Context, req *KMSListKeyVersionsRequest) (interface{}, error)
+	KMSBatchEncrypt(ctx context.Context, req *KMSBatchEncryptRequest) (interface{}, error)
+	KMSBatchDecrypt(ctx context.Context, req *KMSBatchDecryptRequest) (interface{}, error)
 
 	// KMS Random generation
 	KMSGenerateRandom(ctx context.Context, numBytes int) ([]byte, error)

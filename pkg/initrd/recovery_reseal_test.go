@@ -35,6 +35,7 @@ import (
 var (
 	errReadPCRs = errors.New("tpm: PCR read failed")
 	errUnseal   = errors.New("tpm: unseal failed")
+	errSeal     = errors.New("tpm: seal failed")
 )
 
 // resealTPM answers ReadPCRs, fails every Unseal, and refuses every Seal with
@@ -61,7 +62,7 @@ func (f *resealTPM) Unseal(context.Context, *xkmssdk.SealedData, *xkmssdk.Unseal
 
 func (f *resealTPM) Seal(context.Context, []byte, *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
 	f.seals++
-	return nil, errSealUnprotected
+	return nil, errSeal
 }
 
 // newResealManager returns a manager over tpm whose volume has the given

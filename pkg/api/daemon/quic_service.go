@@ -86,6 +86,9 @@ type QUICServiceHandler struct {
 	kmsService     KMSServiceInterface
 	cryptoService  CryptoServiceInterface
 	secretsService SecretsServiceInterface
+	// dekService backs the DEK sub-opcodes of OpKMSExtendedCategory with the
+	// DEKServerAdapter the gRPC DEKManagement service serves.
+	dekService DEKServiceInterface
 	// configDeliveryService backs the OpProvisioningCategory handlers with
 	// the same ConfigDeliveryGRPCService as the gRPC transport.
 	configDeliveryService ConfigDeliveryQUICService
@@ -699,6 +702,10 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpIAMRoleCreate && req.Opcode <= quicwire.OpIAMRoleRevoke:
 		return h.handleIAMOperation(ctx, req)
 
+	// IAM Group Operations (0xBB-0xBF)
+	case req.Opcode >= quicwire.OpIAMGroupCreate && req.Opcode <= quicwire.OpIAMGroupAddMember:
+		return h.handleIAMOperation(ctx, req)
+
 	// KMS Extended Category Opcode (0xCD) - multiplexes revoke, metadata,
 	// policy, and supported-algorithms sub-operations.
 	case req.Opcode == quicwire.OpKMSExtendedCategory:
@@ -767,8 +774,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpPXEListDevices && req.Opcode <= quicwire.OpPXEUpdateState:
 		return h.handlePXEOperation(ctx, req)
 
-	// IAM Extended Operations (0xF7-0xFB) - CheckPermission through TokenVerify
-	case req.Opcode >= quicwire.OpIAMCheckPermission && req.Opcode <= quicwire.OpIAMTokenVerify:
+	// IAM Extended Operations (0xF6-0xFB) - GroupRemoveMember through TokenVerify
+	case req.Opcode >= quicwire.OpIAMGroupRemoveMember && req.Opcode <= quicwire.OpIAMTokenVerify:
 		return h.handleIAMOperation(ctx, req)
 
 	// PXE Extended Operations (0xFC-0xFF) - Authorize, Quarantine, Retry, RemoveDevice

@@ -85,6 +85,17 @@ func (s *vmComputeStub) ResumeVM(_ context.Context, req *platformv1.ResumeVMRequ
 	return &platformv1.ResumeVMResponse{Status: &platformv1.Status{Success: true}}, s.record("ResumeVM", req)
 }
 
+func (s *vmComputeStub) PrepareMigration(_ context.Context, req *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	if err := s.record("PrepareMigration", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.PrepareMigrationResponse{ReceiverId: "recv-1", Port: 49152, TlsHostname: "dest.example"}, nil
+}
+
+func (s *vmComputeStub) FinalizeMigration(_ context.Context, req *platformv1.FinalizeMigrationRequest) (*platformv1.FinalizeMigrationResponse, error) {
+	return &platformv1.FinalizeMigrationResponse{Status: &platformv1.Status{Success: true}}, s.record("FinalizeMigration", req)
+}
+
 // vmComputeProvider is a ComputeProvider serving server.
 type vmComputeProvider struct {
 	*mockServiceProvider
@@ -201,6 +212,50 @@ var vmLifecycleCases = []vmLifecycleCase{
 		args:   map[string]interface{}{"id": "vm-7"},
 		want:   &platformv1.ResumeVMRequest{Id: "vm-7"},
 	},
+	{
+		tool:   "vm_migration_prepare",
+		method: "PrepareMigration",
+		args: map[string]interface{}{
+			"vm_id":   "vm-7",
+			"vm_name": "web",
+			"mode":    "live",
+			"spec": map[string]interface{}{
+				"memory_mb":    float64(2048),
+				"cpus":         float64(2),
+				"disk_size":    "20G",
+				"boot_mode":    "uefi",
+				"secure_boot":  true,
+				"enable_kvm":   true,
+				"tpm_enabled":  true,
+				"network_mode": "bridge",
+				"mac_address":  "52:54:00:12:34:56",
+				"arch":         "x86_64",
+			},
+		},
+		want: &platformv1.PrepareMigrationRequest{
+			VmId:   "vm-7",
+			VmName: "web",
+			Mode:   "live",
+			Spec: &platformv1.VMMigrationSpec{
+				MemoryMb:    2048,
+				Cpus:        2,
+				DiskSize:    "20G",
+				BootMode:    "uefi",
+				SecureBoot:  true,
+				EnableKvm:   true,
+				TpmEnabled:  true,
+				NetworkMode: "bridge",
+				MacAddress:  "52:54:00:12:34:56",
+				Arch:        "x86_64",
+			},
+		},
+	},
+	{
+		tool:   "vm_migration_finalize",
+		method: "FinalizeMigration",
+		args:   map[string]interface{}{"receiver_id": "recv-1", "commit": true},
+		want:   &platformv1.FinalizeMigrationRequest{ReceiverId: "recv-1", Commit: true},
+	},
 }
 
 func TestVMLifecycleToolsCarryTheFullRequest(t *testing.T) {
@@ -236,6 +291,9 @@ func TestVMLifecycleToolsRefuseBadArguments(t *testing.T) {
 		{"timeout beyond uint32", "vm_stop", map[string]interface{}{"id": "vm-7", "timeout_seconds": float64(1 << 32)}},
 		{"force as a string", "vm_reboot", map[string]interface{}{"id": "vm-7", "force": "yes"}},
 		{"delete_disks as a number", "vm_delete", map[string]interface{}{"id": "vm-7", "delete_disks": float64(1)}},
+		{"flat migration spec", "vm_migration_prepare", map[string]interface{}{"vm_name": "web", "memory_mb": float64(2048)}},
+		{"cpus as a string", "vm_migration_prepare", map[string]interface{}{"spec": map[string]interface{}{"cpus": "two"}}},
+		{"commit as a string", "vm_migration_finalize", map[string]interface{}{"receiver_id": "recv-1", "commit": "yes"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -303,7 +361,12 @@ func TestVMLifecycleToolSchemasAreTheRequests(t *testing.T) {
 	for _, tool := range NewToolRegistry(nil, newTestLogger()).ListTools() {
 		schemas[tool.Name] = tool.InputSchema
 	}
-	required := map[string][]string{"vm_create": {"config"}, "vm_list": nil}
+	required := map[string][]string{
+		"vm_create":             {"config"},
+		"vm_list":               nil,
+		"vm_migration_prepare":  {"spec"},
+		"vm_migration_finalize": {"receiver_id"},
+	}
 	for _, tc := range vmLifecycleCases {
 		t.Run(tc.tool, func(t *testing.T) {
 			schema, ok := schemas[tc.tool]

@@ -117,7 +117,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "kms://webservices/provisioning/key/password?ensure=true&len=32&enc=raw"
-      tpm-policy: platform
+      platform-policy: true
     certificate:
       subject:
         cn: cp-provisioning.example.internal   # the host config-server-url names
@@ -194,7 +194,7 @@ than a placeholder. Roughly seventy pages across:
 | Area | Covers |
 |---|---|
 | Dashboard | Overview |
-| IAM | Users, roles, permissions, policies, tokens, OAuth apps |
+| IAM | Users, groups, roles, permissions, policies, tokens, OAuth apps |
 | Tenant | Workspace, members, quotas, invitations |
 | CA | Certificates, requests, CRL, trust bundle |
 | KMS | Keys, encrypt/decrypt |

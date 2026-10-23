@@ -21,7 +21,6 @@ import (
 	"syscall"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
@@ -239,10 +238,10 @@ func (s *TPMPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) 
 // build their attributes here so the two can never disagree (#52).
 func sealedObjectAttrs(cn string, parent *xkmssdk.KeyAttributes) *xkmssdk.KeyAttributes {
 	return &xkmssdk.KeyAttributes{
-		CN:        cn,
-		KeyType:   xkmssdk.KeyTypeHMAC,
-		TPMPolicy: common.TPMPolicyPlatform,
-		Parent:    parent,
+		CN:             cn,
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: true,
+		Parent:         parent,
 	}
 }
 
@@ -261,7 +260,7 @@ func (s *TPMPCRStrategy) unsealPlatformKeyStore(ctx context.Context, pubPath, pr
 	// password or platform-policy session. Recorded at seal time as
 	// keystore-platform-policy in pcr-banks and replayed here; assuming
 	// the wrong mode is TPM_RC_POLICY_FAIL on every load (#52).
-	srkAttrs.TPMPolicy = common.PlatformTPMPolicy(s.getPlatformPolicy())
+	srkAttrs.PlatformPolicy = s.getPlatformPolicy()
 
 	// CHILD attributes: the sealed object is ALWAYS PCR-bound —
 	// PlatformPolicy here attaches the PCR-based auth policy the
@@ -385,7 +384,7 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 
 	// PARENT axis: how the SRK itself is authorized (password vs
 	// platform-policy session) — the configured mode from pcr-banks.
-	srkAttrs.TPMPolicy = common.PlatformTPMPolicy(s.getPlatformPolicy())
+	srkAttrs.PlatformPolicy = s.getPlatformPolicy()
 
 	// CHILD axis: the sealed object is ALWAYS PCR-bound, regardless of how
 	// the parent SRK is authorized — the same unconditional choice

@@ -1,11 +1,11 @@
 # Bootstrap — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl init`, `platformctl bootstrap`, `platformctl firstboot`, `platform-initrd` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl init`, `platformctl bootstrap`, `platformctl firstboot`, `platform-initrd` · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > Every verb and every flag below was read out of `pkg/cli/commands/bootstrap/`,
-> `pkg/cli/commands/firstboot/` and `pkg/boot/commands/` on 2026-08-18.
+> `pkg/cli/commands/firstboot/` and `pkg/boot/commands/` on 2026-10-19.
 
 ---
 
@@ -20,7 +20,7 @@ platform-initrd boot             Unlock the encrypted root filesystem
 platform-initrd recovery         Recovery mode with re-seal
 ```
 
-`platformctl bootstrap` carries **three unrelated families** under one noun, and
+`platformctl bootstrap` carries **five unrelated families** under one noun, and
 mixing them up is the commonest mistake here:
 
 | Family | Verbs | What it talks to |
@@ -37,7 +37,7 @@ node fails to boot.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:126`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:134`), precedence
 **flag > environment > config file > built-in default**:
 
 | Flag | Short | Default | Environment | Meaning |
@@ -171,8 +171,11 @@ faults on record …`) — fix or replace the part before provisioning, because 
 failed DIMM halts POST and the install never starts.
 
 **`--skip-virtual-media-mount` is an escape hatch, not a convenience.** It skips
-only the mount step; boot-device selection, power reset, health wait and the
-best-effort unmount still run. Use it on boards whose vendor mount API is behind
+the ISO staging on the deployer (so `iso_path` is not required), the mount, the
+re-mount on each retry and the deferred unmount (`bootNodeVirtualMedia` in
+`pkg/bootstrap/virtual_media.go`). Per-MAC config staging, the one-shot CDROM
+boot device, the power cycle, the install-log wait with its retries, and the
+post-install unmount, disk boot and health wait still run. Use it on boards whose vendor mount API is behind
 a licence the platform's BMC backends cannot drive, after inserting the ISO with
 vendor tooling or the remote console.
 
@@ -568,9 +571,14 @@ parses and then fails at startup.
 your scrollback and possibly your shell history file. Prefer the masked default
 and read the *status*, not the value.
 
-Recognised URI schemes: `kms://`, `remote-kms://`, `env://`, `idevid://`,
-`file://`, `dynamic://`, `xkms://`. A short `kms://` path is expanded into the
-tenant/node keyspace automatically.
+The platform recognises the URI schemes `kms://`, `remote-kms://`, `env://`,
+`idevid://`, `file://`, `dynamic://`, `xkms://`, plus `credential://` and
+`autogen://`, which the go-quicbaas registry resolves (`IsSecretURI`,
+`pkg/bootstrap/secrets.go`). `secrets status`, `verify` and `migrate` count only
+`kms://`, `remote-kms://`, `env://` and `idevid://` values as already migrated
+(`isSecretURI` in `pkg/cli/commands/bootstrap/helpers.go`). A short `kms://`
+path is expanded into `tenants/<tenant>/nodes/<node>/secrets/` when both IDs are
+known (`ExpandShortKMSPath`).
 
 ---
 
@@ -613,8 +621,10 @@ Resolution order is `--pcrs`, then `seal-pcrs` / `tpm.seal-pcrs` /
 `secure-wipe-passes` (top level, same files) sets how many overwrite passes
 destroy `installer.luks` when a `TPM-PCR` unlock has proven the seal: 1 (the
 default, NIST SP 800-88: one random pass plus TRIM), 3 (DoD 5220.22-M) or 7
-(DoD ECE). It is read by `platform-initrd boot` before the container is
-closed, and by firstboot for the failed-seal path.
+(DoD ECE). The wipe is done by `platform-initrd boot`
+(`pkg/boot/commands/sealconfirm.go`). Firstboot reads the value too, but it never
+wipes: it always preserves the container for that boot to destroy
+(`pkg/firstboot/strategy.go`).
 
 **`--tpm-only` removes the password keyslot.** After that the disk unlocks only
 via the TPM. If the PCR policy stops matching — firmware update, bootloader
@@ -647,7 +657,10 @@ platform-initrd version    Print version information
 
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
-| `--device` | `-d` | string | | LUKS device path (**required**) |
+| `--device` | `-d` | string | | LUKS device path (**required** unless `--diskless`) |
+| `--diskless` | | bool | `false` | Mount the diskless dm-verity root described by the signed kernel command line instead of unlocking `--device` |
+| `--root-mount` | | string | `/sysroot` | Where the diskless root is mounted |
+| `--diskless-work-dir` | | string | `/run/platform/diskless-root` | tmpfs work directory for the diskless root |
 | `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
 | `--timeout` | | int | `30` | Unlock timeout, seconds |
 | `--pcrs` | | uint slice | `nil` | Expected PCR banks; read from the `pcr-banks` file when unset |
@@ -676,8 +689,10 @@ platform-initrd recovery --device /dev/sda2 --interactive
 ```
 
 **`--fallback` defaults to true**, which enables the ordered unlock chain
-TPM-PCR → TPM-upgrade → FIDO2 → password. Disabling it makes a PCR mismatch
-fatal.
+TPM-PCR → TPM-Upgrade → FIDO2 (when an authenticator is present) → Password.
+Disabling it registers none of them: only the first-boot `Keyfile` strategy
+remains, so an enrolled node cannot unlock at all (`registerDefaultStrategies`
+in `pkg/initrd/initrd.go`).
 
 **`recovery --reseal-pcrs` defaults to true**, so a successful recovery unlock
 re-seals to whatever the PCRs are *now*. That is what you want after a firmware
@@ -700,8 +715,10 @@ fixed-width tables directly to stdout rather than going through the renderer, so
 `--output json` does **not** change their shape.
 
 `bootstrap run` returns non-zero when a phase fails, having already printed the
-result block. A BMC-enrollment failure does not make the run non-zero — check
-the `BMCEnrollments` entries in the output.
+result block. A BMC-enrollment failure does not make the run non-zero. It is
+logged as a warning (`bmc-enroll: enrollment failed`) and recorded in
+`BootstrapResult.BMCEnrollments`, which the printed result block does not show;
+read the log, then retry with `platformctl bmc enroll`.
 
 ---
 
@@ -722,5 +739,5 @@ the `BMCEnrollments` entries in the output.
 
 `conventions/feature-docs.md` §4 requires every verb here to have a matching
 `CommandDefinition` in the integration parity suite. **This repository defines no
-`CommandDefinition` type** (grepped repo-wide, 2026-08-18), so that requirement
+`CommandDefinition` type** (searched repo-wide, 2026-10-19), so that requirement
 is unmet — repo-wide, not only for bootstrap.

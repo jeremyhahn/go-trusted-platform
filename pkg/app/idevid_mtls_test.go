@@ -32,7 +32,6 @@ import (
 
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
-	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/require"
 
@@ -66,7 +65,7 @@ func newSimulatedIDevID(t *testing.T) *simulatedIDevID {
 	require.NoError(t, err)
 	backend := xkmssdk.NewFileBackend(logger, storage)
 
-	config := simulatedIDevIDConfig(t)
+	config := simulatedIDevIDConfig()
 	tpm, err := xkmssdk.NewTPM2(&xkmssdk.TPMParams{
 		Backend:   backend,
 		Config:    config,
@@ -94,14 +93,14 @@ func newSimulatedIDevID(t *testing.T) *simulatedIDevID {
 
 // simulatedIDevIDConfig mirrors the TPM section of the shipped device
 // templates, with the handles go-xkms's own simulator suites use.
-func simulatedIDevIDConfig(t *testing.T) *xkmssdk.TPMConfig {
+func simulatedIDevIDConfig() *xkmssdk.TPMConfig {
 	rsa2048 := func() *xkmssdk.RSAConfig { return &xkmssdk.RSAConfig{KeySize: 2048} }
 	return &xkmssdk.TPMConfig{
 		Hash: "SHA-256",
 		EK: &xkmssdk.EKConfig{
 			CertHandle:    0x01C00002,
 			Handle:        0x81010001,
-			HierarchyAuth: literalHierarchyAuth(t, xkmssdk.DEFAULT_PASSWORD),
+			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
 			RSAConfig:     rsa2048(),
 		},
 		IdentityProvisioningStrategy: "IAK_IDEVID_SINGLE_PASS",
@@ -128,25 +127,16 @@ func simulatedIDevIDConfig(t *testing.T) *xkmssdk.TPMConfig {
 		GoldenPCRs:      []uint{0, 7},
 		SSRK: &xkmssdk.SRKConfig{
 			Handle:        0x81000001,
-			HierarchyAuth: literalHierarchyAuth(t, xkmssdk.DEFAULT_PASSWORD),
+			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
 			KeyAlgorithm:  x509.RSA.String(),
 			RSAConfig:     rsa2048(),
 		},
 		PlatformSRK: &xkmssdk.PlatformSRKConfig{
+			SRKAuth:        "testme",
 			SRKHandle:      0x81000002,
 			PlatformPolicy: true,
 		},
 	}
-}
-
-// literalHierarchyAuth seals value as a TPM hierarchy auth secret, the way
-// ProvisionPlatform seals the security officer PIN. Each config field gets
-// its own value: a SecretValue has a single owner.
-func literalHierarchyAuth(t *testing.T, value string) *quicbaassecret.SecretValue {
-	t.Helper()
-	auth, err := sealHierarchyAuth(mustPassword(t, []byte(value)))
-	require.NoError(t, err)
-	return auth
 }
 
 // testIssuer is a throwaway CA that issues the device certificate the way the

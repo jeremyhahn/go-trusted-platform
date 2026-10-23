@@ -108,6 +108,22 @@ var vmLifecycleCalls = []struct {
 		&platformv1.ResumeVMRequest{Id: "vm-1"},
 		&platformv1.ResumeVMResponse{Status: vmStatus()},
 	},
+	{
+		platformv1.ComputeService_PrepareMigration_FullMethodName, "vm_migration_prepare",
+		&platformv1.PrepareMigrationRequest{
+			VmId: "vm-1", VmName: "web", Mode: "live",
+			Spec: &platformv1.VMMigrationSpec{
+				MemoryMb: 2048, Cpus: 2, DiskSize: "20G", BootMode: "uefi", SecureBoot: true,
+				EnableKvm: true, TpmEnabled: true, NetworkMode: "bridge", MacAddress: "52:54:00:12:34:56", Arch: "x86_64",
+			},
+		},
+		&platformv1.PrepareMigrationResponse{Status: vmStatus(), ReceiverId: "recv-1", Port: 49152, TlsHostname: "dest.example"},
+	},
+	{
+		platformv1.ComputeService_FinalizeMigration_FullMethodName, "vm_migration_finalize",
+		&platformv1.FinalizeMigrationRequest{ReceiverId: "recv-1", Commit: true},
+		&platformv1.FinalizeMigrationResponse{Status: vmStatus()},
+	},
 }
 
 // protoNamesMap is a message in the protojson form the vm_* tools take and
@@ -206,6 +222,12 @@ func TestVMSnapshotAttestMethodsCallTheirTool(t *testing.T) {
 			&platformv1.ListSnapshotsResponse{},
 			map[string]interface{}{"vm_id": "vm-1"},
 			&platformv1.ListSnapshotsResponse{Snapshots: []*platformv1.Snapshot{{Id: "snap-1"}}}},
+		{platformv1.ComputeService_GetSnapshot_FullMethodName, "vm_snapshot_get",
+			&platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "snap-1"},
+			map[string]interface{}{"snapshot": map[string]interface{}{"id": "snap-1"}},
+			&platformv1.GetSnapshotResponse{},
+			map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"},
+			&platformv1.GetSnapshotResponse{Snapshot: &platformv1.Snapshot{Id: "snap-1"}}},
 		{platformv1.ComputeService_DeleteSnapshot_FullMethodName, "vm_snapshot_delete",
 			&platformv1.DeleteSnapshotRequest{VmId: "vm-1", SnapshotId: "snap-1"},
 			vmStatusResult(), &platformv1.DeleteSnapshotResponse{},

@@ -279,6 +279,16 @@ func TestVTEPManager_Stop(t *testing.T) {
 		client.deleteErr = boom
 		assert.ErrorIs(t, m.Stop(context.Background()), boom)
 	})
+
+	t.Run("port already gone is stopped", func(t *testing.T) {
+		client := newFakeOVS()
+		m := newTestManager(t, client)
+		require.NoError(t, m.Start(context.Background()))
+		client.deleteErr = ovs.ErrVXLANPortNotFound
+
+		require.NoError(t, m.Stop(context.Background()))
+		assert.False(t, m.IsStarted())
+	})
 }
 
 func TestVTEPManager_OFPortBeforeStart(t *testing.T) {

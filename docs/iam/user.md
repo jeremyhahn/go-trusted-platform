@@ -1,16 +1,15 @@
 # IAM — Using It
 
 > **Status: REFERENCE** · Last verified: 2026-08-18
-> Managing users, roles, policies and OAuth applications. Internals are
+> Managing users, groups, roles, policies and OAuth applications. Internals are
 > in [engineering.md](engineering.md).
 
 ---
 
 ## What this is
 
-The platform's identity surface: users, roles, authorization policies and
-OAuth applications, all scoped by tenant. There are no groups — go-quicbaas
-removed them; grant access through roles.
+The platform's identity surface: users, groups, roles, authorization policies
+and OAuth applications, all scoped by tenant.
 
 **The platform does not implement IAM.** It re-exports the stack's — go-qrdb
 owns the identity model and the single RBAC decision point, go-quicbaas composes
@@ -26,7 +25,7 @@ This is the thing to get straight first.
 
 | | `platformctl tenant` / `POST /api/v1/tenants` | `POST /api/v1/iam/tenants` |
 |---|---|---|
-| Creates | A **platform tenant**: a VLAN, a bridge, a keyspace and a DEK, plus a quota | An **IAM scope** for users, roles, policies and apps |
+| Creates | A **platform tenant**: a VLAN, a bridge, a keyspace and a DEK, plus a quota | An **IAM scope** for users, groups, roles, policies and apps |
 | Feature | [`docs/tenant/`](../tenant/) | this one |
 
 They are not the same operation and creating one does not create the other. If
@@ -53,7 +52,7 @@ not let you be vague.
 ```bash
 platformctl iam user create --tenant tenant-a \
     --email ops@example.com --name "Ops" \
-    --roles operator \
+    --roles operator --groups platform-ops \
     --attributes department=infra,region=eu
 
 platformctl iam user get    tenant-a u-0f21
@@ -61,8 +60,8 @@ platformctl iam user list   --tenant tenant-a
 platformctl iam user delete tenant-a u-0f21
 ```
 
-**`update` replaces; it does not merge.** `--roles` and `--attributes` each
-overwrite the whole list. This will bite:
+**`update` replaces; it does not merge.** `--roles`, `--groups` and
+`--attributes` each overwrite the whole list. This will bite:
 
 ```bash
 # WRONG if the user already had other roles - this removes them
@@ -74,6 +73,27 @@ platformctl iam user assign-role tenant-a u-0f21 admin
 
 Use `assign-role` and `revoke-role` for incremental changes. Use `update
 --roles` only when you mean "these and no others".
+
+---
+
+## Groups
+
+```bash
+platformctl iam group create tenant-ops --tenant tenant-a --name "Tenant A Ops"
+platformctl iam group list --tenant tenant-a
+platformctl iam group get  tenant-a tenant-ops
+```
+
+**Group membership cannot be changed from the CLI.** `add-member` and
+`remove-member` exist as commands and are unimplemented. Use REST:
+
+```bash
+curl -s -X POST   https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/tenant-ops/members/u-0f21
+curl -s -X DELETE https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/tenant-ops/members/u-0f21
+```
+
+or set the whole list at user creation with `--groups`, remembering that
+`update --groups` replaces it.
 
 ---
 
@@ -147,6 +167,9 @@ daemon retries the failures and leaves everyone else alone.
 **A user's roles disappeared after an update.**
 `update --roles` replaces the list. Use `assign-role` to add.
 
+**`iam group add-member` says "not yet implemented".**
+It is. Use the REST route or the MCP tool.
+
 **A user registered but does not appear in `iam user list`.**
 The WebAuthn mirror. The mirror and the REST IAM router must be given the same
 IAM client, or the two surfaces diverge. A daemon restart runs the startup
@@ -178,7 +201,7 @@ document.
 
 ## One thing to be aware of
 
-Every `PlatformIAMService` gRPC method requires an `iam` scope — 34 of them, the
+Every `PlatformIAMService` gRPC method requires an `iam` scope — 41 of them, the
 largest entry in the scope catalog. **Each `iam_*` MCP tool requires the scope
 of the gRPC method it answers through** (`iam:read`, `iam:write` or
 `iam:delete`), and a caller bound to one tenant is served only from that
@@ -194,7 +217,7 @@ OIDC flows"; platform tokens come from the broker ([api.md](api.md) §6).
 
 ## Where to go next
 
-- [cli.md](cli.md) — every verb and flag
+- [cli.md](cli.md) — every verb and flag, and the two that do not work
 - [api.md](api.md) — every capability on every transport, and the gaps
 - [architecture.md](architecture.md) — what this repository owns (very little)
 - [`docs/tenant/`](../tenant/) — platform tenancy, the other meaning of "tenant"

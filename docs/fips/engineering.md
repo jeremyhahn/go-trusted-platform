@@ -12,20 +12,20 @@
 |---|---|
 | `WITH_FIPS ?= 0`: the switch, off by default | `Makefile:94` |
 | `WITH_FIPS=1` **appends** `fips` to `BUILD_TAGS` | `Makefile:293-295` |
-| `make -s print-build-tags` prints the assembled tag list for callers that run `go` directly | `Makefile:639-655` |
-| `make test-fips` builds `./...` and then runs `make test`, both with `GOFIPS140=latest GODEBUG=fips140=only` and `WITH_FIPS=1` | `Makefile:1351-1368` |
+| `make -s print-build-tags` prints the assembled tag list for callers that run `go` directly | `Makefile:663-680` |
+| `make test-fips` builds `./...` and then runs `make test`, both with `GOFIPS140=latest GODEBUG=fips140=only` and `WITH_FIPS=1` | `Makefile:1365-1382` |
 
 Never pass `BUILD_TAGS="... fips"` on the command line. A command-line variable
 replaces the Makefile's `+=` chain, so the build loses every codec. Under the old
 nightly FIPS job that showed up as `no codec available for encoding` and was
 reported as a FIPS finding (`Makefile:286-292`). The `go build` step of
 `test-fips` therefore gets its tags from
-`print-build-tags WITH_FIPS=1` (`Makefile:1367`).
+`print-build-tags WITH_FIPS=1` (`Makefile:1381`).
 
 `GOFIPS140=latest` links Go's FIPS 140-3 module into the binary.
 `GODEBUG=fips140=only` makes that module refuse non-approved algorithms at run
 time. `test-fips` uses `only`, not `on`, which still permits them
-(`Makefile:1361-1363`).
+(`Makefile:1375-1377`).
 
 ## 2. Implementations the `fips` tag selects
 

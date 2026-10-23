@@ -22,6 +22,7 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +33,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
@@ -103,13 +103,18 @@ func SetupTestInfrastructure(ctx context.Context, t *testing.T, config *TestConf
 		return nil, fmt.Errorf("failed to setup network bridges: %w", err)
 	}
 
-	// Create a mock flow controller for the policy engine
-	flowController := newMockFlowController()
+	// The policy engine drives the real OVS flow controller, built the way
+	// the daemon builds it (pkg/daemon/commands/quarantine_init.go): one
+	// controller serves as both the flow and the port controller.
+	flowController, err := policy.NewOVSFlowController(ovsClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OVS flow controller: %w", err)
+	}
 
-	// Setup policy engine
 	policyEngine, err := policy.NewEngine(policy.Config{
 		BridgeName:     config.ProvisioningNetwork.Bridge,
 		FlowController: flowController,
+		PortController: flowController,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create policy engine: %w", err)
@@ -193,15 +198,13 @@ func (i *TestInfrastructure) SetupServerVM(ctx context.Context, t *testing.T) er
 
 	// Create TAP interface for server on provisioning network
 	tapName := "tap-server"
-	_, err := i.OVSClient.AddPort(ctx, i.Config.ProvisioningNetwork.Bridge, tapName)
-	if err != nil {
-		return fmt.Errorf("failed to create server TAP: %w", err)
+	if err := i.createTAPInterface(tapName); err != nil {
+		return fmt.Errorf("failed to configure server TAP: %w", err)
 	}
 	i.ServerTapName = tapName
 
-	// Configure TAP interface
-	if err := i.configureTAPInterface(tapName); err != nil {
-		return fmt.Errorf("failed to configure server TAP: %w", err)
+	if _, err := i.OVSClient.AddPort(ctx, i.Config.ProvisioningNetwork.Bridge, tapName); err != nil {
+		return fmt.Errorf("failed to create server TAP: %w", err)
 	}
 
 	// Setup server TPM
@@ -232,6 +235,10 @@ func (i *TestInfrastructure) SetupServerVM(ctx context.Context, t *testing.T) er
 	}
 
 	i.ServerTPM = serverTPM
+
+	// swtpm serves from a temp directory when the state directory is outside
+	// /tmp (the e2e work dir is relative), so the socket is wherever it says.
+	tpmSocketPath = serverTPM.SocketPath()
 	i.Logger.Info("Server TPM started", "socket", tpmSocketPath)
 
 	// Wait for TPM socket
@@ -266,15 +273,13 @@ func (i *TestInfrastructure) SetupClientVM(ctx context.Context, t *testing.T) er
 
 	// Create TAP interface for client on provisioning network
 	tapName := "tap-client"
-	_, err := i.OVSClient.AddPort(ctx, i.Config.ProvisioningNetwork.Bridge, tapName)
-	if err != nil {
-		return fmt.Errorf("failed to create client TAP: %w", err)
+	if err := i.createTAPInterface(tapName); err != nil {
+		return fmt.Errorf("failed to configure client TAP: %w", err)
 	}
 	i.ClientTapName = tapName
 
-	// Configure TAP interface
-	if err := i.configureTAPInterface(tapName); err != nil {
-		return fmt.Errorf("failed to configure client TAP: %w", err)
+	if _, err := i.OVSClient.AddPort(ctx, i.Config.ProvisioningNetwork.Bridge, tapName); err != nil {
+		return fmt.Errorf("failed to create client TAP: %w", err)
 	}
 
 	// Setup client TPM
@@ -305,6 +310,10 @@ func (i *TestInfrastructure) SetupClientVM(ctx context.Context, t *testing.T) er
 	}
 
 	i.ClientTPM = clientTPM
+
+	// swtpm serves from a temp directory when the state directory is outside
+	// /tmp (the e2e work dir is relative), so the socket is wherever it says.
+	tpmSocketPath = clientTPM.SocketPath()
 	i.Logger.Info("Client TPM started", "socket", tpmSocketPath)
 
 	// Wait for TPM socket
@@ -385,47 +394,34 @@ func (i *TestInfrastructure) createClientQEMUConfig(tapName, tpmSocket string) *
 	return config
 }
 
-// configureTAPInterface configures a TAP interface
-func (i *TestInfrastructure) configureTAPInterface(tapName string) error {
-	// Bring TAP interface up
-	cmd := exec.Command("ip", "link", "set", "dev", tapName, "up")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to bring up TAP %s: %w: %s", tapName, err, string(output))
+// createTAPInterface creates a persistent TAP device and brings it up
+func (i *TestInfrastructure) createTAPInterface(tapName string) error {
+	// OVS creates kernel devices only for internal ports, so a TAP port
+	// added to the bridge has no device until one is created here. QEMU
+	// attaches to it by name (ifname=, script=no).
+	if _, err := net.InterfaceByName(tapName); err == nil {
+		// A run that died before cleanup left the device behind.
+		if err := runIP("link", "delete", "dev", tapName); err != nil {
+			return fmt.Errorf("failed to remove stale TAP %s: %w", tapName, err)
+		}
+	}
+	if err := runIP("tuntap", "add", "dev", tapName, "mode", "tap"); err != nil {
+		return fmt.Errorf("failed to create TAP %s: %w", tapName, err)
+	}
+	if err := runIP("link", "set", "dev", tapName, "up"); err != nil {
+		return fmt.Errorf("failed to bring up TAP %s: %w", tapName, err)
 	}
 
-	i.Logger.Info("TAP interface configured", "name", tapName)
+	i.Logger.Info("TAP interface created", "name", tapName)
 	return nil
 }
 
-// Mock FlowController for testing
-type mockFlowController struct{}
-
-func newMockFlowController() *mockFlowController {
-	return &mockFlowController{}
-}
-
-func (m *mockFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
-	// No-op for mock
+// runIP runs ip(8) with args and folds its output into the error.
+func runIP(args ...string) error {
+	if output, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("ip %v: %w: %s", args, err, string(output))
+	}
 	return nil
-}
-
-func (m *mockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) DeleteFlow(bridgeName string, match string) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) DeleteFlowsByPort(bridgeName string, portID string) error {
-	// No-op for mock
-	return nil
-}
-
-func (m *mockFlowController) ListFlows(bridgeName string) ([]string, error) {
-	return []string{}, nil
 }
 
 // Helper functions

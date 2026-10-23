@@ -31,7 +31,7 @@ What `main` does and does not do today:
 - **The switches are not linked.** Nothing sets `GODEBUG=fips140=only` from the
   kernel indicator. No init script, unit or Go code sets `GODEBUG`.
 - **Only the FIPS test job builds with the tag.** That job is
-  `make test-fips` (`Makefile:1366-1368`). Release binaries carry neither the
+  `make test-fips` (`Makefile:1380-1382`). Release binaries carry neither the
   `fips` tag nor `GOFIPS140`.
 - A FIPS OS image is a separate path (§4). It boots a FIPS kernel with
   `fips=1`, which turns on the kernel indicator. It does not turn on the Go
@@ -49,7 +49,7 @@ mode). Until it is built, an operator sets `GODEBUG` by hand
 |---|---|
 | Gate every check on the build tag | A binary built without the tag can still run under `fips140=only`. A tag-only check would then let `crypto/hmac` or `crypto/sha1` panic mid-handshake. Checks on a Go runtime refusal therefore read `fips140.Enabled()` (`pkg/bmc/rmcp_fips_keys.go:32-36`, `pkg/dns/config.go:333`) |
 | `make BUILD_TAGS="... fips"` | A command-line `BUILD_TAGS` replaces the Makefile's whole tag list. The run then tests a build with no codecs, raft or frost, and the resulting codec errors look like FIPS findings (`Makefile:286-292`) |
-| `GODEBUG=fips140=on` in the test job | `on` loads the module but still permits non-approved algorithms, so the suite would pass while a regulated path used prohibited cryptography (`Makefile:1361-1363`) |
+| `GODEBUG=fips140=on` in the test job | `on` loads the module but still permits non-approved algorithms, so the suite would pass while a regulated path used prohibited cryptography (`Makefile:1375-1377`) |
 | Silently rewrite every unapproved LUKS choice | Only the documented case is substituted: an Argon2 KDF becomes PBKDF2. An explicit `pbkdf2-sha1` or SHA-1 hash is refused with a typed error, because `--fips` never promised to rewrite them (`pkg/installer/luks_algorithms.go:45-60`, `:64-70`) |
 | Treat an unreadable kernel indicator as "not FIPS" | That fails open. `IsEnabled` assumes activation on any read error (`pkg/fips/detect.go:71-83`) |
 

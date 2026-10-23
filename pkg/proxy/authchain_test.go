@@ -252,7 +252,6 @@ func TestChainAuthenticateNilArguments(t *testing.T) {
 func TestChainAuthenticateDenyReasons(t *testing.T) {
 	ca := newTestCA(t)
 	plain := newLeafCert(t, ca, leafSpec{cn: "device-1"})
-	trusted := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 	public := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "public"})
 	adapterErr := errors.New("certificate expired")
 
@@ -283,8 +282,6 @@ func TestChainAuthenticateDenyReasons(t *testing.T) {
 			AuthRequirements{Mode: AuthModeMTLS, AllowedZones: []string{"control-plane"}}, ReasonZoneNotAllowed},
 		{"zone matrix denies path", &fakeMTLSAuth{}, tlsRequest(public),
 			AuthRequirements{Mode: AuthModeMTLS, BackendZone: "internal"}, ReasonZoneMatrixDenied},
-		{"role required but absent", &fakeMTLSAuth{}, tlsRequest(trusted),
-			AuthRequirements{Mode: AuthModeMTLS, RequiredRoles: []string{"admin"}}, ReasonRoleRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -324,7 +321,6 @@ func TestChainAuthenticateAllow(t *testing.T) {
 		RequireIDevID: true,
 		AllowedZones:  []string{"control-plane"},
 		BackendZone:   "internal",
-		RequiredRoles: []string{"operators"},
 	}))
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -518,28 +514,6 @@ func TestRolesFromIdentity(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Fatalf("roles = %v, want %v", got, tt.want)
 				}
-			}
-		})
-	}
-}
-
-func TestHasAllRoles(t *testing.T) {
-	tests := []struct {
-		name     string
-		held     []string
-		required []string
-		want     bool
-	}{
-		{"no requirements", nil, nil, true},
-		{"subset", []string{"a", "b"}, []string{"a"}, true},
-		{"exact", []string{"a"}, []string{"a"}, true},
-		{"missing", []string{"a"}, []string{"a", "b"}, false},
-		{"none held", nil, []string{"a"}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hasAllRoles(tt.held, tt.required); got != tt.want {
-				t.Errorf("hasAllRoles(%v, %v) = %v, want %v", tt.held, tt.required, got, tt.want)
 			}
 		})
 	}

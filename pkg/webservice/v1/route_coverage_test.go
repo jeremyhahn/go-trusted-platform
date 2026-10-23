@@ -114,8 +114,7 @@ var unroutedClaims = map[string]string{
 	// IAM (#400) has no row. (a) Seven item operations that sent a collection
 	// path were repaired in #416: the SDK claims the item routes the server
 	// serves (sdk/go/transport/rest/adapter.go, templatedRouteTable);
-	// RemoveGroupMember and GetCurrentUser were fixed in #414 (#415); the group
-	// operations have since gone with IAM groups (go-quicbaas v0.14).
+	// RemoveGroupMember and GetCurrentUser were fixed in #414 (#415).
 	// (b) The four claims the IAM router did not serve were settled in #452:
 	// CheckPermission is now served at POST /api/v1/iam/permissions/check,
 	// and CreateToken, RevokeToken and VerifyToken are refused inside the SDK

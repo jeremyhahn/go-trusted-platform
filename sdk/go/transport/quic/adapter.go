@@ -569,6 +569,8 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DetachDisk":          quicwire.OpVMDetachDisk,
 	"/platform.v1.ComputeService/ResizeDisk":          quicwire.OpVMResizeDisk,
 	"/platform.v1.ComputeService/MigrateVM":           quicwire.OpVMMigrate,
+	"/platform.v1.ComputeService/PrepareMigration":    quicwire.OpVMPrepareMigration,
+	"/platform.v1.ComputeService/FinalizeMigration":   quicwire.OpVMFinalizeMigration,
 	"/platform.v1.ComputeService/RebootVM":            quicwire.OpVMRestart,
 	"/platform.v1.ComputeService/SuspendVM":           quicwire.OpVMSuspend,
 	"/platform.v1.ComputeService/ResumeVM":            quicwire.OpVMResume,
@@ -576,6 +578,7 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/RestoreSnapshot":     quicwire.OpVMSnapshotRestore,
 	"/platform.v1.ComputeService/DeleteSnapshot":      quicwire.OpVMSnapshotDelete,
 	"/platform.v1.ComputeService/ListSnapshots":       quicwire.OpVMSnapshotList,
+	"/platform.v1.ComputeService/GetSnapshot":         quicwire.OpVMSnapshotGet,
 	"/platform.v1.ComputeService/AttestVM":            quicwire.OpVMAttest,
 	"/platform.v1.ComputeService/VerifyVMAttestation": quicwire.OpVMVerifyAttest,
 
@@ -633,13 +636,19 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/DisableDevice": quicwire.DeviceSubDisable,
 	"/platform.v1.DeviceService/EnableDevice":  quicwire.DeviceSubEnable,
 
-	// Device templates: handleDeviceTemplateCreate and
-	// handleDeviceProfileFromTemplate.
+	// Device templates: handleDeviceTemplate{Create,Get,List,Update,Delete}
+	// and handleDeviceProfileFromTemplate.
 	"/platform.v1.DeviceService/CreateTemplate":            quicwire.DeviceSubTemplateCreate,
+	"/platform.v1.DeviceService/GetTemplate":               quicwire.DeviceSubTemplateGet,
+	"/platform.v1.DeviceService/ListTemplates":             quicwire.DeviceSubTemplateList,
+	"/platform.v1.DeviceService/UpdateTemplate":            quicwire.DeviceSubTemplateUpdate,
+	"/platform.v1.DeviceService/DeleteTemplate":            quicwire.DeviceSubTemplateDelete,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": quicwire.DeviceSubProfileFromTemplate,
 
-	// Profile matching: handleDeviceFindMatchingProfile.
+	// Profile matching and config lookup: handleDeviceFindMatchingProfile,
+	// handleDeviceFindConfigForDevice.
 	"/platform.v1.DeviceService/FindMatchingProfile": quicwire.DeviceSubFindMatchingProfile,
+	"/platform.v1.DeviceService/FindConfigForDevice": quicwire.DeviceSubFindConfigForDevice,
 
 	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
 	// sub-range 0x20-0x2D (the single-byte opcode space is fully
@@ -755,6 +764,14 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.PlatformIAMService/AssignRole": quicwire.OpIAMRoleAssign,
 	"/platform.v1.PlatformIAMService/RevokeRole": quicwire.OpIAMRoleRevoke,
 
+	// IAM Group Operations
+	"/platform.v1.PlatformIAMService/CreateGroup":       quicwire.OpIAMGroupCreate,
+	"/platform.v1.PlatformIAMService/DeleteGroup":       quicwire.OpIAMGroupDelete,
+	"/platform.v1.PlatformIAMService/GetGroup":          quicwire.OpIAMGroupGet,
+	"/platform.v1.PlatformIAMService/ListGroups":        quicwire.OpIAMGroupList,
+	"/platform.v1.PlatformIAMService/AddGroupMember":    quicwire.OpIAMGroupAddMember,
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": quicwire.OpIAMGroupRemoveMember,
+
 	// IAM tenant records route to OpIAMCategory (aab_iam_tenant.go), never to
 	// the platform tenancy opcodes below (#767).
 
@@ -831,8 +848,13 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/DisableDevice":                quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/EnableDevice":                 quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/GetTemplate":                  quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/ListTemplates":                quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/UpdateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/DeleteTemplate":               quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate":    quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/FindMatchingProfile":          quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/FindConfigForDevice":          quicwire.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicwire.OpSDNCreateBridge,
@@ -993,6 +1015,8 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DetachDisk":          quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ResizeDisk":          quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/MigrateVM":           quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/PrepareMigration":    quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/FinalizeMigration":   quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/RebootVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/SuspendVM":           quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ResumeVM":            quicwire.OpVMExtendedCategory,
@@ -1000,6 +1024,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/RestoreSnapshot":     quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/DeleteSnapshot":      quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ListSnapshots":       quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/GetSnapshot":         quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/AttestVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/VerifyVMAttestation": quicwire.OpVMExtendedCategory,
 

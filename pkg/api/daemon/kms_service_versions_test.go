@@ -8,6 +8,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -229,4 +230,125 @@ func TestDEKAlgorithmToPb(t *testing.T) {
 
 func TestDEKUsagePercent_NoLimits(t *testing.T) {
 	assert.Zero(t, dekUsagePercent(&dekclient.DEKInfo{UsageCount: 99, BytesUsed: 99}))
+}
+
+// versionSecretsClient answers the secret version, rotate, rollback and
+// status calls; every other method fails through extSecretsClientMock.
+type versionSecretsClient struct {
+	extSecretsClientMock
+	lastGetVersion *secretsclient.GetSecretVersionRequest
+	lastRotate     *secretsclient.RotateSecretRequest
+	lastRollback   *secretsclient.RollbackSecretRequest
+	lastStatus     *secretsclient.UpdateSecretStatusRequest
+}
+
+func (c *versionSecretsClient) GetVersion(ctx context.Context, req *secretsclient.GetSecretVersionRequest) (*secretsclient.SecretVersionInfo, error) {
+	c.lastGetVersion = req
+	return &secretsclient.SecretVersionInfo{SecretID: req.SecretID, Version: req.Version, Data: []byte("v1-data"), CreatedBy: "ops"}, nil
+}
+
+func (c *versionSecretsClient) ListVersions(ctx context.Context, secretID string) (*secretsclient.ListSecretVersionsResponse, error) {
+	return &secretsclient.ListSecretVersionsResponse{Versions: []secretsclient.SecretVersionInfo{
+		{SecretID: secretID, Version: 1, Data: []byte("v1-data")},
+		{SecretID: secretID, Version: 2, Data: []byte("v2-data")},
+	}}, nil
+}
+
+func (c *versionSecretsClient) Rotate(ctx context.Context, req *secretsclient.RotateSecretRequest) (*secretsclient.RotateSecretResponse, error) {
+	c.lastRotate = req
+	return &secretsclient.RotateSecretResponse{SecretID: req.SecretID, OldVersion: 2, NewVersion: 3}, nil
+}
+
+func (c *versionSecretsClient) Rollback(ctx context.Context, req *secretsclient.RollbackSecretRequest) (*secretsclient.RollbackSecretResponse, error) {
+	c.lastRollback = req
+	return &secretsclient.RollbackSecretResponse{SecretID: req.SecretID, NewVersion: 4}, nil
+}
+
+func (c *versionSecretsClient) UpdateStatus(ctx context.Context, req *secretsclient.UpdateSecretStatusRequest) error {
+	c.lastStatus = req
+	return nil
+}
+
+func TestSecretsServerAdapter_VersionsDelegateToSecretsClient(t *testing.T) {
+	ctx := context.Background()
+	client := &versionSecretsClient{}
+	adapter := NewSecretsServerAdapter(client, slog.Default())
+
+	got, err := adapter.GetSecretVersion(ctx, &pb.GetSecretVersionRequest{SecretId: "db/pw", Version: 1})
+	require.NoError(t, err)
+	assert.Equal(t, &secretsclient.GetSecretVersionRequest{SecretID: "db/pw", Version: 1}, client.lastGetVersion)
+	assert.Equal(t, []byte("v1-data"), got.GetData())
+	assert.Equal(t, "ops", got.GetVersion().GetCreatedBy())
+
+	listed, err := adapter.ListSecretVersions(ctx, &pb.ListSecretVersionsRequest{SecretId: "db/pw"})
+	require.NoError(t, err)
+	require.Len(t, listed.GetVersions(), 2)
+	assert.Equal(t, uint64(2), listed.GetVersions()[1].GetVersion())
+
+	rotated, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: "db/pw", NewData: []byte("v3"), Metadata: map[string]string{"by": "ops"}})
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v3"), client.lastRotate.NewData)
+	assert.Equal(t, "ops", client.lastRotate.Metadata["by"])
+	assert.Equal(t, uint64(3), rotated.GetNewVersion())
+
+	rolled, err := adapter.RollbackSecret(ctx, &pb.RollbackSecretRequest{SecretId: "db/pw", TargetVersion: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 1, client.lastRollback.TargetVersion)
+	assert.Equal(t, uint64(4), rolled.GetNewVersion())
+
+	updated, err := adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{SecretId: "db/pw", Status: pb.SecretStatus_SECRET_STATUS_DISABLED})
+	require.NoError(t, err)
+	assert.Equal(t, secretsclient.SecretStatusDisabled, client.lastStatus.Status)
+	assert.Equal(t, pb.SecretStatus_SECRET_STATUS_DISABLED, updated.GetStatus())
+}
+
+func TestSecretsServerAdapter_VersionsErrors(t *testing.T) {
+	ctx := context.Background()
+	calls := map[string]func(a *SecretsServerAdapter, id string) error{
+		"GetSecretVersion": func(a *SecretsServerAdapter, id string) error {
+			_, err := a.GetSecretVersion(ctx, &pb.GetSecretVersionRequest{SecretId: id, Version: 1})
+			return err
+		},
+		"ListSecretVersions": func(a *SecretsServerAdapter, id string) error {
+			_, err := a.ListSecretVersions(ctx, &pb.ListSecretVersionsRequest{SecretId: id})
+			return err
+		},
+		"RotateSecret": func(a *SecretsServerAdapter, id string) error {
+			_, err := a.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: id, NewData: []byte("x")})
+			return err
+		},
+		"RollbackSecret": func(a *SecretsServerAdapter, id string) error {
+			_, err := a.RollbackSecret(ctx, &pb.RollbackSecretRequest{SecretId: id, TargetVersion: 1})
+			return err
+		},
+		"UpdateSecretStatus": func(a *SecretsServerAdapter, id string) error {
+			_, err := a.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{SecretId: id, Status: pb.SecretStatus_SECRET_STATUS_ENABLED})
+			return err
+		},
+	}
+	failing := map[string]codes.Code{
+		"GetSecretVersion":   codes.NotFound,
+		"ListSecretVersions": codes.NotFound,
+		"RotateSecret":       codes.Internal,
+		"RollbackSecret":     codes.Internal,
+		"UpdateSecretStatus": codes.Internal,
+	}
+
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, codes.Unavailable, status.Code(call(NewSecretsServerAdapter(nil, slog.Default()), "db/pw")))
+
+			adapter := NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default())
+			assert.Equal(t, codes.InvalidArgument, status.Code(call(adapter, "")))
+			assert.Equal(t, failing[name], status.Code(call(adapter, "db/pw")))
+		})
+	}
+
+	adapter := NewSecretsServerAdapter(&versionSecretsClient{}, slog.Default())
+	_, err := adapter.RotateSecret(ctx, &pb.RotateSecretRequest{SecretId: "db/pw"})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "rotate without new data")
+	_, err = adapter.RollbackSecret(ctx, &pb.RollbackSecretRequest{SecretId: "db/pw"})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "rollback without a target version")
+	_, err = adapter.UpdateSecretStatus(ctx, &pb.UpdateSecretStatusRequest{SecretId: "db/pw"})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "unspecified status")
 }

@@ -198,12 +198,12 @@ refuse is a startup error. Listeners remain gatewayd-local.
    is present** — when both credentials arrive the certificate wins and the
    bearer token is ignored and never forwarded.
 6. **mTLS path** — adapter authentication (chain, validity), then IDevID
-   validation on `require-idevid` routes, then zone extraction and enforcement,
-   then roles.
+   validation on `require-idevid` routes, then zone extraction and enforcement.
 7. **Token path** — bearer extraction, then the platformtoken SDK pipeline
    (JWKS-by-`kid`, `iss`/`aud`/`exp`, RFC 9068 `typ: at+jwt`, DPoP proof for
    `cnf.jkt`-bound tokens, scope enforcement, per-mode liveness), then the
-   operator-assigned token zone, then roles.
+   operator-assigned token zone. There is no role check on either path: a
+   route's permission is its `required-scopes` (#926).
 8. **Attestation gate** (`require-attestation` routes), then **OPA policy**
    (`opa-policy` routes) — both shared by the two paths, in that order, so the
    policy input sees the attestation outcome.

@@ -56,6 +56,31 @@ type IAMCommands interface {
 	// RevokeRole revokes a role from a user
 	RevokeRole(ctx context.Context, opts RevokeRoleOptions) (*RevokeRoleResult, error)
 
+	// Group CRUD Operations
+
+	// CreateGroup creates a new group
+	CreateGroup(ctx context.Context, opts CreateGroupOptions) (*CreateGroupResult, error)
+
+	// GetGroup retrieves a group by ID
+	GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGroupResult, error)
+
+	// UpdateGroup updates an existing group
+	UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error)
+
+	// DeleteGroup removes a group
+	DeleteGroup(ctx context.Context, opts DeleteGroupOptions) (*DeleteGroupResult, error)
+
+	// ListGroups lists all groups with optional filtering
+	ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error)
+
+	// Group Membership Operations
+
+	// AddMember adds a user to a group
+	AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error)
+
+	// RemoveMember removes a user from a group
+	RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error)
+
 	// Role CRUD Operations
 
 	// CreateRole creates a new role
@@ -90,6 +115,7 @@ type User struct {
 	Email       string            `json:"email"`
 	Name        string            `json:"name,omitempty"`
 	Roles       []string          `json:"roles,omitempty"`
+	Groups      []string          `json:"groups,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`
 	MFAVerified bool              `json:"mfa_verified"`
 	CreatedAt   *time.Time        `json:"created_at,omitempty"`
@@ -103,6 +129,7 @@ type CreateUserOptions struct {
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -129,6 +156,7 @@ type UpdateUserOptions struct {
 	Email      string            `json:"email,omitempty"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -153,6 +181,7 @@ type ListUsersOptions struct {
 	TenantID string `json:"tenant_id"`
 	Email    string `json:"email,omitempty"`
 	Role     string `json:"role,omitempty"`
+	Group    string `json:"group,omitempty"`
 	Limit    int32  `json:"limit,omitempty"`
 	Offset   int32  `json:"offset,omitempty"`
 }
@@ -186,6 +215,108 @@ type RevokeRoleOptions struct {
 
 // RevokeRoleResult contains the result of revoking a role
 type RevokeRoleResult struct {
+	Success bool `json:"success"`
+}
+
+// ============================================================================
+// Group Types
+// ============================================================================
+
+// Group represents an IAM group
+type Group struct {
+	ID          string     `json:"id"`
+	TenantID    string     `json:"tenant_id"`
+	Name        string     `json:"name,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Members     []string   `json:"members,omitempty"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
+}
+
+// CreateGroupOptions contains options for creating a group
+type CreateGroupOptions struct {
+	TenantID    string `json:"tenant_id"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// CreateGroupResult contains the result of group creation
+type CreateGroupResult struct {
+	Group *Group `json:"group"`
+}
+
+// GetGroupOptions contains options for getting a group
+type GetGroupOptions struct {
+	TenantID string `json:"tenant_id"`
+	GroupID  string `json:"group_id"`
+}
+
+// GetGroupResult contains the result of getting a group
+type GetGroupResult struct {
+	Group *Group `json:"group"`
+}
+
+// UpdateGroupOptions contains options for updating a group
+type UpdateGroupOptions struct {
+	TenantID    string `json:"tenant_id"`
+	GroupID     string `json:"group_id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// UpdateGroupResult contains the result of updating a group
+type UpdateGroupResult struct {
+	Group *Group `json:"group"`
+}
+
+// DeleteGroupOptions contains options for deleting a group
+type DeleteGroupOptions struct {
+	TenantID string `json:"tenant_id"`
+	GroupID  string `json:"group_id"`
+}
+
+// DeleteGroupResult contains the result of deleting a group
+type DeleteGroupResult struct {
+	Success bool `json:"success"`
+}
+
+// ListGroupsOptions contains options for listing groups
+type ListGroupsOptions struct {
+	TenantID string `json:"tenant_id"`
+	Limit    int32  `json:"limit,omitempty"`
+	Offset   int32  `json:"offset,omitempty"`
+}
+
+// ListGroupsResult contains the result of listing groups
+type ListGroupsResult struct {
+	Groups []*Group `json:"groups"`
+	Total  int64    `json:"total"`
+	Limit  int32    `json:"limit"`
+	Offset int32    `json:"offset"`
+}
+
+// AddMemberOptions contains options for adding a member to a group
+type AddMemberOptions struct {
+	TenantID string `json:"tenant_id"`
+	GroupID  string `json:"group_id"`
+	UserID   string `json:"user_id"`
+}
+
+// AddMemberResult contains the result of adding a member
+type AddMemberResult struct {
+	Success bool `json:"success"`
+}
+
+// RemoveMemberOptions contains options for removing a member from a group
+type RemoveMemberOptions struct {
+	TenantID string `json:"tenant_id"`
+	GroupID  string `json:"group_id"`
+	UserID   string `json:"user_id"`
+}
+
+// RemoveMemberResult contains the result of removing a member
+type RemoveMemberResult struct {
 	Success bool `json:"success"`
 }
 

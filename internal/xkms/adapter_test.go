@@ -632,6 +632,36 @@ func (m *mockClient) SealStoreStatus(ctx context.Context) (*xkms.SealStoreStatus
 	return nil, nil
 }
 
+// PolicyService stubs
+
+func (m *mockClient) PolicyCreate(ctx context.Context, req *xkms.PolicyCreateRequest) (*xkms.PolicyCreateResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) PolicyGet(ctx context.Context, req *xkms.PolicyGetRequest) (*xkms.PolicyGetResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) PolicyList(ctx context.Context) (*xkms.PolicyListResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) PolicyDelete(ctx context.Context, req *xkms.PolicyDeleteRequest) error {
+	return nil
+}
+
+func (m *mockClient) PolicyRefresh(ctx context.Context, req *xkms.PolicyRefreshRequest) (*xkms.PolicyGetResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) PolicyVerify(ctx context.Context, req *xkms.PolicyVerifyRequest) (*xkms.PolicyVerifyResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) PolicyExport(ctx context.Context, req *xkms.PolicyExportRequest) (*xkms.PolicyExportResponse, error) {
+	return nil, nil
+}
+
 // CustodianGroupService stubs
 
 func (m *mockClient) CreateCustodianGroup(ctx context.Context, req *xkms.CreateCustodianGroupRequest) (*xkms.CreateCustodianGroupResponse, error) {

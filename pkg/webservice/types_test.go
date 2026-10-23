@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,7 +76,7 @@ func TestDefaultConfigRSA(t *testing.T) {
 
 		assert.Equal(t, crypto.SHA256.String(), DefaultConfigRSA.Key.Hash)
 		assert.Equal(t, x509.RSA.String(), DefaultConfigRSA.Key.KeyAlgorithm)
-		assert.Equal(t, common.TPMPolicyPlatform, DefaultConfigRSA.Key.TPMPolicy)
+		assert.True(t, DefaultConfigRSA.Key.PlatformPolicy)
 		assert.Equal(t, x509.SHA256WithRSAPSS.String(), DefaultConfigRSA.Key.SignatureAlgorithm)
 		assert.Equal(t, xkmssdk.StoreTPM2.String(), DefaultConfigRSA.Key.StoreType)
 	})
@@ -100,7 +99,7 @@ func TestDefaultConfigECDSA(t *testing.T) {
 
 		assert.Equal(t, crypto.SHA256.String(), DefaultConfigECDSA.Key.Hash)
 		assert.Equal(t, x509.ECDSA.String(), DefaultConfigECDSA.Key.KeyAlgorithm)
-		assert.Equal(t, common.TPMPolicyPlatform, DefaultConfigECDSA.Key.TPMPolicy)
+		assert.True(t, DefaultConfigECDSA.Key.PlatformPolicy)
 		assert.Equal(t, x509.ECDSAWithSHA256.String(), DefaultConfigECDSA.Key.SignatureAlgorithm)
 		assert.Equal(t, xkmssdk.StoreTPM2.String(), DefaultConfigECDSA.Key.StoreType)
 	})
@@ -123,7 +122,7 @@ func TestDefaultConfigEd25519(t *testing.T) {
 
 		assert.Equal(t, crypto.SHA256.String(), DefaultConfigEd25519.Key.Hash)
 		assert.Equal(t, x509.PureEd25519.String(), DefaultConfigEd25519.Key.KeyAlgorithm)
-		assert.Equal(t, common.TPMPolicyPlatform, DefaultConfigEd25519.Key.TPMPolicy)
+		assert.True(t, DefaultConfigEd25519.Key.PlatformPolicy)
 		assert.Equal(t, x509.Ed25519.String(), DefaultConfigEd25519.Key.SignatureAlgorithm)
 		// Ed25519 uses software store since TPM2 doesn't support Ed25519
 		assert.Equal(t, xkmssdk.StoreSoftware.String(), DefaultConfigEd25519.Key.StoreType)
@@ -185,11 +184,11 @@ func TestStoreTypeConfiguration(t *testing.T) {
 	})
 }
 
-func TestTPMPolicyConfiguration(t *testing.T) {
-	t.Run("all configs bind the platform TPM policy", func(t *testing.T) {
-		assert.Equal(t, common.TPMPolicyPlatform, DefaultConfigRSA.Key.TPMPolicy)
-		assert.Equal(t, common.TPMPolicyPlatform, DefaultConfigECDSA.Key.TPMPolicy)
-		assert.Equal(t, common.TPMPolicyPlatform, DefaultConfigEd25519.Key.TPMPolicy)
+func TestPlatformPolicyConfiguration(t *testing.T) {
+	t.Run("all configs have platform policy enabled", func(t *testing.T) {
+		assert.True(t, DefaultConfigRSA.Key.PlatformPolicy)
+		assert.True(t, DefaultConfigECDSA.Key.PlatformPolicy)
+		assert.True(t, DefaultConfigEd25519.Key.PlatformPolicy)
 	})
 }
 

@@ -92,6 +92,24 @@ func TestVMSnapshotSDKParity_CreateThenList(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, listed, 1)
 			assert.Equal(t, "nightly", listed[0].GetId())
+
+			got, err := client.GetSnapshot(ctx, "vm-1", "nightly")
+			require.NoError(t, err)
+			assert.Equal(t, "nightly", got.GetId())
+			assert.Equal(t, "vm-1", got.GetVmId())
+		})
+	}
+}
+
+func TestVMSnapshotSDKParity_GetUnknownSnapshot(t *testing.T) {
+	for _, transport := range vmSDKTransports {
+		t.Run(transport.name, func(t *testing.T) {
+			provider, svc, _ := seededVMPair()
+			client := transport.dial(t, provider, svc)
+
+			_, err := client.GetSnapshot(context.Background(), "vm-1", "never-taken")
+			assert.True(t, typedAs[*sdkcompute.ErrGetSnapshotFailed](err), "err = %T, want *ErrGetSnapshotFailed", err)
+			assert.Equal(t, codes.NotFound, status.Code(err), "err = %v", err)
 		})
 	}
 }

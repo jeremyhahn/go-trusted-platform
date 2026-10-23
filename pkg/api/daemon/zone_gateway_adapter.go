@@ -319,9 +319,10 @@ func privilegedAccessFromQUIC(pa *quic.NetworkZonePrivilegedAccessInfo) *zone.Pr
 // rather than a misleading error or a nil-pointer panic.
 type fullGatewayQUICAdapter struct {
 	ipamAlloc ipam.Allocator
-	zoneSvc   gateway.ZoneService          // may be nil
-	lb        GatewayLoadBalancerInterface // may be nil
-	nat64     GatewayNAT64Interface        // may be nil
+	zoneSvc   gateway.ZoneService // may be nil
+	// backends is the shared gateway service the LB and NAT64 sub-opcodes
+	// read their backend from (#660); may be nil.
+	backends GatewayBackendSource
 	// gatewaySnapshotQUICAdapter serves the telemetry snapshot sub-opcodes
 	// from the gateway gRPC service when one is wired (#594).
 	gatewaySnapshotQUICAdapter
@@ -339,10 +340,11 @@ var _ quic.GatewayServiceInterface = (*fullGatewayQUICAdapter)(nil)
 // newFullGatewayQUICAdapter creates a fullGatewayQUICAdapter.
 // ipamAlloc must be non-nil; zoneSvc may be nil (zone methods will return
 // errGatewayFeatureNotConfigured in that case).
-func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader, status GatewayStatusController, bgp GatewayBGPController) *fullGatewayQUICAdapter {
+func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader, status GatewayStatusController, bgp GatewayBGPController, backends GatewayBackendSource) *fullGatewayQUICAdapter {
 	return &fullGatewayQUICAdapter{
 		ipamAlloc:                  ipamAlloc,
 		zoneSvc:                    zoneSvc,
+		backends:                   backends,
 		gatewaySnapshotQUICAdapter: gatewaySnapshotQUICAdapter{reader: snapshots},
 		gatewayStatusQUICAdapter:   gatewayStatusQUICAdapter{controller: status},
 		gatewayBGPQUICAdapter:      gatewayBGPQUICAdapter{controller: bgp},

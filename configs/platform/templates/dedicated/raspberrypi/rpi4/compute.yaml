@@ -408,7 +408,7 @@ acme:
         debug: true
         hash: SHA-256
         password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
-        tpm-policy: platform
+        platform-policy: true
         rsa:
           size: 2048
         signature-algorithm: SHA256-RSAPSS
@@ -628,7 +628,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -639,7 +639,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -677,7 +677,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -688,7 +688,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
       valid: 10
       subject:
@@ -745,7 +745,7 @@ webservice:
     hash: SHA-256
     store: software
     password: "kms://webservice/key/password?ensure=true&len=32&enc=raw"
-    tpm-policy: platform
+    platform-policy: true
     debug: true
   certificate:
     # The listener serves the node's CP-ISSUED identity, not a certificate

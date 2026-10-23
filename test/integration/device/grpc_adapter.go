@@ -26,7 +26,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -528,7 +527,7 @@ func (a *GRPCAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 }
 
 // =============================================================================
-// Template CRUD Operations (not yet available via gRPC)
+// Template CRUD Operations
 // =============================================================================
 
 // CreateTemplate creates a new device template via gRPC.
@@ -545,22 +544,60 @@ func (a *GRPCAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpt
 
 // GetTemplate retrieves a template by ID via gRPC.
 func (a *GRPCAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.GetTemplate(ctx, &pb.DeviceTemplateGetRequest{Id: id})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrGRPCCallFailed{Method: "GetTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &GetTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // UpdateTemplate updates an existing template via gRPC.
 func (a *GRPCAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "UpdateTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "UpdateTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.UpdateTemplate(ctx, templateUpdateRequest(id, opts))
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "UpdateTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrGRPCCallFailed{Method: "UpdateTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &UpdateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // DeleteTemplate removes a template via gRPC.
 func (a *GRPCAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "DeleteTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "DeleteTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.DeleteTemplate(ctx, &pb.DeviceTemplateDeleteRequest{Id: id})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "DeleteTemplate", Err: err}
+	}
+	return &DeleteTemplateResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// ListTemplates lists all templates via gRPC.
+// ListTemplates pages templates via gRPC.
 func (a *GRPCAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "ListTemplates"}
+	req, err := templateListRequest("gRPC", opts)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.client.ListTemplates(ctx, req)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "ListTemplates", Err: err}
+	}
+	return templateListResult(resp), nil
 }
 
 // CreateProfileFromTemplate creates a profile from a template via gRPC.
@@ -602,7 +639,14 @@ func (a *GRPCAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 
 // FindConfigForDevice finds the config for a device via gRPC.
 func (a *GRPCAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "FindConfigForDevice"}
+	resp, err := a.client.FindConfigForDevice(ctx, &pb.FindConfigForDeviceRequest{
+		EkSerial:   opts.EKSerial,
+		MacAddress: opts.MACAddress,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "FindConfigForDevice", Err: err}
+	}
+	return &FindConfigForDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device via gRPC.
@@ -688,6 +732,14 @@ func protoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
 		Model:    p.GetModel(),
 		Role:     grpcapi.ProtoRoleToEntity(p.GetRole()),
 		EventLog: p.GetEventLog(),
+
+		// The device binding AssignProfileToDevice records.
+		EKSerial:   p.GetEkSerial(),
+		MACAddress: p.GetMacAddress(),
+		Assigned:   p.GetAssigned(),
+	}
+	if p.GetAssignedAt() != nil {
+		profile.AssignedAt = p.GetAssignedAt().AsTime()
 	}
 
 	if p.GetMatchRules() != nil {
@@ -724,6 +776,61 @@ func templateCreateRequest(opts CreateTemplateOptions) *pb.DeviceTemplateCreateR
 			MatchRules:  entityMatchRulesToProto(opts.MatchRules),
 		},
 	}
+}
+
+// templateUpdateRequest builds the UpdateTemplate request shared by the
+// gRPC, Unix and QUIC adapters. The RPC replaces the stored template, so
+// every field the suite sends rides on it.
+func templateUpdateRequest(id uint64, opts UpdateTemplateOptions) *pb.DeviceTemplateUpdateRequest {
+	return &pb.DeviceTemplateUpdateRequest{
+		Template: &pb.DeviceTemplate{
+			Id:          id,
+			TenantId:    opts.TenantID,
+			Name:        opts.Name,
+			Description: opts.Description,
+			Role:        grpcapi.EntityRoleToProto(opts.Role),
+			Config:      opts.Config,
+			MatchRules:  entityMatchRulesToProto(opts.MatchRules),
+		},
+	}
+}
+
+// templateListRequest builds the ListTemplates request shared by the gRPC,
+// Unix and QUIC adapters. The request pages but has no role field, so a role
+// filter is refused rather than answered with an unfiltered page.
+func templateListRequest(transport string, opts ListTemplatesOptions) (*pb.DeviceTemplateListRequest, error) {
+	if opts.Role != "" {
+		return nil, ErrNoListFilter{Transport: transport, Operation: "ListTemplates", Filter: "role"}
+	}
+	return &pb.DeviceTemplateListRequest{
+		Pagination: &pb.PaginationRequest{
+			PageSize: uint32(opts.Limit),
+			Page:     pageOf(opts.Limit, opts.Offset),
+		},
+	}, nil
+}
+
+// templateListResult converts a ListTemplates reply; the pagination carries
+// the total.
+func templateListResult(resp *pb.DeviceTemplateListResponse) *ListTemplatesResult {
+	templates := make([]*entities.DeviceTemplate, 0, len(resp.GetTemplates()))
+	for _, t := range resp.GetTemplates() {
+		templates = append(templates, protoToTemplate(t))
+	}
+	return &ListTemplatesResult{Templates: templates, Total: int(resp.GetPagination().GetTotalItems())}
+}
+
+// ErrNoListFilter reports a list filter the transport's request has no field
+// for. Sending the request anyway would return an unfiltered page that looks
+// like a filtered one, so the adapter refuses it.
+type ErrNoListFilter struct {
+	Transport string
+	Operation string
+	Filter    string
+}
+
+func (e ErrNoListFilter) Error() string {
+	return fmt.Sprintf("%s request for %s has no %s filter", e.Transport, e.Operation, e.Filter)
 }
 
 // protoToTemplate maps the template a CreateTemplate response carries

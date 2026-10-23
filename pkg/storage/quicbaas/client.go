@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -275,7 +274,7 @@ func (c *Client) Get(ctx context.Context, entityType string, id uint64, shardID 
 		// Convert to our semantic: return found=false for not-found cases.
 		// Check both typed errors and string patterns since errors may be
 		// wrapped through multiple transport layers.
-		if baaserrors.IsNotFound(err) || isNotFoundString(err) {
+		if IsNotFound(err) || isNotFoundString(err) {
 			return nil, false, nil
 		}
 		return nil, false, ErrOperationFailed{Operation: "get", Cause: err}

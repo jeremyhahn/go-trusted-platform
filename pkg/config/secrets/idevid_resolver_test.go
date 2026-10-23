@@ -491,20 +491,9 @@ func TestIDevIDResolver_Resolve_ContextDeadlineExceeded(t *testing.T) {
 	}
 }
 
-// newLiteralSecretValue seals plaintext into a literal-strategy SecretValue,
-// failing the test if sealing fails.
-func newLiteralSecretValue(t *testing.T, raw string, plaintext []byte) *quicbaassecret.SecretValue {
-	t.Helper()
-	sv, err := quicbaassecret.NewSecretValue(raw, plaintext, quicbaassecret.StrategyLiteral)
-	if err != nil {
-		t.Fatalf("NewSecretValue: %v", err)
-	}
-	return sv
-}
-
 func TestSecretValue_Clear(t *testing.T) {
 	t.Run("clears_bytes", func(t *testing.T) {
-		sv := newLiteralSecretValue(t, "idevid://ref", []byte("secret-data"))
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret-data"), quicbaassecret.StrategyLiteral)
 
 		sv.Clear()
 
@@ -519,7 +508,7 @@ func TestSecretValue_Clear(t *testing.T) {
 	})
 
 	t.Run("already_cleared", func(t *testing.T) {
-		sv := newLiteralSecretValue(t, "idevid://ref", []byte("data"))
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("data"), quicbaassecret.StrategyLiteral)
 		sv.Clear()
 		// Second Clear must not panic
 		sv.Clear()
@@ -528,7 +517,7 @@ func TestSecretValue_Clear(t *testing.T) {
 
 func TestSecretValue_Expired(t *testing.T) {
 	t.Run("not_expired", func(t *testing.T) {
-		sv := newLiteralSecretValue(t, "idevid://ref", []byte("secret"))
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret"), quicbaassecret.StrategyLiteral)
 		sv.ExpiresAt = time.Now().Add(time.Hour)
 
 		if sv.Expired() {
@@ -537,7 +526,7 @@ func TestSecretValue_Expired(t *testing.T) {
 	})
 
 	t.Run("expired", func(t *testing.T) {
-		sv := newLiteralSecretValue(t, "idevid://ref", []byte("secret"))
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret"), quicbaassecret.StrategyLiteral)
 		sv.ExpiresAt = time.Now().Add(-time.Hour)
 
 		if !sv.Expired() {
@@ -546,7 +535,7 @@ func TestSecretValue_Expired(t *testing.T) {
 	})
 
 	t.Run("zero_expiry_never_expires", func(t *testing.T) {
-		sv := newLiteralSecretValue(t, "idevid://ref", []byte("secret"))
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret"), quicbaassecret.StrategyLiteral)
 
 		if sv.Expired() {
 			t.Error("expected not expired for zero expiry time")
@@ -560,7 +549,7 @@ func TestSecretValue_Expired(t *testing.T) {
 func TestSecretValue_Plaintext(t *testing.T) {
 	t.Run("round_trips_plaintext", func(t *testing.T) {
 		expected := "test-secret"
-		sv := newLiteralSecretValue(t, "idevid://ref", []byte(expected))
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte(expected), quicbaassecret.StrategyLiteral)
 
 		if err := sv.WithBytes(func(plaintext []byte) error {
 			if string(plaintext) != expected {

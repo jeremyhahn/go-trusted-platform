@@ -246,21 +246,14 @@ func daemonServerSANs(a *app.App) daemonSANs {
 // challenge types. Each challenge type (e.g., "http-01", "dns-01",
 // "enroll-01") is mapped to its corresponding verifier function that
 // performs the ACME challenge validation.
-//
-// One challenge-validation client serves every verifier that contacts a
-// client-named target (http-01, enroll-01). It refuses reserved addresses
-// unless allowPrivateTargets is set.
-func buildChallengeMap(challenges []string, allowPrivateTargets bool, ca tcgEnrollmentCA) map[string]quicbaassdk.ACMEChallengeVerifierFunc {
+func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicbaassdk.ACMEChallengeVerifierFunc {
 	challengeMap := make(map[string]quicbaassdk.ACMEChallengeVerifierFunc)
-	client := quicbaassdk.NewACMEChallengeClient(quicbaassdk.ACMEChallengeClientConfig{
-		AllowPrivateTargets: allowPrivateTargets,
-	})
 
 	for _, challengeType := range challenges {
 		switch challengeType {
 		case "http-01":
 			challengeMap["http-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyHTTP01(client, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyHTTP01(resolver, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "dns-01":
 			challengeMap["dns-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
@@ -268,7 +261,7 @@ func buildChallengeMap(challenges []string, allowPrivateTargets bool, ca tcgEnro
 			}
 		case "enroll-01":
 			challengeMap["enroll-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyEnroll01(client, ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyEnroll01(resolver, ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "endorse-01":
 			// endorse-01 is used to provision EK certificates for TPMs without manufacturer certs.
@@ -506,6 +499,18 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 	logger.Info("vTPM service initialized",
 		"base_dir", vtpmCfg.BaseDir,
 		"ek_ca_wired", vtpmCA != nil)
+}
+
+// wireDaemonDNSService hands the platform DNS service to the daemon's gRPC,
+// QUIC, MCP and Unix transports. App.ServiceRegistry() is what creates
+// App.DNSService, so this must follow that call: read before it, the field is
+// still nil and every daemon DNS handler answers "DNS service not available".
+func wireDaemonDNSService(logger *logging.Logger, a *app.App, cfg *daemon.Config) {
+	if a == nil || cfg == nil || a.DNSService == nil {
+		return
+	}
+	cfg.DNSService = a.DNSService
+	logger.Info("DNS service configured for daemon")
 }
 
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
@@ -843,6 +848,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	} else {
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPathWS)
 	}
+	if App != nil {
+		daemonConfig.GatewayDatapathSocket = App.SDNConfig.GatewayDatapathSocket()
+	}
 
 	// vTPM service must exist before compute so the QEMU orchestrator can be
 	// wired with the profile-aware generator. Idempotent — the call later in
@@ -855,11 +863,6 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	} else {
 		daemonConfig.ComputeOrchestrator = computeOrchestrator
 		logger.Info("Compute orchestrator initialized successfully")
-	}
-
-	if App != nil && App.DNSService != nil {
-		daemonConfig.DNSService = App.DNSService
-		logger.Info("DNS service configured for daemon")
 	}
 
 	// Surface platform services into the daemon config so each gRPC
@@ -888,6 +891,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			daemonConfig.CAService = App.CA
 			logger.Info("CA service wired for daemon gRPC")
 		}
+		wireDaemonDNSService(logger, App, daemonConfig)
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -1091,7 +1095,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			baseRESTURI := strings.TrimSuffix(wsConfig.ACME.DirectoryURL, "/acme/directory")
 			logger.Info("ACME server enabled for webservice", "name", wsName, "directory", wsConfig.ACME.DirectoryURL, "baseURI", baseRESTURI)
 
-			challengeMap := buildChallengeMap(wsConfig.ACME.Challenges, wsConfig.ACME.AllowPrivateTargets, App.CA)
+			challengeMap := buildChallengeMap(wsConfig.ACME.Challenges, App.CA)
 			logger.Info("ACME challenges configured", "count", len(challengeMap), "challenges", wsConfig.ACME.Challenges)
 
 			var internalDomain string
@@ -1637,11 +1641,6 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	config.PlatformTenantManager = platformTenantManager(logger, App)
 	config.PlatformTenantID = platformTenantID(App)
 
-	if App != nil && App.DNSService != nil {
-		config.DNSService = App.DNSService
-		logger.Info("DNS service configured for daemon")
-	}
-
 	// Surface device + profile services into the daemon config so the BMC,
 	// Device, and PXE gRPC services can resolve profile-backed configuration.
 	// runWithWebservices wires these the same way; without them the daemon-only
@@ -1664,6 +1663,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			config.DeviceTemplateService = templateSvc
 			logger.Info("device template service wired for daemon gRPC")
 		}
+		wireDaemonDNSService(logger, App, config)
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -1684,6 +1684,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		logger.Info("OVS socket detected, SDN service will be enabled", "path", ovsSocketPath)
 	} else {
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPath)
+	}
+	if App != nil {
+		config.GatewayDatapathSocket = App.SDNConfig.GatewayDatapathSocket()
 	}
 
 	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, config.OVSSocketPath, config.VTPMService)

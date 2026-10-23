@@ -44,6 +44,15 @@ func TestPlatformKMSRESTFacadeGenerateKey(t *testing.T) {
 				got = req
 				return &kms.GenerateKeyResponse{KeyID: "key-1", Version: 1, Algorithm: req.Algorithm}, nil
 			},
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{
+					KeyID:     req.KeyID,
+					Algorithm: kms.AlgorithmECDSAP256,
+					Version:   1,
+					Tags:      req.Tags,
+					Owner:     "kms-recorded-owner",
+				}, nil
+			},
 		}, &platformMockCryptoClient{})
 
 		resp, err := facade.GenerateKey(ctx, &restapi.KMSGenerateKeyServiceRequest{
@@ -67,7 +76,7 @@ func TestPlatformKMSRESTFacadeGenerateKey(t *testing.T) {
 		if resp.Key.Algorithm != int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256) {
 			t.Errorf("unexpected algorithm: %d", resp.Key.Algorithm)
 		}
-		if resp.Metadata.Owner != "rest-owner" || resp.Metadata.Tags["proto"] != "rest" {
+		if resp.Metadata.Owner != "kms-recorded-owner" || resp.Metadata.Tags["proto"] != "rest" {
 			t.Errorf("unexpected metadata: %+v", resp.Metadata)
 		}
 	})
@@ -274,8 +283,8 @@ func TestPlatformKMSRESTFacadeBatchEncrypt(t *testing.T) {
 		resp, err := facade.BatchEncrypt(ctx, &restapi.KMSBatchEncryptServiceRequest{
 			KeyID: "key-1",
 			Items: []*restapi.KMSBatchEncryptItem{
-				{Plaintext: []byte("p1")},
-				{Plaintext: []byte("p2")},
+				{ItemID: "a", Plaintext: []byte("p1")},
+				{ItemID: "b", Plaintext: []byte("p2")},
 			},
 		})
 		if err != nil {
@@ -283,6 +292,9 @@ func TestPlatformKMSRESTFacadeBatchEncrypt(t *testing.T) {
 		}
 		if resp.KeyVersion != 3 || resp.SuccessCount != 1 || resp.FailureCount != 1 {
 			t.Errorf("unexpected response: %+v", resp)
+		}
+		if resp.Results[0].ItemID != "a" || resp.Results[1].ItemID != "b" {
+			t.Errorf("item ids not carried through: %q, %q", resp.Results[0].ItemID, resp.Results[1].ItemID)
 		}
 		if !bytes.Equal(resp.Results[0].Ciphertext, []byte("ct-1")) || resp.Results[0].Error != "" {
 			t.Errorf("unexpected result 0: %+v", resp.Results[0])

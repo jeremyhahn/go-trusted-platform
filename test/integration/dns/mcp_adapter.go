@@ -22,14 +22,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"os"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -77,11 +83,6 @@ type jsonRPCError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// JSON-RPC 2.0 standard error codes.
-const (
-	jsonRPCInternalError = -32603
-)
-
 // =============================================================================
 // MCP Protocol Types
 // =============================================================================
@@ -123,18 +124,6 @@ type mcpCallToolRequest struct {
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
 }
 
-// mcpCallToolResult is the MCP tools/call response payload.
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-// mcpContentItem represents a content item in a tool result.
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
 // =============================================================================
 // MCP Adapter Implementation
 // =============================================================================
@@ -145,6 +134,8 @@ type MCPAdapter struct {
 	httpClient  *http.Client
 	initialized bool
 	requestID   int64
+	// ops runs the DNS operations over mcpDNSClient.
+	ops *GRPCAdapter
 }
 
 // NewMCPAdapter creates a new MCP adapter for integration testing.
@@ -181,6 +172,7 @@ func (m *MCPAdapter) Setup(ctx context.Context) error {
 		return ErrMCPInitializeFailed{Err: err}
 	}
 
+	m.ops = &GRPCAdapter{dns: mcpDNSClient{adapter: m}}
 	m.initialized = true
 	return nil
 }
@@ -256,546 +248,216 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 	return nil
 }
 
+// callTool runs one tools/call. The platform MCP server answers with the
+// tool's result as the JSON-RPC result (pkg/api/mcp Server.handleToolsCall),
+// not wrapped in MCP content items; a tool failure is a JSON-RPC error.
 func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[string]interface{}, result interface{}) error {
 	toolReq := mcpCallToolRequest{
 		Name:      toolName,
 		Arguments: args,
 	}
 
-	var toolResult mcpCallToolResult
-	if err := m.sendRequest(ctx, "tools/call", toolReq, &toolResult); err != nil {
+	err := m.sendRequest(ctx, "tools/call", toolReq, result)
+	var toolErr ErrMCPToolCallFailed
+	if errors.As(err, &toolErr) {
+		toolErr.Tool = toolName
+		return toolErr
+	}
+	return err
+}
+
+// =============================================================================
+// DNS Operations
+// =============================================================================
+
+// Each daemon dns_* MCP tool takes the arguments of its DNSService RPC request
+// and returns the RPC response, both in the proto3 JSON mapping. The adapter
+// therefore runs the gRPC adapter's request building and response reading
+// over mcpDNSClient, a DNSServiceClient whose calls are those MCP tools.
+
+func (m *MCPAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*CreateZoneResult, error) {
+	return m.ops.CreateZone(ctx, opts)
+}
+
+func (m *MCPAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneResult, error) {
+	return m.ops.GetZone(ctx, zoneName)
+}
+
+func (m *MCPAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
+	return m.ops.UpdateZone(ctx, zoneName, opts)
+}
+
+func (m *MCPAdapter) DeleteZone(ctx context.Context, zoneName string) (*DeleteZoneResult, error) {
+	return m.ops.DeleteZone(ctx, zoneName)
+}
+
+func (m *MCPAdapter) ListZones(ctx context.Context, opts ListZonesOptions) (*ListZonesResult, error) {
+	return m.ops.ListZones(ctx, opts)
+}
+
+func (m *MCPAdapter) AddRecord(ctx context.Context, opts AddRecordOptions) (*AddRecordResult, error) {
+	return m.ops.AddRecord(ctx, opts)
+}
+
+func (m *MCPAdapter) GetRecord(ctx context.Context, name string, recordType string) (*GetRecordResult, error) {
+	return m.ops.GetRecord(ctx, name, recordType)
+}
+
+func (m *MCPAdapter) UpdateRecord(ctx context.Context, opts UpdateRecordOptions) (*UpdateRecordResult, error) {
+	return m.ops.UpdateRecord(ctx, opts)
+}
+
+func (m *MCPAdapter) DeleteRecord(ctx context.Context, name string, recordType string) (*DeleteRecordResult, error) {
+	return m.ops.DeleteRecord(ctx, name, recordType)
+}
+
+func (m *MCPAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
+	return m.ops.ListRecords(ctx, zoneName, opts)
+}
+
+func (m *MCPAdapter) Resolve(ctx context.Context, name string, recordType string) (*ResolveResult, error) {
+	return m.ops.Resolve(ctx, name, recordType)
+}
+
+func (m *MCPAdapter) AddTLSARecord(ctx context.Context, opts AddTLSARecordOptions) (*AddTLSARecordResult, error) {
+	return m.ops.AddTLSARecord(ctx, opts)
+}
+
+// mcpProtoJSON encodes tool arguments the way the daemon decodes them.
+var mcpProtoJSON = protojson.MarshalOptions{UseProtoNames: true}
+
+// mcpDNSClient is the DNSService over the daemon's dns_* MCP tools.
+type mcpDNSClient struct {
+	adapter *MCPAdapter
+}
+
+var _ pb.DNSServiceClient = mcpDNSClient{}
+
+// call runs one tool: the request is its arguments, its result the response.
+func (c mcpDNSClient) call(ctx context.Context, tool string, request, response proto.Message) error {
+	data, err := mcpProtoJSON.Marshal(request)
+	if err != nil {
+		return ErrMCPRequestFailed{Err: err}
+	}
+	args := map[string]interface{}{}
+	if err := json.Unmarshal(data, &args); err != nil {
+		return ErrMCPRequestFailed{Err: err}
+	}
+	var result json.RawMessage
+	if err := c.adapter.callTool(ctx, tool, args, &result); err != nil {
 		return err
 	}
-
-	if toolResult.IsError {
-		var errMsg string
-		for _, item := range toolResult.Content {
-			if item.Type == "text" {
-				errMsg = item.Text
-				break
-			}
-		}
-		return ErrMCPToolCallFailed{Tool: toolName, Code: jsonRPCInternalError, Message: errMsg}
+	if len(result) == 0 {
+		return ErrMCPEmptyResult{Tool: tool}
 	}
-
-	if result != nil && len(toolResult.Content) > 0 {
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if err := json.Unmarshal([]byte(item.Text), result); err != nil {
-					return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
-				}
-				break
-			}
-		}
+	if err := protojson.Unmarshal(result, response); err != nil {
+		return ErrMCPResponseParseFailed{Operation: tool, Err: err}
 	}
-
 	return nil
 }
 
-// =============================================================================
-// Zone Management Operations
-// =============================================================================
-
-// CreateZone creates a new DNS zone via MCP tool call.
-func (m *MCPAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*CreateZoneResult, error) {
-	args := map[string]interface{}{
-		"name": opts.Name,
-		"ttl":  opts.TTL,
-	}
-	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-	if opts.Internal {
-		args["internal"] = true
-	}
-	if opts.SOA != nil {
-		args["soa"] = map[string]interface{}{
-			"mname":      opts.SOA.MName,
-			"rname":      opts.SOA.RName,
-			"serial":     opts.SOA.Serial,
-			"refresh":    opts.SOA.Refresh,
-			"retry":      opts.SOA.Retry,
-			"expire":     opts.SOA.Expire,
-			"minimumTtl": opts.SOA.MinimumTTL,
-		}
-	}
-
-	var resp mcpCreateZoneResponse
-	if err := m.callTool(ctx, "platform.dns.zone.create", args, &resp); err != nil {
+func (c mcpDNSClient) CreateZone(ctx context.Context, in *pb.CreateZoneRequest, _ ...grpc.CallOption) (*pb.CreateZoneResponse, error) {
+	out := &pb.CreateZoneResponse{}
+	if err := c.call(ctx, "dns_zone_create", in, out); err != nil {
 		return nil, err
 	}
-
-	return &CreateZoneResult{
-		Name:      resp.Name,
-		ID:        resp.ID,
-		TTL:       resp.TTL,
-		Internal:  resp.Internal,
-		CreatedAt: mcpUnixMillisToTime(resp.CreatedAt),
-	}, nil
+	return out, nil
 }
 
-// GetZone retrieves a DNS zone via MCP tool call.
-func (m *MCPAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneResult, error) {
-	args := map[string]interface{}{
-		"name": zoneName,
-	}
-
-	var resp mcpGetZoneResponse
-	if err := m.callTool(ctx, "platform.dns.zone.get", args, &resp); err != nil {
+func (c mcpDNSClient) GetZone(ctx context.Context, in *pb.GetZoneRequest, _ ...grpc.CallOption) (*pb.GetZoneResponse, error) {
+	out := &pb.GetZoneResponse{}
+	if err := c.call(ctx, "dns_zone_get", in, out); err != nil {
 		return nil, err
 	}
-
-	result := &GetZoneResult{
-		Name:        resp.Name,
-		ID:          resp.ID,
-		TTL:         resp.TTL,
-		Description: resp.Description,
-		Internal:    resp.Internal,
-		RecordCount: resp.RecordCount,
-		CreatedAt:   mcpUnixMillisToTime(resp.CreatedAt),
-		UpdatedAt:   mcpUnixMillisToTime(resp.UpdatedAt),
-	}
-
-	if resp.SOA != nil {
-		result.SOA = &SOARecordInfo{
-			Name:       resp.Name,
-			MName:      resp.SOA.MName,
-			RName:      resp.SOA.RName,
-			Serial:     resp.SOA.Serial,
-			Refresh:    resp.SOA.Refresh,
-			Retry:      resp.SOA.Retry,
-			Expire:     resp.SOA.Expire,
-			MinimumTTL: resp.SOA.MinimumTTL,
-			TTL:        resp.TTL,
-		}
-	}
-
-	return result, nil
+	return out, nil
 }
 
-// UpdateZone updates a DNS zone via MCP tool call.
-func (m *MCPAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
-	args := map[string]interface{}{
-		"name": zoneName,
-	}
-	if opts.TTL > 0 {
-		args["ttl"] = opts.TTL
-	}
-	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-
-	var resp mcpUpdateZoneResponse
-	if err := m.callTool(ctx, "platform.dns.zone.update", args, &resp); err != nil {
+func (c mcpDNSClient) UpdateZone(ctx context.Context, in *pb.UpdateZoneRequest, _ ...grpc.CallOption) (*pb.UpdateZoneResponse, error) {
+	out := &pb.UpdateZoneResponse{}
+	if err := c.call(ctx, "dns_zone_update", in, out); err != nil {
 		return nil, err
 	}
-
-	return &UpdateZoneResult{
-		Name:      resp.Name,
-		TTL:       resp.TTL,
-		UpdatedAt: mcpUnixMillisToTime(resp.UpdatedAt),
-	}, nil
+	return out, nil
 }
 
-// DeleteZone deletes a DNS zone via MCP tool call.
-func (m *MCPAdapter) DeleteZone(ctx context.Context, zoneName string) (*DeleteZoneResult, error) {
-	args := map[string]interface{}{
-		"name": zoneName,
-	}
-
-	var resp mcpDeleteZoneResponse
-	if err := m.callTool(ctx, "platform.dns.zone.delete", args, &resp); err != nil {
+func (c mcpDNSClient) DeleteZone(ctx context.Context, in *pb.DeleteZoneRequest, _ ...grpc.CallOption) (*pb.DeleteZoneResponse, error) {
+	out := &pb.DeleteZoneResponse{}
+	if err := c.call(ctx, "dns_zone_delete", in, out); err != nil {
 		return nil, err
 	}
-
-	return &DeleteZoneResult{
-		Name:    zoneName,
-		Deleted: resp.Deleted,
-	}, nil
+	return out, nil
 }
 
-// ListZones lists DNS zones via MCP tool call.
-func (m *MCPAdapter) ListZones(ctx context.Context, opts ListZonesOptions) (*ListZonesResult, error) {
-	args := map[string]interface{}{}
-	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
-	if opts.Internal != nil {
-		args["internal"] = *opts.Internal
-	}
-
-	var resp mcpListZonesResponse
-	if err := m.callTool(ctx, "platform.dns.zone.list", args, &resp); err != nil {
+func (c mcpDNSClient) ListZones(ctx context.Context, in *pb.ListZonesRequest, _ ...grpc.CallOption) (*pb.ListZonesResponse, error) {
+	out := &pb.ListZonesResponse{}
+	if err := c.call(ctx, "dns_zone_list", in, out); err != nil {
 		return nil, err
 	}
-
-	zones := make([]ZoneSummary, len(resp.Zones))
-	for i, z := range resp.Zones {
-		zones[i] = ZoneSummary{
-			Name:        z.Name,
-			ID:          z.ID,
-			TTL:         z.TTL,
-			Internal:    z.Internal,
-			RecordCount: z.RecordCount,
-			CreatedAt:   mcpUnixMillisToTime(z.CreatedAt),
-		}
-	}
-
-	return &ListZonesResult{
-		Zones:      zones,
-		TotalCount: resp.TotalCount,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+	return out, nil
 }
 
-// =============================================================================
-// Record Management Operations
-// =============================================================================
-
-// AddRecord adds a DNS record via MCP tool call.
-func (m *MCPAdapter) AddRecord(ctx context.Context, opts AddRecordOptions) (*AddRecordResult, error) {
-	args := map[string]interface{}{
-		"zoneName":   opts.ZoneName,
-		"name":       opts.Name,
-		"recordType": opts.RecordType,
-		"value":      opts.Value,
-		"ttl":        opts.TTL,
-	}
-	if opts.Priority > 0 {
-		args["priority"] = opts.Priority
-	}
-	if opts.Weight > 0 {
-		args["weight"] = opts.Weight
-	}
-	if opts.Port > 0 {
-		args["port"] = opts.Port
-	}
-
-	var resp mcpAddRecordResponse
-	if err := m.callTool(ctx, "platform.dns.record.add", args, &resp); err != nil {
+func (c mcpDNSClient) AddRecord(ctx context.Context, in *pb.AddRecordRequest, _ ...grpc.CallOption) (*pb.AddRecordResponse, error) {
+	out := &pb.AddRecordResponse{}
+	if err := c.call(ctx, "dns_record_create", in, out); err != nil {
 		return nil, err
 	}
-
-	return &AddRecordResult{
-		Name:       resp.Name,
-		RecordType: resp.RecordType,
-		Value:      resp.Value,
-		TTL:        resp.TTL,
-		CreatedAt:  mcpUnixMillisToTime(resp.CreatedAt),
-	}, nil
+	return out, nil
 }
 
-// GetRecord retrieves a DNS record via MCP tool call.
-func (m *MCPAdapter) GetRecord(ctx context.Context, name string, recordType string) (*GetRecordResult, error) {
-	args := map[string]interface{}{
-		"name":       name,
-		"recordType": recordType,
-	}
-
-	var resp mcpGetRecordResponse
-	if err := m.callTool(ctx, "platform.dns.record.get", args, &resp); err != nil {
+func (c mcpDNSClient) DeleteRecord(ctx context.Context, in *pb.DeleteRecordRequest, _ ...grpc.CallOption) (*pb.DeleteRecordResponse, error) {
+	out := &pb.DeleteRecordResponse{}
+	if err := c.call(ctx, "dns_record_delete", in, out); err != nil {
 		return nil, err
 	}
-
-	return &GetRecordResult{
-		Name:       resp.Name,
-		RecordType: resp.RecordType,
-		Value:      resp.Value,
-		TTL:        resp.TTL,
-		Priority:   resp.Priority,
-		Weight:     resp.Weight,
-		Port:       resp.Port,
-		CreatedAt:  mcpUnixMillisToTime(resp.CreatedAt),
-		UpdatedAt:  mcpUnixMillisToTime(resp.UpdatedAt),
-	}, nil
+	return out, nil
 }
 
-// UpdateRecord updates a DNS record via MCP tool call.
-func (m *MCPAdapter) UpdateRecord(ctx context.Context, opts UpdateRecordOptions) (*UpdateRecordResult, error) {
-	args := map[string]interface{}{
-		"zoneName":   opts.ZoneName,
-		"name":       opts.Name,
-		"recordType": opts.RecordType,
-		"value":      opts.Value,
-		"ttl":        opts.TTL,
-	}
-	if opts.Priority > 0 {
-		args["priority"] = opts.Priority
-	}
-	if opts.Weight > 0 {
-		args["weight"] = opts.Weight
-	}
-	if opts.Port > 0 {
-		args["port"] = opts.Port
-	}
-
-	var resp mcpUpdateRecordResponse
-	if err := m.callTool(ctx, "platform.dns.record.update", args, &resp); err != nil {
+func (c mcpDNSClient) UpdateRecord(ctx context.Context, in *pb.UpdateRecordRequest, _ ...grpc.CallOption) (*pb.UpdateRecordResponse, error) {
+	out := &pb.UpdateRecordResponse{}
+	if err := c.call(ctx, "dns_record_update", in, out); err != nil {
 		return nil, err
 	}
-
-	return &UpdateRecordResult{
-		Name:       resp.Name,
-		RecordType: resp.RecordType,
-		Value:      resp.Value,
-		TTL:        resp.TTL,
-		UpdatedAt:  mcpUnixMillisToTime(resp.UpdatedAt),
-	}, nil
+	return out, nil
 }
 
-// DeleteRecord deletes a DNS record via MCP tool call.
-func (m *MCPAdapter) DeleteRecord(ctx context.Context, name string, recordType string) (*DeleteRecordResult, error) {
-	args := map[string]interface{}{
-		"name":       name,
-		"recordType": recordType,
-	}
-
-	var resp mcpDeleteRecordResponse
-	if err := m.callTool(ctx, "platform.dns.record.delete", args, &resp); err != nil {
+func (c mcpDNSClient) ListRecords(ctx context.Context, in *pb.ListRecordsRequest, _ ...grpc.CallOption) (*pb.ListRecordsResponse, error) {
+	out := &pb.ListRecordsResponse{}
+	if err := c.call(ctx, "dns_record_list", in, out); err != nil {
 		return nil, err
 	}
-
-	return &DeleteRecordResult{
-		Name:       name,
-		RecordType: recordType,
-		Deleted:    resp.Deleted,
-	}, nil
+	return out, nil
 }
 
-// ListRecords lists DNS records via MCP tool call.
-func (m *MCPAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
-	args := map[string]interface{}{
-		"zoneName": zoneName,
-	}
-	if opts.RecordType != "" {
-		args["recordType"] = opts.RecordType
-	}
-	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
-
-	var resp mcpListRecordsResponse
-	if err := m.callTool(ctx, "platform.dns.record.list", args, &resp); err != nil {
+func (c mcpDNSClient) SignZone(ctx context.Context, in *pb.SignZoneRequest, _ ...grpc.CallOption) (*pb.SignZoneResponse, error) {
+	out := &pb.SignZoneResponse{}
+	if err := c.call(ctx, "dns_zone_sign", in, out); err != nil {
 		return nil, err
 	}
-
-	records := make([]RecordSummary, len(resp.Records))
-	for i, r := range resp.Records {
-		records[i] = RecordSummary{
-			Name:       r.Name,
-			RecordType: r.RecordType,
-			Value:      r.Value,
-			TTL:        r.TTL,
-			Priority:   r.Priority,
-		}
-	}
-
-	return &ListRecordsResult{
-		Records:    records,
-		TotalCount: resp.TotalCount,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+	return out, nil
 }
 
-// =============================================================================
-// Resolution Operations
-// =============================================================================
-
-// Resolve performs DNS resolution via MCP tool call.
-func (m *MCPAdapter) Resolve(ctx context.Context, name string, recordType string) (*ResolveResult, error) {
-	args := map[string]interface{}{
-		"name":       name,
-		"recordType": recordType,
-	}
-
-	var resp mcpResolveResponse
-	if err := m.callTool(ctx, "platform.dns.resolve", args, &resp); err != nil {
+func (c mcpDNSClient) GetDNSSECStatus(ctx context.Context, in *pb.GetDNSSECStatusRequest, _ ...grpc.CallOption) (*pb.GetDNSSECStatusResponse, error) {
+	out := &pb.GetDNSSECStatusResponse{}
+	if err := c.call(ctx, "dns_zone_dnssec_status", in, out); err != nil {
 		return nil, err
 	}
-
-	return &ResolveResult{
-		Name:       resp.Name,
-		RecordType: resp.RecordType,
-		Values:     resp.Values,
-		TTL:        resp.TTL,
-		Timestamp:  mcpUnixMillisToTime(resp.Timestamp),
-	}, nil
+	return out, nil
 }
 
-// =============================================================================
-// TLSA/DANE Operations
-// =============================================================================
-
-// AddTLSARecord adds a TLSA record via MCP tool call.
-func (m *MCPAdapter) AddTLSARecord(ctx context.Context, opts AddTLSARecordOptions) (*AddTLSARecordResult, error) {
-	args := map[string]interface{}{
-		"zoneName":     opts.ZoneName,
-		"name":         opts.Name,
-		"usage":        opts.Usage,
-		"selector":     opts.Selector,
-		"matchingType": opts.MatchingType,
-		"data":         opts.Data,
-		"ttl":          opts.TTL,
-	}
-
-	var resp mcpAddTLSAResponse
-	if err := m.callTool(ctx, "platform.dns.tlsa.add", args, &resp); err != nil {
+func (c mcpDNSClient) Resolve(ctx context.Context, in *pb.ResolveRequest, _ ...grpc.CallOption) (*pb.ResolveResponse, error) {
+	out := &pb.ResolveResponse{}
+	if err := c.call(ctx, "dns_lookup", in, out); err != nil {
 		return nil, err
 	}
-
-	return &AddTLSARecordResult{
-		Name:         resp.Name,
-		Usage:        resp.Usage,
-		Selector:     resp.Selector,
-		MatchingType: resp.MatchingType,
-		Data:         resp.Data,
-		TTL:          resp.TTL,
-		CreatedAt:    mcpUnixMillisToTime(resp.CreatedAt),
-	}, nil
+	return out, nil
 }
 
-// =============================================================================
-// MCP Response Types
-// =============================================================================
-
-type mcpCreateZoneResponse struct {
-	Name      string `json:"name"`
-	ID        string `json:"id"`
-	TTL       uint32 `json:"ttl"`
-	Internal  bool   `json:"internal"`
-	CreatedAt int64  `json:"createdAt"`
-}
-
-type mcpGetZoneResponse struct {
-	Name        string      `json:"name"`
-	ID          string      `json:"id"`
-	TTL         uint32      `json:"ttl"`
-	Description string      `json:"description"`
-	Internal    bool        `json:"internal"`
-	RecordCount int         `json:"recordCount"`
-	SOA         *mcpSOAInfo `json:"soa,omitempty"`
-	CreatedAt   int64       `json:"createdAt"`
-	UpdatedAt   int64       `json:"updatedAt"`
-}
-
-type mcpSOAInfo struct {
-	MName      string `json:"mname"`
-	RName      string `json:"rname"`
-	Serial     uint32 `json:"serial"`
-	Refresh    uint32 `json:"refresh"`
-	Retry      uint32 `json:"retry"`
-	Expire     uint32 `json:"expire"`
-	MinimumTTL uint32 `json:"minimumTtl"`
-}
-
-type mcpUpdateZoneResponse struct {
-	Name      string `json:"name"`
-	TTL       uint32 `json:"ttl"`
-	UpdatedAt int64  `json:"updatedAt"`
-}
-
-type mcpDeleteZoneResponse struct {
-	Deleted bool `json:"deleted"`
-}
-
-type mcpListZonesResponse struct {
-	Zones      []mcpZoneSummary `json:"zones"`
-	TotalCount int32            `json:"totalCount"`
-	HasMore    bool             `json:"hasMore"`
-	NextCursor string           `json:"nextCursor"`
-}
-
-type mcpZoneSummary struct {
-	Name        string `json:"name"`
-	ID          string `json:"id"`
-	TTL         uint32 `json:"ttl"`
-	Internal    bool   `json:"internal"`
-	RecordCount int    `json:"recordCount"`
-	CreatedAt   int64  `json:"createdAt"`
-}
-
-type mcpAddRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"recordType"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	CreatedAt  int64  `json:"createdAt"`
-}
-
-type mcpGetRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"recordType"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	Priority   uint16 `json:"priority"`
-	Weight     uint16 `json:"weight"`
-	Port       uint16 `json:"port"`
-	CreatedAt  int64  `json:"createdAt"`
-	UpdatedAt  int64  `json:"updatedAt"`
-}
-
-type mcpUpdateRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"recordType"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	UpdatedAt  int64  `json:"updatedAt"`
-}
-
-type mcpDeleteRecordResponse struct {
-	Deleted bool `json:"deleted"`
-}
-
-type mcpListRecordsResponse struct {
-	Records    []mcpRecordSummary `json:"records"`
-	TotalCount int32              `json:"totalCount"`
-	HasMore    bool               `json:"hasMore"`
-	NextCursor string             `json:"nextCursor"`
-}
-
-type mcpRecordSummary struct {
-	Name       string `json:"name"`
-	RecordType string `json:"recordType"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	Priority   uint16 `json:"priority"`
-}
-
-type mcpResolveResponse struct {
-	Name       string   `json:"name"`
-	RecordType string   `json:"recordType"`
-	Values     []string `json:"values"`
-	TTL        uint32   `json:"ttl"`
-	Timestamp  int64    `json:"timestamp"`
-}
-
-type mcpAddTLSAResponse struct {
-	Name         string `json:"name"`
-	Usage        uint8  `json:"usage"`
-	Selector     uint8  `json:"selector"`
-	MatchingType uint8  `json:"matchingType"`
-	Data         string `json:"data"`
-	TTL          uint32 `json:"ttl"`
-	CreatedAt    int64  `json:"createdAt"`
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-func mcpUnixMillisToTime(ms int64) time.Time {
-	if ms == 0 {
-		return time.Time{}
+func (c mcpDNSClient) Register(ctx context.Context, in *pb.RegisterRequest, _ ...grpc.CallOption) (*pb.RegisterResponse, error) {
+	out := &pb.RegisterResponse{}
+	if err := c.call(ctx, "dns_register", in, out); err != nil {
+		return nil, err
 	}
-	return time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond))
+	return out, nil
 }
 
 // =============================================================================
@@ -838,6 +500,16 @@ type ErrMCPToolCallFailed struct {
 
 func (e ErrMCPToolCallFailed) Error() string {
 	return fmt.Sprintf("MCP tool %q call failed (code %d): %s", e.Tool, e.Code, e.Message)
+}
+
+// ErrMCPEmptyResult indicates an MCP tool answered without a result, which
+// would otherwise leave the caller an empty response to dereference.
+type ErrMCPEmptyResult struct {
+	Tool string
+}
+
+func (e ErrMCPEmptyResult) Error() string {
+	return fmt.Sprintf("MCP tool %q returned no result", e.Tool)
 }
 
 // ErrMCPResponseParseFailed indicates MCP response parsing failed.

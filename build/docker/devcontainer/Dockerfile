@@ -114,7 +114,13 @@ ENV GOTOOLCHAIN=local \
 # cpio: pkg/diskimage/netboot repacks its installer initramfs with it.
 # libssl-dev: go-tpm-tools' simulator compiles the reference TPM against
 # OpenSSL (#149).
+# APT_REFRESH is a dated cache key: the runner's BuildKit cache otherwise keeps
+# this layer forever. Bumping it rebuilds the layer so `apt-get upgrade` takes
+# new Debian security fixes; bump it when trivy reports a HIGH that Debian has
+# fixed (libexpat CVE-2025-59375 / CVE-2026-77214, PR #991).
+ARG APT_REFRESH=2026-10-22
 RUN set -eu; \
+    echo "apt refresh: ${APT_REFRESH}"; \
     apt-get update; \
     apt-get upgrade -y; \
     apt-get install -y --no-install-recommends \
@@ -125,12 +131,13 @@ RUN set -eu; \
     useradd -m -u 10001 -g dev -d /home/dev dev; \
     install -d -m 0755 -o 10001 -g 10001 /src
 COPY --from=modules /gomodcache /gomodcache
-# Pre-warm the race-instrumented standard library, then open the build cache to
-# any uid (the toolchain image runs as the invoking user).
+# Open the module cache for reading and the (empty) build cache for writing to
+# any uid (the toolchain image runs as the invoking user). The race-instrumented
+# standard library is not pre-built here: it cost 11 minutes of every uncached
+# image build (CA m639), and the race job builds it on first use.
 RUN set -eu; \
     chmod -R a+rX /gomodcache; \
-    go build -race std; \
-    chmod -R a+rwX /gocache
+    install -d -m 0777 /gocache
 # Nothing fetches a module at run time (devcontainer.md §4).
 ENV GOPROXY=off
 
@@ -186,6 +193,12 @@ RUN apt-get update && apt-get install -y \
     iproute2 iputils-ping dnsutils netcat-openbsd \
     procps psmisc \
     sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# chrony for the ntp suite: platformd renders chrony.conf from the
+# integration config's ntp: section and drives chronyc against the chronyd
+# the runner starts on it (run-integration-tests.sh start_chronyd).
+RUN apt-get update && apt-get install -y chrony \
     && rm -rf /var/lib/apt/lists/*
 
 # TPM 2.0 software stack and swtpm (software TPM).

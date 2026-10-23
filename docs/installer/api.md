@@ -97,12 +97,10 @@ YAML templates.
 | Validate the platformd binary name | `iso.ValidatePlatformdBinaryName(path)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Generate the module-signing key | `secureboot.GenerateModuleSigningKey(ctx, *ModuleSigningKeyConfig)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
-**The Go functions exist; five of the CLI verbs that should call them do not.**
-`iso download`, `iso extract`, `iso customize`, `iso build` and every
-`iso profile` verb return `ErrDaemonConnectionRequired` instead of invoking the
-package ([cli.md](cli.md) §4). `iso create` is the one production verb that runs
-the whole pipeline. This is a **CLI wiring gap over a working library**, not a
-missing capability.
+**The Go functions exist and the CLI calls them locally.** `iso create` runs the
+whole pipeline; `iso download`, `iso extract`, `iso customize`, `iso build` and
+the `iso profile` verbs run its steps one at a time ([cli.md](cli.md) §4). No
+daemon protocol carries them.
 
 ## 5. Boot-time unlock
 
@@ -181,7 +179,6 @@ errors in [engineering.md](engineering.md) §6 would be:
 | `0x06` | `StatusAlreadyExists` | 409 | `ErrDirectoryAlreadyExists` |
 | `0x07` | `StatusPermissionDenied` | 403 | `ErrSecureBoot`, `ErrModulesUnsigned` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrTPM` when no TPM device is present |
-| `0x0B` | `StatusNotImplemented` | 501 | `ErrDaemonConnectionRequired` (the five stub verbs) |
 
 This table is **illustrative**. Nothing in the code produces these codes today.
 

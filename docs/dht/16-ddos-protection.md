@@ -1,5 +1,7 @@
 # Network-Wide DDoS Protection System
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Trusted DHT Network provides **network-wide DDoS protection** for ALL nodes and services. This protection extends not only to the DHT infrastructure itself, but to any service hosted on the network - including e-commerce sites, cloud hosting, SaaS applications, and any user-deployed workloads.

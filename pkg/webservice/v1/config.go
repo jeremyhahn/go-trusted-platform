@@ -101,12 +101,6 @@ type ACMEConfig struct {
 	TermsOfService string `yaml:"terms-of-service" json:"terms_of_service" mapstructure:"terms-of-service"`
 	// Challenges is the list of supported challenge types
 	Challenges []string `yaml:"challenges" json:"challenges" mapstructure:"challenges"`
-	// AllowPrivateTargets lets the http-01 and enroll-01 verifiers reach
-	// reserved addresses (loopback, private, link-local). Off by default:
-	// the challenge client refuses them to keep ACME validation from being
-	// used as an SSRF probe. Set it only where devices enroll from a
-	// private network.
-	AllowPrivateTargets bool `yaml:"allow-private-targets" json:"allow_private_targets" mapstructure:"allow-private-targets"`
 	// ExternalAccountRequired indicates whether external account binding is required
 	ExternalAccountRequired bool `yaml:"external-account-required" json:"external_account_required" mapstructure:"external-account-required"`
 }

@@ -440,8 +440,11 @@ Profile-level configuration knobs worth knowing:
   - `FindByMACPrefix` lowercases both the input and the stored `MACPrefix`.
   - `FindBySerialPrefix` uppercases both the input and the stored
     `SerialPrefix`.
-  - `FindMatchingProfile` lowercases the MAC and uppercases the serial before
-    calling `ProfileMatchRules.Matches`.
+  - `FindMatchingProfile` lowercases the MAC and uppercases the serial, and
+    compares them against a copy of the stored rules normalised the same way
+    (MAC prefix lowercase, serial prefixes uppercase) before calling
+    `ProfileMatchRules.Matches`, so a prefix stored as `AA:BB:ce` matches
+    `aa:bb:CE:…`.
   - `FindByEKSerial` and `FindByExactMAC` use `strings.EqualFold`.
   - **`ProfileMatchRules.Matches` itself does no normalisation** — it is a plain
     prefix/equality comparison. Callers that invoke it directly (not through the

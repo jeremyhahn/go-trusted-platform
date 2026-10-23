@@ -51,9 +51,7 @@ Everything else — `network.role: compute`, `ip-forward: false`, the
 `platform-vrf` address, `trust.bmc`, NTS from the control plane, ACME
 `enroll-01` and the listener's `device-attest-01`, SDN environment 4 — is the
 x10 compute role unchanged. The `bmc` block is kept as the single-node rpi4
-template keeps it; the Pi has no BMC. The Pi enrolls from a private address,
-which the x10 control plane's `internal` listener accepts through
-`acme.allow-private-targets: true`.
+template keeps it; the Pi has no BMC.
 
 ## More than one Pi
 

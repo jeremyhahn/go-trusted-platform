@@ -563,7 +563,7 @@ acme:
         debug: true
         hash: SHA-256
         password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
-        tpm-policy: platform
+        platform-policy: true
         ecc:
           curve: P-256
         signature-algorithm: ECDSA-SHA256
@@ -897,7 +897,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA w/ PSS
@@ -908,7 +908,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -919,7 +919,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 ECDSA
@@ -930,7 +930,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 Ed25519
@@ -941,7 +941,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -979,7 +979,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA w/ PSS
@@ -990,7 +990,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -1001,7 +1001,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 ECDSA
@@ -1012,7 +1012,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 Ed25519
@@ -1023,7 +1023,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
       valid: 10
       subject:
@@ -1120,7 +1120,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
-      tpm-policy: platform
+      platform-policy: true
       debug: true
     certificate:
       acme:
@@ -1161,10 +1161,6 @@ webservices:
         - http-8081
         - enroll-8080
         - enroll-8081
-      # Gateway and compute nodes enroll from the private zones of the
-      # reference network, so the http-01 / enroll-01 verifiers must reach
-      # private addresses. The public listener keeps the SSRF guard.
-      allow-private-targets: true
     jwt:
       expiration: 60
       issuer: trusted-platform
@@ -1194,7 +1190,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
-      tpm-policy: platform
+      platform-policy: true
       debug: true
     certificate:
       subject:

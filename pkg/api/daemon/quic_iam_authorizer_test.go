@@ -124,6 +124,20 @@ func TestIAMTokenAuthorizer_CheckPermission_Errors(t *testing.T) {
 		assert.False(t, allowed)
 		assert.Error(t, err)
 	})
+	t.Run("empty permission is refused before the PEP", func(t *testing.T) {
+		asked := false
+		authz, err := newIAMTokenAuthorizer(validator, &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			asked = true
+			return &sdkiam.CheckResponse{Allowed: true}, nil
+		}})
+		require.NoError(t, err)
+
+		allowed, err := authz.CheckPermission(context.Background(), "jwt", "kms", "")
+		assert.False(t, allowed)
+		var want ErrEmptyPermission
+		require.True(t, errors.As(err, &want), "error is %T", err)
+		assert.False(t, asked, "the PEP must not be asked about an empty permission")
+	})
 	t.Run("nil PEP response denies", func(t *testing.T) {
 		authz, err := newIAMTokenAuthorizer(validator, &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 			return nil, nil

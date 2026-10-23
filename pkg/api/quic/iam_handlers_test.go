@@ -40,29 +40,38 @@ func init() {
 
 // mockIAMService implements IAMService for testing
 type mockIAMService struct {
-	users map[string]*IAMUserInfo
-	roles map[string]*IAMRoleInfo
+	users  map[string]*IAMUserInfo
+	roles  map[string]*IAMRoleInfo
+	groups map[string]*IAMGroupInfo
 
-	createUserError       error
-	getUserError          error
-	listUsersError        error
-	updateUserError       error
-	deleteUserError       error
-	createRoleError       error
-	getRoleError          error
-	listRolesError        error
-	updateRoleError       error
-	deleteRoleError       error
-	assignRoleError       error
-	revokeRoleError       error
-	checkPermissionError  error
-	checkPermissionResult *IAMCheckPermissionResponse
+	createUserError        error
+	getUserError           error
+	listUsersError         error
+	updateUserError        error
+	deleteUserError        error
+	createRoleError        error
+	getRoleError           error
+	listRolesError         error
+	updateRoleError        error
+	deleteRoleError        error
+	assignRoleError        error
+	revokeRoleError        error
+	createGroupError       error
+	getGroupError          error
+	listGroupsError        error
+	updateGroupError       error
+	deleteGroupError       error
+	addGroupMemberError    error
+	removeGroupMemberError error
+	checkPermissionError   error
+	checkPermissionResult  *IAMCheckPermissionResponse
 }
 
 func newMockIAMService() *mockIAMService {
 	return &mockIAMService{
-		users: make(map[string]*IAMUserInfo),
-		roles: make(map[string]*IAMRoleInfo),
+		users:  make(map[string]*IAMUserInfo),
+		roles:  make(map[string]*IAMRoleInfo),
+		groups: make(map[string]*IAMGroupInfo),
 	}
 }
 
@@ -77,6 +86,7 @@ func (m *mockIAMService) CreateUser(ctx context.Context, tenantID string, req *I
 		Username:   req.Username,
 		Name:       req.Name,
 		Roles:      req.Roles,
+		Groups:     req.Groups,
 		Attributes: req.Attributes,
 		CreatedAt:  time.Now().Unix(),
 		UpdatedAt:  time.Now().Unix(),
@@ -257,6 +267,117 @@ func (m *mockIAMService) RevokeRole(ctx context.Context, tenantID, userID, roleI
 	return ErrIAMRoleNotFound{}
 }
 
+func (m *mockIAMService) CreateGroup(ctx context.Context, tenantID string, req *IAMCreateGroupRequest) (*IAMGroupInfo, error) {
+	if m.createGroupError != nil {
+		return nil, m.createGroupError
+	}
+	groupID := req.ID
+	if groupID == "" {
+		groupID = "group-" + req.Name
+	}
+	group := &IAMGroupInfo{
+		ID:          groupID,
+		TenantID:    tenantID,
+		Name:        req.Name,
+		Description: req.Description,
+		Members:     []string{},
+		CreatedAt:   time.Now().Unix(),
+		UpdatedAt:   time.Now().Unix(),
+	}
+	m.groups[group.ID] = group
+	return group, nil
+}
+
+func (m *mockIAMService) GetGroup(ctx context.Context, tenantID, groupID string) (*IAMGroupInfo, error) {
+	if m.getGroupError != nil {
+		return nil, m.getGroupError
+	}
+	group, ok := m.groups[groupID]
+	if !ok {
+		return nil, ErrIAMGroupNotFound{}
+	}
+	return group, nil
+}
+
+func (m *mockIAMService) ListGroups(ctx context.Context, tenantID string, req *IAMListRequest) (*IAMGroupListResponse, error) {
+	if m.listGroupsError != nil {
+		return nil, m.listGroupsError
+	}
+	groups := make([]*IAMGroupInfo, 0, len(m.groups))
+	for _, g := range m.groups {
+		if g.TenantID == tenantID {
+			groups = append(groups, g)
+		}
+	}
+	return &IAMGroupListResponse{
+		Groups: groups,
+		Total:  int64(len(groups)),
+		Limit:  req.Limit,
+		Offset: req.Offset,
+	}, nil
+}
+
+func (m *mockIAMService) UpdateGroup(ctx context.Context, tenantID, groupID string, req *IAMUpdateGroupRequest) (*IAMGroupInfo, error) {
+	if m.updateGroupError != nil {
+		return nil, m.updateGroupError
+	}
+	group, ok := m.groups[groupID]
+	if !ok {
+		return nil, ErrIAMGroupNotFound{}
+	}
+	if req.Name != "" {
+		group.Name = req.Name
+	}
+	if req.Description != "" {
+		group.Description = req.Description
+	}
+	group.UpdatedAt = time.Now().Unix()
+	return group, nil
+}
+
+func (m *mockIAMService) DeleteGroup(ctx context.Context, tenantID, groupID string) error {
+	if m.deleteGroupError != nil {
+		return m.deleteGroupError
+	}
+	if _, ok := m.groups[groupID]; !ok {
+		return ErrIAMGroupNotFound{}
+	}
+	delete(m.groups, groupID)
+	return nil
+}
+
+func (m *mockIAMService) AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if m.addGroupMemberError != nil {
+		return m.addGroupMemberError
+	}
+	group, ok := m.groups[groupID]
+	if !ok {
+		return ErrIAMGroupNotFound{}
+	}
+	if _, ok := m.users[userID]; !ok {
+		return ErrIAMUserNotFound{}
+	}
+	group.Members = append(group.Members, userID)
+	return nil
+}
+
+func (m *mockIAMService) RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if m.removeGroupMemberError != nil {
+		return m.removeGroupMemberError
+	}
+	group, ok := m.groups[groupID]
+	if !ok {
+		return ErrIAMGroupNotFound{}
+	}
+	for i, member := range group.Members {
+		if member == userID {
+			group.Members = append(group.Members[:i], group.Members[i+1:]...)
+			return nil
+		}
+	}
+	return ErrIAMUserNotFound{}
+}
+
 func (m *mockIAMService) CheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (*IAMCheckPermissionResponse, error) {
 	if m.checkPermissionError != nil {
 		return nil, m.checkPermissionError
@@ -293,6 +414,7 @@ func createTestUser(service *mockIAMService, id, tenantID, email string) *IAMUse
 		Username:  "testuser",
 		Name:      "Test User",
 		Roles:     []string{},
+		Groups:    []string{},
 		CreatedAt: time.Now().Unix(),
 		UpdatedAt: time.Now().Unix(),
 	}
@@ -312,6 +434,20 @@ func createTestRole(service *mockIAMService, id, tenantID, name string) *IAMRole
 	}
 	service.roles[id] = role
 	return role
+}
+
+func createTestGroup(service *mockIAMService, id, tenantID, name string) *IAMGroupInfo {
+	group := &IAMGroupInfo{
+		ID:          id,
+		TenantID:    tenantID,
+		Name:        name,
+		Description: "Test Group",
+		Members:     []string{},
+		CreatedAt:   time.Now().Unix(),
+		UpdatedAt:   time.Now().Unix(),
+	}
+	service.groups[id] = group
+	return group
 }
 
 // =============================================================================
@@ -1625,6 +1761,622 @@ func TestHandleRoleDelete(t *testing.T) {
 }
 
 // =============================================================================
+// Test: Group Create
+// =============================================================================
+
+func TestHandleGroupCreate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("creates group successfully", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		createReq := &IAMCreateGroupRequest{
+			TenantID:    "tenant-1",
+			Name:        "developers",
+			Description: "Development team",
+		}
+
+		payload, err := quicwire.EncodePayload(createReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var groupResp IAMGroupResponse
+		err = quicwire.DecodePayload(resp.Payload, &groupResp)
+		require.NoError(t, err)
+
+		assert.NotNil(t, groupResp.Group)
+		assert.Equal(t, "developers", groupResp.Group.Name)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		handler := NewIAMHandler(newTestIAMLogger(), nil)
+
+		createReq := &IAMCreateGroupRequest{
+			TenantID: "tenant-1",
+			Name:     "developers",
+		}
+
+		payload, err := quicwire.EncodePayload(createReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for missing tenant ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		createReq := &IAMCreateGroupRequest{
+			Name: "developers",
+		}
+
+		payload, err := quicwire.EncodePayload(createReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for missing name", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		createReq := &IAMCreateGroupRequest{
+			TenantID: "tenant-1",
+		}
+
+		payload, err := quicwire.EncodePayload(createReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+}
+
+// =============================================================================
+// Test: Group Get
+// =============================================================================
+
+func TestHandleGroupGet(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("gets group successfully", func(t *testing.T) {
+		handler, service := createTestIAMHandler()
+		createTestGroup(service, "group-1", "tenant-1", "developers")
+
+		getReq := &IAMGetGroupRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var groupResp IAMGroupResponse
+		err = quicwire.DecodePayload(resp.Payload, &groupResp)
+		require.NoError(t, err)
+
+		assert.NotNil(t, groupResp.Group)
+		assert.Equal(t, "group-1", groupResp.Group.ID)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		handler := NewIAMHandler(newTestIAMLogger(), nil)
+
+		getReq := &IAMGetGroupRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for missing tenant ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		getReq := &IAMGetGroupRequest{
+			GroupID: "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for missing group ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		getReq := &IAMGetGroupRequest{
+			TenantID: "tenant-1",
+		}
+
+		payload, err := quicwire.EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for group not found", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		getReq := &IAMGetGroupRequest{
+			TenantID: "tenant-1",
+			GroupID:  "nonexistent",
+		}
+
+		payload, err := quicwire.EncodePayload(getReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	})
+}
+
+// =============================================================================
+// Test: Group List
+// =============================================================================
+
+func TestHandleGroupList(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("lists groups successfully", func(t *testing.T) {
+		handler, service := createTestIAMHandler()
+		createTestGroup(service, "group-1", "tenant-1", "developers")
+		createTestGroup(service, "group-2", "tenant-1", "testers")
+
+		listReq := &IAMListRequest{
+			TenantID: "tenant-1",
+			Limit:    10,
+		}
+
+		payload, err := quicwire.EncodePayload(listReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupList,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var listResp IAMGroupListResponse
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(2), listResp.Total)
+		assert.Len(t, listResp.Groups, 2)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		handler := NewIAMHandler(newTestIAMLogger(), nil)
+
+		listReq := &IAMListRequest{
+			TenantID: "tenant-1",
+		}
+
+		payload, err := quicwire.EncodePayload(listReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupList,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for missing tenant ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		listReq := &IAMListRequest{}
+
+		payload, err := quicwire.EncodePayload(listReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupList,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+}
+
+// =============================================================================
+// Test: Group Delete
+// =============================================================================
+
+func TestHandleGroupDelete(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("deletes group successfully", func(t *testing.T) {
+		handler, service := createTestIAMHandler()
+		createTestGroup(service, "group-1", "tenant-1", "developers")
+
+		deleteReq := &IAMDeleteGroupRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(deleteReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var successResp IAMSuccessResponse
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
+		require.NoError(t, err)
+
+		assert.True(t, successResp.Success)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		handler := NewIAMHandler(newTestIAMLogger(), nil)
+
+		deleteReq := &IAMDeleteGroupRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(deleteReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for missing tenant ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		deleteReq := &IAMDeleteGroupRequest{
+			GroupID: "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(deleteReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for missing group ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		deleteReq := &IAMDeleteGroupRequest{
+			TenantID: "tenant-1",
+		}
+
+		payload, err := quicwire.EncodePayload(deleteReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for group not found", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		deleteReq := &IAMDeleteGroupRequest{
+			TenantID: "tenant-1",
+			GroupID:  "nonexistent",
+		}
+
+		payload, err := quicwire.EncodePayload(deleteReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	})
+}
+
+// =============================================================================
+// Test: Group Add Member
+// =============================================================================
+
+func TestHandleGroupAddMember(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("adds member successfully", func(t *testing.T) {
+		handler, service := createTestIAMHandler()
+		createTestUser(service, "user-1", "tenant-1", "test@example.com")
+		createTestGroup(service, "group-1", "tenant-1", "developers")
+
+		memberReq := &IAMGroupMemberRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+			UserID:   "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var successResp IAMSuccessResponse
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
+		require.NoError(t, err)
+
+		assert.True(t, successResp.Success)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		handler := NewIAMHandler(newTestIAMLogger(), nil)
+
+		memberReq := &IAMGroupMemberRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+			UserID:   "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for missing tenant ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		memberReq := &IAMGroupMemberRequest{
+			GroupID: "group-1",
+			UserID:  "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for missing group ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		memberReq := &IAMGroupMemberRequest{
+			TenantID: "tenant-1",
+			UserID:   "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("returns error for missing user ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		memberReq := &IAMGroupMemberRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+}
+
+// =============================================================================
+// Test: Group Remove Member
+// =============================================================================
+
+func TestHandleGroupRemoveMember(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("removes member successfully", func(t *testing.T) {
+		handler, service := createTestIAMHandler()
+		createTestUser(service, "user-1", "tenant-1", "test@example.com")
+		group := createTestGroup(service, "group-1", "tenant-1", "developers")
+		group.Members = []string{"user-1"}
+
+		memberReq := &IAMGroupMemberRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+			UserID:   "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupRemoveMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var successResp IAMSuccessResponse
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
+		require.NoError(t, err)
+
+		assert.True(t, successResp.Success)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		handler := NewIAMHandler(newTestIAMLogger(), nil)
+
+		memberReq := &IAMGroupMemberRequest{
+			TenantID: "tenant-1",
+			GroupID:  "group-1",
+			UserID:   "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupRemoveMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for missing tenant ID", func(t *testing.T) {
+		handler, _ := createTestIAMHandler()
+
+		memberReq := &IAMGroupMemberRequest{
+			GroupID: "group-1",
+			UserID:  "user-1",
+		}
+
+		payload, err := quicwire.EncodePayload(memberReq)
+		require.NoError(t, err)
+
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupRemoveMember,
+			Payload: payload,
+		}
+
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+}
+
+// =============================================================================
 // Test: Check Permission
 // =============================================================================
 
@@ -1813,6 +2565,12 @@ func TestIAMErrorTypes(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrIAMRoleNotFound{}))
 	})
 
+	t.Run("ErrIAMGroupNotFound", func(t *testing.T) {
+		err := ErrIAMGroupNotFound{}
+		assert.Equal(t, "group not found", err.Error())
+		assert.True(t, errors.Is(err, ErrIAMGroupNotFound{}))
+	})
+
 	t.Run("ErrIAMUserAlreadyExists", func(t *testing.T) {
 		err := ErrIAMUserAlreadyExists{}
 		assert.Equal(t, "user already exists", err.Error())
@@ -1823,6 +2581,12 @@ func TestIAMErrorTypes(t *testing.T) {
 		err := ErrIAMRoleAlreadyExists{}
 		assert.Equal(t, "role already exists", err.Error())
 		assert.True(t, errors.Is(err, ErrIAMRoleAlreadyExists{}))
+	})
+
+	t.Run("ErrIAMGroupAlreadyExists", func(t *testing.T) {
+		err := ErrIAMGroupAlreadyExists{}
+		assert.Equal(t, "group already exists", err.Error())
+		assert.True(t, errors.Is(err, ErrIAMGroupAlreadyExists{}))
 	})
 
 	t.Run("ErrIAMPermissionDenied", func(t *testing.T) {

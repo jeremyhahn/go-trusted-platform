@@ -1362,6 +1362,7 @@ func TestIAMToolExecution(t *testing.T) {
 			"email":     "user@example.com",
 			"name":      "Test User",
 			"roles":     []interface{}{"admin", "user"},
+			"groups":    []interface{}{"group1"},
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_create_user", args)
@@ -1475,6 +1476,7 @@ func TestIAMToolExecution(t *testing.T) {
 				Pagination:  IAMPagination{Page: 2, PageSize: 25},
 				EmailFilter: "@example.com",
 				RoleFilter:  "admin",
+				GroupFilter: "ops",
 			}
 			if *req != want {
 				t.Errorf("request = %+v, want %+v", *req, want)
@@ -1488,6 +1490,7 @@ func TestIAMToolExecution(t *testing.T) {
 			"pagination":   map[string]interface{}{"page": 2, "page_size": 25},
 			"email_filter": "@example.com",
 			"role_filter":  "admin",
+			"group_filter": "ops",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_list_users", args)
@@ -1889,6 +1892,158 @@ func TestIAMToolExecution(t *testing.T) {
 		_, err := registry.ExecuteTool(ctx, "iam_authenticate", args)
 		if err == nil {
 			t.Error("expected error")
+		}
+	})
+}
+
+func TestIAMGroupToolExecution(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	t.Run("executeIAMCreateGroup success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id":   "tenant-1",
+			"id":          "group-123",
+			"name":        "Administrators",
+			"description": "Admin group",
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_create_group", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Error("result should not be nil")
+		}
+	})
+
+	t.Run("executeIAMDeleteGroup success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id": "tenant-1",
+			"group_id":  "group-123",
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_delete_group", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result is not a map")
+		}
+		if success, ok := resultMap["success"].(bool); !ok || !success {
+			t.Error("expected success: true")
+		}
+	})
+
+	t.Run("executeIAMGetGroup success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id": "tenant-1",
+			"group_id":  "group-123",
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_get_group", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Error("result should not be nil")
+		}
+	})
+
+	t.Run("executeIAMListGroups success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id": "tenant-1",
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_list_groups", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Error("result should not be nil")
+		}
+	})
+
+	t.Run("executeIAMListGroups with pagination", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.iamListGroupsFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
+			if tenantID != "tenant-1" || page != (IAMPagination{Page: 4, PageSize: 100}) {
+				t.Errorf("list(%q, %+v), want tenant-1 page 4 of size 100", tenantID, page)
+			}
+			return map[string]interface{}{"groups": []interface{}{}}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id":  "tenant-1",
+			"pagination": map[string]interface{}{"page": float64(4), "page_size": float64(100)},
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_list_groups", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Error("result should not be nil")
+		}
+	})
+
+	t.Run("executeIAMAddGroupMember success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id": "tenant-1",
+			"group_id":  "group-123",
+			"user_id":   "user-456",
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_add_group_member", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result is not a map")
+		}
+		if success, ok := resultMap["success"].(bool); !ok || !success {
+			t.Error("expected success: true")
+		}
+	})
+
+	t.Run("executeIAMRemoveGroupMember success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id": "tenant-1",
+			"group_id":  "group-123",
+			"user_id":   "user-456",
+		}
+
+		result, err := registry.ExecuteTool(ctx, "iam_remove_group_member", args)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result is not a map")
+		}
+		if success, ok := resultMap["success"].(bool); !ok || !success {
+			t.Error("expected success: true")
 		}
 	})
 }

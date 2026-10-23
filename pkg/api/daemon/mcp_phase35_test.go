@@ -520,11 +520,11 @@ func TestPhase35Provider_LUKSDelegation(t *testing.T) {
 	}
 	if _, err := p.LUKSEnrollTPM(ctx, map[string]interface{}{
 		"device": "/dev/x", "existing_passphrase": "a",
-		"pcrs": []interface{}{float64(0), float64(7)},
+		"pcrs": []interface{}{float64(0), float64(7)}, "handle": "0x81000004",
 	}); err != nil {
 		t.Fatalf("LUKSEnrollTPM: %v", err)
 	}
-	if lb.lastEnroll == nil || len(lb.lastEnroll.PCRs) != 2 {
+	if lb.lastEnroll == nil || len(lb.lastEnroll.PCRs) != 2 || lb.lastEnroll.Handle != "0x81000004" {
 		t.Errorf("EnrollTPM: bad args: %+v", lb.lastEnroll)
 	}
 	if _, err := p.LUKSEnrollRecovery(ctx, map[string]interface{}{

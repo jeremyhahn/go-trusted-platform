@@ -945,9 +945,7 @@ func TestIDevIDResolver_Resolve_Success(t *testing.T) {
 
 	mock := &mockDecrypter{
 		decryptFn: func(_ io.Reader, _ []byte, _ crypto.DecrypterOpts) ([]byte, error) {
-			// The SecretValue takes ownership of the plaintext and wipes it,
-			// so hand over a copy and keep expected intact for the comparison.
-			return append([]byte(nil), expected...), nil
+			return expected, nil
 		},
 	}
 	resolver := secrets.NewIDevIDResolver(mock, logger)

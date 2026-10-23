@@ -148,6 +148,13 @@ The Go SDK reaches both routes as `DeviceService/CreateTemplate` and
 in this shape and refuses the fields it has no place for
 ([api.md §4](api.md#4-device-templates)).
 
+It reaches `GET`, `PUT` and `DELETE /device/templates/{id}` and
+`GET /device/templates` as `DeviceService/GetTemplate`, `UpdateTemplate`,
+`DeleteTemplate` and `ListTemplates`. Get and update answer the bare
+template; delete answers `204`; the list takes `page` and `page_size` query
+parameters and answers `{"templates": [...], "pagination": {page, page_size,
+total, total_pages, has_more}}`.
+
 ## Device Operations
 
 ### Register Device

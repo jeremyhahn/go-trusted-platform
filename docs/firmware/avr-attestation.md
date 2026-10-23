@@ -1,6 +1,6 @@
 # AVR Attestation Provider
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-18
 > The AVR attestation provider in `pkg/firmware/avr/attestation`.
 
 The platform-side attestation provider for trusted-firmware AVR devices. It
@@ -23,8 +23,9 @@ using the same vendor-neutral contract the BMC attestation subsystem defines
 
 - **Not** DICE verification. Decoding the UCCS claims set, verifying a DICE
   chain and checking the `eat_nonce` claim belong to go-xkms
-  (`pkg/attestation/dice`), reached through the go-quicbaas SDK re-export.
-  This package does not reimplement them and does not pretend to have run
+  (`pkg/attestation/dice`), reached through the go-quicbaas SDK re-export
+  `xkms.DICEVerify` (`sdk/go/xkms`, go-quicbaas v0.14.0-alpha and later; the
+  pinned v0.12.0-alpha does not carry it). This package does not reimplement them and does not pretend to have run
   them.
 - **Not** enrolment, the device registry, gateway wiring, or CLI surface.
   Those are separate work; see [Following work](#following-work).
@@ -118,7 +119,7 @@ reporting a check it had not performed would be worse than refusing. The
 failure reason names go-xkms as the component that does perform it.
 
 `TrustedIssuers` is a **name** check on the leaf's issuer. Building and
-verifying a DICE chain is `dice.Verify`'s job; a name match narrows which
+verifying a DICE chain is go-xkms `dice.Verify`'s job; a name match narrows which
 certificates are worth forwarding and claims nothing more.
 
 ### Verbatim relay
@@ -210,7 +211,8 @@ make bench-avr-attestation
 ## Following work
 
 - Enrolment: driving `AttestCert` into an ACME `device-attest-01` flow, with
-  `dice.Verify` reached through the go-quicbaas SDK re-export of go-xkms.
+  `dice.Verify` reached through `xkms.DICEVerify`, the go-quicbaas SDK
+  re-export of go-xkms.
 - The device registry: persisting tenant-scoped device identity and the
   golden `FWHash` per build.
 - gatewayd wiring: scheduling collection rounds and relaying evidence.

@@ -14,20 +14,33 @@
 package iso
 
 import (
+	"context"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 )
 
 // extractFlags holds flags for the extract command
 type extractFlags struct {
-	iso        string
-	outputDir  string
-	force      bool
-	configFile string
-	workDir    string
-	debug      bool
-	verbose    bool
+	iso       string
+	outputDir string
+	force     bool
+	workDir   string
+	debug     bool
+}
+
+// extractResult is what `iso extract` prints (docs/installer/cli.md §4).
+type extractResult struct {
+	Success   bool   `json:"success" yaml:"success"`
+	OutputDir string `json:"output_dir" yaml:"output_dir"`
+	FileCount int    `json:"file_count" yaml:"file_count"`
+	Message   string `json:"message" yaml:"message"`
 }
 
 // newExtractCommand creates the extract subcommand for extracting ISO contents
@@ -53,7 +66,7 @@ Examples:
   # Force re-extraction
   platformctl iso extract --iso alpine.iso --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runExtract(getFlags(), flags)
+			return runExtract(cmd.Context(), getFlags(), flags, cmd.OutOrStdout())
 		},
 	}
 
@@ -63,10 +76,8 @@ Examples:
 	cmd.Flags().BoolVar(&flags.force, "force", false, "Overwrite existing extraction directory")
 
 	// Common flags
-	cmd.Flags().StringVar(&flags.configFile, "config", "", "Path to ISO build configuration file")
-	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Working directory for ISO operations")
+	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Working directory; the default output directory is <work-dir>/iso")
 	cmd.Flags().BoolVar(&flags.debug, "debug", false, "Enable debug output")
-	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "Enable verbose output")
 
 	// Mark required flags
 	cli.MarkFlagsRequired(cmd, "iso")
@@ -75,8 +86,64 @@ Examples:
 }
 
 // runExtract executes the extract command
-func runExtract(commonFlags *cli.CommonFlags, flags *extractFlags) error {
-	// ISO extract requires App initialization which needs daemon connection
-	// Dual-mode will be added later to support local-only operations
-	return ErrDaemonConnectionRequired{Command: "iso extract"}
+func runExtract(ctx context.Context, commonFlags *cli.CommonFlags, flags *extractFlags, out io.Writer) error {
+	isoPath, err := filepath.Abs(flags.iso)
+	if err != nil {
+		return &WrappedError{Msg: "failed to resolve ISO path", Err: err}
+	}
+	if _, err := os.Stat(isoPath); err != nil {
+		return ErrISONotFound{Path: isoPath}
+	}
+
+	outputDir := flags.outputDir
+	if outputDir == "" {
+		outputDir = filepath.Join(flags.workDir, "iso")
+	}
+	if !flags.force && directoryHasEntries(outputDir) {
+		return ErrDirectoryAlreadyExists{Path: outputDir}
+	}
+
+	cfg := pkgiso.DefaultISOConfig()
+	cfg.WorkDir = filepath.Dir(isoPath)
+	cfg.ISO = filepath.Base(isoPath)
+	cfg.ISODir = outputDir
+	cfg.Debug = flags.debug
+
+	if err := pkgiso.ExtractISO(ctx, cfg); err != nil {
+		return ErrExtractionFailed{Reason: err.Error()}
+	}
+
+	fileCount, err := countFiles(outputDir)
+	if err != nil {
+		return &WrappedError{Msg: "failed to count extracted files", Err: err}
+	}
+
+	return printResult(out, commonFlags, extractResult{
+		Success:   true,
+		OutputDir: outputDir,
+		FileCount: fileCount,
+		Message:   "ISO extracted from " + isoPath,
+	})
+}
+
+// directoryHasEntries reports whether path is a directory with at least one
+// entry. A missing or unreadable directory has none.
+func directoryHasEntries(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
+}
+
+// countFiles counts the regular files under root.
+func countFiles(root string) (int, error) {
+	count := 0
+	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type().IsRegular() {
+			count++
+		}
+		return nil
+	})
+	return count, err
 }

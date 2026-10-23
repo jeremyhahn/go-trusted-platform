@@ -123,7 +123,6 @@ func pbTestRoute(id string) *platformv1.ProxyRoute {
 			BackendZone:            "internal",
 			RequireAttestation:     true,
 			AttestationMaxAgeNanos: int64(5 * time.Minute),
-			RequiredRoles:          []string{"admin"},
 			RequiredScopes:         []string{"proxy:read"},
 			OpaPolicy:              "policies/proxy.rego",
 			TokenZone:              "edge",

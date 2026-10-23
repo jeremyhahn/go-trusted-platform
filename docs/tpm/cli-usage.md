@@ -38,7 +38,10 @@ registered (`pkg/cli/commands/tpm/tpm.go`); see [cli.md](cli.md).
 # TPM information as reported by the daemon
 platformctl tpm info
 
-# JSON output: {"info": "...", "is_simulator": false}
+# JSON output: {"info": "...", "version": "2.0", "pcr_banks": ["sha1", "sha256"],
+#   "manufacturer": {"name": "IFX", "id": 1229346816, "model": "SLB9670", "firmware_version": "7.85"},
+#   "fips_mode": true, "max_nvram_size": 2048, "is_simulator": false}
+# "manufacturer" is omitted when the TPM's fixed properties cannot be read.
 platformctl tpm info -o json
 
 # Keys, certificates and hierarchies

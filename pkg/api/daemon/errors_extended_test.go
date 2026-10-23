@@ -613,6 +613,24 @@ func TestErrIAMRoleAlreadyExists(t *testing.T) {
 	}
 }
 
+func TestErrIAMGroupNotFound(t *testing.T) {
+	t.Parallel()
+	err := ErrIAMGroupNotFound{TenantID: "tenant-1", GroupID: "admins"}
+	expected := "IAM group not found: admins in tenant tenant-1"
+	if got := err.Error(); got != expected {
+		t.Errorf("Error() = %q, want %q", got, expected)
+	}
+}
+
+func TestErrIAMGroupAlreadyExists(t *testing.T) {
+	t.Parallel()
+	err := ErrIAMGroupAlreadyExists{TenantID: "tenant-1", GroupID: "admins"}
+	expected := "IAM group already exists: admins in tenant tenant-1"
+	if got := err.Error(); got != expected {
+		t.Errorf("Error() = %q, want %q", got, expected)
+	}
+}
+
 func TestErrIAMTenantNotFound(t *testing.T) {
 	t.Parallel()
 	err := ErrIAMTenantNotFound{TenantID: "tenant-xyz"}
@@ -727,6 +745,15 @@ func TestErrIAMRoleRevocationFailed(t *testing.T) {
 	t.Parallel()
 	err := ErrIAMRoleRevocationFailed{UserID: "user-1", RoleID: "admin", Reason: "role not assigned"}
 	expected := "IAM failed to revoke role admin from user user-1: role not assigned"
+	if got := err.Error(); got != expected {
+		t.Errorf("Error() = %q, want %q", got, expected)
+	}
+}
+
+func TestErrIAMGroupMembershipFailed(t *testing.T) {
+	t.Parallel()
+	err := ErrIAMGroupMembershipFailed{GroupID: "admins", UserID: "user-1", Reason: "user already member"}
+	expected := "IAM group membership operation failed for user user-1 in group admins: user already member"
 	if got := err.Error(); got != expected {
 		t.Errorf("Error() = %q, want %q", got, expected)
 	}

@@ -393,7 +393,14 @@ const user = await client.dataIam.createUser({
   displayName: 'John Doe',
 });
 
-// Create a policy and attach it to the user
+// Create a group and add the user to it
+const group = await client.dataIam.createGroup({ name: 'operators' });
+await client.dataIam.addUserToGroup({
+  groupId: group.data!.group.id,
+  userId: user.data!.user.id,
+});
+
+// Create a policy and attach it to the group
 const policy = await client.dataIam.createPolicy({
   name: 'secrets-access',
   document: JSON.stringify({
@@ -404,14 +411,10 @@ const policy = await client.dataIam.createPolicy({
 });
 await client.dataIam.attachPolicy({
   policyId: policy.data!.policy.id,
-  targetType: 'user',
-  targetId: user.data!.user.id,
+  targetType: 'group',
+  targetId: group.data!.group.id,
 });
 ```
-
-There are no IAM groups: go-quicbaas removed them (see [`docs/iam/`](../iam/)),
-so `dataIam` manages users and attaches policies to users only. Grant access
-through roles and policies.
 
 ## React Hooks for Platform Services
 

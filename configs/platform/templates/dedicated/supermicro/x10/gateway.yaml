@@ -384,7 +384,7 @@ acme:
         debug: true
         hash: SHA-256
         password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
-        tpm-policy: platform
+        platform-policy: true
         rsa:
           size: 2048
         signature-algorithm: SHA256-RSAPSS
@@ -397,8 +397,8 @@ acme:
 # =============================================================================
 
 # The platform CA bundle, delivered by provisioning. Every platform service
-# gatewayd talks to -- the platform secret store behind every kms:// and
-# secret:// reference in this file, platformd over grpc, the proxy's mTLS
+# gatewayd talks to -- the platform secret store behind every kms://
+# reference in this file, platformd over grpc, the proxy's mTLS
 # callers, the control-plane reporter -- presents a certificate the platform
 # CA issued and is verified against this bundle. gatewayd runs no CA of its
 # own, so this file is its whole platform trust: not a strategy choice, and
@@ -621,7 +621,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -632,7 +632,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -670,7 +670,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -681,7 +681,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
       valid: 10
       subject:
@@ -771,7 +771,7 @@ gateway:
   # transport is
   # gre (plain), ipsec (the same carrier wrapped in ESP) or wireguard (not
   # available in FIPS builds). An ipsec or wireguard tunnel names its keys
-  # by reference — kms:// or secret:// resolved through the secret-store:
+  # by reference — kms:// resolved through the secret-store:
   # section below — and never carries key material in this file. Key
   # material is fetched at start, given to the kernel, and wiped; a
   # reference that does not resolve refuses the tunnel.
@@ -869,7 +869,7 @@ control-plane:
 # =============================================================================
 # platformd does not decode this section; firstboot projects it into
 # /etc/gatewayd/config.yaml with the sections above. It says where the
-# platform secret store is, and it is what makes every kms:// and secret://
+# platform secret store is, and it is what makes every kms://
 # reference in this file resolvable — the gateway's BGP passwords and
 # TCP-AO master keys, and its ipsec/wireguard tunnel keys. Configuration
 # carries references; the values live in the store and are fetched at
@@ -879,7 +879,10 @@ control-plane:
 # switchboard. The session is verified against the platform anchor, so a
 # secret-store: without platform-ca-file: (set above) is refused
 # (secrets.ErrTrustRequired) and the gateway does not start; if you remove
-# platform-ca-file:, comment this section out too.
+# platform-ca-file:, comment this section out too. The session is mutual:
+# the gateway presents its node mTLS identity, the control-plane: cert-file
+# and key-file pair (set above), and this section has no credential of its
+# own; without that pair it is refused (secrets.ErrClientIdentityRequired).
 # Without this section a service that references a secret fails closed at
 # start rather than running with a reference where a key belongs.
 
@@ -939,7 +942,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
-      tpm-policy: platform
+      platform-policy: true
       debug: true
     certificate:
       # Public webservice TLS — issued by the internal control-plane ACME
@@ -1026,7 +1029,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
-      tpm-policy: platform
+      platform-policy: true
       debug: true
     certificate:
       # The internal listener serves the node's CP-ISSUED identity, not a

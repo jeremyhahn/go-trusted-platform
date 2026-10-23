@@ -300,7 +300,7 @@ certificate-authority:
           hash: SHA-384
           store: tpm2
           password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
       valid: 20
       subject:
         cn: root-ca.example.com
@@ -329,7 +329,7 @@ certificate-authority:
           hash: SHA-256
           store: pkcs11
           password: "kms://ca/tls/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
       valid: 10
       subject:
         cn: tls-ca.example.com
@@ -356,7 +356,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "kms://ca/device/keys/0/password?ensure=true&len=32&enc=base64"
-          tpm-policy: platform
+          platform-policy: true
       valid: 10
       subject:
         cn: device-ca.example.com

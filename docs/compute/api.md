@@ -98,7 +98,7 @@ The daemon listener has no console or logs route: they are streams (§5).
 | Suspend VM | `POST /api/v1/compute/vms/{id}/suspend` | `SuspendVM` | `OpVMSuspend` (`0xB7`) | `vm_suspend` | ✅ |
 | Resume VM | `POST /api/v1/compute/vms/{id}/resume` | `ResumeVM` | `OpVMResume` (`0xB8`) | `vm_resume` | ✅ |
 | Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Get VM state | `MISSING — docs/13 G7` | (via `GetVM`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Get VM state | (via `GET /api/v1/compute/vms/{id}`) | (via `GetVM`) | (via `OpVMGet`) | (via `vm_get`) | (via `GetVM`) |
 | Activate VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 
 **Suspend pauses a running VM in memory; resume continues it** (#704). The
@@ -312,23 +312,26 @@ QUIC serves these as **sub-opcodes under `OpVMExtendedCategory` (`0x69`)** — s
 | Resize disk | `PATCH /api/v1/compute/vms/{id}/disks/{diskId}` | `ResizeDisk` | `OpVMResizeDisk` (`0xCF`) | `vm_disk_resize` | ✅ |
 | Create snapshot | `POST /api/v1/compute/vms/{id}/snapshots` | `CreateSnapshot` | `OpVMSnapshotCreate` (`0xBB`) | `vm_snapshot_create` | ✅ |
 | List snapshots | `GET /api/v1/compute/vms/{id}/snapshots` | `ListSnapshots` | `OpVMSnapshotList` (`0xBE`) | `vm_snapshot_list` | ✅ |
-| Get snapshot | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_snapshot_get` | — |
+| Get snapshot | `GET /api/v1/compute/vms/{id}/snapshots/{snapshotId}` | `GetSnapshot` | `OpVMSnapshotGet` (`0xBA`) | `vm_snapshot_get` | ✅ |
 | Delete snapshot | `DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}` | `DeleteSnapshot` | `OpVMSnapshotDelete` (`0xBD`) | `vm_snapshot_delete` | ✅ |
 | Restore snapshot | `POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore` | `RestoreSnapshot` | `OpVMSnapshotRestore` (`0xBC`) | `vm_snapshot_restore` | ✅ |
 | Migrate VM | `POST /api/v1/compute/vms/{id}/migrate` | `MigrateVM` | `OpVMMigrate` (`0xD0`) | `vm_migrate` | ✅ |
-| Prepare migration | `MISSING — docs/13 G7` | `PrepareMigration` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Finalize migration | `MISSING — docs/13 G7` | `FinalizeMigration` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Prepare migration | `POST /api/v1/compute/migrations/prepare` | `PrepareMigration` | `OpVMPrepareMigration` (`0xD1`) | `vm_migration_prepare` | ✅ |
+| Finalize migration | `POST /api/v1/compute/migrations/{receiverId}/finalize` | `FinalizeMigration` | `OpVMFinalizeMigration` (`0xD2`) | `vm_migration_finalize` | ✅ |
 | VM metrics | `GET /api/v1/compute/vms/{id}/metrics` | `GetVMMetrics` | `OpVMMetrics` (`0xCC`) | `vm_metrics` | ✅ |
 | VM logs | `MISSING` — streaming, §5 | `GetVMLogs` (server stream) | `MISSING` — streaming | `vm_logs` | ✅ |
 
-The four snapshot sub-opcodes carry the RPC's request message
-(`CreateSnapshotRequest`, `ListSnapshotsRequest`, `DeleteSnapshotRequest`,
-`RestoreSnapshotRequest`) and are answered by the same `ComputeService` as gRPC
-(§6), with the same checks: a missing VM or snapshot id, or a snapshot that
-takes memory without disk or disk without memory, is InvalidArgument; an
-unknown VM or snapshot is NotFound; a VM that is not running, or an
-orchestrator without snapshots, is FailedPrecondition. The snapshot's id is
-its name.
+The five snapshot sub-opcodes carry the RPC's request message
+(`CreateSnapshotRequest`, `ListSnapshotsRequest`, `GetSnapshotRequest`,
+`DeleteSnapshotRequest`, `RestoreSnapshotRequest`) and are answered by the same
+`ComputeService` as gRPC (§6), with the same checks: a missing VM or snapshot
+id, or a snapshot that takes memory without disk or disk without memory, is
+InvalidArgument; an unknown VM or snapshot is NotFound; a VM that is not
+running, or an orchestrator without snapshots, is FailedPrecondition. The
+snapshot's id is its name. `GetSnapshot` answers the one entry of
+`ListSnapshots` with that id (`GetSnapshotResponse.snapshot`), so it fails
+exactly as `ListSnapshots` does, and an id the list does not hold is NotFound
+(`ErrVMSnapshotNotFound`).
 
 The Go SDK carries the snapshot verbs over every transport, returning the
 client's typed error (`ErrCreateSnapshotFailed`, ...,
@@ -343,15 +346,29 @@ sub-opcodes (`sdk/go/transport/quic/adapter.go`). As with the lifecycle verbs
 is InvalidArgument. `TestVMSnapshotSDKParity_*` and
 `TestVMSnapshotAttestSDKParity_MissingVMID`
 (`pkg/api/daemon/compute_sdk_snapshot_parity_test.go`) hold this over REST,
-QUIC and MCP. Against a running daemon, `TestComputeSnapshotsMultiProtocol`
-(`test/integration/compute/multiprotocol_test.go`) creates, lists, restores and
-deletes a snapshot of a running VM over REST, gRPC, QUIC, MCP and Unix, then
-checks that deleting it again answers NotFound and that listing without a VM
-id answers InvalidArgument. The CLI has no snapshot verb.
+QUIC, MCP, gRPC, Unix and embedded; `TestVMSnapshotSDKParity_GetUnknownSnapshot`
+holds that an unknown snapshot id is `ErrGetSnapshotFailed` around NotFound on
+each. Against a running daemon, `TestComputeSnapshotsMultiProtocol`
+(`test/integration/compute/multiprotocol_test.go`) creates, lists, gets,
+restores and deletes a snapshot of a running VM over REST, gRPC, QUIC, MCP and
+Unix, then checks that getting or deleting it again answers NotFound and that
+listing without a VM id answers InvalidArgument. The CLI has no snapshot verb.
 
-`PrepareMigration` and `FinalizeMigration` are gRPC-only and exist so a
-migration can be staged and confirmed; `MigrateVM` is the one-shot form. Do not
-treat the pair as internal — they are the two-phase contract.
+`PrepareMigration` and `FinalizeMigration` are served on REST, gRPC, QUIC, MCP
+and the Unix socket and exist so a migration can be staged and confirmed;
+`MigrateVM` is the one-shot form. Do not treat the pair as internal — they are
+the two-phase contract. Every transport calls the same `ComputeService`
+methods, so a missing `spec` or `receiver_id` is InvalidArgument, an unknown
+receiver is NotFound, and an orchestrator that cannot receive a migration is
+FailedPrecondition except over REST, where it is InvalidArgument (§2). The Go SDK client carries the pair as
+`Client.PrepareMigration` and `Client.FinalizeMigration`, failing with
+`ErrPrepareMigrationFailed` and `ErrFinalizeMigrationFailed` around the
+transport status. `TestVMMigrationSDKParity_*`
+(`pkg/api/daemon/compute_sdk_migration_parity_test.go`) holds this over REST,
+QUIC, MCP, gRPC, Unix and embedded, and
+`TestComputeMigrationMultiProtocol`
+(`test/integration/compute/multiprotocol_test.go`) holds the refusals against
+a running daemon.
 
 `ResizeDisk` is a `PATCH`, the only `PATCH` in the compute surface.
 
@@ -459,8 +476,9 @@ asking for VM metrics.** Under `0x69` the daemon first offers every sub-opcode
 to the `ComputeService` path (`handleVMPB`, `pkg/api/daemon/quic_vm_pb.go`):
 the operational sub-opcodes above and the VM verbs `OpVMCreate`–`OpVMList`
 (`0x60`–`0x65`), `OpVMRestart`, `OpVMSuspend` and `OpVMResume` (`0xB6`–`0xB8`),
-the snapshot verbs `OpVMSnapshotCreate`, `OpVMSnapshotRestore`,
-`OpVMSnapshotDelete` and `OpVMSnapshotList` (`0xBB`–`0xBE`), and the
+the snapshot verbs `OpVMSnapshotGet` (`0xBA`), `OpVMSnapshotCreate`,
+`OpVMSnapshotRestore`, `OpVMSnapshotDelete` and `OpVMSnapshotList`
+(`0xBB`–`0xBE`), and the
 attestation verbs `OpVMAttest` (`0xB9`) and `OpVMVerifyAttest` (`0xBF`) are
 answered there.
 A verb's failure keeps its class: a missing id or VM config is
@@ -471,9 +489,10 @@ The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned, and `0x60` is
 object storage's category (#704). The flat VM
 handler that once answered them was never wired into platformd and has been
 removed. `0x60`–`0x65` survive only as sub-opcodes under `0x69`. Of the
-sub-opcodes `0xB9`–`0xBF` that went with it, `0xBB`–`0xBE` now carry the
+sub-opcodes `0xB9`–`0xBF` that went with it, `0xBA`–`0xBE` now carry the
 snapshot verbs and `0xB9` and `0xBF` the attestation verbs through
-`ComputeService`; `0xBA` is unassigned.
+`ComputeService`. `0xBA` was the flat handler's console verb; it now means
+`GetSnapshot`.
 
 The permission guard (`AuthMiddleware.GuardRequest`, `pkg/api/quic/auth.go`)
 runs before dispatch. It answers `StatusPermissionDenied` to an authenticated
@@ -502,7 +521,7 @@ under two resources:
 | `container:read` | `GetContainer`, `ListContainers`, `GetContainerLogs`, `GetContainerMetrics`, `AttestContainer` |
 | `container:write` | `CreateContainer`, `StartContainer`, `StopContainer`, `ExecContainer`, `AttachContainer` |
 | `container:delete` | `DeleteContainer` |
-| `vm:read` | `GetVM`, `ListVMs`, `GetVMLogs`, `GetVMMetrics`, `ListSnapshots`, `AttestVM`, `VerifyVMAttestation` |
+| `vm:read` | `GetVM`, `ListVMs`, `GetVMLogs`, `GetVMMetrics`, `ListSnapshots`, `GetSnapshot`, `AttestVM`, `VerifyVMAttestation` |
 | `vm:write` | `CreateVM`, `StartVM`, `StopVM`, `RebootVM`, `SuspendVM`, `ResumeVM`, `AttachDisk`, `DetachDisk`, `ResizeDisk`, `CreateSnapshot`, `RestoreSnapshot`, `MigrateVM`, `PrepareMigration`, `FinalizeMigration`, `AttachVMConsole`, `SendVMConsoleInput` |
 | `vm:delete` | `DeleteVM`, `DeleteSnapshot` |
 
@@ -519,12 +538,12 @@ backend:
 | `container:write` | `container_create`, `container_start`, `container_stop`, `container_exec` |
 | `container:delete` | `container_remove` |
 | `vm:read` | `vm_list`, `vm_get`, `vm_snapshot_list`, `vm_snapshot_get`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
-| `vm:write` | `vm_create`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_suspend`, `vm_resume`, `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
+| `vm:write` | `vm_create`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_suspend`, `vm_resume`, `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate`, `vm_migration_prepare`, `vm_migration_finalize` |
 | `vm:delete` | `vm_delete`, `vm_snapshot_delete` |
 
 `vm_disk_detach` is `vm:write`, not `vm:delete`, because `DetachDisk` is.
 
-The nine VM lifecycle tools take their RPC's full request and answer its
+The VM lifecycle and migration tools take their RPC's full request and answer its
 response, both in protojson with the proto's field names
 (`pkg/api/mcp/vm_lifecycle_tools.go`). Each tool calls the gRPC
 `ComputeService` servicer the daemon builds over its orchestrator
@@ -532,7 +551,9 @@ response, both in protojson with the proto's field names
 An unknown argument, a wrong type, an out-of-range number or an unknown enum
 name is InvalidArgument before the service runs. `vm_create` takes
 `{"config": {...}, "start": bool}`, `vm_list` takes `selector`, `pagination`
-and `states`, and the others take `id` plus the RPC's flags.
+and `states`, `vm_migration_prepare` takes `vm_id`, `vm_name`, `mode` and `spec` (the
+`VMMigrationSpec` fields), `vm_migration_finalize` takes `receiver_id` and
+`commit`, and the others take `id` plus the RPC's flags.
 [api-reference-mcp.md](api-reference-mcp.md) lists every argument.
 `CreateVM` applies or refuses every `config` field and acts on `start`, stop
 and reboot read `force` and `timeout_seconds`, and `ListVMs` reads `states`,
@@ -542,8 +563,9 @@ every transport.
 The snapshot and attestation tools answer through their RPC the same way
 (`pkg/api/daemon/mcp_vm.go`), so each reply is the RPC's response in the
 proto's field names. Since #704 this replaces the tools' earlier hand-built
-maps: `vm_snapshot_list` returns `ListSnapshotsResponse` with no `count`, and
-`vm_attest` returns `AttestVMResponse`, whose `pcr_values` is a list of
+maps: `vm_snapshot_list` returns `ListSnapshotsResponse` with no `count`,
+`vm_snapshot_get` returns `GetSnapshotResponse`, whose `snapshot` holds the
+entry it once returned bare, and `vm_attest` returns `AttestVMResponse`, whose `pcr_values` is a list of
 `{index, bank, value}` entries with base64 values rather than a map of index
 to hex. The arguments map onto the request:
 
@@ -551,7 +573,7 @@ to hex. The arguments map onto the request:
 |---|---|---|
 | `vm_snapshot_create` | `vm_id`, `name`, `description`, `memory_snapshot`, `disk_snapshot` | `CreateSnapshotRequest` (`config`); the two flags must be equal |
 | `vm_snapshot_list` | `vm_id` | `ListSnapshotsRequest` |
-| `vm_snapshot_delete`, `vm_snapshot_restore` | `vm_id`, `snapshot_id` | `DeleteSnapshotRequest`, `RestoreSnapshotRequest` |
+| `vm_snapshot_get`, `vm_snapshot_delete`, `vm_snapshot_restore` | `vm_id`, `snapshot_id` | `GetSnapshotRequest`, `DeleteSnapshotRequest`, `RestoreSnapshotRequest` |
 | `vm_attest` | `vm_id`, `nonce` (base64), `include_pcrs` | `AttestVMRequest`, SHA-256 bank |
 | `vm_attest_verify` | `vm_id`, `quote`, `signature`, `nonce` (base64), `signature_algorithm`, `expected_pcrs` (index → base64 SHA-256) | `VerifyVMAttestationRequest`, SHA-256 bank |
 
@@ -570,8 +592,8 @@ one) is FailedPrecondition. `CreateVM`, `StartVM`, `StopVM`, `RebootVM`,
 disk RPCs do, so an unknown VM is NotFound there too; any other failure
 stays Internal.
 
-`vm_snapshot_get` has no gRPC or REST twin. It reads one entry of what
-`ListSnapshots` returns, so it takes `ListSnapshots`' `vm:read`. #304 deleted
+`vm_snapshot_get`'s twin is `GetSnapshot` (#704), which reads one entry of
+what `ListSnapshots` returns and takes the same `vm:read`. #304 deleted
 `vm_update`, which had no twin and no executor behind it; #704 brought
 `vm_suspend` and `vm_resume` back with `SuspendVM` and `ResumeVM` as their twins.
 

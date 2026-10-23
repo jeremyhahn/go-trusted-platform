@@ -60,12 +60,14 @@ func TestCreateUserRequest_Fields(t *testing.T) {
 		Email:      "test@example.com",
 		Name:       "Test User",
 		Roles:      []string{"admin", "viewer"},
+		Groups:     []string{"engineering"},
 		Attributes: map[string]string{"department": "engineering"},
 	}
 
 	assert.Equal(t, "test@example.com", req.Email)
 	assert.Equal(t, "Test User", req.Name)
 	assert.Equal(t, []string{"admin", "viewer"}, req.Roles)
+	assert.Equal(t, []string{"engineering"}, req.Groups)
 	assert.Equal(t, "engineering", req.Attributes["department"])
 }
 
@@ -74,6 +76,7 @@ func TestCreateUserRequest_EmptyFields(t *testing.T) {
 	assert.Empty(t, req.Email)
 	assert.Empty(t, req.Name)
 	assert.Nil(t, req.Roles)
+	assert.Nil(t, req.Groups)
 	assert.Nil(t, req.Attributes)
 }
 
@@ -82,12 +85,14 @@ func TestUpdateUserRequest_Fields(t *testing.T) {
 		Email:      "updated@example.com",
 		Name:       "Updated User",
 		Roles:      []string{"admin"},
+		Groups:     []string{"developers"},
 		Attributes: map[string]string{"level": "senior"},
 	}
 
 	assert.Equal(t, "updated@example.com", req.Email)
 	assert.Equal(t, "Updated User", req.Name)
 	assert.Equal(t, []string{"admin"}, req.Roles)
+	assert.Equal(t, []string{"developers"}, req.Groups)
 	assert.Equal(t, "senior", req.Attributes["level"])
 }
 
@@ -99,6 +104,7 @@ func TestUserResponse_Fields(t *testing.T) {
 		Email:       "user@example.com",
 		Name:        "Test User",
 		Roles:       []string{"admin"},
+		Groups:      []string{"team-a"},
 		Attributes:  map[string]string{"dept": "eng"},
 		MFAVerified: true,
 		CreatedAt:   &now,
@@ -159,6 +165,61 @@ func TestListUsersResponse_EmptyUsers(t *testing.T) {
 
 	assert.Equal(t, int64(0), resp.Total)
 	assert.Empty(t, resp.Users)
+}
+
+func TestCreateGroupRequest_Fields(t *testing.T) {
+	req := CreateGroupRequest{
+		ID:          "engineering",
+		Name:        "Engineering Team",
+		Description: "Software engineering department",
+	}
+
+	assert.Equal(t, "engineering", req.ID)
+	assert.Equal(t, "Engineering Team", req.Name)
+	assert.Equal(t, "Software engineering department", req.Description)
+}
+
+func TestUpdateGroupRequest_Fields(t *testing.T) {
+	req := UpdateGroupRequest{
+		Name:        "Updated Team",
+		Description: "Updated description",
+	}
+
+	assert.Equal(t, "Updated Team", req.Name)
+	assert.Equal(t, "Updated description", req.Description)
+}
+
+func TestGroupResponse_Fields(t *testing.T) {
+	now := time.Now()
+	resp := GroupResponse{
+		ID:          "group-123",
+		TenantID:    "tenant-456",
+		Name:        "Engineering",
+		Description: "Engineering team",
+		Members:     []string{"user-1", "user-2"},
+		CreatedAt:   &now,
+		UpdatedAt:   &now,
+	}
+
+	assert.Equal(t, "group-123", resp.ID)
+	assert.Equal(t, "tenant-456", resp.TenantID)
+	assert.Len(t, resp.Members, 2)
+}
+
+func TestListGroupsResponse_Fields(t *testing.T) {
+	resp := ListGroupsResponse{
+		PaginatedResponse: PaginatedResponse{
+			Total:  10,
+			Limit:  50,
+			Offset: 0,
+		},
+		Groups: []GroupResponse{
+			{ID: "group-1", Name: "Group 1"},
+		},
+	}
+
+	assert.Equal(t, int64(10), resp.Total)
+	assert.Len(t, resp.Groups, 1)
 }
 
 func TestCreateRoleRequest_Fields(t *testing.T) {
@@ -592,6 +653,19 @@ func TestAssignRoleRequest_Fields(t *testing.T) {
 func TestAssignRoleRequest_EmptyRole(t *testing.T) {
 	req := AssignRoleRequest{}
 	assert.Empty(t, req.Role)
+}
+
+func TestMembershipRequest_Fields(t *testing.T) {
+	req := MembershipRequest{
+		UserID: "user-123",
+	}
+
+	assert.Equal(t, "user-123", req.UserID)
+}
+
+func TestMembershipRequest_EmptyUserID(t *testing.T) {
+	req := MembershipRequest{}
+	assert.Empty(t, req.UserID)
 }
 
 func TestUserResponse_JSONTags(t *testing.T) {

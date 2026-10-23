@@ -18,18 +18,28 @@ import (
 	"errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 )
 
 // gatewayPerfQUICAdapter bridges the shared perf backend into the QUIC
 // gateway perf handler interface.
 type gatewayPerfQUICAdapter struct {
-	perf GatewayPerfInterface
+	backends GatewayBackendSource
 }
 
 // newGatewayPerfQUICAdapter creates the QUIC perf adapter.
-func newGatewayPerfQUICAdapter(backend GatewayPerfInterface) *gatewayPerfQUICAdapter {
-	return &gatewayPerfQUICAdapter{perf: backend}
+func newGatewayPerfQUICAdapter(backends GatewayBackendSource) *gatewayPerfQUICAdapter {
+	return &gatewayPerfQUICAdapter{backends: backends}
+}
+
+// requirePerf resolves the shared service's perf backend, or reports
+// quic.ErrGatewayPerfNotConfigured (StatusUnavailable on the wire).
+func (a *gatewayPerfQUICAdapter) requirePerf() (GatewayPerfInterface, error) {
+	if a.backends == nil || a.backends.Perf() == nil {
+		return nil, quic.ErrGatewayPerfNotConfigured
+	}
+	return a.backends.Perf(), nil
 }
 
 // Ensure the adapter satisfies the QUIC perf interface.
@@ -43,7 +53,10 @@ func mapPerfToQUICError(err error) error {
 	}
 	var countErr *perf.ErrInvalidFlowCount
 	var bridgeErr *perf.ErrBridgeUnavailable
+	var notActive *gateway.ErrServiceNotActive
 	switch {
+	case errors.As(err, &notActive):
+		return quic.ErrGatewayPerfNotConfigured
 	case errors.As(err, &countErr):
 		return quic.ErrGatewayPerfInvalidRequest
 	case errors.As(err, &bridgeErr):
@@ -62,7 +75,11 @@ func (a *gatewayPerfQUICAdapter) PerfFlows(ctx context.Context, bridge string, c
 		flowCount = perf.DefaultFlowCount
 	}
 
-	result, err := a.perf.Flows(ctx, bridge, flowCount, batch)
+	backend, err := a.requirePerf()
+	if err != nil {
+		return nil, err
+	}
+	result, err := backend.Flows(ctx, bridge, flowCount, batch)
 	if err != nil {
 		return nil, mapPerfToQUICError(err)
 	}
@@ -77,7 +94,11 @@ func (a *gatewayPerfQUICAdapter) PerfFlows(ctx context.Context, bridge string, c
 
 // PerfDatapath reads live datapath counters.
 func (a *gatewayPerfQUICAdapter) PerfDatapath(ctx context.Context, bridge string) (*quic.PerfDatapathInfo, error) {
-	result, err := a.perf.Datapath(ctx, bridge)
+	backend, err := a.requirePerf()
+	if err != nil {
+		return nil, err
+	}
+	result, err := backend.Datapath(ctx, bridge)
 	if err != nil {
 		return nil, mapPerfToQUICError(err)
 	}
@@ -99,7 +120,11 @@ func (a *gatewayPerfQUICAdapter) PerfConntrack(ctx context.Context, zone *uint32
 		zoneFilter = int(*zone)
 	}
 
-	result, err := a.perf.Conntrack(ctx, zoneFilter)
+	backend, err := a.requirePerf()
+	if err != nil {
+		return nil, err
+	}
+	result, err := backend.Conntrack(ctx, zoneFilter)
 	if err != nil {
 		return nil, mapPerfToQUICError(err)
 	}

@@ -991,6 +991,7 @@ var templatedRouteTable = map[string]templatedRoute{
 	// and snapshot ids ride the path; create's config stays in the body.
 	"/platform.v1.ComputeService/CreateSnapshot": itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodPost, "{id}", "vm_id"),
 	"/platform.v1.ComputeService/ListSnapshots":  itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodGet, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/GetSnapshot":    vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodGet),
 	"/platform.v1.ComputeService/DeleteSnapshot": vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodDelete),
 	"/platform.v1.ComputeService/RestoreSnapshot": vmSnapshotRoute(
 		"/api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore", http.MethodPost),
@@ -999,6 +1000,10 @@ var templatedRouteTable = map[string]templatedRoute{
 	// selection and evidence stay in the body.
 	"/platform.v1.ComputeService/AttestVM":            itemRoute("/api/v1/compute/vms/{id}/attest", http.MethodPost, "{id}", "vm_id"),
 	"/platform.v1.ComputeService/VerifyVMAttestation": itemRoute("/api/v1/compute/vms/{id}/attest/verify", http.MethodPost, "{id}", "vm_id"),
+	// FinalizeMigration names the receiver PrepareMigration returned in the
+	// path; commit stays in the body.
+	"/platform.v1.ComputeService/FinalizeMigration": itemRoute(
+		"/api/v1/compute/migrations/{receiverId}/finalize", http.MethodPost, "{receiverId}", "receiver_id"),
 
 	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
 	//
@@ -1052,6 +1057,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	// id unconstrained; evidence travels in the body.
 	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
 
+	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
+	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/UpdateTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "template.id"),
+	"/platform.v1.DeviceService/DeleteTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	// The template list pages by query parameter; a zero page or size is
+	// omitted, so the server's defaults apply.
+	"/platform.v1.DeviceService/ListTemplates": {
+		path:   "/api/v1/device/templates",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "page", field: "pagination.page"},
+			{name: "page_size", field: "pagination.page_size"},
+		},
+	},
 	// POST /api/v1/device/templates/{id:[0-9]+}/create-profile. The body
 	// keeps {"overrides": {...}}.
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}/create-profile", http.MethodPost, "{id:[0-9]+}", "template_id"),
@@ -1095,6 +1114,21 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.KeyManagementService/Decrypt":   itemRoute("/api/v1/kms/decrypt/{name}", http.MethodPost, "{name}", "key_id"),
 	"/platform.v1.KeyManagementService/Sign":      itemRoute("/api/v1/kms/sign/{name}", http.MethodPost, "{name}", "key_id"),
 	"/platform.v1.KeyManagementService/Verify":    itemRoute("/api/v1/kms/verify/{name}", http.MethodPost, "{name}", "key_id"),
+
+	// GET /api/v1/kms/keys/{id}/export -- the daemon REST server's route
+	// (pkg/api/rest/kms_handlers.go). It reads the wrapping algorithm and the
+	// format as their enum numbers, so they are rendered as numbers here.
+	"/platform.v1.KeyManagementService/ExportKey": {
+		path:       "/api/v1/kms/keys/{id}/export",
+		method:     http.MethodGet,
+		pathParams: []pathParam{{placeholder: "{id}", field: "key_id"}},
+		queryParams: []queryParam{
+			{name: "wrapping_key_id", field: "wrapping_key_id"},
+			{name: "wrapping_algorithm", field: "wrapping_algorithm", encode: encodeEnumNumber},
+			{name: "format", field: "format", encode: encodeEnumNumber},
+			{name: "version", field: "version"},
+		},
+	},
 
 	// GET /api/v1/overlay/vteps/{nodeId}
 	"/platform.v1.OverlayService/GetVTEP": itemRoute("/api/v1/overlay/vteps/{nodeId}", http.MethodGet, "{nodeId}", "node_id"),
@@ -1166,29 +1200,45 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.PlatformIAMService/GetRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodGet,
 		pathParam{placeholder: "{id}", field: "role_id"}),
 
+	// GET /api/v1/iam/tenants/{tenant}/groups/{id} -- registerGroupRoutes.
+	"/platform.v1.PlatformIAMService/GetGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "group_id"}),
+
 	// GET /api/v1/iam/tenants/{tenant} -- router.go:208. The server names this
 	// segment {tenant}, not {id}, and the request has only tenant_id.
 	"/platform.v1.PlatformIAMService/GetTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodGet, "{tenant}", "tenant_id"),
 
-	// The item operations #416 repairs (#379's shape on the mutating verbs,
-	// found by #400's fixture), less its two group rows, which left with IAM
-	// groups (removed upstream). Each sent a collection path the server does
-	// not serve for that verb; the server's routes are the item paths below
-	// (pkg/webservice/v1/rest/iam/router.go), and the identifiers travel in
-	// the path, never the body. All but DeleteTenant are on the tenant-scoped
-	// tree for the reason given at GetUser (#401).
+	// DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}.
+	// The flat row sent DELETE /api/v1/iam/groups/members, and the server
+	// routed that to DELETE /groups/{id} with id="members": a DeleteGroup on
+	// whatever group carries that name, not a membership removal (#415).
+	// RemoveGroupMemberRequest carries tenant_id, group_id and user_id; all
+	// three travel in the path.
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
+
+	// The seven item operations #416 repairs (#379's shape on the mutating
+	// verbs, found by #400's fixture). Each sent a collection path the server
+	// does not serve for that verb; the server's routes are the item paths
+	// below (pkg/webservice/v1/rest/iam/router.go), and the identifiers
+	// travel in the path, never the body. All but DeleteTenant are on the
+	// tenant-scoped tree for the reason given at GetUser (#401).
 	"/platform.v1.PlatformIAMService/DeleteUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "user_id"}),
 	"/platform.v1.PlatformIAMService/DeleteRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/DeleteGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/DeleteTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodDelete, "{tenant}", "tenant_id"),
 	"/platform.v1.PlatformIAMService/AssignRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
 	// RevokeRole changes verb as well as path: the server revokes with DELETE.
 	"/platform.v1.PlatformIAMService/RevokeRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/AddGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodPost,
+		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
 
-	// The three updates are a PUT on the item (router.go). With no row here
+	// The four updates are a PUT on the item (router.go). With no row here
 	// they fell back to POST /api/v1/platformiam/update<item>, which the
 	// server does not serve, so none of them worked over REST (#401). The
 	// identifiers travel in the path; the remaining fields are the body,
@@ -1197,6 +1247,8 @@ var templatedRouteTable = map[string]templatedRoute{
 		pathParam{placeholder: "{id}", field: "user_id"}),
 	"/platform.v1.PlatformIAMService/UpdateRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodPut,
 		pathParam{placeholder: "{id}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/UpdateGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/UpdateTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodPut, "{tenant}", "tenant_id"),
 }
 
@@ -1331,6 +1383,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
 
+	"/platform.v1.PlatformIAMService/CreateGroup": {"/api/v1/iam/groups", http.MethodPost},
+	"/platform.v1.PlatformIAMService/ListGroups":  {"/api/v1/iam/groups", http.MethodGet},
+
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
@@ -1346,6 +1401,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.KeyManagementService/GenerateRandom":         {"/api/v1/kms/random", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
+	// The batch operations and rewrap are the daemon REST server's routes
+	// (pkg/api/rest/kms_handlers.go); kms_batch.go reshapes their bodies.
+	"/platform.v1.KeyManagementService/BatchEncrypt": {"/api/v1/kms/batch-encrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/BatchDecrypt": {"/api/v1/kms/batch-decrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/Rewrap":       {"/api/v1/kms/rewrap", http.MethodPost},
 
 	// Physical TPM Service — proto: pkg/api/grpc/proto/tpm.proto
 	// Server registrations live in pkg/webservice/v1/rest/tpm/router.go
@@ -1469,6 +1529,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},
 	// CreateVM sends its whole request (config and start) as the JSON body.
 	"/platform.v1.ComputeService/CreateVM": {"/api/v1/compute/vms", http.MethodPost},
+	// PrepareMigration sends its whole request (VM name, mode and spec) as
+	// the JSON body; the receiver it stands up has no id until it answers.
+	"/platform.v1.ComputeService/PrepareMigration": {"/api/v1/compute/migrations/prepare", http.MethodPost},
 
 	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
 	// Server registrations live in pkg/api/daemon/ceremony_rest.go.

@@ -4,6 +4,7 @@
  * These types match the backend API responses from:
  * /api/v1/iam/tenants/{tenant}/users
  * /api/v1/iam/tenants/{tenant}/roles
+ * /api/v1/iam/tenants/{tenant}/groups
  * /api/v1/iam/tenants/{tenant}/policies
  */
 
@@ -14,6 +15,7 @@ export interface User {
   email: string;
   name?: string;
   roles?: string[];
+  groups?: string[];
   attributes?: Record<string, string>;
   mfa_verified: boolean;
   created_at?: string;
@@ -32,6 +34,7 @@ export interface CreateUserRequest {
   email: string;
   name?: string;
   roles?: string[];
+  groups?: string[];
   attributes?: Record<string, string>;
 }
 
@@ -39,6 +42,7 @@ export interface UpdateUserRequest {
   email?: string;
   name?: string;
   roles?: string[];
+  groups?: string[];
   attributes?: Record<string, string>;
 }
 
@@ -71,6 +75,35 @@ export interface UpdateRoleRequest {
   name?: string;
   description?: string;
   permissions?: string[];
+}
+
+// Group types
+export interface Group {
+  id: string;
+  tenant_id: string;
+  name?: string;
+  description?: string;
+  members?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ListGroupsResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  groups: Group[];
+}
+
+export interface CreateGroupRequest {
+  id: string;
+  name?: string;
+  description?: string;
+}
+
+export interface UpdateGroupRequest {
+  name?: string;
+  description?: string;
 }
 
 // Policy types

@@ -39,6 +39,7 @@ const (
 	ComputeService_RestoreSnapshot_FullMethodName     = "/platform.v1.ComputeService/RestoreSnapshot"
 	ComputeService_DeleteSnapshot_FullMethodName      = "/platform.v1.ComputeService/DeleteSnapshot"
 	ComputeService_ListSnapshots_FullMethodName       = "/platform.v1.ComputeService/ListSnapshots"
+	ComputeService_GetSnapshot_FullMethodName         = "/platform.v1.ComputeService/GetSnapshot"
 	ComputeService_MigrateVM_FullMethodName           = "/platform.v1.ComputeService/MigrateVM"
 	ComputeService_PrepareMigration_FullMethodName    = "/platform.v1.ComputeService/PrepareMigration"
 	ComputeService_FinalizeMigration_FullMethodName   = "/platform.v1.ComputeService/FinalizeMigration"
@@ -87,6 +88,7 @@ type ComputeServiceClient interface {
 	RestoreSnapshot(ctx context.Context, in *RestoreSnapshotRequest, opts ...grpc.CallOption) (*RestoreSnapshotResponse, error)
 	DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*DeleteSnapshotResponse, error)
 	ListSnapshots(ctx context.Context, in *ListSnapshotsRequest, opts ...grpc.CallOption) (*ListSnapshotsResponse, error)
+	GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*GetSnapshotResponse, error)
 	// VM migration
 	MigrateVM(ctx context.Context, in *MigrateVMRequest, opts ...grpc.CallOption) (*MigrateVMResponse, error)
 	// Inter-daemon migration handshake (destination side)
@@ -340,6 +342,16 @@ func (c *computeServiceClient) ListSnapshots(ctx context.Context, in *ListSnapsh
 	return out, nil
 }
 
+func (c *computeServiceClient) GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*GetSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSnapshotResponse)
+	err := c.cc.Invoke(ctx, ComputeService_GetSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *computeServiceClient) MigrateVM(ctx context.Context, in *MigrateVMRequest, opts ...grpc.CallOption) (*MigrateVMResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MigrateVMResponse)
@@ -548,6 +560,7 @@ type ComputeServiceServer interface {
 	RestoreSnapshot(context.Context, *RestoreSnapshotRequest) (*RestoreSnapshotResponse, error)
 	DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*DeleteSnapshotResponse, error)
 	ListSnapshots(context.Context, *ListSnapshotsRequest) (*ListSnapshotsResponse, error)
+	GetSnapshot(context.Context, *GetSnapshotRequest) (*GetSnapshotResponse, error)
 	// VM migration
 	MigrateVM(context.Context, *MigrateVMRequest) (*MigrateVMResponse, error)
 	// Inter-daemon migration handshake (destination side)
@@ -639,6 +652,9 @@ func (UnimplementedComputeServiceServer) DeleteSnapshot(context.Context, *Delete
 }
 func (UnimplementedComputeServiceServer) ListSnapshots(context.Context, *ListSnapshotsRequest) (*ListSnapshotsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSnapshots not implemented")
+}
+func (UnimplementedComputeServiceServer) GetSnapshot(context.Context, *GetSnapshotRequest) (*GetSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSnapshot not implemented")
 }
 func (UnimplementedComputeServiceServer) MigrateVM(context.Context, *MigrateVMRequest) (*MigrateVMResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MigrateVM not implemented")
@@ -1044,6 +1060,24 @@ func _ComputeService_ListSnapshots_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ComputeService_GetSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComputeServiceServer).GetSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComputeService_GetSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComputeServiceServer).GetSnapshot(ctx, req.(*GetSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ComputeService_MigrateVM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MigrateVMRequest)
 	if err := dec(in); err != nil {
@@ -1392,6 +1426,10 @@ var ComputeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSnapshots",
 			Handler:    _ComputeService_ListSnapshots_Handler,
+		},
+		{
+			MethodName: "GetSnapshot",
+			Handler:    _ComputeService_GetSnapshot_Handler,
 		},
 		{
 			MethodName: "MigrateVM",

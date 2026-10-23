@@ -112,3 +112,17 @@ func TestMirroredEmails_Errors(t *testing.T) {
 	_, err = NewQuicBaaSUserMirror(client).MirroredEmails(ctx, "t1")
 	assert.ErrorIs(t, err, listErr)
 }
+
+func TestUsernameFromEmail(t *testing.T) {
+	cases := map[string]string{
+		"alice@acme.test": "alice",
+		"bob":             "bob",
+		"@acme.test":      "@acme.test",
+		"":                "",
+	}
+	for email, want := range cases {
+		if got := UsernameFromEmail(email); got != want {
+			t.Errorf("UsernameFromEmail(%q) = %q, want %q", email, got, want)
+		}
+	}
+}

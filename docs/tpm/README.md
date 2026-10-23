@@ -38,7 +38,7 @@ operations for the go-trusted-platform.
 | Key Generation           | RSA, ECDSA, Ed25519 key generation in hardware   |
 | Key Storage              | Secure persistent storage in TPM NVRAM           |
 | Attestation              | Quote generation and verification                |
-| Sealing/Unsealing        | Password-protected sealing (PCR binding refused until go-quicbaas #1171) |
+| Sealing/Unsealing        | Data protection bound to PCR state               |
 | Random Number Generation | Hardware-based cryptographic RNG                 |
 | PCR Operations           | Read, extend, and policy-based access            |
 | NVRAM Storage            | Define, read, write secure storage areas         |
@@ -86,11 +86,11 @@ platformctl tpm srk info
 ### 4. Seal Data
 
 ```bash
-# Seal a secret under a password (--pcrs is refused until go-quicbaas #1171)
-platformctl tpm seal --cn my-secret --data "sensitive data" --password "$PW"
+# Seal a secret to the current state of PCR 7
+platformctl tpm seal --cn my-secret --data "sensitive data" --pcrs 7
 
-# Unseal the secret
-platformctl tpm unseal --cn my-secret --password "$PW"
+# Unseal the secret (requires matching PCR state)
+platformctl tpm unseal --cn my-secret --pcrs 7
 ```
 
 ## Key Hierarchy

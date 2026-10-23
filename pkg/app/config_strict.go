@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 )
 
@@ -30,10 +31,12 @@ type strictSection struct {
 
 // strictSections are the sections checked for unknown keys on every loader
 // path. Pre-release, a key the schema no longer has (sdn.networks,
-// sdn.transit, network.subnets …) must fail the load, not be ignored.
+// sdn.transit, network.subnets, proxy route required-roles …) must fail the
+// load, not be ignored.
 var strictSections = []strictSection{
 	{name: "network", target: func() any { return &installer.NetworkConfig{} }},
 	{name: "sdn", target: func() any { return &sdn.Config{} }},
+	{name: "proxy", target: func() any { return &proxy.ControlPlaneConfig{} }},
 }
 
 // CheckPlatformConfigViper refuses unknown keys in the strictly checked

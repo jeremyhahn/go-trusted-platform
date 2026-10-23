@@ -48,15 +48,14 @@ func (c *Chain) checkPolicy(ctx context.Context, r *http.Request, route *Compile
 // part of the proxy's policy contract (documented in docs/proxy):
 //
 //	{
-//	  "client":  {"id", "zone", "device_id", "attested", "auth_method", "roles"},
+//	  "client":  {"id", "zone", "device_id", "attested", "auth_method"},
 //	  "route":   {"id", "hosts", "path_prefix", "backend_zone"},
 //	  "request": {"method", "path", "host"}
 //	}
+//
+// OPA answers evidence questions (zone, attestation, method); it is given no
+// roles because access is the IAM decision, not the policy's (#926).
 func policyInput(r *http.Request, route *CompiledRoute, id *ClientIdentity) map[string]any {
-	roles := make([]any, 0, len(id.Roles))
-	for _, role := range id.Roles {
-		roles = append(roles, role)
-	}
 	hosts := make([]any, 0, len(route.cfg.Hosts))
 	for _, h := range route.cfg.Hosts {
 		hosts = append(hosts, h)
@@ -68,7 +67,6 @@ func policyInput(r *http.Request, route *CompiledRoute, id *ClientIdentity) map[
 			"device_id":   id.DeviceID,
 			"attested":    id.Attested,
 			"auth_method": id.AuthMethod,
-			"roles":       roles,
 		},
 		"route": map[string]any{
 			"id":           route.cfg.ID,

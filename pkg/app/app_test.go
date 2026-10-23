@@ -41,7 +41,7 @@ type mockTPM struct {
 	xkmssdk.TrustedPlatformModule
 	idevidFn      func() (crypto.PublicKey, error)
 	idevidAttrsFn func() (*xkmssdk.KeyAttributes, error)
-	rsaDecryptFn  func(attrs *xkmssdk.KeyAttributes, backend xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error)
+	rsaDecryptFn  func(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error)
 }
 
 func (m *mockTPM) IDevID() (crypto.PublicKey, error) {
@@ -58,9 +58,9 @@ func (m *mockTPM) IDevIDAttributes() (*xkmssdk.KeyAttributes, error) {
 	return nil, errors.New("mock: IDevIDAttributes not configured")
 }
 
-func (m *mockTPM) RSADecrypt(attrs *xkmssdk.KeyAttributes, backend xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error) {
+func (m *mockTPM) RSADecrypt(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error) {
 	if m.rsaDecryptFn != nil {
-		return m.rsaDecryptFn(attrs, backend, blob)
+		return m.rsaDecryptFn(handle, name, blob)
 	}
 	return nil, errors.New("mock: RSADecrypt not configured")
 }
@@ -787,7 +787,7 @@ func TestTPMDecrypter_Public_Error(t *testing.T) {
 func TestTPMDecrypter_Decrypt_RSADecryptError(t *testing.T) {
 	cause := errors.New("tpm: authorization failed")
 	mock := &mockTPM{
-		rsaDecryptFn: func(_ *xkmssdk.KeyAttributes, _ xkmssdk.TPMKeyBackend, _ []byte) ([]byte, error) {
+		rsaDecryptFn: func(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error) {
 			return nil, cause
 		},
 	}
@@ -808,20 +808,18 @@ func TestTPMDecrypter_Decrypt_RSADecryptError(t *testing.T) {
 // plaintext returned by RSADecrypt is forwarded to the caller.
 func TestTPMDecrypter_Decrypt_RSADecryptSuccess(t *testing.T) {
 	expected := []byte("decrypted-plaintext")
+	mock := &mockTPM{
+		rsaDecryptFn: func(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error) {
+			assert.Equal(t, gotpm2.TPMHandle(0x81000001), handle)
+			assert.Equal(t, []byte("test-name"), name.Buffer)
+			assert.Equal(t, []byte("ciphertext"), blob)
+			return expected, nil
+		},
+	}
 	attrs := &xkmssdk.KeyAttributes{
 		TPMAttributes: &xkmssdk.TPMAttributes{
 			Handle: gotpm2.TPMHandle(0x81000001),
 			Name:   gotpm2.TPM2BName{Buffer: []byte("test-name")},
-		},
-	}
-	mock := &mockTPM{
-		rsaDecryptFn: func(gotAttrs *xkmssdk.KeyAttributes, backend xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error) {
-			// The IDevID attributes are passed through unchanged, with the
-			// nil backend that selects the TPM's own platform key store.
-			assert.Same(t, attrs, gotAttrs)
-			assert.Nil(t, backend)
-			assert.Equal(t, []byte("ciphertext"), blob)
-			return expected, nil
 		},
 	}
 	d := &tpmDecrypter{tpm: mock, attrs: attrs}

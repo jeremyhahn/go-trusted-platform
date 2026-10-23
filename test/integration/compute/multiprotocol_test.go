@@ -57,10 +57,12 @@ func TestComputeMultiProtocol(t *testing.T) {
 		}
 	})
 
+	// A protocol that fails stops the test: the remaining protocols drive the
+	// same daemon and would spend their deadlines on the same fault.
 	gate := helpers.NewAdapterGate(t, "compute", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -77,6 +79,9 @@ func TestComputeMultiProtocol(t *testing.T) {
 			t.Run("VMCreateRefusesUnsupportedField", func(t *testing.T) { testVMCreateRefusesUnsupportedField(t, ctx, adapter, fixture) })
 			t.Run("VMSuspendResumeReboot", func(t *testing.T) { testVMSuspendResumeReboot(t, ctx, adapter, fixture) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
@@ -102,9 +107,9 @@ func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute snapshots", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -114,10 +119,13 @@ func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 
 			t.Run("VMSnapshots", func(t *testing.T) { testVMSnapshots(t, ctx, adapter) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
-// testVMSnapshots creates, lists, restores and deletes a snapshot of a
+// testVMSnapshots creates, lists, gets, restores and deletes a snapshot of a
 // running VM, then checks a deleted snapshot answers NotFound.
 func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter) {
 	vmName := generateTestVMName("snap-" + uuid.New().String()[:8])
@@ -126,7 +134,7 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
 		t.Fatalf("CreateVM failed: %v", err)
@@ -158,6 +166,14 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	requireSnapshotListed(t, ctx, adapter, vmID, snapshotName, true)
 
 	snapshot := SnapshotOptions{VMID: vmID, SnapshotID: snapshotName}
+	got, err := adapter.GetSnapshot(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if got.ID != snapshotName || got.VMID != vmID {
+		t.Errorf("GetSnapshot = %+v, want ID %q on VM %q", *got, snapshotName, vmID)
+	}
+
 	if err := adapter.RestoreSnapshot(ctx, snapshot); err != nil {
 		t.Fatalf("RestoreSnapshot failed: %v", err)
 	}
@@ -170,6 +186,11 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	err = adapter.DeleteSnapshot(ctx, snapshot)
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("DeleteSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+
+	_, err = adapter.GetSnapshot(ctx, snapshot)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
 	}
 
 	_, err = adapter.ListSnapshots(ctx, "")
@@ -198,6 +219,56 @@ func requireSnapshotListed(t *testing.T, ctx context.Context, adapter snapshotAd
 	}
 }
 
+// migrationAdapter is a transport that carries the destination half of a
+// two-phase migration.
+type migrationAdapter interface {
+	ComputeCommands
+	MigrationCommands
+}
+
+// TestComputeMigrationMultiProtocol holds the migration refusals against the
+// running daemon on every transport: the local-qemu orchestrator can receive
+// a migration, so the request checks behind it answer, not FailedPrecondition.
+func TestComputeMigrationMultiProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t.Cleanup(cancel)
+
+	adapters := []migrationAdapter{
+		NewRESTAdapter(),
+		NewGRPCAdapter(),
+		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
+	}
+
+	gate := helpers.NewAdapterGate(t, "compute migration", helpers.AdapterNames(adapters)...)
+	for _, adapter := range adapters {
+		adapter := adapter
+		t.Run(adapter.Name(), func(t *testing.T) {
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
+			t.Cleanup(func() {
+				if err := adapter.Teardown(ctx); err != nil {
+					t.Logf("Warning: teardown failed: %v", err)
+				}
+			})
+
+			t.Run("MigrationRefusals", func(t *testing.T) { testMigrationRefusals(t, ctx, adapter) })
+		})
+	}
+}
+
+func testMigrationRefusals(t *testing.T, ctx context.Context, adapter migrationAdapter) {
+	_, err := adapter.PrepareMigration(ctx, PrepareMigrationOptions{VMName: "guest", Mode: "live"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("PrepareMigration without a guest over %s: got %v, want InvalidArgument", adapter.Name(), err)
+	}
+
+	err = adapter.FinalizeMigration(ctx, "recv-"+uuid.New().String()[:8], false)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("FinalizeMigration of an unknown receiver over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+}
+
 // attestAdapter is a transport that carries both the VM verbs and the
 // attestation verbs.
 type attestAdapter interface {
@@ -220,9 +291,9 @@ func TestComputeAttestationMultiProtocol(t *testing.T) {
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute attestation", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -232,6 +303,9 @@ func TestComputeAttestationMultiProtocol(t *testing.T) {
 
 			t.Run("VMAttestation", func(t *testing.T) { testVMAttestation(t, ctx, adapter) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
@@ -244,7 +318,7 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 		TPM:        true,
 	})
 	if err != nil {

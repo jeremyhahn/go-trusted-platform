@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,6 +43,7 @@ func (f archFixture) x86Config() *Config {
 		OVMFCode: f.path("OVMF_CODE.fd"), OVMFCodeSecure: f.path("OVMF_CODE.secboot.fd"), OVMFVars: f.path("OVMF_VARS.fd"),
 		TPMSocket: f.path("tpm.sock"), NetworkMode: "user", NoGraphic: true, SerialLogFile: f.path("serial.log"),
 		EnableKVM: true, ISO: f.path("iso.iso"), BootOrder: "d",
+		HostArch: "amd64", KVMProbe: kvmUsable,
 	}
 }
 
@@ -51,8 +53,16 @@ func (f archFixture) aarch64Config() *Config {
 		Firmware: f.path("u-boot.bin"),
 		DiskPath: f.path("disk.img"), DiskSize: "1G", Memory: 2048, CPUs: 2, WorkDir: f.dir,
 		TPMSocket: f.path("tpm.sock"), NetworkMode: "user", NoGraphic: true, SerialLogFile: f.path("serial.log"),
-		EnableKVM: true,
+		EnableKVM: true, KVMProbe: kvmUsable,
 	}
+}
+
+// kvmUsable and kvmMissing stand in for the /dev/kvm probe, so no test
+// depends on the host's KVM device.
+func kvmUsable() error { return nil }
+
+func kvmMissing() error {
+	return &SentinelCauseError{Sentinel: ErrKVMUnavailable, Cause: fs.ErrNotExist}
 }
 
 // withKVM prepends -enable-kvm after the ROM/binary position when the host
@@ -111,15 +121,15 @@ func buildArgs(t *testing.T, cfg *Config, mode BootMode) []string {
 func TestBuildQEMUCommand_X86Golden(t *testing.T) {
 	f := newArchFixture(t)
 	x86Head := func(machine string) []string {
-		return withKVM("amd64",
+		return concat([]string{"-enable-kvm"}, []string{
 			"-machine", machine,
 			"-cpu", "host",
 			"-smp", "cores=2,threads=1",
 			"-m", "2048",
-			"-drive", "file="+f.path("disk.img")+",if=none,format=qcow2,cache=writethrough,id=hd0",
+			"-drive", "file=" + f.path("disk.img") + ",if=none,format=qcow2,cache=writethrough,id=hd0",
 			"-device", "ahci,id=ahci0",
 			"-device", "ide-hd,drive=hd0,bus=ahci0.0",
-		)
+		})
 	}
 
 	t.Run("boot with Secure Boot", func(t *testing.T) {
@@ -374,6 +384,16 @@ func TestBuildQEMUCommand_AArch64UEFIOnForeignHostUsesTCG(t *testing.T) {
 	assert.Equal(t, "cortex-a72", argAfter(t, args, "-cpu"))
 }
 
+func TestBuildQEMUCommand_X86OnForeignHostUsesTCG(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.x86Config()
+	cfg.HostArch = "arm64"
+
+	args := buildArgs(t, cfg, BootModeBoot)
+	assert.NotContains(t, args, "-enable-kvm")
+	assert.Equal(t, "max", argAfter(t, args, "-cpu"))
+}
+
 // An arm64 host with KVM turned off runs TCG, which cannot take
 // gic-version=host: the fixed GICv3 stays, whatever the host's GIC is.
 func TestBuildQEMUCommand_AArch64KVMDisabledKeepsTheFixedGIC(t *testing.T) {
@@ -425,12 +445,80 @@ func TestConfigKVM_FollowsTheInjectedHostArch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.arch)+"-on-"+tc.hostArch, func(t *testing.T) {
-			cfg := &Config{Arch: tc.arch, HostArch: tc.hostArch, EnableKVM: true}
+			probed := false
+			probe := func() error { probed = true; return nil }
+			cfg := &Config{Arch: tc.arch, HostArch: tc.hostArch, EnableKVM: true, KVMProbe: probe}
 			p, err := cfg.profile()
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, cfg.kvm(p))
+			kvm, err := cfg.kvm(p)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, kvm)
+			assert.Equal(t, tc.want, probed, "only a native guest probes the KVM device")
 		})
 	}
+}
+
+func TestConfigKVM_NotRequestedNeverProbes(t *testing.T) {
+	probe := func() error {
+		t.Fatal("the KVM device was probed although KVM was not requested")
+		return nil
+	}
+	cfg := &Config{HostArch: "amd64", EnableKVM: false, KVMProbe: probe}
+	p, err := cfg.profile()
+	require.NoError(t, err)
+	kvm, err := cfg.kvm(p)
+	require.NoError(t, err)
+	assert.False(t, kvm)
+}
+
+func TestConfigKVM_UnusableDeviceFallsBackToTCG(t *testing.T) {
+	cfg := &Config{HostArch: "amd64", EnableKVM: true, KVMProbe: kvmMissing}
+	p, err := cfg.profile()
+	require.NoError(t, err)
+	kvm, err := cfg.kvm(p)
+	assert.False(t, kvm)
+	assert.ErrorIs(t, err, ErrKVMUnavailable)
+	assert.ErrorIs(t, err, fs.ErrNotExist, "the reason names the open failure")
+}
+
+func TestBuildQEMUCommand_UnusableKVMRunsTCG(t *testing.T) {
+	f := newArchFixture(t)
+
+	t.Run("x86_64", func(t *testing.T) {
+		cfg := f.x86Config()
+		cfg.KVMProbe = kvmMissing
+		args := buildArgs(t, cfg, BootModeBoot)
+		assert.NotContains(t, args, "-enable-kvm")
+		assert.Equal(t, "q35", argAfter(t, args, "-machine"))
+		assert.Equal(t, "max", argAfter(t, args, "-cpu"), "TCG cannot take -cpu host")
+	})
+
+	t.Run("aarch64 on arm64", func(t *testing.T) {
+		cfg := f.aarch64UEFIConfig()
+		cfg.KVMProbe = kvmMissing
+		args := buildArgs(t, cfg, BootModeBoot)
+		assert.NotContains(t, args, "-enable-kvm")
+		assert.Equal(t, "virt,gic-version=3", argAfter(t, args, "-machine"))
+		assert.Equal(t, "cortex-a72", argAfter(t, args, "-cpu"))
+	})
+}
+
+func TestProbeDeviceRW(t *testing.T) {
+	t.Run("a read-write device is usable", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "kvm")
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+		assert.NoError(t, probeDeviceRW(path))
+	})
+
+	t.Run("a missing device is unusable", func(t *testing.T) {
+		err := probeDeviceRW(filepath.Join(t.TempDir(), "kvm"))
+		assert.ErrorIs(t, err, ErrKVMUnavailable)
+		assert.ErrorIs(t, err, fs.ErrNotExist)
+	})
+
+	t.Run("a directory cannot be opened read-write", func(t *testing.T) {
+		assert.ErrorIs(t, probeDeviceRW(t.TempDir()), ErrKVMUnavailable)
+	})
 }
 
 // argAfter returns the value that follows flag in args.

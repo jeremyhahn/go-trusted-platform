@@ -52,6 +52,10 @@ const (
 
 	// DefaultCommandTimeout is the default timeout for CLI commands.
 	DefaultCommandTimeout = 30 * time.Second
+
+	// cliWaitDelay bounds how long a killed command's output pipes are
+	// drained before Run returns.
+	cliWaitDelay = 5 * time.Second
 )
 
 // =============================================================================
@@ -185,12 +189,12 @@ func (c *CLIAdapter) Teardown() error {
 
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	// Create context with timeout if not already set
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.commandTimeout)
-		defer cancel()
-	}
+	// Every command gets its own timeout. The suite's context always carries
+	// a deadline (10 minutes, go test's own limit), so applying the timeout
+	// only to a deadline-free context left a hung platformctl to run until
+	// the package panicked. A shorter caller deadline still wins.
+	ctx, cancel := context.WithTimeout(ctx, c.commandTimeout)
+	defer cancel()
 
 	// Build command with common flags
 	fullArgs := []string{
@@ -206,6 +210,9 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
+	// Once the context kills platformctl, stop waiting for its output pipes:
+	// a child process still holding them would otherwise keep Run blocked.
+	cmd.WaitDelay = cliWaitDelay
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

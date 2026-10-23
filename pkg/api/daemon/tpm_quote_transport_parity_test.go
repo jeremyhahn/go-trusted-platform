@@ -148,7 +148,7 @@ func (f *tpmParityFixture) daemonRESTConn(scopes ...string) tpmTransport {
 		router := mux.NewRouter()
 		restapi.NewTPMHandlers(slog.Default()).
 			WithTPMService(f.svc).
-			WithTokenAuthorizer(tokenScopes{token: scopes}).
+			WithScopeGuard(restapi.NewScopeGuard(tokenScopes{token: scopes}, nil, nil)).
 			RegisterRoutes(router)
 		router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)

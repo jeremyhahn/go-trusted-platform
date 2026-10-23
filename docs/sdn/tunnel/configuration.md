@@ -28,7 +28,7 @@ not match the transport, is a validation error.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `key-ref` | string | yes | - | Key-store reference for the outbound SA (36 bytes: AES-256 key + 4-byte salt). Under gatewayd this is a `kms://` or `secret://` reference resolved through the `secret-store:` section — see [the gateway user guide](../../gateway/user.md#keys-and-passwords-where-they-come-from) |
+| `key-ref` | string | yes | - | Key-store reference for the outbound SA (36 bytes: AES-256 key + 4-byte salt). Under gatewayd this is a `kms://` reference resolved through the `secret-store:` section — see [the gateway user guide](../../gateway/user.md#keys-and-passwords-where-they-come-from) |
 | `peer-key-ref` | string | no | `key-ref` | Reference for the inbound SA |
 | `spi-out` | uint32 | yes | - | Outbound SPI, non-zero |
 | `spi-in` | uint32 | yes | - | Inbound SPI, non-zero, different from `spi-out` |

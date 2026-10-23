@@ -115,9 +115,9 @@ func luksMCPCases() []luksMCPCase {
 		},
 		{
 			method:  platformv1.LUKSService_EnrollTPM_FullMethodName,
-			request: &platformv1.LUKSEnrollTPMRequest{Device: "/dev/sda2", ExistingPassphrase: "old", Pcrs: []int32{0, 7}},
+			request: &platformv1.LUKSEnrollTPMRequest{Device: "/dev/sda2", ExistingPassphrase: "old", Pcrs: []int32{0, 7}, Handle: "0x81000001"},
 			wantArgs: map[string]interface{}{"device": "/dev/sda2", "existing_passphrase": "old",
-				"pcrs": []interface{}{float64(0), float64(7)}},
+				"pcrs": []interface{}{float64(0), float64(7)}, "handle": "0x81000001"},
 			result: map[string]interface{}{"Slot": 5, "TokenID": "tok-t"},
 			reply:  &platformv1.LUKSEnrollTPMResponse{},
 			check: func(t *testing.T, r interface{}) {

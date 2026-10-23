@@ -1,7 +1,7 @@
 /**
  * Identity and Access Management (IAM) Types
  *
- * Types for IAM operations including users, roles, tenants, policies, and applications.
+ * Types for IAM operations including users, roles, groups, tenants, policies, and applications.
  * Based on pkg/api/grpc/proto/iam.proto
  */
 
@@ -23,6 +23,8 @@ export interface IAMUser {
   name: string;
   /** Assigned role IDs */
   roles: string[];
+  /** Group memberships */
+  groups: string[];
   /** User attributes */
   attributes?: Record<string, string>;
   /** MFA verified */
@@ -47,6 +49,8 @@ export interface CreateIAMUserRequest {
   name: string;
   /** Initial role IDs */
   roles?: string[];
+  /** Initial group memberships */
+  groups?: string[];
   /** User attributes */
   attributes?: Record<string, string>;
 }
@@ -75,6 +79,8 @@ export interface ListIAMUsersRequest {
   emailFilter?: string;
   /** Role filter */
   roleFilter?: string;
+  /** Group filter */
+  groupFilter?: string;
 }
 
 /**
@@ -91,6 +97,8 @@ export interface UpdateIAMUserRequest {
   name?: string;
   /** Updated roles */
   roles?: string[];
+  /** Updated groups */
+  groups?: string[];
   /** Updated attributes */
   attributes?: Record<string, string>;
 }
@@ -215,6 +223,114 @@ export interface RevokeIAMRoleRequest {
   userId: string;
   /** Role ID */
   roleId: string;
+}
+
+// =============================================================================
+// Group Types
+// =============================================================================
+
+/**
+ * IAM group
+ */
+export interface IAMGroup {
+  /** Group ID */
+  id: string;
+  /** Tenant ID */
+  tenantId: string;
+  /** Group name */
+  name: string;
+  /** Description */
+  description?: string;
+  /** Member user IDs */
+  members: string[];
+  /** Creation timestamp */
+  createdAt: string;
+  /** Update timestamp */
+  updatedAt: string;
+}
+
+/**
+ * Create group request
+ */
+export interface CreateIAMGroupRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Group ID */
+  id?: string;
+  /** Group name */
+  name: string;
+  /** Description */
+  description?: string;
+}
+
+/**
+ * Get group request
+ */
+export interface GetIAMGroupRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Group ID */
+  groupId: string;
+}
+
+/**
+ * List groups request
+ */
+export interface ListIAMGroupsRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Page number */
+  page?: number;
+  /** Page size */
+  pageSize?: number;
+}
+
+/**
+ * Update group request
+ */
+export interface UpdateIAMGroupRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Group ID */
+  groupId: string;
+  /** Updated name */
+  name?: string;
+  /** Updated description */
+  description?: string;
+}
+
+/**
+ * Delete group request
+ */
+export interface DeleteIAMGroupRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Group ID */
+  groupId: string;
+}
+
+/**
+ * Add group member request
+ */
+export interface AddGroupMemberRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Group ID */
+  groupId: string;
+  /** User ID */
+  userId: string;
+}
+
+/**
+ * Remove group member request
+ */
+export interface RemoveGroupMemberRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Group ID */
+  groupId: string;
+  /** User ID */
+  userId: string;
 }
 
 // =============================================================================
@@ -837,6 +953,60 @@ export interface AssignIAMRoleResponse {
  * Revoke role response
  */
 export interface RevokeIAMRoleResponse {
+  /** Operation status */
+  status: IAMStatus;
+  /** Response timestamp */
+  timestamp: string;
+}
+
+/**
+ * Group response
+ */
+export interface IAMGroupResponse {
+  /** Group */
+  group: IAMGroup;
+  /** Response timestamp */
+  timestamp: string;
+}
+
+/**
+ * List groups response
+ */
+export interface ListIAMGroupsResponse {
+  /** Groups */
+  groups: IAMGroup[];
+  /** Pagination info */
+  pagination?: IAMPaginationResponse;
+  /** Total count */
+  total: number;
+  /** Response timestamp */
+  timestamp: string;
+}
+
+/**
+ * Delete group response
+ */
+export interface DeleteIAMGroupResponse {
+  /** Operation status */
+  status: IAMStatus;
+  /** Response timestamp */
+  timestamp: string;
+}
+
+/**
+ * Add group member response
+ */
+export interface AddGroupMemberResponse {
+  /** Operation status */
+  status: IAMStatus;
+  /** Response timestamp */
+  timestamp: string;
+}
+
+/**
+ * Remove group member response
+ */
+export interface RemoveGroupMemberResponse {
   /** Operation status */
   status: IAMStatus;
   /** Response timestamp */

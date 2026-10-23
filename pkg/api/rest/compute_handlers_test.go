@@ -103,6 +103,14 @@ func (f *fakeComputeService) MigrateVM(ctx context.Context, req *platformv1.Migr
 	return computeAnswer(f, ctx, req, &platformv1.MigrateVMResponse{})
 }
 
+func (f *fakeComputeService) PrepareMigration(ctx context.Context, req *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	return computeAnswer(f, ctx, req, &platformv1.PrepareMigrationResponse{})
+}
+
+func (f *fakeComputeService) FinalizeMigration(ctx context.Context, req *platformv1.FinalizeMigrationRequest) (*platformv1.FinalizeMigrationResponse, error) {
+	return computeAnswer(f, ctx, req, &platformv1.FinalizeMigrationResponse{})
+}
+
 func (f *fakeComputeService) AttachDisk(ctx context.Context, req *platformv1.AttachDiskRequest) (*platformv1.AttachDiskResponse, error) {
 	return computeAnswer(f, ctx, req, &platformv1.AttachDiskResponse{})
 }
@@ -121,6 +129,10 @@ func (f *fakeComputeService) CreateSnapshot(ctx context.Context, req *platformv1
 
 func (f *fakeComputeService) ListSnapshots(ctx context.Context, req *platformv1.ListSnapshotsRequest) (*platformv1.ListSnapshotsResponse, error) {
 	return computeAnswer(f, ctx, req, &platformv1.ListSnapshotsResponse{})
+}
+
+func (f *fakeComputeService) GetSnapshot(ctx context.Context, req *platformv1.GetSnapshotRequest) (*platformv1.GetSnapshotResponse, error) {
+	return computeAnswer(f, ctx, req, &platformv1.GetSnapshotResponse{})
 }
 
 func (f *fakeComputeService) DeleteSnapshot(ctx context.Context, req *platformv1.DeleteSnapshotRequest) (*platformv1.DeleteSnapshotResponse, error) {
@@ -271,6 +283,21 @@ func computeRouteCases() []computeRouteCase {
 			resp: &platformv1.MigrateVMResponse{Status: ok}, key: "status",
 		},
 		{
+			route: "POST " + computeBasePath + "/migrations/prepare", method: http.MethodPost, target: computeBasePath + "/migrations/prepare",
+			body: `{"vmId":"vm-1","vmName":"web","mode":"live","spec":{"memoryMb":2048,"cpus":2,"arch":"aarch64"}}`,
+			want: &platformv1.PrepareMigrationRequest{
+				VmId: "vm-1", VmName: "web", Mode: "live",
+				Spec: &platformv1.VMMigrationSpec{MemoryMb: 2048, Cpus: 2, Arch: "aarch64"},
+			},
+			resp: &platformv1.PrepareMigrationResponse{Status: ok, ReceiverId: "recv-1", Port: 49152, TlsHostname: "node-2"}, key: "receiverId",
+		},
+		{
+			route: "POST " + computeBasePath + "/migrations/{receiverId}/finalize", method: http.MethodPost, target: computeBasePath + "/migrations/recv-1/finalize",
+			body: `{"commit":true}`,
+			want: &platformv1.FinalizeMigrationRequest{ReceiverId: "recv-1", Commit: true},
+			resp: &platformv1.FinalizeMigrationResponse{Status: ok}, key: "status",
+		},
+		{
 			route: "POST " + vms + "/{vmId}/disks", method: http.MethodPost, target: vms + "/vm-1/disks",
 			body: `{"disk":{"id":"disk-1","sizeGb":20,"readonly":true}}`,
 			want: &platformv1.AttachDiskRequest{VmId: "vm-1", Disk: &platformv1.DiskConfig{Id: "disk-1", SizeGb: 20, Readonly: true}},
@@ -297,6 +324,11 @@ func computeRouteCases() []computeRouteCase {
 			route: "GET " + vms + "/{vmId}/snapshots", method: http.MethodGet, target: vms + "/vm-1/snapshots",
 			want: &platformv1.ListSnapshotsRequest{VmId: "vm-1"},
 			resp: &platformv1.ListSnapshotsResponse{Snapshots: []*platformv1.Snapshot{{Id: "snap-1", VmId: "vm-1"}}}, key: "snapshots",
+		},
+		{
+			route: "GET " + vms + "/{vmId}/snapshots/{snapshotId}", method: http.MethodGet, target: vms + "/vm-1/snapshots/snap-1",
+			want: &platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "snap-1"},
+			resp: &platformv1.GetSnapshotResponse{Snapshot: &platformv1.Snapshot{Id: "snap-1", VmId: "vm-1"}}, key: "snapshot",
 		},
 		{
 			route: "DELETE " + vms + "/{vmId}/snapshots/{snapshotId}", method: http.MethodDelete, target: vms + "/vm-1/snapshots/snap-1",

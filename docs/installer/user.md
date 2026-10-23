@@ -24,10 +24,6 @@ Three things surprise people, so read them before you start:
    encryption key** inside a container whose password is a published constant.
    That is a deliberate trade for forensic protection, not a secret. Don't
    leave a machine in that state, and don't image the disk in that state.
-3. **`iso build`, `iso download`, `iso extract`, `iso customize` and every
-   `iso profile` verb currently do nothing.** They print
-   *"daemon connection required … dual-mode will be added later"*. Use
-   `iso create`, which does the whole pipeline.
 
 ---
 

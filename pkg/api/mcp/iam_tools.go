@@ -64,6 +64,12 @@ var ErrIAMRoleIDRequired = &IAMError{
 	Message: "role_id is required",
 }
 
+// ErrIAMGroupIDRequired indicates group ID is required.
+var ErrIAMGroupIDRequired = &IAMError{
+	Code:    "IAM_GROUP_ID_REQUIRED",
+	Message: "group_id is required",
+}
+
 // ErrIAMEmailRequired indicates email is required.
 var ErrIAMEmailRequired = &IAMError{
 	Code:    "IAM_EMAIL_REQUIRED",
@@ -105,6 +111,9 @@ func (r *ToolRegistry) registerIAMTools() {
 
 	// Role management tools
 	r.registerIAMRoleTools()
+
+	// Group management tools
+	r.registerIAMGroupTools()
 
 	// Authentication and authorization tools
 	r.registerIAMAuthTools()
@@ -161,6 +170,11 @@ func (r *ToolRegistry) registerIAMUserTools() {
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
 					"description": "Initial roles to assign to the user",
+				},
+				"groups": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Initial groups to add the user to",
 				},
 				"attributes": map[string]interface{}{
 					"type":        "object",
@@ -227,6 +241,10 @@ func (r *ToolRegistry) registerIAMUserTools() {
 				"role_filter": map[string]interface{}{
 					"type":        "string",
 					"description": "Only users holding this role ID",
+				},
+				"group_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only members of this group ID",
 				},
 			},
 			"required": []string{"tenant_id"},
@@ -365,6 +383,136 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 				},
 			},
 			"required": []string{"tenant_id", "user_id", "role_id"},
+		},
+	})
+}
+
+// registerIAMGroupTools registers IAM group management tools.
+func (r *ToolRegistry) registerIAMGroupTools() {
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_create_group",
+		Description: "Create a new IAM group in a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID for the group",
+				},
+				"id": map[string]interface{}{
+					"type":        "string",
+					"description": "Unique group identifier",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Group display name",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "Group description",
+				},
+			},
+			"required": []string{"tenant_id", "id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_delete_group",
+		Description: "Delete an IAM group from a tenant",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"group_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Group ID to delete",
+				},
+			},
+			"required": []string{"tenant_id", "group_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_get_group",
+		Description: "Get IAM group details by ID",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"group_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Group ID to retrieve",
+				},
+			},
+			"required": []string{"tenant_id", "group_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_list_groups",
+		Description: "List IAM groups in a tenant with pagination",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"pagination": iamPaginationSchema(),
+			},
+			"required": []string{"tenant_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_add_group_member",
+		Description: "Add a user to an IAM group",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"group_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Group ID to add the user to",
+				},
+				"user_id": map[string]interface{}{
+					"type":        "string",
+					"description": "User ID to add to the group",
+				},
+			},
+			"required": []string{"tenant_id", "group_id", "user_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_remove_group_member",
+		Description: "Remove a user from an IAM group",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"group_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Group ID to remove the user from",
+				},
+				"user_id": map[string]interface{}{
+					"type":        "string",
+					"description": "User ID to remove from the group",
+				},
+			},
+			"required": []string{"tenant_id", "group_id", "user_id"},
 		},
 	})
 }

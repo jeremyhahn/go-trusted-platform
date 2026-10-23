@@ -33,12 +33,10 @@ import (
 )
 
 // TestAppServices_EmbeddedSDK calls the services over the embedded
-// transport. That transport has no Messaging handlers, and its Cache
-// handlers are keyed by method names the SDK's cache client does not send,
-// so every cache and messaging call answers SERVICE_NOT_CONFIGURED rather
-// than an internal error. ObjectStorage it serves. Since go-quicbaas v0.14
-// the transport serves the Scheduler, so a scheduler call reaches the
-// embedded scheduler instead.
+// transport. That transport has no Scheduler or Messaging handlers, and its
+// Cache handlers are keyed by method names the SDK's cache client does not
+// send, so every call answers SERVICE_NOT_CONFIGURED rather than an internal
+// error. ObjectStorage it serves.
 func TestAppServices_EmbeddedSDK(t *testing.T) {
 	servers := embeddedAppServiceServers(t)
 	for name, c := range appServiceCalls(servers) {
@@ -46,19 +44,9 @@ func TestAppServices_EmbeddedSDK(t *testing.T) {
 			continue // served: TestObjectStorage_EmbeddedSDKRoundTrip
 		}
 		st := status.Convert(c.call(context.Background()))
-		if c.service == appservices.ServiceScheduler {
-			assert.NotEqual(t, codes.Unavailable, st.Code(),
-				"%s reaches the embedded scheduler: %s", name, st.Message())
-			continue
-		}
 		require.Equal(t, codes.Unavailable, st.Code(), "%s: %s", name, st.Message())
 		assert.Equal(t, c.service, notConfiguredServiceName(t, st), name)
 	}
-
-	_, err := servers.scheduler.GetStatus(context.Background(), &platformv1.GetSchedulerStatusRequest{})
-	assert.NoError(t, err, "the embedded scheduler answers its status")
-	_, err = servers.scheduler.ListJobs(context.Background(), &platformv1.ListSchedulerJobsRequest{})
-	assert.NoError(t, err, "the embedded scheduler lists its jobs")
 }
 
 // TestObjectStorage_EmbeddedSDKRoundTrip stores, reads, copies, lists and

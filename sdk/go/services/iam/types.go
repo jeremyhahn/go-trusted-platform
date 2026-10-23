@@ -22,11 +22,23 @@ type User struct {
 	Email       string            `json:"email" yaml:"email"`
 	Name        string            `json:"name,omitempty" yaml:"name,omitempty"`
 	Roles       []string          `json:"roles,omitempty" yaml:"roles,omitempty"`
+	Groups      []string          `json:"groups,omitempty" yaml:"groups,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty" yaml:"attributes,omitempty"`
 	MfaVerified bool              `json:"mfa_verified" yaml:"mfa_verified"`
 	CreatedAt   time.Time         `json:"created_at" yaml:"created_at"`
 	UpdatedAt   *time.Time        `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
 	LastAuth    *time.Time        `json:"last_auth,omitempty" yaml:"last_auth,omitempty"`
+}
+
+// Group represents an IAM group.
+type Group struct {
+	ID          string     `json:"id" yaml:"id"`
+	TenantID    string     `json:"tenant_id" yaml:"tenant_id"`
+	Name        string     `json:"name,omitempty" yaml:"name,omitempty"`
+	Description string     `json:"description,omitempty" yaml:"description,omitempty"`
+	Members     []string   `json:"members,omitempty" yaml:"members,omitempty"`
+	CreatedAt   time.Time  `json:"created_at" yaml:"created_at"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
 }
 
 // Role represents an IAM role.
@@ -112,6 +124,12 @@ type RotateSecretResult struct {
 type ListUsersResult struct {
 	Users []*User `json:"users" yaml:"users"`
 	Total uint64  `json:"total" yaml:"total"`
+}
+
+// ListGroupsResult contains the result of listing groups.
+type ListGroupsResult struct {
+	Groups []*Group `json:"groups" yaml:"groups"`
+	Total  uint64   `json:"total" yaml:"total"`
 }
 
 // ListRolesResult contains the result of listing roles.

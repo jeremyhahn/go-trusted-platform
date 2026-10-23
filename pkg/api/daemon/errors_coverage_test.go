@@ -124,6 +124,8 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrIAMUserAlreadyExists", ErrIAMUserAlreadyExists{TenantID: "tenant-1", Email: "user@example.com"}, "IAM user already exists: user@example.com in tenant tenant-1"},
 		{"ErrIAMRoleNotFound", ErrIAMRoleNotFound{TenantID: "tenant-1", RoleID: "admin"}, "IAM role not found: admin in tenant tenant-1"},
 		{"ErrIAMRoleAlreadyExists", ErrIAMRoleAlreadyExists{TenantID: "tenant-1", RoleID: "admin"}, "IAM role already exists: admin in tenant tenant-1"},
+		{"ErrIAMGroupNotFound", ErrIAMGroupNotFound{TenantID: "tenant-1", GroupID: "developers"}, "IAM group not found: developers in tenant tenant-1"},
+		{"ErrIAMGroupAlreadyExists", ErrIAMGroupAlreadyExists{TenantID: "tenant-1", GroupID: "developers"}, "IAM group already exists: developers in tenant tenant-1"},
 		{"ErrIAMTenantNotFound", ErrIAMTenantNotFound{TenantID: "tenant-1"}, "IAM tenant not found: tenant-1"},
 		{"ErrIAMTenantAlreadyExists", ErrIAMTenantAlreadyExists{TenantID: "tenant-1"}, "IAM tenant already exists: tenant-1"},
 		{"ErrIAMPolicyNotFound", ErrIAMPolicyNotFound{TenantID: "tenant-1", PolicyName: "read-only"}, "IAM policy not found: read-only in tenant tenant-1"},
@@ -136,6 +138,7 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrIAMInvalidCredentials", ErrIAMInvalidCredentials{}, "IAM invalid credentials"},
 		{"ErrIAMRoleAssignmentFailed", ErrIAMRoleAssignmentFailed{UserID: "user-1", RoleID: "admin", Reason: "role limit exceeded"}, "IAM failed to assign role admin to user user-1: role limit exceeded"},
 		{"ErrIAMRoleRevocationFailed", ErrIAMRoleRevocationFailed{UserID: "user-1", RoleID: "admin", Reason: "role not assigned"}, "IAM failed to revoke role admin from user user-1: role not assigned"},
+		{"ErrIAMGroupMembershipFailed", ErrIAMGroupMembershipFailed{GroupID: "developers", UserID: "user-1", Reason: "group full"}, "IAM group membership operation failed for user user-1 in group developers: group full"},
 		{"ErrIAMTokenNotFound", ErrIAMTokenNotFound{TokenID: "token-123"}, "IAM token not found: token-123"},
 		{"ErrIAMTokenExpired", ErrIAMTokenExpired{TokenID: "token-123"}, "IAM token expired: token-123"},
 		{"ErrIAMTokenRevoked", ErrIAMTokenRevoked{TokenID: "token-123"}, "IAM token revoked: token-123"},
@@ -333,6 +336,8 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrIAMUserAlreadyExists{}
 	var _ error = ErrIAMRoleNotFound{}
 	var _ error = ErrIAMRoleAlreadyExists{}
+	var _ error = ErrIAMGroupNotFound{}
+	var _ error = ErrIAMGroupAlreadyExists{}
 	var _ error = ErrIAMTenantNotFound{}
 	var _ error = ErrIAMTenantAlreadyExists{}
 	var _ error = ErrIAMPolicyNotFound{}
@@ -345,6 +350,7 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrIAMInvalidCredentials{}
 	var _ error = ErrIAMRoleAssignmentFailed{}
 	var _ error = ErrIAMRoleRevocationFailed{}
+	var _ error = ErrIAMGroupMembershipFailed{}
 	var _ error = ErrIAMTokenNotFound{}
 	var _ error = ErrIAMTokenExpired{}
 	var _ error = ErrIAMTokenRevoked{}

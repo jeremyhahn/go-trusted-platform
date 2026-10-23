@@ -224,6 +224,7 @@ over a given connection.
 |------|-------------------------|
 | `pkg/vtpm` `Service.Quote` (REST, QUIC, gRPC `QuoteVTPM`, MCP `vtpm_quote` / `vtpm_bundle_quote`) and compute `AttestVM` (QEMU, AWS, GCP; Azure refuses) | Signed by the guest's vTPM, or by no key at all for the cloud EK paths — never by the node IAK. No node collector or device verifier accepts a vTPM quote as host evidence. |
 | attestation `AttestVM` / `CollectVMAttestation` / `CollectContainerAttestation` | Return `ErrTPMSessionNotConfigured`; no quote is produced. |
+| attestation `BuildManifest` (REST `/manifests/build`, gRPC, QUIC `0x7C`, MCP `attestation_create_manifest`) | Returns `ErrTPMSessionNotConfigured` on every node, a TPM or not. A manifest is signed with a free-form IAK signature over the caller's nonce, and the daemon's TPM session (`HostQuoter`) offers only `TPM2_Quote` under the restricted IAK, so it has no key to sign with. No manifest is built or stored. |
 | container `Attest(ctx, id)`, PIV `Attest(slot)`, MCP `platform_tpm_certify` | Take no caller qualifying data. |
 | daemon REST `/api/v1/tpm/certify` | Bound when a nonce is given (invariant 11). Its output is a `TPM_ST_ATTEST_CERTIFY` structure, which every quote verifier, `quotebind.QuotedData` and the JS `quotedData` refuse. |
 | diskless boot quote (`app.disklessBootQuote` → `hostquote.Collect`) | Quotes the binding the node derived from the connection it dialled itself; the caller never supplies it. |

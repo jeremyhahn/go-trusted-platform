@@ -42,6 +42,9 @@ var (
 	// ErrIAMMissingRoleID is returned when role ID is required but not provided.
 	ErrIAMMissingRoleID = errors.New("role ID is required")
 
+	// ErrIAMMissingGroupID is returned when group ID is required but not provided.
+	ErrIAMMissingGroupID = errors.New("group ID is required")
+
 	// ErrIAMMissingEmail is returned when email is required but not provided.
 	ErrIAMMissingEmail = errors.New("email is required")
 
@@ -76,6 +79,15 @@ type IAMService interface {
 	DeleteRole(ctx context.Context, tenantID, roleID string) error
 	AssignRole(ctx context.Context, tenantID, userID, roleID string) error
 	RevokeRole(ctx context.Context, tenantID, userID, roleID string) error
+
+	// Group operations
+	CreateGroup(ctx context.Context, tenantID string, req *IAMCreateGroupRequest) (*IAMGroupInfo, error)
+	GetGroup(ctx context.Context, tenantID, groupID string) (*IAMGroupInfo, error)
+	ListGroups(ctx context.Context, tenantID string, req *IAMListRequest) (*IAMGroupListResponse, error)
+	UpdateGroup(ctx context.Context, tenantID, groupID string, req *IAMUpdateGroupRequest) (*IAMGroupInfo, error)
+	DeleteGroup(ctx context.Context, tenantID, groupID string) error
+	AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error
+	RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error
 
 	// Authorization operations
 	CheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (*IAMCheckPermissionResponse, error)
@@ -132,6 +144,20 @@ func (h *IAMHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *
 	case quicwire.OpIAMRoleDelete:
 		return h.handleRoleDelete(ctx, req)
 
+	// Group operations
+	case quicwire.OpIAMGroupCreate:
+		return h.handleGroupCreate(ctx, req)
+	case quicwire.OpIAMGroupGet:
+		return h.handleGroupGet(ctx, req)
+	case quicwire.OpIAMGroupList:
+		return h.handleGroupList(ctx, req)
+	case quicwire.OpIAMGroupDelete:
+		return h.handleGroupDelete(ctx, req)
+	case quicwire.OpIAMGroupAddMember:
+		return h.handleGroupAddMember(ctx, req)
+	case quicwire.OpIAMGroupRemoveMember:
+		return h.handleGroupRemoveMember(ctx, req)
+
 	// Authorization operations
 	case quicwire.OpIAMCheckPermission:
 		return h.handleCheckPermission(ctx, req)
@@ -155,6 +181,7 @@ type IAMCreateUserRequest struct {
 	Username   string            `codec:"username"`
 	Name       string            `codec:"name"`
 	Roles      []string          `codec:"roles"`
+	Groups     []string          `codec:"groups"`
 	Attributes map[string]string `codec:"attributes"`
 }
 
@@ -166,6 +193,7 @@ type IAMUpdateUserRequest struct {
 	Username   string            `codec:"username"`
 	Name       string            `codec:"name"`
 	Roles      []string          `codec:"roles"`
+	Groups     []string          `codec:"groups"`
 	Attributes map[string]string `codec:"attributes"`
 }
 
@@ -197,6 +225,7 @@ type IAMUserInfo struct {
 	Username    string            `codec:"username"`
 	Name        string            `codec:"name"`
 	Roles       []string          `codec:"roles"`
+	Groups      []string          `codec:"groups"`
 	Attributes  map[string]string `codec:"attributes"`
 	MFAVerified bool              `codec:"mfa_verified"`
 	CreatedAt   int64             `codec:"created_at"`
@@ -287,6 +316,67 @@ type IAMRoleListResponse struct {
 	Limit     int32          `codec:"limit"`
 	Offset    int32          `codec:"offset"`
 	Timestamp int64          `codec:"timestamp"`
+}
+
+// IAMCreateGroupRequest represents a group creation request
+type IAMCreateGroupRequest struct {
+	TenantID    string `codec:"tenant_id"`
+	ID          string `codec:"id"`
+	Name        string `codec:"name"`
+	Description string `codec:"description"`
+}
+
+// IAMUpdateGroupRequest represents a group update request
+type IAMUpdateGroupRequest struct {
+	TenantID    string `codec:"tenant_id"`
+	GroupID     string `codec:"group_id"`
+	Name        string `codec:"name"`
+	Description string `codec:"description"`
+}
+
+// IAMGetGroupRequest represents a group get request
+type IAMGetGroupRequest struct {
+	TenantID string `codec:"tenant_id"`
+	GroupID  string `codec:"group_id"`
+}
+
+// IAMDeleteGroupRequest represents a group deletion request
+type IAMDeleteGroupRequest struct {
+	TenantID string `codec:"tenant_id"`
+	GroupID  string `codec:"group_id"`
+}
+
+// IAMGroupMemberRequest represents a group membership request
+type IAMGroupMemberRequest struct {
+	TenantID string `codec:"tenant_id"`
+	GroupID  string `codec:"group_id"`
+	UserID   string `codec:"user_id"`
+}
+
+// IAMGroupInfo contains group information
+type IAMGroupInfo struct {
+	ID          string   `codec:"id"`
+	TenantID    string   `codec:"tenant_id"`
+	Name        string   `codec:"name"`
+	Description string   `codec:"description"`
+	Members     []string `codec:"members"`
+	CreatedAt   int64    `codec:"created_at"`
+	UpdatedAt   int64    `codec:"updated_at"`
+}
+
+// IAMGroupResponse represents a group operation response
+type IAMGroupResponse struct {
+	Group     *IAMGroupInfo `codec:"group"`
+	Timestamp int64         `codec:"timestamp"`
+}
+
+// IAMGroupListResponse represents a group list response
+type IAMGroupListResponse struct {
+	Groups    []*IAMGroupInfo `codec:"groups"`
+	Total     int64           `codec:"total"`
+	Limit     int32           `codec:"limit"`
+	Offset    int32           `codec:"offset"`
+	Timestamp int64           `codec:"timestamp"`
 }
 
 // IAMCheckPermissionRequest represents a permission check request
@@ -782,6 +872,265 @@ func (h *IAMHandler) handleRoleRevoke(ctx context.Context, req *quicwire.Request
 }
 
 // =============================================================================
+// Group Handler Methods
+// =============================================================================
+
+// handleGroupCreate creates a new IAM group
+func (h *IAMHandler) handleGroupCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.service == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
+	}
+
+	var createReq IAMCreateGroupRequest
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	}
+
+	if createReq.TenantID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
+	}
+
+	if createReq.Name == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingName)
+	}
+
+	group, err := h.service.CreateGroup(ctx, createReq.TenantID, &createReq)
+	if err != nil {
+		h.logger.Error(err, "failed to create group")
+		return h.iamErrorResponse(err)
+	}
+
+	resp := &IAMGroupResponse{
+		Group:     group,
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quicwire.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+	}
+
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleGroupGet retrieves an IAM group by ID
+func (h *IAMHandler) handleGroupGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.service == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
+	}
+
+	var getReq IAMGetGroupRequest
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	}
+
+	if getReq.TenantID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
+	}
+
+	if getReq.GroupID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
+	}
+
+	group, err := h.service.GetGroup(ctx, getReq.TenantID, getReq.GroupID)
+	if err != nil {
+		h.logger.Error(err, "failed to get group")
+		return h.iamErrorResponse(err)
+	}
+
+	resp := &IAMGroupResponse{
+		Group:     group,
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quicwire.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+	}
+
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleGroupList lists IAM groups
+func (h *IAMHandler) handleGroupList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.service == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
+	}
+
+	var listReq IAMListRequest
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	}
+
+	if listReq.TenantID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
+	}
+
+	// Apply defaults
+	if listReq.Limit <= 0 {
+		listReq.Limit = iamDefaultLimit
+	}
+	if listReq.Limit > iamMaxLimit {
+		listReq.Limit = iamMaxLimit
+	}
+
+	groups, err := h.service.ListGroups(ctx, listReq.TenantID, &listReq)
+	if err != nil {
+		h.logger.Error(err, "failed to list groups")
+		return h.iamErrorResponse(err)
+	}
+
+	groups.Timestamp = time.Now().Unix()
+
+	payload, err := quicwire.EncodePayload(groups)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+	}
+
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleGroupDelete deletes an IAM group
+func (h *IAMHandler) handleGroupDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.service == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
+	}
+
+	var deleteReq IAMDeleteGroupRequest
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	}
+
+	if deleteReq.TenantID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
+	}
+
+	if deleteReq.GroupID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
+	}
+
+	if err := h.service.DeleteGroup(ctx, deleteReq.TenantID, deleteReq.GroupID); err != nil {
+		h.logger.Error(err, "failed to delete group")
+		return h.iamErrorResponse(err)
+	}
+
+	resp := &IAMSuccessResponse{
+		Success:   true,
+		Message:   "group deleted successfully",
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quicwire.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+	}
+
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleGroupAddMember adds a user to a group
+func (h *IAMHandler) handleGroupAddMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.service == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
+	}
+
+	var memberReq IAMGroupMemberRequest
+	if err := quicwire.DecodePayload(req.Payload, &memberReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	}
+
+	if memberReq.TenantID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
+	}
+
+	if memberReq.GroupID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
+	}
+
+	if memberReq.UserID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
+	}
+
+	if err := h.service.AddGroupMember(ctx, memberReq.TenantID, memberReq.GroupID, memberReq.UserID); err != nil {
+		h.logger.Error(err, "failed to add group member")
+		return h.iamErrorResponse(err)
+	}
+
+	resp := &IAMSuccessResponse{
+		Success:   true,
+		Message:   "member added successfully",
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quicwire.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+	}
+
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleGroupRemoveMember removes a user from a group
+func (h *IAMHandler) handleGroupRemoveMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.service == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
+	}
+
+	var memberReq IAMGroupMemberRequest
+	if err := quicwire.DecodePayload(req.Payload, &memberReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	}
+
+	if memberReq.TenantID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
+	}
+
+	if memberReq.GroupID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
+	}
+
+	if memberReq.UserID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
+	}
+
+	if err := h.service.RemoveGroupMember(ctx, memberReq.TenantID, memberReq.GroupID, memberReq.UserID); err != nil {
+		h.logger.Error(err, "failed to remove group member")
+		return h.iamErrorResponse(err)
+	}
+
+	resp := &IAMSuccessResponse{
+		Success:   true,
+		Message:   "member removed successfully",
+		Timestamp: time.Now().Unix(),
+	}
+
+	payload, err := quicwire.EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+	}
+
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
+		Payload: payload,
+	}
+}
+
+// =============================================================================
 // Authorization Handler Methods
 // =============================================================================
 
@@ -852,9 +1201,13 @@ func (h *IAMHandler) iamErrorResponse(err error) *quicwire.Response {
 		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrIAMRoleNotFound{}):
 		status = quicwire.StatusNotFound
+	case errors.Is(err, ErrIAMGroupNotFound{}):
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrIAMUserAlreadyExists{}):
 		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrIAMRoleAlreadyExists{}):
+		status = quicwire.StatusAlreadyExists
+	case errors.Is(err, ErrIAMGroupAlreadyExists{}):
 		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrIAMPermissionDenied{}):
 		status = quicwire.StatusPermissionDenied
@@ -933,6 +1286,18 @@ func (e ErrIAMRoleNotFound) Is(target error) bool {
 	return ok
 }
 
+// ErrIAMGroupNotFound represents a group not found error
+type ErrIAMGroupNotFound struct{}
+
+func (e ErrIAMGroupNotFound) Error() string {
+	return "group not found"
+}
+
+func (e ErrIAMGroupNotFound) Is(target error) bool {
+	_, ok := target.(ErrIAMGroupNotFound)
+	return ok
+}
+
 // ErrIAMUserAlreadyExists represents a user already exists error
 type ErrIAMUserAlreadyExists struct{}
 
@@ -954,6 +1319,18 @@ func (e ErrIAMRoleAlreadyExists) Error() string {
 
 func (e ErrIAMRoleAlreadyExists) Is(target error) bool {
 	_, ok := target.(ErrIAMRoleAlreadyExists)
+	return ok
+}
+
+// ErrIAMGroupAlreadyExists represents a group already exists error
+type ErrIAMGroupAlreadyExists struct{}
+
+func (e ErrIAMGroupAlreadyExists) Error() string {
+	return "group already exists"
+}
+
+func (e ErrIAMGroupAlreadyExists) Is(target error) bool {
+	_, ok := target.(ErrIAMGroupAlreadyExists)
 	return ok
 }
 

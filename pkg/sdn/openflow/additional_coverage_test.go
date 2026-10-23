@@ -15,6 +15,7 @@ package openflow
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -287,10 +288,11 @@ func TestClient_Handshake_WrongFeaturesReplyType(t *testing.T) {
 	ctx := context.Background()
 	err = client.Connect(ctx)
 	if err == nil {
-		t.Error("expected error for wrong features reply type")
 		_ = client.Disconnect()
-	} else if err != ErrNoFeatures {
-		t.Logf("got error: %v", err)
+		t.Fatal("expected error for wrong features reply type")
+	}
+	if !errors.Is(err, ErrNoFeatures) {
+		t.Fatalf("Connect() error = %v, want ErrNoFeatures", err)
 	}
 }
 

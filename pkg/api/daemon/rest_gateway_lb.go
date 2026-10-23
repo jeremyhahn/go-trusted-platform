@@ -23,20 +23,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 )
 
-// SetLoadBalancer wires the gateway load balancer backend into the REST
-// gateway service. A nil backend leaves every VIP operation returning
-// rest.ErrLBNotConfigured (503).
-func (s *gatewayRESTService) SetLoadBalancer(lb GatewayLoadBalancerInterface) {
-	s.lb = lb
-}
-
-// requireLB resolves the load balancer backend or returns the typed REST
-// not-configured error.
+// requireLB returns the shared service's load balancer backend, or the
+// typed not-configured error (503) when none is wired.
 func (s *gatewayRESTService) requireLB() (GatewayLoadBalancerInterface, error) {
-	if s.lb == nil {
+	if s.backends == nil || s.backends.LoadBalancer() == nil {
 		return nil, rest.ErrLBNotConfigured{}
 	}
-	return s.lb, nil
+	return s.backends.LoadBalancer(), nil
 }
 
 // mapLBError converts load balancer errors to typed REST errors.

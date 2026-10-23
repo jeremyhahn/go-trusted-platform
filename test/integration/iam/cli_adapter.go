@@ -100,6 +100,9 @@ func (a *CLIAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*C
 	if len(opts.Roles) > 0 {
 		args = append(args, "--roles", strings.Join(opts.Roles, ","))
 	}
+	if len(opts.Groups) > 0 {
+		args = append(args, "--groups", strings.Join(opts.Groups, ","))
+	}
 	if len(opts.Attributes) > 0 {
 		attrs := formatAttributesForCLI(opts.Attributes)
 		args = append(args, "--attributes", attrs)
@@ -164,6 +167,9 @@ func (a *CLIAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*U
 	if len(opts.Roles) > 0 {
 		args = append(args, "--roles", strings.Join(opts.Roles, ","))
 	}
+	if len(opts.Groups) > 0 {
+		args = append(args, "--groups", strings.Join(opts.Groups, ","))
+	}
 	if len(opts.Attributes) > 0 {
 		attrs := formatAttributesForCLI(opts.Attributes)
 		args = append(args, "--attributes", attrs)
@@ -227,6 +233,9 @@ func (a *CLIAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Lis
 	}
 	if opts.Role != "" {
 		args = append(args, "--role", opts.Role)
+	}
+	if opts.Group != "" {
+		args = append(args, "--group", opts.Group)
 	}
 
 	output, err := a.runCommand(ctx, args...)
@@ -297,6 +306,206 @@ func (a *CLIAdapter) RevokeRole(ctx context.Context, opts RevokeRoleOptions) (*R
 	}
 
 	return &RevokeRoleResult{Success: resp.Success}, nil
+}
+
+// ============================================================================
+// Group CRUD Operations
+// ============================================================================
+
+// CreateGroup creates a new group
+func (a *CLIAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) (*CreateGroupResult, error) {
+	args := []string{"iam", "group", "create",
+		opts.ID,
+		"--tenant", opts.TenantID,
+		"--output", "json",
+	}
+
+	if opts.Name != "" {
+		args = append(args, "--name", opts.Name)
+	}
+	if opts.Description != "" {
+		args = append(args, "--description", opts.Description)
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var group Group
+	if err := json.Unmarshal(output, &group); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: "CreateGroup",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &CreateGroupResult{Group: &group}, nil
+}
+
+// GetGroup retrieves a group by ID
+func (a *CLIAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGroupResult, error) {
+	args := []string{"iam", "group", "get",
+		opts.TenantID,
+		opts.GroupID,
+		"--output", "json",
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var group Group
+	if err := json.Unmarshal(output, &group); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: "GetGroup",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &GetGroupResult{Group: &group}, nil
+}
+
+// UpdateGroup updates an existing group
+func (a *CLIAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error) {
+	args := []string{"iam", "group", "update",
+		opts.GroupID,
+		"--tenant", opts.TenantID,
+		"--output", "json",
+	}
+
+	if opts.Name != "" {
+		args = append(args, "--name", opts.Name)
+	}
+	if opts.Description != "" {
+		args = append(args, "--description", opts.Description)
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var group Group
+	if err := json.Unmarshal(output, &group); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: "UpdateGroup",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+
+	return &UpdateGroupResult{Group: &group}, nil
+}
+
+// DeleteGroup removes a group
+func (a *CLIAdapter) DeleteGroup(ctx context.Context, opts DeleteGroupOptions) (*DeleteGroupResult, error) {
+	args := []string{"iam", "group", "delete",
+		opts.TenantID,
+		opts.GroupID,
+		"--output", "json",
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return &DeleteGroupResult{Success: true}, nil
+	}
+
+	return &DeleteGroupResult{Success: resp.Success}, nil
+}
+
+// ListGroups lists all groups with optional filtering
+func (a *CLIAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error) {
+	args := []string{"iam", "group", "list",
+		"--tenant", opts.TenantID,
+		"--output", "json",
+	}
+
+	if opts.Limit > 0 {
+		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
+	}
+	if opts.Offset > 0 {
+		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ListGroupsResult
+	if err := json.Unmarshal(output, &result); err != nil {
+		var groups []*Group
+		if err := json.Unmarshal(output, &groups); err != nil {
+			return nil, &CLIAdapterError{
+				Operation: "ListGroups",
+				Message:   "failed to parse response",
+				Output:    string(output),
+			}
+		}
+		result.Groups = groups
+		result.Total = int64(len(groups))
+	}
+
+	return &result, nil
+}
+
+// AddMember adds a user to a group
+func (a *CLIAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
+	args := []string{"iam", "group", "add-member",
+		opts.TenantID,
+		opts.GroupID,
+		opts.UserID,
+		"--output", "json",
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return &AddMemberResult{Success: true}, nil
+	}
+
+	return &AddMemberResult{Success: resp.Success}, nil
+}
+
+// RemoveMember removes a user from a group
+func (a *CLIAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
+	args := []string{"iam", "group", "remove-member",
+		opts.TenantID,
+		opts.GroupID,
+		opts.UserID,
+		"--output", "json",
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil {
+		return &RemoveMemberResult{Success: true}, nil
+	}
+
+	return &RemoveMemberResult{Success: resp.Success}, nil
 }
 
 // ============================================================================

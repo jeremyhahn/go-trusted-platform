@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// tenantRecordingIAMClient answers User/Role Get from the tenant it is
+// tenantRecordingIAMClient answers User/Role/Group Get from the tenant it is
 // asked for and records that tenant, so a test can prove which tenant a
 // request was served from. Every other IAM method is left to the embedded nil
 // interface: a call to one panics, which the tests below never make.
@@ -32,6 +32,10 @@ func (c *tenantRecordingIAMClient) User() sdkiam.UserClient {
 
 func (c *tenantRecordingIAMClient) Role() sdkiam.RoleClient {
 	return tenantRecordingRoles{client: c}
+}
+
+func (c *tenantRecordingIAMClient) Group() sdkiam.GroupClient {
+	return tenantRecordingGroups{client: c}
 }
 
 type tenantRecordingUsers struct {
@@ -52,6 +56,16 @@ type tenantRecordingRoles struct {
 func (r tenantRecordingRoles) Get(_ context.Context, tenantID, roleID string) (*sdkiam.Role, error) {
 	r.client.servedTenant = tenantID
 	return &sdkiam.Role{ID: roleID, TenantID: tenantID}, nil
+}
+
+type tenantRecordingGroups struct {
+	sdkiam.GroupClient
+	client *tenantRecordingIAMClient
+}
+
+func (g tenantRecordingGroups) Get(_ context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
+	g.client.servedTenant = tenantID
+	return &sdkiam.Group{ID: groupID, TenantID: tenantID}, nil
 }
 
 func tokenCallerContext(tenantID string) context.Context {
@@ -153,6 +167,10 @@ func TestIAMGRPCService_TenantBinding(t *testing.T) {
 			_, err := s.GetRole(ctx, &platformv1.GetIAMRoleRequest{TenantId: tenantID, RoleId: "r-1"})
 			return err
 		},
+		"GetGroup": func(s *IAMGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.GetGroup(ctx, &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: "g-1"})
+			return err
+		},
 	}
 
 	cases := []struct {
@@ -181,5 +199,51 @@ func TestIAMGRPCService_TenantBinding(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestIAMGRPCService_CrossTenantRPCsAreSystemOnly pins the REST
+// RequireSystemTenant rule on the shared IAM service every transport calls:
+// only the system tenant creates or lists IAM tenants, and a refused create
+// leaves no tenant behind.
+func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
+	cases := []struct {
+		name         string
+		systemTenant string
+		ctx          context.Context
+		wantCode     codes.Code
+	}{
+		{name: "system tenant", systemTenant: "system", ctx: tokenCallerContext("system"), wantCode: codes.OK},
+		{name: "unbound local caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.OK},
+		{name: "other tenant", systemTenant: "system", ctx: tokenCallerContext("tenant-a"), wantCode: codes.PermissionDenied},
+		{name: "unset system tenant", systemTenant: "", ctx: tokenCallerContext("system"), wantCode: codes.PermissionDenied},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewIAMGRPCService(slog.Default(), newMemIAM(), nil)
+			svc.SetSystemTenant(tc.systemTenant)
+
+			_, err := svc.CreateTenant(tc.ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("CreateTenant code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
+			}
+			_, err = svc.ListTenants(tc.ctx, &platformv1.ListIAMTenantsRequest{})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("ListTenants code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
+			}
+
+			listed, err := svc.ListTenants(context.Background(), &platformv1.ListIAMTenantsRequest{})
+			if err != nil {
+				t.Fatalf("ListTenants as the local caller: %v", err)
+			}
+			wantTenants := 0
+			if tc.wantCode == codes.OK {
+				wantTenants = 1
+			}
+			if len(listed.GetTenants()) != wantTenants {
+				t.Fatalf("tenants after CreateTenant = %d, want %d", len(listed.GetTenants()), wantTenants)
+			}
+		})
 	}
 }

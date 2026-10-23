@@ -173,9 +173,7 @@ func (r *IDevIDResolver) Resolve(ctx context.Context, raw string) (*quicbaassecr
 		slog.Int("plaintext_len", len(plaintext)),
 	)
 
-	// NewSecretValue seals a copy, so the plaintext is wiped either way.
-	defer clear(plaintext)
-	return quicbaassecret.NewSecretValue(raw, plaintext, quicbaassecret.StrategyLiteral)
+	return quicbaassecret.NewSecretValue(raw, plaintext, quicbaassecret.StrategyLiteral), nil
 }
 
 // decrypt performs the actual decryption using the crypto.Decrypter interface.

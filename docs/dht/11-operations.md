@@ -1,5 +1,7 @@
 # Operations
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document consolidates operational aspects of the go-trusted-platform network including genesis protocol, partition handling, telemetry, and planned enhancements.
 
 ## Genesis Protocol

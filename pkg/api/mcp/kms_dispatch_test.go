@@ -72,6 +72,15 @@ func TestKMSAdapterMappedToolsRegistered(t *testing.T) {
 		"kms_random",
 		"kms_generate_data_key",
 		"kms_generate_wrapped_data_key",
+		"kms_hash",
+		"kms_hmac",
+		"kms_verify_hmac",
+		"kms_rewrap",
+		"kms_import_key",
+		"kms_update_key_status",
+		"kms_list_key_versions",
+		"kms_batch_encrypt",
+		"kms_batch_decrypt",
 	}
 
 	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())

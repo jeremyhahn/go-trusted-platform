@@ -57,14 +57,6 @@ completes a challenge, and receives the production webservice
 certificates. The root CA bundle is baked into the install ISO so the
 first ACME connection can verify TLS before any cert has been issued.
 
-Those nodes enroll from the private zones of the reference network, so the
-`internal` listener of each `control-plane.yaml` sets
-`acme.allow-private-targets: true`: without it the http-01 and enroll-01
-validators refuse private addresses (the SSRF guard) and no gateway or compute
-node, the Raspberry Pi compute included, can enroll. The `public` listener and
-the gateways' own ACME servers keep the default, `false`.
-`TestShippedTemplates_ACMEPrivateTargetsOptIn` pins which listeners opt in.
-
 The platform listener (`tls-port: 9443`) of every `gateway.yaml` and
 `compute.yaml` here, Supermicro X10 and Dell R640 alike, sets
 `certificate.acme.challenge: device-attest-01`, so its certificate comes from
@@ -483,7 +475,7 @@ The two gateway templates set a top-level `platform-ca-file:`. It is the
 platform CA bundle provisioning delivers to the node, and it is gatewayd's
 platform anchor: every platform service the gateway talks to is verified
 against it. That includes the platform secret store (`secret-store:`), so it
-stands behind every `kms://` and `secret://` reference the gateway
+stands behind every `kms://` reference the gateway
 configuration carries — the BGP neighbour passwords, the TCP-AO master keys,
 the ipsec and wireguard keys — as well as platformd over grpc, the proxy's
 mTLS callers and `trust-class: platform` backends, and the telemetry reporter.
@@ -503,6 +495,14 @@ Without it, a gateway with a `secret-store:` refuses to start
 secret reference fails at service start. The file is read at each
 verification, so a rotated bundle needs no restart; a bundle not yet on disk
 fails the verification naming the path.
+
+The anchor is one side of the store session. The other is the gateway's node
+identity: the session presents the `control-plane:` `cert-file`/`key-file`
+pair (`/etc/gatewayd/client.pem`, `client-key.pem`), the same certificate the
+telemetry reporter presents, so a store that requires a client certificate
+accepts the gateway. `secret-store:` carries no credential of its own; without
+the pair a gateway with a `secret-store:` refuses to start
+(`secrets.ErrClientIdentityRequired`). The pair is read once at start.
 
 ---
 

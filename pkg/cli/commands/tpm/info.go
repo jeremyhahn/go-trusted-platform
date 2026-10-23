@@ -100,10 +100,27 @@ func buildTPMInfoOutput(resp *tpmsvc.InfoResponse) map[string]interface{} {
 	if resp.Properties != nil {
 		info = resp.Properties["info"]
 	}
-	return map[string]interface{}{
-		"info":         info,
-		"is_simulator": resp.IsSimulator,
+	pcrBanks := make([]string, 0, len(resp.PCRBanks))
+	for _, bank := range resp.PCRBanks {
+		pcrBanks = append(pcrBanks, string(bank))
 	}
+	output := map[string]interface{}{
+		"info":           info,
+		"version":        string(resp.Version),
+		"is_simulator":   resp.IsSimulator,
+		"fips_mode":      resp.FIPSMode,
+		"max_nvram_size": resp.MaxNVRAMSize,
+		"pcr_banks":      pcrBanks,
+	}
+	if resp.Manufacturer != nil {
+		output["manufacturer"] = map[string]interface{}{
+			"name":             resp.Manufacturer.Name,
+			"id":               resp.Manufacturer.ID,
+			"model":            resp.Manufacturer.Model,
+			"firmware_version": resp.Manufacturer.FirmwareVersion,
+		}
+	}
+	return output
 }
 
 // printTPMInfoDetails prints the comprehensive xkms TPM info report in

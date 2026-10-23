@@ -1,5 +1,7 @@
 # Browser Extension for DHT Network Access
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Browser Extension provides external users seamless access to the Trusted DHT network directly from Chrome and Firefox browsers. Users can browse DHT content, discover services, interact with e-commerce stores, and manage their DHT wallet without running a full node.

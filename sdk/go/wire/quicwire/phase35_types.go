@@ -310,6 +310,7 @@ type LUKSEnrollTPMReq struct {
 	Device             string  `codec:"device"`
 	ExistingPassphrase string  `codec:"existing_passphrase"`
 	PCRs               []int32 `codec:"pcrs"`
+	Handle             string  `codec:"handle"`
 }
 
 // LUKSEnrollTPMResp is the QUIC enroll-tpm response payload.

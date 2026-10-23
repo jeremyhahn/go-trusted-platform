@@ -169,16 +169,16 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 	}
 
 	// SSRK has NO platform policy - this allows unseal without PCR verification
-	srkAttrs.TPMPolicy = ""
+	srkAttrs.PlatformPolicy = false
 
 	// Create key attributes for upgrade seal
 	// Both parent SRK and sealed object have NO PCR policy
 	upgradeAttrs := &xkmssdk.KeyAttributes{
-		CN:        "luks-upgrade-seal",
-		KeyType:   xkmssdk.KeyTypeHMAC,
-		TPMPolicy: "", // No PCR policy
-		Parent:    srkAttrs,
-		StoreType: xkmssdk.StoreSoftware,
+		CN:             "luks-upgrade-seal",
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: false, // No PCR policy
+		Parent:         srkAttrs,
+		StoreType:      xkmssdk.StoreSoftware,
 	}
 
 	// Load sealed data from EFI partition files
@@ -319,33 +319,6 @@ func (s *TPMUpgradeStrategy) CreateUpgradeSeal(key []byte) error {
 		}
 	}()
 
-	sealedData, err := s.sealUpgradeKey(key)
-	if err != nil {
-		return err
-	}
-
-	// Write sealed data to EFI partition
-	publicPath := filepath.Join(s.getEFIPath(), upgradePublicFile)
-	privatePath := filepath.Join(s.getEFIPath(), upgradePrivateFile)
-
-	if err := os.WriteFile(publicPath, sealedData.TPMPublic, 0600); err != nil {
-		return &WrappedError{Msg: "failed to write upgrade seal public", Err: err}
-	}
-	if err := os.WriteFile(privatePath, sealedData.TPMPrivate, 0600); err != nil {
-		return &WrappedError{Msg: "failed to write upgrade seal private", Err: err}
-	}
-
-	s.logger.Info("✓ Upgrade seal created successfully on EFI partition")
-	s.logger.Info("System will boot once with new kernel, then re-seal with new PCRs")
-
-	return nil
-}
-
-// sealUpgradeKey seals key under the SSRK with no PCR policy and no password.
-// The go-xkms v0.49 TPM refuses such an object (ErrSealUnprotected: a sealed
-// object needs a policy or a password), so this writer is unreached until it
-// gets a named TPM policy (go-xkms #1443).
-func (s *TPMUpgradeStrategy) sealUpgradeKey(key []byte) (*xkmssdk.SealedData, error) {
 	// Upgrade seals use SSRK which has NO PCR policy
 	// This is required because Platform KeyStore SRK has PCR auth policy
 	// which would prevent unseal after kernel upgrades when PCRs change
@@ -356,19 +329,19 @@ func (s *TPMUpgradeStrategy) sealUpgradeKey(key []byte) (*xkmssdk.SealedData, er
 	// Get SSRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(ssrkHandle)
 	if err != nil {
-		return nil, &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
+		return &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 
 	// SSRK has NO platform policy - this allows unseal without PCR verification
-	srkAttrs.TPMPolicy = ""
+	srkAttrs.PlatformPolicy = false
 
 	// Create key attributes for upgrade seal without PCR policy
 	upgradeAttrs := &xkmssdk.KeyAttributes{
-		CN:        "luks-upgrade-seal",
-		KeyType:   xkmssdk.KeyTypeHMAC,
-		TPMPolicy: "", // No PCR policy
-		Parent:    srkAttrs,
-		StoreType: xkmssdk.StoreSoftware,
+		CN:             "luks-upgrade-seal",
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: false, // No PCR policy
+		Parent:         srkAttrs,
+		StoreType:      xkmssdk.StoreSoftware,
 	}
 
 	// Get the backend for storing sealed data
@@ -387,9 +360,24 @@ func (s *TPMUpgradeStrategy) sealUpgradeKey(key []byte) (*xkmssdk.SealedData, er
 	}
 	sealedData, err := s.platform.TPM.Seal(context.Background(), key, sealOpts)
 	if err != nil {
-		return nil, &WrappedError{Msg: "failed to seal upgrade key", Err: err}
+		return &WrappedError{Msg: "failed to seal upgrade key", Err: err}
 	}
-	return sealedData, nil
+
+	// Write sealed data to EFI partition
+	publicPath := filepath.Join(s.getEFIPath(), upgradePublicFile)
+	privatePath := filepath.Join(s.getEFIPath(), upgradePrivateFile)
+
+	if err := os.WriteFile(publicPath, sealedData.TPMPublic, 0600); err != nil {
+		return &WrappedError{Msg: "failed to write upgrade seal public", Err: err}
+	}
+	if err := os.WriteFile(privatePath, sealedData.TPMPrivate, 0600); err != nil {
+		return &WrappedError{Msg: "failed to write upgrade seal private", Err: err}
+	}
+
+	s.logger.Info("✓ Upgrade seal created successfully on EFI partition")
+	s.logger.Info("System will boot once with new kernel, then re-seal with new PCRs")
+
+	return nil
 }
 
 // getEFIPath returns the EFI partition path

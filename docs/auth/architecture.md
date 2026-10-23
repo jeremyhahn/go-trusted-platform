@@ -1005,10 +1005,8 @@ refusal directly, and `TestGatewayFacingRoutes_AreNotBehindTheRoleGate` asserts
 the converse: a gateway presenting a valid certificate and no bearer token is
 still served.
 
-Which operator authorization the `/gateway/state` routes should carry was
-previously left open in the code as an owner decision. This answers it with the
-same RBAC role guard §6c establishes for the rest of the API; if the owner
-wants a different answer, this is the paragraph to overrule.
+The `/gateway/state` routes carry the same RBAC role guard §6c establishes for
+the rest of the API.
 
 #### `/api/v1/tenants` carries a within-tenant boundary the role cannot express (#234)
 

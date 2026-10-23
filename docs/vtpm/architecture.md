@@ -90,12 +90,8 @@ property: the guest never participates in creating its own identity.
    interfaces and **is not equivalent as a trust root**. A deployment whose
    "TPM" resolves to swtpm on the host has software-rooted, not
    hardware-rooted, attestation.
-5. **Sealed data.** `SealVTPM` is protected by its auth value alone. Binding a
-   secret to measurements (`--pcrs`) is refused with
-   `common.ErrPCRBoundSealUnavailable` until go-quicbaas re-exports the TPM
-   PolicyPCR primitives (go-quicbaas #1171). Without them go-xkms would seal an
-   object the PCRs do not protect, so the platform fails closed rather than
-   claim a binding it cannot make.
+5. **Sealed data.** `SealVTPM` with `--pcrs` binds a secret to measurements.
+   The binding is the control; the auth value is a second one.
 
 ## What this feature deliberately does not do
 
@@ -255,6 +251,12 @@ The service integrates with the platform CA to issue EK certificates.
        ├───────────────────────────────────────▶
        │                   │                   │
 ```
+
+"Create EK Key" is the go-xkms TPM provisioning flow on the bundle's fresh
+swtpm: it creates and persists the EK, the shared SRK (`0x81000001`) and an
+IAK (`0x81020001`). The IAK's common name is the bundle hostname; go-xkms
+refuses to create an IAK without one. The EK public key sent to the CA is
+read back from the persistent EK handle.
 
 ### NV Index Locations
 

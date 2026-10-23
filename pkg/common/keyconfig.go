@@ -21,21 +21,6 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
-// TPMPolicyPlatform is the TPMPolicy value that binds a key to the built-in
-// platform policy (PCR state or password). It mirrors go-xkms's
-// KeyAttributes.TPMPolicy "platform" value, which the quicbaas SDK does not
-// re-export.
-const TPMPolicyPlatform = "platform"
-
-// PlatformTPMPolicy maps a boolean platform-policy setting, as carried by
-// PlatformSRKConfig and TPMSealConfig, to a KeyAttributes.TPMPolicy value.
-func PlatformTPMPolicy(enabled bool) string {
-	if enabled {
-		return TPMPolicyPlatform
-	}
-	return ""
-}
-
 // KeyConfig is a YAML/JSON-serializable configuration for cryptographic keys.
 // It uses string representations for enums and types to support configuration files.
 // Convert to xkmssdk.KeyAttributes using ToKeyAttributes() before use with backends.
@@ -46,7 +31,7 @@ type KeyConfig struct {
 	KeyAlgorithm       string               `yaml:"algorithm,omitempty" json:"algorithm,omitempty" mapstructure:"algorithm"`
 	Password           string               `yaml:"password,omitempty" json:"password,omitempty" mapstructure:"password" secret:"true"`
 	PasswordCache      *PasswordCacheConfig `yaml:"password-cache,omitempty" json:"password_cache,omitempty" mapstructure:"password-cache"`
-	TPMPolicy          string               `yaml:"tpm-policy,omitempty" json:"tpm_policy,omitempty" mapstructure:"tpm-policy"`
+	PlatformPolicy     bool                 `yaml:"platform-policy,omitempty" json:"platform_policy,omitempty" mapstructure:"platform-policy"`
 	SignatureAlgorithm string               `yaml:"signature-algorithm,omitempty" json:"signature_algorithm,omitempty" mapstructure:"signature-algorithm"`
 	StoreType          string               `yaml:"store,omitempty" json:"store,omitempty" mapstructure:"store"`
 	ECCConfig          *ECCConfig           `yaml:"ecc,omitempty" json:"ecc,omitempty" mapstructure:"ecc"`
@@ -89,10 +74,10 @@ type PasswordCacheConfig struct {
 // ToKeyAttributes converts KeyConfig to xkmssdk.KeyAttributes for use with backends.
 func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 	attrs := &xkmssdk.KeyAttributes{
-		CN:         kc.CN,
-		Debug:      kc.Debug,
-		TPMPolicy:  kc.TPMPolicy,
-		Exportable: kc.Exportable,
+		CN:             kc.CN,
+		Debug:          kc.Debug,
+		PlatformPolicy: kc.PlatformPolicy,
+		Exportable:     kc.Exportable,
 	}
 
 	// Parse hash algorithm
@@ -179,13 +164,13 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 // NewKeyConfigFromAttributes creates a KeyConfig from xkmssdk.KeyAttributes.
 func NewKeyConfigFromAttributes(attrs *xkmssdk.KeyAttributes) *KeyConfig {
 	kc := &KeyConfig{
-		CN:           attrs.CN,
-		Debug:        attrs.Debug,
-		Hash:         attrs.Hash.String(),
-		KeyAlgorithm: attrs.KeyAlgorithm.String(),
-		TPMPolicy:    attrs.TPMPolicy,
-		StoreType:    attrs.StoreType.String(),
-		Exportable:   attrs.Exportable,
+		CN:             attrs.CN,
+		Debug:          attrs.Debug,
+		Hash:           attrs.Hash.String(),
+		KeyAlgorithm:   attrs.KeyAlgorithm.String(),
+		PlatformPolicy: attrs.PlatformPolicy,
+		StoreType:      attrs.StoreType.String(),
+		Exportable:     attrs.Exportable,
 	}
 
 	if attrs.SignatureAlgorithm != x509.UnknownSignatureAlgorithm {

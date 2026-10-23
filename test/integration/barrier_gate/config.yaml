@@ -71,7 +71,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         - algorithm: ECDSA
@@ -81,7 +81,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -114,7 +114,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         - algorithm: ECDSA
@@ -124,7 +124,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 10
@@ -146,7 +146,7 @@ certificate-authority:
 # =============================================================================
 # TPM 2.0 CONFIGURATION
 # =============================================================================
-# Required for CA identities whose keys set tpm-policy: platform. Integration tests
+# Required for CA identities that set platform-policy: true. Integration tests
 # run against swtpm started by the devcontainer harness: device is the socket
 # start_swtpm in run-integration-tests.sh serves. The integration container is
 # privileged and sees the host's /dev/tpmrm0, so a hardware path here would

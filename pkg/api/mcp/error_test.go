@@ -209,6 +209,7 @@ func TestIAMError_PredefinedErrors(t *testing.T) {
 		{"ErrIAMTenantIDRequired", ErrIAMTenantIDRequired, "IAM_TENANT_ID_REQUIRED: tenant_id is required"},
 		{"ErrIAMUserIDRequired", ErrIAMUserIDRequired, "IAM_USER_ID_REQUIRED: user_id is required"},
 		{"ErrIAMRoleIDRequired", ErrIAMRoleIDRequired, "IAM_ROLE_ID_REQUIRED: role_id is required"},
+		{"ErrIAMGroupIDRequired", ErrIAMGroupIDRequired, "IAM_GROUP_ID_REQUIRED: group_id is required"},
 		{"ErrIAMEmailRequired", ErrIAMEmailRequired, "IAM_EMAIL_REQUIRED: email is required"},
 		{"ErrIAMPasswordRequired", ErrIAMPasswordRequired, "IAM_PASSWORD_REQUIRED: password is required"},
 		{"ErrIAMResourceRequired", ErrIAMResourceRequired, "IAM_RESOURCE_REQUIRED: resource is required"},

@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 const (
@@ -97,7 +99,7 @@ func checkOVS() error {
 	ctx, cancel := context.WithTimeout(context.Background(), ovsCheckTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "ovs-vsctl", "list-br").CombinedOutput()
+	out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "list-br").CombinedOutput()
 	if err != nil {
 		return missing("a running Open vSwitch (ovs-vsctl list-br: "+strings.TrimSpace(string(out))+")", err)
 	}
@@ -123,7 +125,7 @@ func checkOVSDBAt(address string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), ovsCheckTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "ovs-vsctl", "--db="+address, "list-br").CombinedOutput()
+	out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "--db="+address, "list-br").CombinedOutput()
 	if err != nil {
 		return missing("OVSDB at "+address+" (ovs-vsctl: "+strings.TrimSpace(string(out))+")", err)
 	}

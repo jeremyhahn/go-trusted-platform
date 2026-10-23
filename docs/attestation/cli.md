@@ -3,6 +3,8 @@
 > **Status: NORMATIVE** · Scope: attestation verbs in `platformctl` · Last verified: 2026-09-05
 > Conflicts with this document are defects. Fix them here first.
 
+Replaces `docs/man/attestor.md` and `docs/man/verifier.md`, removed in 3ddd4fa19 (`git show 3ddd4fa19^:<path>`).
+
 ---
 
 ## 1. What `platformctl attestation` covers
@@ -282,7 +284,7 @@ but they are what you reach for when an attestation result needs explaining:
 |---|---|
 | `platformctl tpm eventlog` | The measured-boot event log behind a host manifest |
 | `platformctl tpm extend` | Extends a PCR — the operation workload measurement performs |
-| `platformctl tpm seal` / `unseal` | Password-protected sealing; PCR-bound sealing is refused until go-quicbaas #1171 ([tpm/cli.md](../tpm/cli.md) §5) |
+| `platformctl tpm seal` / `unseal` | PCR-bound sealing; the same PCR policy attestation checks |
 | `platformctl tpm status` / `info` | Whether the TPM is present and provisioned at all |
 | `platformctl tpm ek` / `srk` / `iak` / `idevid` | The key hierarchy an attestation identity is rooted in |
 | `platformctl device attest-cert record` | Records the AK certificate a device's verdict is verified against ([device/cli.md](../device/cli.md)) |

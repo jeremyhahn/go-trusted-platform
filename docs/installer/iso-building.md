@@ -112,9 +112,8 @@ The output filename defaults to: `trusted-alpine-<version>-<arch>.iso` (or with 
 
 ## Individual Commands
 
-**These verbs are stubs.** `download`, `extract`, `customize` and `build`
-parse their flags and return `ErrDaemonConnectionRequired`
-([cli.md](cli.md) §3.4); use `iso create`. Their intended usage:
+`download`, `extract`, `customize` and `build` run the four steps of
+`iso create` one at a time, locally ([cli.md](cli.md) §3.4, §4):
 
 ```bash
 # Download Alpine ISO
@@ -126,6 +125,7 @@ platformctl iso extract --iso work/alpine-standard-3.22.2-x86_64.iso
 # Customize ISO (integrates platform binaries and configuration)
 platformctl iso customize --iso-dir work/iso \
   --platformd-binary ./platformd-static \
+  --platform-config configs/platform/templates/single-node/default.yaml \
   --keys-dir secure-boot-keys
 
 # Build final bootable ISO
@@ -171,8 +171,7 @@ same file boots from USB.
 
 ## Installation Profiles
 
-The `platformctl iso profile` verbs are stubs too ([cli.md](cli.md) §3.4).
-Their intended usage:
+The `platformctl iso profile` verbs run locally ([cli.md](cli.md) §4):
 
 ```bash
 # List available profiles
@@ -232,6 +231,7 @@ platformctl iso test all --iso trusted-alpine-1.0.0-x86_64.iso
 | `--fido2` | false | Enable FIDO2/CanoKey device emulation |
 | `--fido2-mode` | canokey | FIDO2 mode: canokey, u2f-emulated, or u2f-passthru |
 | `--network` | auto | Network mode: user, bridge, or none |
+| `--timeout` | 0 (none) | Stop QEMU and the software TPM and fail when the guest has not powered off within this duration (per VM run); headless runs set it |
 
 
 ### UEFI / OVMF

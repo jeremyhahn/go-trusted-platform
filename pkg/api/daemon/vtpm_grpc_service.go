@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -908,12 +907,6 @@ func (s *VTPMServiceServer) mapError(err error) error {
 func mapVTPMError(err error) error {
 	if err == nil {
 		return nil
-	}
-
-	// A PCR-bound seal is refused until the SDK can bind it: the request
-	// was well formed, the platform cannot honour it yet.
-	if errors.As(err, &common.ErrPCRBoundSealUnavailable{}) {
-		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 
 	// Check for known error types and map to appropriate gRPC codes

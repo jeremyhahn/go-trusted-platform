@@ -27,6 +27,8 @@ type (
 	ProjectBinding = upstream.ProjectBinding
 	// ForgeConfig names the repository a project delivers to.
 	ForgeConfig = upstream.ForgeConfig
+	// WorkerConfig names the agent that writes the project's code.
+	WorkerConfig = upstream.WorkerConfig
 	// ReviewerConfig configures the project's reviewer. A bind replaces the
 	// whole binding, so a bind that omits it erases the reviewer.
 	ReviewerConfig = upstream.ReviewerConfig

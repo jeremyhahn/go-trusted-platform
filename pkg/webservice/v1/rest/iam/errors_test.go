@@ -41,6 +41,17 @@ func TestErrMissingUserID_ImplementsErrorInterface(t *testing.T) {
 	assert.Equal(t, "user ID is required", err.Error())
 }
 
+func TestErrMissingGroupID_Error(t *testing.T) {
+	err := ErrMissingGroupID{}
+	assert.Equal(t, "group ID is required", err.Error())
+}
+
+func TestErrMissingGroupID_ImplementsErrorInterface(t *testing.T) {
+	var err error = ErrMissingGroupID{}
+	assert.NotNil(t, err)
+	assert.Equal(t, "group ID is required", err.Error())
+}
+
 func TestErrMissingRoleID_Error(t *testing.T) {
 	err := ErrMissingRoleID{}
 	assert.Equal(t, "role ID is required", err.Error())
@@ -187,6 +198,41 @@ func TestErrUserNotFound_ImplementsErrorInterface(t *testing.T) {
 	var err error = ErrUserNotFound{TenantID: "t1", UserID: "u1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "user not found")
+}
+
+func TestErrGroupNotFound_Error(t *testing.T) {
+	tests := []struct {
+		name     string
+		tenantID string
+		groupID  string
+		expected string
+	}{
+		{
+			name:     "with both IDs",
+			tenantID: "tenant-123",
+			groupID:  "group-456",
+			expected: "group not found: tenant=tenant-123, group=group-456",
+		},
+		{
+			name:     "with empty tenant ID",
+			tenantID: "",
+			groupID:  "group-456",
+			expected: "group not found: tenant=, group=group-456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ErrGroupNotFound{TenantID: tt.tenantID, GroupID: tt.groupID}
+			assert.Equal(t, tt.expected, err.Error())
+		})
+	}
+}
+
+func TestErrGroupNotFound_ImplementsErrorInterface(t *testing.T) {
+	var err error = ErrGroupNotFound{TenantID: "t1", GroupID: "g1"}
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "group not found")
 }
 
 func TestErrRoleNotFound_Error(t *testing.T) {
@@ -374,22 +420,48 @@ func TestErrMissingRole_ImplementsErrorInterface(t *testing.T) {
 	assert.Equal(t, "role is required", err.Error())
 }
 
+func TestErrMissingMember_Error(t *testing.T) {
+	err := ErrMissingMember{}
+	assert.Equal(t, "member ID is required", err.Error())
+}
+
+func TestErrMissingMember_ImplementsErrorInterface(t *testing.T) {
+	var err error = ErrMissingMember{}
+	assert.NotNil(t, err)
+	assert.Equal(t, "member ID is required", err.Error())
+}
+
+func TestErrConflictingQueryTenant_Error(t *testing.T) {
+	err := ErrConflictingQueryTenant{Path: "tenant-a", Query: "tenant-b"}
+	assert.Equal(t, `rest/iam: tenant_id query "tenant-b" conflicts with path tenant "tenant-a"`, err.Error())
+}
+
+func TestErrConflictingQueryTenant_ImplementsErrorInterface(t *testing.T) {
+	var err error = ErrConflictingQueryTenant{Path: "tenant-a", Query: "tenant-b"}
+	var conflict ErrConflictingQueryTenant
+	assert.ErrorAs(t, err, &conflict)
+	assert.Equal(t, "tenant-b", conflict.Query)
+}
+
 func TestAllErrorTypesAreDistinct(t *testing.T) {
 	errors := []error{
 		ErrMissingTenantID{},
 		ErrMissingUserID{},
+		ErrMissingGroupID{},
 		ErrMissingRoleID{},
 		ErrMissingPolicyID{},
 		ErrMissingAppID{},
 		ErrInvalidRequestBody{Reason: "test"},
 		ErrInvalidPaginationParams{Reason: "test"},
 		ErrUserNotFound{TenantID: "t", UserID: "u"},
+		ErrGroupNotFound{TenantID: "t", GroupID: "g"},
 		ErrRoleNotFound{TenantID: "t", RoleID: "r"},
 		ErrTenantNotFound{TenantID: "t"},
 		ErrPolicyNotFound{TenantID: "t", PolicyID: "p"},
 		ErrAppNotFound{TenantID: "t", AppID: "a"},
 		ErrInvalidPolicySpec{Reason: "test"},
 		ErrMissingRole{},
+		ErrMissingMember{},
 	}
 
 	errorMessages := make(map[string]bool)

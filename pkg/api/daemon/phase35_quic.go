@@ -51,42 +51,53 @@ func okResponse(v interface{}) *quicwire.Response {
 
 // errResponseFrom maps a service error to the QUIC status byte.
 func errResponseFrom(err error) *quicwire.Response {
-	switch {
-	case err == nil:
+	if err == nil {
 		return &quicwire.Response{Status: quicwire.StatusOK}
-	case errors.Is(err, ErrPIVKeyImportUnsupported):
-		return &quicwire.Response{Status: quicwire.StatusNotImplemented}
-	case errors.Is(err, ErrCeremonyNotConfigured),
-		errors.Is(err, ErrPIVNotConfigured),
-		errors.Is(err, ErrLUKSNotConfigured),
-		errors.Is(err, ErrFIDO2NotConfigured):
-		// The message names the service, so a client can tell "not configured"
-		// from any other Unavailable.
-		return &quicwire.Response{Status: quicwire.StatusUnavailable, Payload: []byte(err.Error())}
-	case errors.Is(err, ErrLUKSRootRequired):
-		return &quicwire.Response{Status: quicwire.StatusPermissionDenied}
-	case errors.Is(err, ErrLUKSFIDO2PINUnsupported):
-		// The message names the missing SDK seam, so the client can tell
-		// this refusal from a malformed request.
-		return &quicwire.Response{Status: quicwire.StatusInvalidArgument, Payload: []byte(err.Error())}
-	case errors.Is(err, ErrCeremonyOfficerRequired),
-		errors.Is(err, ErrCeremonyChallengeRequired),
-		errors.Is(err, ErrCeremonyCSRRequired),
-		errors.Is(err, ErrPIVSlotRequired),
-		errors.Is(err, ErrPIVDeviceRequired),
-		errors.Is(err, ErrPIVPayloadRequired),
-		errors.Is(err, ErrPIVPrivateKeyRequired),
-		errors.Is(err, ErrLUKSDeviceRequired),
-		errors.Is(err, ErrLUKSPassphraseRequired),
-		errors.Is(err, ErrLUKSNewPassphraseRequired),
-		errors.Is(err, ErrLUKSCredentialIDRequired),
-		errors.Is(err, ErrLUKSSlotRequired),
-		errors.Is(err, ErrFIDO2DeviceRequired),
-		errors.Is(err, ErrFIDO2UsernameRequired),
-		errors.Is(err, ErrFIDO2CredentialRequired):
-		return &quicwire.Response{Status: quicwire.StatusInvalidArgument}
+	}
+	for _, refusal := range phase35QUICRefusals {
+		if errors.Is(err, refusal.sentinel) {
+			// The message names the sentinel, as the gRPC status message and
+			// the REST body do, so a client can tell one refusal from
+			// another carrying the same status byte.
+			return &quicwire.Response{Status: refusal.status, Payload: []byte(err.Error())}
+		}
 	}
 	return &quicwire.Response{Status: quicwire.StatusInternalError}
+}
+
+// phase35QUICRefusal pairs a typed service refusal with its QUIC status byte.
+type phase35QUICRefusal struct {
+	sentinel error
+	status   byte
+}
+
+// phase35QUICRefusals is the one error-to-status table the ceremony, PIV,
+// LUKS and FIDO2 QUIC handlers share. Each row matches the status the REST
+// and gRPC mappers give the same sentinel (docs/daemon/api.md §4, status
+// bytes). Order matters only where one error wraps two sentinels.
+var phase35QUICRefusals = []phase35QUICRefusal{
+	{ErrPIVKeyImportUnsupported, quicwire.StatusNotImplemented},
+	{ErrCeremonyNotConfigured, quicwire.StatusUnavailable},
+	{ErrPIVNotConfigured, quicwire.StatusUnavailable},
+	{ErrLUKSNotConfigured, quicwire.StatusUnavailable},
+	{ErrFIDO2NotConfigured, quicwire.StatusUnavailable},
+	{ErrLUKSRootRequired, quicwire.StatusPermissionDenied},
+	{ErrLUKSFIDO2PINUnsupported, quicwire.StatusInvalidArgument},
+	{ErrCeremonyOfficerRequired, quicwire.StatusInvalidArgument},
+	{ErrCeremonyChallengeRequired, quicwire.StatusInvalidArgument},
+	{ErrCeremonyCSRRequired, quicwire.StatusInvalidArgument},
+	{ErrPIVSlotRequired, quicwire.StatusInvalidArgument},
+	{ErrPIVDeviceRequired, quicwire.StatusInvalidArgument},
+	{ErrPIVPayloadRequired, quicwire.StatusInvalidArgument},
+	{ErrPIVPrivateKeyRequired, quicwire.StatusInvalidArgument},
+	{ErrLUKSDeviceRequired, quicwire.StatusInvalidArgument},
+	{ErrLUKSPassphraseRequired, quicwire.StatusInvalidArgument},
+	{ErrLUKSNewPassphraseRequired, quicwire.StatusInvalidArgument},
+	{ErrLUKSCredentialIDRequired, quicwire.StatusInvalidArgument},
+	{ErrLUKSSlotRequired, quicwire.StatusInvalidArgument},
+	{ErrFIDO2DeviceRequired, quicwire.StatusInvalidArgument},
+	{ErrFIDO2UsernameRequired, quicwire.StatusInvalidArgument},
+	{ErrFIDO2CredentialRequired, quicwire.StatusInvalidArgument},
 }
 
 // ceremonyQUICHandlers dispatches ceremony sub-opcodes. Uses map-based
@@ -520,7 +531,7 @@ func (h *luksQUICHandlers) enrollTPM(ctx context.Context, payload []byte) *quicw
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
 	out, err := h.service.EnrollTPM(ctx, &LUKSEnrollTPMRequest{
-		Device: in.Device, ExistingPassphrase: in.ExistingPassphrase, PCRs: in.PCRs,
+		Device: in.Device, ExistingPassphrase: in.ExistingPassphrase, PCRs: in.PCRs, Handle: in.Handle,
 	})
 	if err != nil {
 		return errResponseFrom(err)

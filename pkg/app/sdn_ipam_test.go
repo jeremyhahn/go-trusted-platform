@@ -25,6 +25,9 @@ import (
 	"strings"
 	"testing"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -460,5 +463,61 @@ func TestAllocationRequest_ZoneClone(t *testing.T) {
 	clone := req.Clone()
 	if clone.Zone != "storage" {
 		t.Errorf("AllocationRequest.Clone() did not preserve Zone: got %q", clone.Zone)
+	}
+}
+
+// getKVClient answers every KV Get with resp and err.
+type getKVClient struct {
+	quicbaassdk.KVClient
+	resp *service.GetResponse
+	err  error
+}
+
+func (k *getKVClient) Get(context.Context, *service.GetRequest) (*service.GetResponse, error) {
+	return k.resp, k.err
+}
+
+// kvOnlyClient is an SDK client that serves only KV().
+type kvOnlyClient struct {
+	quicbaassdk.Client
+	kv quicbaassdk.KVClient
+}
+
+func (c *kvOnlyClient) KV() quicbaassdk.KVClient { return c.kv }
+
+// A KV Get answers a miss with a typed not-found error, never Found=false.
+// The IPAM backend reads found=false as "absent" (CreatePool's existence
+// check), so the adapter must translate the miss rather than fail the call.
+func TestSDKIPAMClientGet_MissIsNotFound(t *testing.T) {
+	misses := map[string]error{
+		"embedded transport": quicbaassdk.NewDatabaseError(quicbaassdk.ErrNotFound, "service.Get", "ipam/pool not found: 7"),
+		"remote transport":   baaserrors.NewNotFound("kv.Get", "ipam/pool not found"),
+	}
+	for name, miss := range misses {
+		t.Run(name, func(t *testing.T) {
+			c := &sdkIPAMClient{sdk: &kvOnlyClient{kv: &getKVClient{err: miss}}}
+			data, found, err := c.Get(context.Background(), "ipam/pool", 7)
+			if err != nil || found || data != nil {
+				t.Fatalf("Get on a miss = (%v, %v, %v), want (nil, false, nil)", data, found, err)
+			}
+		})
+	}
+}
+
+func TestSDKIPAMClientGet_StorageErrorPropagates(t *testing.T) {
+	storageErr := quicbaassdk.NewDatabaseError(quicbaassdk.ErrUnavailable, "service.Get", "no leader")
+	c := &sdkIPAMClient{sdk: &kvOnlyClient{kv: &getKVClient{err: storageErr}}}
+	_, found, err := c.Get(context.Background(), "ipam/pool", 7)
+	if !errors.Is(err, storageErr) || found {
+		t.Fatalf("Get on a storage failure = (found %v, err %v), want the storage error", found, err)
+	}
+}
+
+func TestSDKIPAMClientGet_Found(t *testing.T) {
+	want := []byte(`{"id":"pool-a"}`)
+	c := &sdkIPAMClient{sdk: &kvOnlyClient{kv: &getKVClient{resp: &service.GetResponse{Found: true, Data: want}}}}
+	data, found, err := c.Get(context.Background(), "ipam/pool", 7)
+	if err != nil || !found || !bytes.Equal(data, want) {
+		t.Fatalf("Get on a hit = (%s, %v, %v), want (%s, true, nil)", data, found, err, want)
 	}
 }

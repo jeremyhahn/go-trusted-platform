@@ -224,6 +224,24 @@ func TestResolvedZonesAndPlan_Nil(t *testing.T) {
 	assert.Nil(t, (&sdn.Config{}).ResolvedZones())
 }
 
+func TestGatewayDatapathSocket_ReadsTheGatewaySection(t *testing.T) {
+	cfg := &sdn.Config{Gateway: &sdn.GatewayConfig{Enabled: true, DatapathSocket: "/run/gatewayd/datapath.sock"}}
+	assert.Equal(t, "/run/gatewayd/datapath.sock", cfg.GatewayDatapathSocket())
+}
+
+func TestGatewayDatapathSocket_UnsetIsEmpty(t *testing.T) {
+	var nilConfig *sdn.Config
+	for name, cfg := range map[string]*sdn.Config{
+		"nil config":      nilConfig,
+		"no gateway":      {},
+		"no socket given": {Gateway: &sdn.GatewayConfig{Enabled: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, cfg.GatewayDatapathSocket())
+		})
+	}
+}
+
 // TestLogPrivilegedPaths writes one audit record per privileged path.
 func TestLogPrivilegedPaths(t *testing.T) {
 	c := minValidConfig()

@@ -48,22 +48,30 @@ func testLogger() *slog.Logger {
 func writeTLSFixtures(t *testing.T) (certFile, keyFile, caFile string) {
 	t.Helper()
 	bundle := testutil.GenerateTestTLSBundle(t)
+	return writeKeypairFixtures(t, bundle, bundle.ServerCert, "server")
+}
+
+// writeKeypairFixtures writes cert (leaf plus chain) and its key as PEM
+// files named <name>.pem and <name>-key.pem, and the bundle's CA beside
+// them as ca.pem.
+func writeKeypairFixtures(t *testing.T, bundle *testutil.TestTLSBundle, cert tls.Certificate, name string) (certFile, keyFile, caFile string) {
+	t.Helper()
 	dir := t.TempDir()
 
 	var certPEM bytes.Buffer
-	for _, der := range bundle.ServerCert.Certificate {
+	for _, der := range cert.Certificate {
 		if err := pem.Encode(&certPEM, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
 			t.Fatalf("encode cert: %v", err)
 		}
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(bundle.ServerCert.PrivateKey)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
 	if err != nil {
 		t.Fatalf("marshal key: %v", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	certFile = filepath.Join(dir, "server.pem")
-	keyFile = filepath.Join(dir, "server-key.pem")
+	certFile = filepath.Join(dir, name+".pem")
+	keyFile = filepath.Join(dir, name+"-key.pem")
 	caFile = filepath.Join(dir, "ca.pem")
 	if err := os.WriteFile(certFile, certPEM.Bytes(), 0o600); err != nil {
 		t.Fatalf("write cert: %v", err)
@@ -1113,14 +1121,9 @@ func TestBuildHostRuntimeSecretStoreNeedsTrust(t *testing.T) {
 func TestBuildHostRuntimeBuildsTheSecretResolver(t *testing.T) {
 	// The anchor is the shipped shape — the platform CA bundle provisioning
 	// projects onto the node, read through `platform-ca-file:` — so the
-	// anchor handed in here is the one a real gateway would carry.
-	cfg := &ServeConfig{
-		Secrets:        &secrets.Config{QuicBaaSAddr: "127.0.0.1:9443"},
-		PlatformCAFile: filepath.Join(t.TempDir(), "cp-ca.pem"),
-	}
-	if err := os.WriteFile(cfg.PlatformCAFile, testutil.GenerateTestTLSBundle(t).CACertPEM, 0o600); err != nil {
-		t.Fatalf("write ca: %v", err)
-	}
+	// anchor handed in here is the one a real gateway would carry. The
+	// node identity is the `control-plane:` pair the store session presents.
+	cfg, _ := secretStoreFixture(t)
 	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
 		t.Fatalf("buildPlatformAnchor: %v", err)

@@ -337,6 +337,47 @@ func TestApplyRendersEnablesAndRestartsChrony(t *testing.T) {
 	}
 }
 
+// A reference the secrets engine left in place is refused whatever its
+// scheme, including one no resolver serves (the removed gateway alias is
+// built from parts so the repository carries no spelling of it).
+func TestAssertResolvedRefusesAnyLeftoverReference(t *testing.T) {
+	for _, value := range []string{
+		"kms://platform/ntp/nts-key",
+		"file:///etc/ntp/nts.key",
+		"secret" + "://platform/ntp/nts-key",
+		"  vault+v2.x://a/b  ",
+	} {
+		err := assertResolved("serve.nts.key-uri", value)
+		var unresolved ErrUnresolvedNTSMaterial
+		if !errors.As(err, &unresolved) {
+			t.Fatalf("assertResolved(%q) = %v, want ErrUnresolvedNTSMaterial", value, err)
+		}
+		if unresolved.Value != strings.TrimSpace(value) {
+			t.Fatalf("Value = %q, want the trimmed reference %q", unresolved.Value, strings.TrimSpace(value))
+		}
+	}
+}
+
+// Resolved material passes, and a value that only looks like a scheme (an
+// invalid scheme character, or no scheme before "://") is material, not a
+// reference; an empty value is missing material.
+func TestAssertResolvedAcceptsMaterialAndRefusesEmpty(t *testing.T) {
+	for _, value := range []string{
+		"-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n",
+		"://no-scheme",
+		"1kms://digit-first",
+		"km s://space-in-scheme",
+	} {
+		if err := assertResolved("serve.nts.key-uri", value); err != nil {
+			t.Fatalf("assertResolved(%q) = %v, want nil", value, err)
+		}
+	}
+	err := assertResolved("serve.nts.cert-uri", "   ")
+	if !errors.Is(err, ErrMissingNTSMaterial{Field: "serve.nts.cert-uri"}) {
+		t.Fatalf("assertResolved(blank) = %v, want ErrMissingNTSMaterial", err)
+	}
+}
+
 func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
 	cfg := consumerConfig()
 	fs := newMemFS()

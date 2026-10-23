@@ -28,7 +28,7 @@ acme:
         debug: true
         hash: SHA-256
         password: 123456
-        tpm-policy: platform
+        platform-policy: true
         rsa:
           size: 2048
         signature-algorithm: SHA256-RSAPSS
@@ -151,7 +151,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #11 RSA w/ PSS
@@ -163,7 +163,7 @@ certificate-authority:
           hash: SHA-256
           store: pkcs11
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA w/ PSS
@@ -174,7 +174,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -185,7 +185,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #11 ECDSA
@@ -196,7 +196,7 @@ certificate-authority:
           hash: SHA-256
           store: pkcs11
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 ECDSA
@@ -207,7 +207,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 Ed25519
@@ -218,7 +218,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
       valid: 50
@@ -266,7 +266,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #11 RSA w/ PSS
@@ -277,7 +277,7 @@ certificate-authority:
           hash: SHA-256
           store: pkcs11
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 RSA w/ PSS
@@ -288,7 +288,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 ECDSA
@@ -299,7 +299,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #11 ECDSA
@@ -310,7 +310,7 @@ certificate-authority:
           hash: SHA-256
           store: pkcs11
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # TPM 2.0 ECDSA
@@ -321,7 +321,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
 
         # PKCS #8 Ed25519
@@ -332,7 +332,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          tpm-policy: platform
+          platform-policy: true
           debug: true
       valid: 10
       subject:
@@ -376,6 +376,7 @@ webservice:
     # debug: true
     # hash: SHA-256
     # password:
+    # platform-policy:
     # rsa:
     #   size: 2048
     # signature-algorithm: SHA256-RSAPSS
@@ -389,7 +390,7 @@ webservice:
     hash: SHA-256
     store: software
     password: 123456
-    tpm-policy: platform
+    platform-policy: true
     debug: true
 
     # # PKCS #8 Ed25519 - NOT SUPPORTED
@@ -401,7 +402,7 @@ webservice:
     # hash: SHA-256
     # store: software
     # password: 123456
-    # tpm-policy: platform
+    # platform-policy: true
     # debug: true
   certificate:
     acme:

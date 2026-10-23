@@ -54,7 +54,7 @@ func roundTripIAMWire(t *testing.T, src, dst proto.Message) {
 }
 
 func TestQUICIAMWireCompatUser(t *testing.T) {
-	// Create carries Roles that the flat CreateUserRequest never had a
+	// Create carries Roles/Groups that the flat CreateUserRequest never had a
 	// field for, plus the TenantId the flat TenantID dropped.
 	roundTripIAMWire(t,
 		&platformv1.CreateIAMUserRequest{
@@ -62,6 +62,7 @@ func TestQUICIAMWireCompatUser(t *testing.T) {
 			Email:      "user@example.com",
 			Name:       "Example User",
 			Roles:      []string{"role-admin", "role-viewer"},
+			Groups:     []string{"group-ops"},
 			Attributes: map[string]string{"dept": "eng"},
 		},
 		&platformv1.CreateIAMUserRequest{})
@@ -74,6 +75,7 @@ func TestQUICIAMWireCompatUser(t *testing.T) {
 			Pagination:  &platformv1.PaginationRequest{Page: 2, PageSize: 25},
 			EmailFilter: "@example.com",
 			RoleFilter:  "role-admin",
+			GroupFilter: "group-ops",
 		},
 		&platformv1.ListIAMUsersRequest{})
 	roundTripIAMWire(t,
@@ -83,6 +85,7 @@ func TestQUICIAMWireCompatUser(t *testing.T) {
 			Email:      "new@example.com",
 			Name:       "Renamed User",
 			Roles:      []string{"role-admin"},
+			Groups:     []string{"group-sre"},
 			Attributes: map[string]string{"dept": "sre"},
 		},
 		&platformv1.UpdateIAMUserRequest{})
@@ -119,6 +122,32 @@ func TestQUICIAMWireCompatRole(t *testing.T) {
 	roundTripIAMWire(t,
 		&platformv1.RevokeIAMRoleRequest{TenantId: "tenant-a", UserId: "user-1", RoleId: "role-admin"},
 		&platformv1.RevokeIAMRoleRequest{})
+}
+
+func TestQUICIAMWireCompatGroup(t *testing.T) {
+	roundTripIAMWire(t,
+		&platformv1.CreateIAMGroupRequest{
+			TenantId:    "tenant-a",
+			Id:          "group-ops",
+			Name:        "Operations",
+			Description: "ops team",
+		},
+		&platformv1.CreateIAMGroupRequest{})
+	roundTripIAMWire(t,
+		&platformv1.GetIAMGroupRequest{TenantId: "tenant-a", GroupId: "group-ops"},
+		&platformv1.GetIAMGroupRequest{})
+	roundTripIAMWire(t,
+		&platformv1.ListIAMGroupsRequest{TenantId: "tenant-a"},
+		&platformv1.ListIAMGroupsRequest{})
+	roundTripIAMWire(t,
+		&platformv1.DeleteIAMGroupRequest{TenantId: "tenant-a", GroupId: "group-ops"},
+		&platformv1.DeleteIAMGroupRequest{})
+	roundTripIAMWire(t,
+		&platformv1.AddGroupMemberRequest{TenantId: "tenant-a", GroupId: "group-ops", UserId: "user-1"},
+		&platformv1.AddGroupMemberRequest{})
+	roundTripIAMWire(t,
+		&platformv1.RemoveGroupMemberRequest{TenantId: "tenant-a", GroupId: "group-ops", UserId: "user-1"},
+		&platformv1.RemoveGroupMemberRequest{})
 }
 
 func TestQUICIAMWireCompatPermissionAndToken(t *testing.T) {

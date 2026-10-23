@@ -64,8 +64,8 @@ func (e ErrQUICStatus) Error() string {
 	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
 }
 
-// QUICNotSupportedError represents an operation with no QUIC opcode. Role
-// update has no PlatformIAMService QUIC opcode (the QUIC surface exposes
+// QUICNotSupportedError represents an operation with no QUIC opcode. Role and
+// group update have no PlatformIAMService QUIC opcode (the QUIC surface exposes
 // user update only); the multi-protocol harness treats this as a skip.
 type QUICNotSupportedError struct {
 	Operation string
@@ -160,7 +160,7 @@ func (a *QUICAdapter) doRequest(ctx context.Context, opcode byte, body interface
 // User CRUD Operations
 // =============================================================================
 
-// CreateUser creates a new user. The pb request carries the Roles the flat
+// CreateUser creates a new user. The pb request carries Roles/Groups the flat
 // struct lacked.
 func (a *QUICAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*CreateUserResult, error) {
 	payload, err := a.doRequest(ctx, quicwire.OpIAMUserCreate, &platformv1.CreateIAMUserRequest{
@@ -168,6 +168,7 @@ func (a *QUICAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*
 		Email:      opts.Email,
 		Name:       opts.Name,
 		Roles:      opts.Roles,
+		Groups:     opts.Groups,
 		Attributes: opts.Attributes,
 	})
 	if err != nil {
@@ -204,6 +205,7 @@ func (a *QUICAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*
 		Email:      opts.Email,
 		Name:       opts.Name,
 		Roles:      opts.Roles,
+		Groups:     opts.Groups,
 		Attributes: opts.Attributes,
 	})
 	if err != nil {
@@ -238,6 +240,7 @@ func (a *QUICAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Li
 		TenantId:    opts.TenantID,
 		EmailFilter: opts.Email,
 		RoleFilter:  opts.Role,
+		GroupFilter: opts.Group,
 	}
 	if opts.Limit > 0 {
 		req.Pagination = &platformv1.PaginationRequest{PageSize: uint32(opts.Limit)}
@@ -379,6 +382,125 @@ func (a *QUICAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Li
 }
 
 // =============================================================================
+// Group CRUD Operations
+// =============================================================================
+
+// CreateGroup creates a new group.
+func (a *QUICAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) (*CreateGroupResult, error) {
+	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupCreate, &platformv1.CreateIAMGroupRequest{
+		TenantId:    opts.TenantID,
+		Id:          opts.ID,
+		Name:        opts.Name,
+		Description: opts.Description,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMGroupResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "CreateGroup", Message: "failed to decode response: " + err.Error()}
+	}
+	return &CreateGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
+}
+
+// GetGroup retrieves a group by ID.
+func (a *QUICAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGroupResult, error) {
+	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupGet, &platformv1.GetIAMGroupRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.IAMGroupResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "GetGroup", Message: "failed to decode response: " + err.Error()}
+	}
+	return &GetGroupResult{Group: pbGroupToGroup(resp.GetGroup())}, nil
+}
+
+// UpdateGroup has no QUIC opcode on the PlatformIAMService surface.
+func (a *QUICAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error) {
+	return nil, &QUICNotSupportedError{Operation: "UpdateGroup"}
+}
+
+// DeleteGroup removes a group.
+func (a *QUICAdapter) DeleteGroup(ctx context.Context, opts DeleteGroupOptions) (*DeleteGroupResult, error) {
+	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupDelete, &platformv1.DeleteIAMGroupRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.DeleteIAMGroupResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "DeleteGroup", Message: "failed to decode response: " + err.Error()}
+	}
+	return &DeleteGroupResult{Success: resp.GetStatus().GetSuccess()}, nil
+}
+
+// ListGroups lists groups with optional filtering.
+func (a *QUICAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error) {
+	req := &platformv1.ListIAMGroupsRequest{TenantId: opts.TenantID}
+	if opts.Limit > 0 {
+		req.Pagination = &platformv1.PaginationRequest{PageSize: uint32(opts.Limit)}
+	}
+
+	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupList, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.ListIAMGroupsResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "ListGroups", Message: "failed to decode response: " + err.Error()}
+	}
+	groups := make([]*Group, 0, len(resp.GetGroups()))
+	for _, g := range resp.GetGroups() {
+		groups = append(groups, pbGroupToGroup(g))
+	}
+	return &ListGroupsResult{Groups: groups, Total: resp.GetTotal(), Limit: opts.Limit, Offset: opts.Offset}, nil
+}
+
+// =============================================================================
+// Group Membership Operations
+// =============================================================================
+
+// AddMember adds a user to a group.
+func (a *QUICAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
+	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupAddMember, &platformv1.AddGroupMemberRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+		UserId:   opts.UserID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.AddGroupMemberResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "AddMember", Message: "failed to decode response: " + err.Error()}
+	}
+	return &AddMemberResult{Success: resp.GetStatus().GetSuccess()}, nil
+}
+
+// RemoveMember removes a user from a group.
+func (a *QUICAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
+	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupRemoveMember, &platformv1.RemoveGroupMemberRequest{
+		TenantId: opts.TenantID,
+		GroupId:  opts.GroupID,
+		UserId:   opts.UserID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp platformv1.RemoveGroupMemberResponse
+	if err := quicwire.DecodePayload(payload, &resp); err != nil {
+		return nil, &QUICAdapterError{Operation: "RemoveMember", Message: "failed to decode response: " + err.Error()}
+	}
+	return &RemoveMemberResult{Success: resp.GetStatus().GetSuccess()}, nil
+}
+
+// =============================================================================
 // Permission Operations
 // =============================================================================
 
@@ -423,6 +545,7 @@ func pbUserToUser(u *platformv1.IAMUser) *User {
 		Email:       u.GetEmail(),
 		Name:        u.GetName(),
 		Roles:       u.GetRoles(),
+		Groups:      u.GetGroups(),
 		Attributes:  u.GetAttributes(),
 		MFAVerified: u.GetMfaVerified(),
 		CreatedAt:   pbTimePtr(u.GetCreatedAt()),
@@ -443,6 +566,21 @@ func pbRoleToRole(r *platformv1.IAMRole) *Role {
 		Permissions: r.GetPermissions(),
 		CreatedAt:   pbTimePtr(r.GetCreatedAt()),
 		UpdatedAt:   pbTimePtr(r.GetUpdatedAt()),
+	}
+}
+
+func pbGroupToGroup(g *platformv1.IAMGroup) *Group {
+	if g == nil {
+		return nil
+	}
+	return &Group{
+		ID:          g.GetId(),
+		TenantID:    g.GetTenantId(),
+		Name:        g.GetName(),
+		Description: g.GetDescription(),
+		Members:     g.GetMembers(),
+		CreatedAt:   pbTimePtr(g.GetCreatedAt()),
+		UpdatedAt:   pbTimePtr(g.GetUpdatedAt()),
 	}
 }
 

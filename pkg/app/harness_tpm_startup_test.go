@@ -168,8 +168,8 @@ func TestTPMOwnership_FirstStartTakesOwnership(t *testing.T) {
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
 	var rejected *OwnerAuthRejectedError
 	require.ErrorAs(t, ownerAuthorizes(t, sim, ""), &rejected)
-	require.Equal(t, harnessSOPIN, hierarchyAuthValue(t, a.TPMConfig.SSRK.HierarchyAuth))
-	require.Empty(t, hierarchyAuthValue(t, a.TPMConfig.EK.HierarchyAuth))
+	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	require.Empty(t, a.TPMConfig.EK.HierarchyAuth)
 }
 
 // TestTPMOwnership_SecondStartUsesSOPIN: a restart on the owned TPM opens the
@@ -185,7 +185,7 @@ func TestTPMOwnership_SecondStartUsesSOPIN(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, a.PlatformKS)
 	require.Zero(t, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
-	require.Equal(t, harnessSOPIN, hierarchyAuthValue(t, a.TPMConfig.SSRK.HierarchyAuth))
+	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
 }
 
@@ -222,8 +222,8 @@ func TestTPMOwnership_AlreadyOwnedTPM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, a.PlatformKS)
 	require.Zero(t, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
-	require.Equal(t, harnessSOPIN, hierarchyAuthValue(t, a.TPMConfig.SSRK.HierarchyAuth))
-	require.Equal(t, harnessSOPIN, hierarchyAuthValue(t, a.TPMConfig.EK.HierarchyAuth))
+	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	require.Equal(t, harnessSOPIN, a.TPMConfig.EK.HierarchyAuth)
 }
 
 // TestTPMOwnership_ChangeAuthFault: a failed TPM2_HierarchyChangeAuth fails

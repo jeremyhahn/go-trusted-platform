@@ -339,10 +339,11 @@ Configuration values support macro expansion (`pkg/dns/macros.go`):
 | `${PUBLIC_IPv4}`, `${PUBLIC_IPv6}` | Public address | `203.0.113.10` |
 | `${PRIVATE_IPv4}`, `${PRIVATE_IPv6}` | Private address | `192.0.2.10` |
 | `${HOSTNAME}` | System hostname | `server01` |
-| `${PUBLIC_DOMAIN}`, `${PUBLIC_FQDN}`, `${PRIVATE_FQDN}` | Domain names | `example.com` |
+| `${PUBLIC_DOMAIN}`, `${PRIVATE_DOMAIN}`, `${PUBLIC_FQDN}`, `${PRIVATE_FQDN}` | Domain names | `example.com` |
 
-The private-domain macro is spelled `PRVATE_DOMAIN` in the code
-(`pkg/dns/macros.go:33`); `${PRIVATE_DOMAIN}` does not expand.
+The domain and FQDN macros are set only when that server (`dns.public`,
+`dns.internal`) is configured. If the local hostname cannot be read, DNS
+startup fails with `ErrHostnameLookup`.
 
 ```yaml
 a:

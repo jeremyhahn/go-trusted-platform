@@ -27,36 +27,64 @@ import (
 	"os"
 	"path/filepath"
 
+	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
+
 	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// harnessAdminBundleName is the file the harness reads as both
-// PLATFORM_CLIENT_CERT and PLATFORM_CLIENT_KEY.
-const harnessAdminBundleName = "client-bundle.pem"
+const (
+	// harnessAdminBundleName is the file the harness reads as both
+	// PLATFORM_CLIENT_CERT and PLATFORM_CLIENT_KEY.
+	harnessAdminBundleName = "client-bundle.pem"
+
+	// harnessTenantBundleName is the file the harness reads as both
+	// PLATFORM_TENANT_CLIENT_CERT and PLATFORM_TENANT_CLIENT_KEY: a client
+	// certificate bound to harnessTenantID, for the suites that assert what
+	// a non-system tenant is refused.
+	harnessTenantBundleName = "tenant-client-bundle.pem"
+
+	// harnessTenantID is the fixed non-system tenant the tenant bundle's
+	// subject O names.
+	harnessTenantID = "harness-tenant"
+)
 
 func init() {
 	harnessAdminBundle = writeHarnessAdminBundle
 }
 
-// writeHarnessAdminBundle issues a CN=admin client certificate and writes
-// it, key included, to <dir>/client-bundle.pem (mode 0600). It issues a
-// fresh certificate on every start; the harness wipes the directory before
-// each run anyway.
+// writeHarnessAdminBundle issues two CN=admin client certificates and writes
+// each, key included, mode 0600: one in harnessTenantID to
+// <dir>/tenant-client-bundle.pem, then the system tenant's to
+// <dir>/client-bundle.pem. It issues fresh certificates on every start; the
+// harness wipes the directory before each run anyway.
 func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, dir string) error {
 	if issuer == nil {
 		return ErrProvisionMissingSDK{}
 	}
-	resp, err := issuer.IssueCertificate(ctx, appbackends.AdminCertificateRequest())
-	if err != nil {
-		return ErrProvisionIssue{Role: "admin", Cause: err}
+	// The tenant bundle is written first: the harness waits for
+	// client-bundle.pem, so once that file exists both bundles do.
+	tenantReq := appbackends.AdminCertificateRequest()
+	tenantReq.Organization = harnessTenantID
+	if err := writeHarnessBundle(ctx, logger, issuer, tenantReq, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
+		return err
 	}
-	path := filepath.Join(dir, harnessAdminBundleName)
+	return writeHarnessBundle(ctx, logger, issuer, appbackends.AdminCertificateRequest(), "admin", filepath.Join(dir, harnessAdminBundleName))
+}
+
+// writeHarnessBundle issues the certificate req asks for and writes it, key
+// included, to path (mode 0600). role names the bundle in a failure.
+func writeHarnessBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, req *certclient.IssueCertificateRequest, role, path string) error {
+	resp, err := issuer.IssueCertificate(ctx, req)
+	if err != nil {
+		return ErrProvisionIssue{Role: role, Cause: err}
+	}
 	if err := writeBundle(path, resp.CertificatePEM, resp.PrivateKeyPEM, 0600); err != nil {
 		return ErrProvisionPersist{Path: path, Cause: err}
 	}
-	logger.Warn("integration build: wrote a test-only admin client bundle",
+	logger.Warn("integration build: wrote a test-only client bundle",
 		"path", path,
+		"tenant", req.Organization,
 		"serial", resp.SerialNumber,
 	)
 	return nil

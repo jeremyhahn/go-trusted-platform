@@ -26,6 +26,7 @@ serves:
 | `pkg/api/quic/tpm_handlers.go` | `TPM2Handler`, TPM2 sentinel errors |
 | `sdk/go/wire/quicwire/tpm_opcodes.go` | the `SubOpTPM2*` constants |
 | `pkg/api/tpmnv/nv.go` | `Read`, `Write`, `Define`, `Undefine`, `BuildAttributes` |
+| `pkg/api/tpmclear/clear.go` | `Clear` — the one TPM2_Clear every transport calls; resets the in-memory hierarchy auth |
 | `pkg/webservice/v1/rest/tpm/` | `TPMRouter`, `Handlers` |
 | `pkg/api/mcp/tpm_tools.go`, `tpm_tools_exec.go` | the 31 `platform_tpm_*` tools |
 | `pkg/cli/commands/tpm/` | the `platformctl tpm` tree |
@@ -36,11 +37,13 @@ serves:
 (wired at `pkg/webservice/v1/router.go`, `tpmRoutes`). platformd's own REST
 listener serves `restapi.TPMHandlers` (`pkg/api/rest/tpm_handlers.go`), mounted
 by `RESTServer.SetTPMHandlers` with the daemon's `TPMGRPCService` as its
-`TPMQuoteService` and the shared platform-token validator as its
-`TokenAuthorizer`. Each route in `TPMHandlers.routes` names its scope, and
-`requireScope` checks it before the handler runs. Quote and verify delegate to
+`TPMQuoteService` and the listener's shared `ScopeGuard` (built by
+`newRESTScopeGuard`, `pkg/api/daemon/transport_auth.go`). Each route in
+`TPMHandlers.routes` names its scope, and `ScopeGuard.Require` checks it before
+the handler runs: a bearer platform token must grant the scope, otherwise a
+verified operator client certificate is accepted. Quote and verify delegate to
 the `TPMQuoteService`; the handler set has no verifier of its own. Without a
-quote service `SetTPMHandlers` mounts nothing; without a validator every route
+quote service `SetTPMHandlers` mounts nothing; without a guard every route
 answers `403`.
 
 ## 2. The SDK edge
@@ -150,6 +153,13 @@ downgrade is invisible in every downstream artefact.
      is not dictionary-attack protected, so the check costs no lockout.
    - The endorsement auth is presented as its bit says and is never changed;
      the lockout auth is never touched.
+   - **A served `Clear` resets both in memory.** `TPM2_Clear` (Part 3 §24.6)
+     empties the owner, endorsement and lockout auth, so every transport's
+     `Clear` goes through `tpmclear.Clear` (`pkg/api/tpmclear`), which empties
+     `SSRK.HierarchyAuth` and `EK.HierarchyAuth` once the TPM accepts the
+     clear. A refused clear leaves both as they were. Without it the next
+     `CreateSRK`, `CreateEK` or `Provision` fails with `TPM_RC_BAD_AUTH` until
+     the daemon restarts.
 6. **SRK policy drift is detected, not ignored.** `InitTPM` compares the stored
    `srkAttrs.TPMAttributes.Public.AuthPolicy.Buffer` against the live
    `PlatformPolicyDigest`; a mismatch triggers re-provisioning, because
@@ -281,37 +291,6 @@ func (s *TPMGRPCService) SetTPM2Service(tpm quicbaassdk.TrustedPlatformModule)
   reclassifies a status code. Treat the mapping as advisory, not contractual,
   and do not build client control flow on the distinction between
   `FailedPrecondition` and `Internal`.
-
-### Sealing fails closed on PCRs
-
-`Seal` builds its options in `buildSealOptions`, which refuses a request that
-names `pcr_indices` with `common.ErrPCRBoundSealUnavailable` before anything
-reaches the TPM. `Seal` matches it with `errors.As`, ahead of `mapError`, and
-returns `codes.FailedPrecondition`; the message names go-quicbaas #1171.
-
-The reason: go-xkms seals a PCR selection that carries no policy digest as a
-password-only object, which unseals whatever the PCRs hold. Binding it needs the
-PolicyPCR digest or a named `TPMPolicy`. go-quicbaas does not re-export either
-yet (go-quicbaas #1171), and building TPM policy locally is forbidden. The
-platform refuses rather than return an object that looks PCR-bound and is not.
-When the re-export lands, `buildSealOptions` sets the policy and the refusal goes.
-
-The seal surfaces that bound PCRs carry the same refusal. Unseal is unchanged on
-all of them.
-
-| Surface | Entry point | What the caller sees |
-|---|---|---|
-| gRPC, Unix, REST `POST /api/v1/tpm/seal` (proxies gRPC) | `TPMGRPCService.Seal` | `FailedPrecondition` |
-| MCP `platform_tpm_seal` | `MCPServiceProvider.TPMSeal` → `TPMGRPCService.Seal` | `FailedPrecondition` |
-| vTPM gRPC | `vtpm.TPMOperations.Seal` → `VTPMServiceServer.mapError` | `FailedPrecondition` |
-| vTPM QUIC | `vtpm.TPMOperations.Seal` → `mapVTPMError` | `StatusInvalidRequest` (QUIC has no precondition status) |
-| vTPM MCP `vtpm_seal` | `vtpm.TPMOperations.Seal` | the typed error, wrapped in `ErrTPMSealFailed` |
-
-A seal without PCRs still works when it carries `--password`, its only
-protection, which sits under the SSRK. A seal with neither PCRs nor a password
-is refused by go-xkms (`ErrSealUnprotected`, go-xkms v0.49): such an object
-would unseal for anyone able to load it. The SDK does not re-export that error,
-so the daemon passes it through unmapped.
 
 ## 7. QUIC handler — `TPM2Handler`
 
@@ -521,6 +500,18 @@ unseal fail.
 `NewMCPAdapter`, `NewUnixAdapter`. `TestTPMMultiProtocol` runs one suite against
 all six. Run it with `make integration-test-tpm`.
 
+The six adapters share the daemon's one TPM, so the suite runs in two phases.
+`ReadOnly` runs first for every adapter against the TPM the daemon provisioned:
+`Info`, `EKInfo` at `0x81010001`, `EKCertificate`, `SRKInfo` at the SSRK handle
+`0x81000001`, seal/unseal and the event log. `Lifecycle` then runs per adapter:
+`Clear` with the empty lockout auth, `EKCreate` and `SRKCreate`, `Clear` again
+before each further SRK create (the daemon creates its configured SSRK at the
+one handle), and `Clear` then `Provision`. On the cleared TPM a `Provision`
+presenting an owner password is refused with `TPM_RC_BAD_AUTH`, and one with the
+empty auth succeeds. The suite never sends a wrong lockout auth: one refusal
+puts the lockout hierarchy into lockout and every later `Clear` fails with
+`TPM_RC_LOCKOUT`.
+
 `conventions/feature-docs.md` §4 asks for a `CommandDefinition` per verb. **No
 `CommandDefinition` type exists in this repository** (grepped 2026-08-18); the
 TPM feature satisfies the *intent* through `TPMCommands`, and the naming
@@ -588,9 +579,6 @@ Recorded here so they are debts with a location, not discoveries:
    `/api/v1/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
    (`pkg/api/daemon/rest_idevid.go`) rely on mTLS alone, where `TPMHandlers`
    routes need a scoped platform token.
-8. **PCR-bound sealing is unavailable** (§6, "Sealing fails closed on PCRs").
-   Every gRPC, Unix, REST, MCP and vTPM seal that names PCRs is refused until
-   go-quicbaas re-exports the PolicyPCR primitives (go-quicbaas #1171).
 
 ## 14. Related
 

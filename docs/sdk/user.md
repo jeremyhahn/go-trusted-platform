@@ -221,11 +221,11 @@ The request and response types of each client come from its sibling package,
 ```go
 import "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/project"
 
-_, err = baas.Project().GrantFleetNodeRole(ctx, &project.GrantFleetNodeRoleRequest{
-    TenantID:    tenantID,
-    ProjectID:   projectID,
-    FleetNodeID: nodeID,
-    Role:        project.ProjectRoleWorker,
+_, err = baas.Project().GrantAgentRole(ctx, &project.GrantAgentRoleRequest{
+    TenantID:  tenantID,
+    ProjectID: projectID,
+    AgentID:   agentID,
+    Role:      project.ProjectRoleWorker,
 })
 ```
 

@@ -407,6 +407,14 @@ func TestSingularAccessors_IdentifierTravelsInThePath(t *testing.T) {
 			strippedIn: "role_id",
 		},
 		{
+			name:       "PlatformIAMService/GetGroup",
+			grpcMethod: "/platform.v1.PlatformIAMService/GetGroup",
+			req:        &platformv1.GetIAMGroupRequest{TenantId: "acme-prod", GroupId: "g-3"},
+			resp:       &platformv1.IAMGroupResponse{},
+			wantPath:   "/api/v1/iam/tenants/acme-prod/groups/g-3",
+			strippedIn: "group_id",
+		},
+		{
 			name:       "PlatformIAMService/GetTenant",
 			grpcMethod: "/platform.v1.PlatformIAMService/GetTenant",
 			req:        &platformv1.GetIAMTenantRequest{TenantId: "acme-prod"},
@@ -491,6 +499,83 @@ func TestSingularAccessors_ZeroIdentifierRejectedBeforeTheWire(t *testing.T) {
 			err := a.Connection().Invoke(context.Background(), tc.grpcMethod, tc.req, tc.resp)
 			if err == nil {
 				t.Fatal("expected an error for the zero identifier, got nil")
+			}
+			if st, _ := status.FromError(err); st == nil || st.Code() != codes.InvalidArgument {
+				t.Errorf("status = %v, want InvalidArgument", st)
+			}
+			if apiHits != 0 {
+				t.Errorf("server saw %d API hits; want 0 -- the request must not leave the client", apiHits)
+			}
+		})
+	}
+}
+
+// TestRemoveGroupMember_BothIdentifiersTravelInThePath pins the repair of
+// #415: the flat row sent DELETE /api/v1/iam/groups/members, which the server
+// routed to DELETE /groups/{id} with id="members" -- a DeleteGroup on the
+// wrong resource. The route has two identifiers, and both must leave the
+// body for the path.
+func TestRemoveGroupMember_BothIdentifiersTravelInThePath(t *testing.T) {
+	var captured struct {
+		method string
+		path   string
+		body   map[string]interface{}
+	}
+	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		captured.method = r.Method
+		captured.path = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&captured.body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"payload":{}}`))
+	})
+
+	req := &platformv1.RemoveGroupMemberRequest{TenantId: "acme-prod", GroupId: "g-3", UserId: "u-5"}
+	if err := a.Connection().Invoke(context.Background(),
+		"/platform.v1.PlatformIAMService/RemoveGroupMember", req, &platformv1.RemoveGroupMemberResponse{}); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if captured.method != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", captured.method)
+	}
+	if want := "/api/v1/iam/tenants/acme-prod/groups/g-3/members/u-5"; captured.path != want {
+		t.Errorf("path = %q, want %q", captured.path, want)
+	}
+	for _, field := range []string{"group_id", "user_id"} {
+		if _, has := captured.body[field]; has {
+			t.Errorf("identifier %q travels in the body as well as the path: %v", field, captured.body)
+		}
+	}
+}
+
+// TestRemoveGroupMember_MissingIdentifierRejectedBeforeTheWire: with either
+// identifier empty the request must not leave the client. Before #415 an
+// empty user_id produced DELETE /iam/groups/members and a 200 from the
+// wrong handler; a placeholder left unfilled must be an error, never a
+// shorter path.
+func TestRemoveGroupMember_MissingIdentifierRejectedBeforeTheWire(t *testing.T) {
+	cases := []struct {
+		name string
+		req  *platformv1.RemoveGroupMemberRequest
+	}{
+		{"no user_id", &platformv1.RemoveGroupMemberRequest{TenantId: "acme-prod", GroupId: "g-3"}},
+		{"no group_id", &platformv1.RemoveGroupMemberRequest{TenantId: "acme-prod", UserId: "u-5"}},
+		{"neither", &platformv1.RemoveGroupMemberRequest{TenantId: "acme-prod"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var apiHits int
+			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health/live" {
+					apiHits++
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+
+			err := a.Connection().Invoke(context.Background(),
+				"/platform.v1.PlatformIAMService/RemoveGroupMember", tc.req, &platformv1.RemoveGroupMemberResponse{})
+			if err == nil {
+				t.Fatal("expected an error for the missing identifier, got nil")
 			}
 			if st, _ := status.FromError(err); st == nil || st.Code() != codes.InvalidArgument {
 				t.Errorf("status = %v, want InvalidArgument", st)

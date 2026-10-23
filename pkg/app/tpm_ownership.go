@@ -19,7 +19,6 @@ import (
 	libtpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
@@ -138,11 +137,11 @@ func readTPMHierarchyAuthState(tpm transport.TPM) (tpmHierarchyAuthState, error)
 
 // hierarchyAuthFor returns the auth a hierarchy currently holds: the SO PIN
 // once its authSet bit is set, empty before.
-func hierarchyAuthFor(authSet bool, soPIN xkmssdk.Password) (*quicbaassecret.SecretValue, error) {
+func hierarchyAuthFor(authSet bool, soPIN xkmssdk.Password) string {
 	if !authSet {
-		return nil, nil
+		return ""
 	}
-	return sealHierarchyAuth(soPIN)
+	return string(soPIN.Bytes())
 }
 
 // applyTPMHierarchyAuth points TPMConfig's owner (SSRK) and endorsement (EK)
@@ -160,12 +159,8 @@ func (app *App) applyTPMHierarchyAuth(soPIN xkmssdk.Password) (tpmHierarchyAuthS
 	if app.TPMConfig.EK == nil {
 		app.TPMConfig.EK = &xkmssdk.EKConfig{}
 	}
-	if app.TPMConfig.SSRK.HierarchyAuth, err = hierarchyAuthFor(state.ownerAuthSet, soPIN); err != nil {
-		return state, err
-	}
-	if app.TPMConfig.EK.HierarchyAuth, err = hierarchyAuthFor(state.endorsementAuthSet, soPIN); err != nil {
-		return state, err
-	}
+	app.TPMConfig.SSRK.HierarchyAuth = hierarchyAuthFor(state.ownerAuthSet, soPIN)
+	app.TPMConfig.EK.HierarchyAuth = hierarchyAuthFor(state.endorsementAuthSet, soPIN)
 	return state, nil
 }
 
@@ -218,11 +213,7 @@ func (app *App) takeTPMOwnership(soPIN xkmssdk.Password) error {
 	if err := app.TPM.SetHierarchyAuth(nil, soPIN, &owner); err != nil {
 		return &TPMOwnershipError{Cause: err}
 	}
-	auth, err := sealHierarchyAuth(soPIN)
-	if err != nil {
-		return err
-	}
-	app.TPMConfig.SSRK.HierarchyAuth = auth
+	app.TPMConfig.SSRK.HierarchyAuth = string(soPIN.Bytes())
 	app.Logger.Info("TPM ownership taken: owner hierarchy auth set to the SO PIN")
 	return nil
 }

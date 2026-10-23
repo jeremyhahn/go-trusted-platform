@@ -429,6 +429,18 @@ func registerDeviceHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.DeviceService_CreateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateTemplate(ctx, req.(*platformv1.DeviceTemplateCreateRequest))
 	}
+	m[platformv1.DeviceService_GetTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetTemplate(ctx, req.(*platformv1.DeviceTemplateGetRequest))
+	}
+	m[platformv1.DeviceService_ListTemplates_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListTemplates(ctx, req.(*platformv1.DeviceTemplateListRequest))
+	}
+	m[platformv1.DeviceService_UpdateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateTemplate(ctx, req.(*platformv1.DeviceTemplateUpdateRequest))
+	}
+	m[platformv1.DeviceService_DeleteTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteTemplate(ctx, req.(*platformv1.DeviceTemplateDeleteRequest))
+	}
 	m[platformv1.DeviceService_CreateProfileFromTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateProfileFromTemplate(ctx, req.(*platformv1.CreateProfileFromTemplateRequest))
 	}
@@ -500,6 +512,27 @@ func registerIAMHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.PlatformIAMService_RevokeRole_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.RevokeRole(ctx, req.(*platformv1.RevokeIAMRoleRequest))
+	}
+	m[platformv1.PlatformIAMService_CreateGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateGroup(ctx, req.(*platformv1.CreateIAMGroupRequest))
+	}
+	m[platformv1.PlatformIAMService_GetGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetGroup(ctx, req.(*platformv1.GetIAMGroupRequest))
+	}
+	m[platformv1.PlatformIAMService_ListGroups_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListGroups(ctx, req.(*platformv1.ListIAMGroupsRequest))
+	}
+	m[platformv1.PlatformIAMService_UpdateGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateGroup(ctx, req.(*platformv1.UpdateIAMGroupRequest))
+	}
+	m[platformv1.PlatformIAMService_DeleteGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteGroup(ctx, req.(*platformv1.DeleteIAMGroupRequest))
+	}
+	m[platformv1.PlatformIAMService_AddGroupMember_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.AddGroupMember(ctx, req.(*platformv1.AddGroupMemberRequest))
+	}
+	m[platformv1.PlatformIAMService_RemoveGroupMember_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RemoveGroupMember(ctx, req.(*platformv1.RemoveGroupMemberRequest))
 	}
 	m[platformv1.PlatformIAMService_CheckPermission_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CheckPermission(ctx, req.(*platformv1.CheckIAMPermissionRequest))
@@ -784,8 +817,17 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_ListSnapshots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ListSnapshots(ctx, req.(*platformv1.ListSnapshotsRequest))
 	}
+	m[platformv1.ComputeService_GetSnapshot_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSnapshot(ctx, req.(*platformv1.GetSnapshotRequest))
+	}
 	m[platformv1.ComputeService_MigrateVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.MigrateVM(ctx, req.(*platformv1.MigrateVMRequest))
+	}
+	m[platformv1.ComputeService_PrepareMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PrepareMigration(ctx, req.(*platformv1.PrepareMigrationRequest))
+	}
+	m[platformv1.ComputeService_FinalizeMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FinalizeMigration(ctx, req.(*platformv1.FinalizeMigrationRequest))
 	}
 	m[platformv1.ComputeService_CreateContainer_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateContainer(ctx, req.(*platformv1.CreateContainerRequest))

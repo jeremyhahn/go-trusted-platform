@@ -46,6 +46,33 @@ type recordingComputeServer struct {
 	stopped  *platformv1.StopContainerRequest
 	attested *platformv1.AttestContainerRequest
 	listed   *platformv1.ListVMsRequest
+	snapshot *platformv1.GetSnapshotRequest
+	prepared *platformv1.PrepareMigrationRequest
+	finished *platformv1.FinalizeMigrationRequest
+}
+
+// PrepareMigration hands every inbound migration receiver "recv-1".
+func (s *recordingComputeServer) PrepareMigration(_ context.Context, req *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	s.prepared = req
+	return &platformv1.PrepareMigrationResponse{ReceiverId: "recv-1", Port: 49152, TlsHostname: "node-2"}, nil
+}
+
+// FinalizeMigration knows one receiver, "recv-1"; any other id is NotFound.
+func (s *recordingComputeServer) FinalizeMigration(_ context.Context, req *platformv1.FinalizeMigrationRequest) (*platformv1.FinalizeMigrationResponse, error) {
+	s.finished = req
+	if req.GetReceiverId() != "recv-1" {
+		return nil, status.Error(codes.NotFound, "migration receiver not found")
+	}
+	return &platformv1.FinalizeMigrationResponse{Status: &platformv1.Status{Success: true}}, nil
+}
+
+// GetSnapshot knows one snapshot, "nightly"; any other id is NotFound.
+func (s *recordingComputeServer) GetSnapshot(_ context.Context, req *platformv1.GetSnapshotRequest) (*platformv1.GetSnapshotResponse, error) {
+	s.snapshot = req
+	if req.GetSnapshotId() != "nightly" {
+		return nil, status.Error(codes.NotFound, "snapshot not found")
+	}
+	return &platformv1.GetSnapshotResponse{Snapshot: &platformv1.Snapshot{Id: "nightly", VmId: req.GetVmId()}}, nil
 }
 
 func (s *recordingComputeServer) DeleteContainer(_ context.Context, req *platformv1.DeleteContainerRequest) (*platformv1.DeleteContainerResponse, error) {
@@ -136,6 +163,64 @@ func TestSDKREST_DeleteContainer(t *testing.T) {
 	assert.Equal(t, "c1", server.deleted.GetId())
 	assert.True(t, server.deleted.GetForce())
 	assert.True(t, server.deleted.GetDeleteVolumes())
+}
+
+func TestSDKREST_GetSnapshot(t *testing.T) {
+	server := &recordingComputeServer{}
+	client, _ := connectComputeSDK(t, server)
+
+	resp, err := client.GetSnapshot(context.Background(),
+		&platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "nightly"})
+
+	require.NoError(t, err)
+	require.NotNil(t, server.snapshot)
+	assert.Equal(t, "vm-1", server.snapshot.GetVmId())
+	assert.Equal(t, "nightly", server.snapshot.GetSnapshotId())
+	assert.Equal(t, "nightly", resp.GetSnapshot().GetId())
+	assert.Equal(t, "vm-1", resp.GetSnapshot().GetVmId())
+}
+
+func TestSDKREST_GetSnapshotUnknownIsNotFound(t *testing.T) {
+	client, _ := connectComputeSDK(t, &recordingComputeServer{})
+
+	_, err := client.GetSnapshot(context.Background(),
+		&platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "gone"})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestSDKREST_PrepareAndFinalizeMigration(t *testing.T) {
+	server := &recordingComputeServer{}
+	client, _ := connectComputeSDK(t, server)
+
+	prepared, err := client.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
+		VmName: "web", Mode: "live",
+		Spec: &platformv1.VMMigrationSpec{MemoryMb: 2048, Cpus: 2},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, server.prepared)
+	assert.Equal(t, "web", server.prepared.GetVmName())
+	assert.Equal(t, int32(2048), server.prepared.GetSpec().GetMemoryMb())
+	assert.Equal(t, "recv-1", prepared.GetReceiverId())
+	assert.Equal(t, int32(49152), prepared.GetPort())
+
+	_, err = client.FinalizeMigration(context.Background(),
+		&platformv1.FinalizeMigrationRequest{ReceiverId: prepared.GetReceiverId(), Commit: true})
+	require.NoError(t, err)
+	require.NotNil(t, server.finished)
+	assert.Equal(t, "recv-1", server.finished.GetReceiverId())
+	assert.True(t, server.finished.GetCommit())
+}
+
+func TestSDKREST_FinalizeMigrationUnknownReceiverIsNotFound(t *testing.T) {
+	client, _ := connectComputeSDK(t, &recordingComputeServer{})
+
+	_, err := client.FinalizeMigration(context.Background(),
+		&platformv1.FinalizeMigrationRequest{ReceiverId: "gone", Commit: true})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
 func TestSDKREST_StartContainer(t *testing.T) {

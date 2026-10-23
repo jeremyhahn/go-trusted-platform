@@ -117,6 +117,8 @@ func TestVMOpsSubOpcodesAreVMFamily(t *testing.T) {
 		quicwire.OpVMDetachDisk,
 		quicwire.OpVMResizeDisk,
 		quicwire.OpVMMigrate,
+		quicwire.OpVMPrepareMigration,
+		quicwire.OpVMFinalizeMigration,
 	}
 	for _, sub := range subs {
 		if !quicwire.IsVMSubOpcode(sub) {

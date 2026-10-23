@@ -707,7 +707,8 @@ func (s *Supervisor) noteRestart(proc *supervised, failure error, cause error) (
 // up is the caller's question in StartService, and the health report's
 // afterwards.
 func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
-	deadline := s.cfg.Clock.Now().Add(s.cfg.ReadyTimeout)
+	started := s.cfg.Clock.Now()
+	deadline := started.Add(s.cfg.ReadyTimeout)
 	var lastErr error
 	for {
 		s.mu.Lock()
@@ -718,6 +719,9 @@ func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
 		}
 		if client != nil {
 			if _, err := client.Status(ctx); err == nil {
+				s.cfg.Logger.Info("gatewayd supervisor: process answering",
+					slog.String("process", proc.def.Name),
+					slog.Duration("waited", s.cfg.Clock.Now().Sub(started)))
 				return nil
 			} else {
 				lastErr = err

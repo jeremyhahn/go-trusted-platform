@@ -11,7 +11,7 @@ acme:
         password: "123456"
         rsa:
           size: 2048
-        tpm-policy: platform
+        platform-policy: true
         signature-algorithm: SHA256-RSA
         store: software
       register: true
@@ -60,7 +60,7 @@ certificate-authority:
       password: "123456"
       rsa:
         size: 2048
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: SHA256-RSA
       store: software
     - debug: true
@@ -70,7 +70,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: ECDSA
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: ECDSA-SHA256
       store: software
     - debug: true
@@ -78,7 +78,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: Ed25519
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: Ed25519
       store: software
     - debug: true
@@ -88,7 +88,7 @@ certificate-authority:
       password: "123456"
       rsa:
         size: 2048
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: SHA256-RSA
       store: tpm2
     - debug: true
@@ -98,7 +98,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: ECDSA
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: ECDSA-SHA256
       store: tpm2
     - debug: true
@@ -108,7 +108,7 @@ certificate-authority:
       password: "123456"
       rsa:
         size: 2048
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: SHA256-RSA
       store: pkcs11
     - debug: true
@@ -118,7 +118,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: ECDSA
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: ECDSA-SHA256
       store: pkcs11
     sans:
@@ -157,7 +157,7 @@ certificate-authority:
       password: "123456"
       rsa:
         size: 2048
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: SHA256-RSA
       store: software
     - debug: true
@@ -167,7 +167,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: ECDSA
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: ECDSA-SHA256
       store: software
     - debug: true
@@ -175,7 +175,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: Ed25519
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: Ed25519
       store: software
     - debug: true
@@ -185,7 +185,7 @@ certificate-authority:
       password: "123456"
       rsa:
         size: 2048
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: SHA256-RSA
       store: tpm2
     - debug: true
@@ -195,7 +195,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: ECDSA
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: ECDSA-SHA256
       store: tpm2
     - debug: true
@@ -205,7 +205,7 @@ certificate-authority:
       password: "123456"
       rsa:
         size: 2048
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: SHA256-RSA
       store: pkcs11
     - debug: true
@@ -215,7 +215,7 @@ certificate-authority:
       hash: SHA-256
       algorithm: ECDSA
       password: "123456"
-      tpm-policy: platform
+      platform-policy: true
       signature-algorithm: ECDSA-SHA256
       store: pkcs11
     sans:
@@ -348,6 +348,7 @@ webservice:
     algorithm: RSA
     rsa:
       size: 2048
+    platform-policy: false
     signature-algorithm: SHA256-RSA
     store: software
   port: 8080
@@ -401,6 +402,7 @@ webservice:
       default: false
       hash: SHA-256
       algorithm: ECDSA
+      platform-policy: false
       signature-algorithm: ECDSA-SHA256
       store: software
   webauthn:

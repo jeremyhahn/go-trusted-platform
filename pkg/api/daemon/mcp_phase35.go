@@ -456,6 +456,7 @@ func (p *MCPServiceProvider) LUKSEnrollTPM(ctx context.Context, args map[string]
 		Device:             mapGetString(args, "device"),
 		ExistingPassphrase: mapGetString(args, "existing_passphrase"),
 		PCRs:               mapGetInt32Slice(args, "pcrs"),
+		Handle:             mapGetString(args, "handle"),
 	}
 	result, err := svc.EnrollTPM(ctx, req)
 	if err != nil {

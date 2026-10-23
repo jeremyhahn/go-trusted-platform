@@ -83,7 +83,7 @@ func TestRESTServer_SetTPMHandlers_NilMountsNothing(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, serveTPMRoute(server, http.MethodPost, "/api/v1/tpm/quote", "token").Code)
 }
 
-// Without the platform-token validator nobody holds a TPM scope, so every
+// Without a scope guard no credential can grant a TPM scope, so every
 // mounted route refuses.
 func TestRESTServer_SetTPMHandlers_WithoutAValidatorRefuses(t *testing.T) {
 	t.Parallel()
@@ -105,7 +105,7 @@ func TestRESTServer_SetTPMHandlers_ServesAScopedToken(t *testing.T) {
 
 	server := newTPMTestRESTServer(t)
 	quotes := &answeringQuoteService{}
-	server.SetTPMHandlers(quotes, validator)
+	server.SetTPMHandlers(quotes, tokenScopeGuard(validator))
 
 	t.Run("a tpm:read token quotes through the quote service", func(t *testing.T) {
 		w := serveTPMRoute(server, http.MethodPost, "/api/v1/tpm/quote", reader)
@@ -161,7 +161,7 @@ func TestRESTServer_SetTPMHandlers_ActivatesCredentials(t *testing.T) {
 		server := newTPMTestRESTServer(t)
 		service := NewTPMGRPCService(logging.NewLogger(0, nil))
 		service.SetTPM2Service(tpm)
-		server.SetTPMHandlers(service, validator)
+		server.SetTPMHandlers(service, tokenScopeGuard(validator))
 		return server
 	}
 
@@ -216,7 +216,7 @@ func TestRESTServer_SetTPMHandlers_ReceivesTheTPM(t *testing.T) {
 	t.Run("injected after mounting", func(t *testing.T) {
 		server := newTPMTestRESTServer(t)
 		tpm := NewTPMGRPCService(logging.NewLogger(0, nil))
-		server.SetTPMHandlers(tpm, validator)
+		server.SetTPMHandlers(tpm, tokenScopeGuard(validator))
 		tpm.SetTPM2Service(&infoOnlyTPM{info: "after-mount"})
 
 		w := serveTPMRoute(server, http.MethodGet, "/api/v1/tpm/info", reader)
@@ -226,7 +226,7 @@ func TestRESTServer_SetTPMHandlers_ReceivesTheTPM(t *testing.T) {
 
 	t.Run("never injected is 503", func(t *testing.T) {
 		server := newTPMTestRESTServer(t)
-		server.SetTPMHandlers(NewTPMGRPCService(logging.NewLogger(0, nil)), validator)
+		server.SetTPMHandlers(NewTPMGRPCService(logging.NewLogger(0, nil)), tokenScopeGuard(validator))
 
 		assert.Equal(t, http.StatusServiceUnavailable, serveTPMRoute(server, http.MethodGet, "/api/v1/tpm/info", reader).Code)
 	})

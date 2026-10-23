@@ -1,7 +1,7 @@
 /**
  * IAM (Identity and Access Management) Service
  *
- * Provides operations for users, roles, tenants, policies, and applications.
+ * Provides operations for users, roles, groups, tenants, policies, and applications.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -27,6 +27,17 @@ import type {
   DeleteIAMRoleResponse,
   AssignIAMRoleResponse,
   RevokeIAMRoleResponse,
+  // Group types
+  CreateIAMGroupRequest,
+  ListIAMGroupsRequest,
+  UpdateIAMGroupRequest,
+  AddGroupMemberRequest,
+  RemoveGroupMemberRequest,
+  IAMGroupResponse,
+  ListIAMGroupsResponse,
+  DeleteIAMGroupResponse,
+  AddGroupMemberResponse,
+  RemoveGroupMemberResponse,
   // Authentication types
   AuthenticateIAMRequest,
   AuthenticateIAMResponse,
@@ -139,6 +150,7 @@ export class IAMService extends BaseService {
         filters: {
           email: request.emailFilter,
           role: request.roleFilter,
+          group: request.groupFilter,
         },
       })
     );
@@ -233,6 +245,79 @@ export class IAMService extends BaseService {
   async revokeRole(request: RevokeIAMRoleRequest): Promise<ApiResponse<RevokeIAMRoleResponse>> {
     return this.client.delete<RevokeIAMRoleResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/users/${this.encodePathSegment(request.userId)}/roles/${this.encodePathSegment(request.roleId)}`)
+    );
+  }
+
+  // =========================================================================
+  // Group Operations
+  // =========================================================================
+
+  /**
+   * Create a group
+   */
+  async createGroup(request: CreateIAMGroupRequest): Promise<ApiResponse<IAMGroupResponse>> {
+    return this.client.post<IAMGroupResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups`),
+      request
+    );
+  }
+
+  /**
+   * Get group by ID
+   */
+  async getGroup(tenantId: string, groupId: string): Promise<ApiResponse<IAMGroupResponse>> {
+    return this.client.get<IAMGroupResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/groups/${this.encodePathSegment(groupId)}`)
+    );
+  }
+
+  /**
+   * List groups
+   */
+  async listGroups(request: ListIAMGroupsRequest): Promise<ApiResponse<ListIAMGroupsResponse>> {
+    return this.client.get<ListIAMGroupsResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups`, {
+        page: request.page,
+        limit: request.pageSize,
+      })
+    );
+  }
+
+  /**
+   * Update a group
+   */
+  async updateGroup(request: UpdateIAMGroupRequest): Promise<ApiResponse<IAMGroupResponse>> {
+    return this.client.put<IAMGroupResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}`),
+      request
+    );
+  }
+
+  /**
+   * Delete a group
+   */
+  async deleteGroup(tenantId: string, groupId: string): Promise<ApiResponse<DeleteIAMGroupResponse>> {
+    return this.client.delete<DeleteIAMGroupResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/groups/${this.encodePathSegment(groupId)}`)
+    );
+  }
+
+  /**
+   * Add member to group
+   */
+  async addGroupMember(request: AddGroupMemberRequest): Promise<ApiResponse<AddGroupMemberResponse>> {
+    return this.client.post<AddGroupMemberResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members`),
+      { userId: request.userId }
+    );
+  }
+
+  /**
+   * Remove member from group
+   */
+  async removeGroupMember(request: RemoveGroupMemberRequest): Promise<ApiResponse<RemoveGroupMemberResponse>> {
+    return this.client.delete<RemoveGroupMemberResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members/${this.encodePathSegment(request.userId)}`)
     );
   }
 

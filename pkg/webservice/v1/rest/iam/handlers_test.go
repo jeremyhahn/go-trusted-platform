@@ -52,6 +52,15 @@ type mockIAMClient struct {
 	assignRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
 	revokeRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
 
+	// Group methods
+	createGroupFn       func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
+	listGroupsFn        func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
+	getGroupFn          func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
+	updateGroupFn       func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
+	deleteGroupFn       func(ctx context.Context, tenantID, groupID string) error
+	addGroupMemberFn    func(ctx context.Context, tenantID, groupID, userID string) error
+	removeGroupMemberFn func(ctx context.Context, tenantID, groupID, userID string) error
+
 	// Role methods
 	createRoleFn func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error)
 	listRolesFn  func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error)
@@ -136,6 +145,55 @@ func (m *mockIAMClient) AssignRole(ctx context.Context, tenantID, userID, roleID
 func (m *mockIAMClient) RevokeRole(ctx context.Context, tenantID, userID, roleID string) error {
 	if m.revokeRoleFn != nil {
 		return m.revokeRoleFn(ctx, tenantID, userID, roleID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+	if m.createGroupFn != nil {
+		return m.createGroupFn(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+	if m.listGroupsFn != nil {
+		return m.listGroupsFn(ctx, tenantID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+	if m.getGroupFn != nil {
+		return m.getGroupFn(ctx, tenantID, groupID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+	if m.updateGroupFn != nil {
+		return m.updateGroupFn(ctx, tenantID, groupID, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) DeleteGroup(ctx context.Context, tenantID, groupID string) error {
+	if m.deleteGroupFn != nil {
+		return m.deleteGroupFn(ctx, tenantID, groupID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if m.addGroupMemberFn != nil {
+		return m.addGroupMemberFn(ctx, tenantID, groupID, userID)
+	}
+	return status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+	if m.removeGroupMemberFn != nil {
+		return m.removeGroupMemberFn(ctx, tenantID, groupID, userID)
 	}
 	return status.Error(codes.Unimplemented, "not implemented")
 }
@@ -467,6 +525,7 @@ func TestCreateUser_Success(t *testing.T) {
 				Email:       req.Email,
 				DisplayName: req.DisplayName,
 				Roles:       req.Roles,
+				Groups:      req.Groups,
 			}, nil
 		},
 	}
@@ -474,9 +533,10 @@ func TestCreateUser_Success(t *testing.T) {
 	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
 
 	body := CreateUserRequest{
-		Email: "test@example.com",
-		Name:  "Test User",
-		Roles: []string{"admin"},
+		Email:  "test@example.com",
+		Name:   "Test User",
+		Roles:  []string{"admin"},
+		Groups: []string{"engineering"},
 	}
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/users", body, map[string]string{"tenant": "tenant-1"})
@@ -826,6 +886,165 @@ func TestRevokeUserRole_Error(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 }
+
+// Tests for Group Handlers
+
+func TestCreateGroup_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+			return &iamsdk.Group{
+				ID:          req.ID,
+				TenantID:    tenantID,
+				Name:        req.Name,
+				Description: req.Description,
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	body := CreateGroupRequest{ID: "engineering", Name: "Engineering", Description: "Engineering team"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CreateGroup(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	payload, ok := writer.lastPayload.(GroupResponse)
+	require.True(t, ok)
+	assert.Equal(t, "engineering", payload.ID)
+}
+
+func TestListGroups_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+			return &iamsdk.ListGroupsResponse{
+				Groups: []iamsdk.Group{
+					{ID: "group-1", Name: "Group 1"},
+					{ID: "group-2", Name: "Group 2"},
+				},
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups", nil, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListGroups(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	payload, ok := writer.lastPayload.(ListGroupsResponse)
+	require.True(t, ok)
+	assert.Len(t, payload.Groups, 2)
+}
+
+func TestGetGroup_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+			return &iamsdk.Group{
+				ID:   groupID,
+				Name: "Engineering",
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups/engineering", nil, map[string]string{"tenant": "tenant-1", "id": "engineering"})
+	rec := httptest.NewRecorder()
+
+	handlers.GetGroup(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+func TestUpdateGroup_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+			return &iamsdk.Group{
+				ID:          groupID,
+				Name:        req.Name,
+				Description: req.Description,
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	body := UpdateGroupRequest{Name: "Updated Group", Description: "Updated description"}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-1/groups/group-1", body, map[string]string{"tenant": "tenant-1", "id": "group-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateGroup(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+func TestDeleteGroup_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		deleteGroupFn: func(ctx context.Context, tenantID, groupID string) error {
+			return nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1", nil, map[string]string{"tenant": "tenant-1", "id": "group-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.DeleteGroup(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+func TestAddGroupMember_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		addGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.AddGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+func TestAddGroupMember_MissingMember(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.AddGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestRemoveGroupMember_Success(t *testing.T) {
+	iamClient := &mockIAMClient{
+		removeGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.RemoveGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+// Tests for Role Handlers
 
 func TestCreateRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
@@ -1772,6 +1991,301 @@ func TestRevokeUserRole_MissingRole(t *testing.T) {
 	handlers.RevokeUserRole(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+// Additional error path tests for Group handlers
+
+func TestCreateGroup_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	body := CreateGroupRequest{ID: "engineering", Name: "Engineering"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants//groups", body, map[string]string{"tenant": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.CreateGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestCreateGroup_InvalidRequestBody(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups", bytes.NewBufferString("invalid json"))
+	req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1"})
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handlers.CreateGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestCreateGroup_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+			return nil, status.Error(codes.AlreadyExists, "group already exists")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	body := CreateGroupRequest{ID: "engineering", Name: "Engineering"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CreateGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestListGroups_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//groups", nil, map[string]string{"tenant": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.ListGroups(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestListGroups_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+			return nil, status.Error(codes.Internal, "internal error")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups", nil, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListGroups(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+}
+
+func TestGetGroup_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//groups/engineering", nil, map[string]string{"tenant": "", "id": "engineering"})
+	rec := httptest.NewRecorder()
+
+	handlers.GetGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestGetGroup_MissingGroupID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.GetGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestGetGroup_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+			return nil, status.Error(codes.NotFound, "group not found")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups/nonexistent", nil, map[string]string{"tenant": "tenant-1", "id": "nonexistent"})
+	rec := httptest.NewRecorder()
+
+	handlers.GetGroup(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+}
+
+func TestUpdateGroup_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	body := UpdateGroupRequest{Name: "Updated Group"}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants//groups/group-1", body, map[string]string{"tenant": "", "id": "group-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestUpdateGroup_MissingGroupID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	body := UpdateGroupRequest{Name: "Updated Group"}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-1/groups/", body, map[string]string{"tenant": "tenant-1", "id": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestUpdateGroup_InvalidRequestBody(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/tenant-1/groups/group-1", bytes.NewBufferString("invalid json"))
+	req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1", "id": "group-1"})
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestUpdateGroup_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+			return nil, status.Error(codes.NotFound, "group not found")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	body := UpdateGroupRequest{Name: "Updated Group"}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-1/groups/nonexistent", body, map[string]string{"tenant": "tenant-1", "id": "nonexistent"})
+	rec := httptest.NewRecorder()
+
+	handlers.UpdateGroup(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+}
+
+func TestDeleteGroup_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//groups/group-1", nil, map[string]string{"tenant": "", "id": "group-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.DeleteGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestDeleteGroup_MissingGroupID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.DeleteGroup(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestDeleteGroup_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		deleteGroupFn: func(ctx context.Context, tenantID, groupID string) error {
+			return status.Error(codes.NotFound, "group not found")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/nonexistent", nil, map[string]string{"tenant": "tenant-1", "id": "nonexistent"})
+	rec := httptest.NewRecorder()
+
+	handlers.DeleteGroup(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+}
+
+func TestAddGroupMember_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants//groups/group-1/members/user-123", nil, map[string]string{"tenant": "", "id": "group-1", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.AddGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestAddGroupMember_MissingGroupID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups//members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.AddGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestAddGroupMember_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		addGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return status.Error(codes.NotFound, "user or group not found")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.AddGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+}
+
+func TestRemoveGroupMember_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//groups/group-1/members/user-123", nil, map[string]string{"tenant": "", "id": "group-1", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.RemoveGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestRemoveGroupMember_MissingGroupID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups//members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.RemoveGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestRemoveGroupMember_MissingMember(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.RemoveGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestRemoveGroupMember_GRPCError(t *testing.T) {
+	iamClient := &mockIAMClient{
+		removeGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
+			return status.Error(codes.NotFound, "member not found")
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": "user-123"})
+	rec := httptest.NewRecorder()
+
+	handlers.RemoveGroupMember(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
 }
 
 // Additional error path tests for Role handlers

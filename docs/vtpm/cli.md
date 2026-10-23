@@ -115,7 +115,7 @@ platformctl vtpm clone --template uefi-sb-ecc --hostname web-02
 | Verb | Flags |
 |---|---|
 | `quote` | `--bundle-id` (required), `--nonce` hex (**required**), `--pcrs` comma-separated (**required**) |
-| `seal` | `--bundle-id` (required), `--data` base64 (required), `--pcrs` (**refused until go-quicbaas #1171**), `--auth-value` |
+| `seal` | `--bundle-id` (required), `--data` base64 (required), `--pcrs`, `--auth-value` |
 | `unseal` | `--bundle-id` (required), `--sealed-data` base64 (required), `--auth-value` |
 | `pcr extend` | `--bundle-id` (required), `--data` hex (required) |
 | `pcr read` | `--bundle-id` (required) |
@@ -129,21 +129,17 @@ one you generated or one a verifier gave you — never a constant.
 is hex, `quote --nonce` is hex, `unseal --sealed-data` is base64. Read the flag
 before encoding.
 
-**`seal --pcrs` is refused.** PCR-bound sealing needs the PolicyPCR digest or a
-named TPM policy, which go-quicbaas does not re-export yet (go-quicbaas #1171).
-Without one, go-xkms would seal a blob protected by `--auth-value` alone, and it
-would unseal whatever the PCRs hold. The daemon fails the request closed: gRPC
-and Unix return `FailedPrecondition`, QUIC returns `StatusInvalidRequest`, and
-MCP returns the typed error. The CLI prints `failed to seal data: …` with the
-refusal, which names #1171. Unsealing blobs that already exist is unchanged.
+**`--pcrs` on `seal` binds the sealed blob to those PCRs.** Data sealed to PCRs
+unseals only while those PCR values still match — that is the point, and it is
+also why an unseal that worked yesterday can fail after a firmware update.
 
 **`--auth-value` must match between seal and unseal.** It is a secret; the
-warning about shell history applies. It is the blob's only protection today.
+warning about shell history applies.
 
 ```bash
 platformctl vtpm quote --bundle-id web-01-tpm \
     --nonce 9f86d081884c7d659a2feaa0c55ad015 --pcrs 0,1,7
-platformctl vtpm seal --bundle-id web-01-tpm --data "$(base64 -w0 secret.bin)" --auth-value "$AUTH"
+platformctl vtpm seal --bundle-id web-01-tpm --data "$(base64 -w0 secret.bin)" --pcrs 0,7
 platformctl vtpm pcr read --bundle-id web-01-tpm
 ```
 

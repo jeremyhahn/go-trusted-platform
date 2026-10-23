@@ -69,6 +69,13 @@ and returns the one named `name`, or `NotFound`.
 | `dns_resolve` | `dns:read` | `name` (required); `record_type` (default `A`) |
 
 The older tools take a record's FQDN, not a zone and a relative name.
+`record_type` is one of A, AAAA, CNAME, MX, NS, TXT, SRV, CAA and TLSA, in any
+case; any other type is `ErrRecordTypeNotSupported`. The `value` of A, AAAA,
+CNAME, MX (the exchange), NS and TXT is stored as given. SRV, CAA and TLSA take
+the RDATA in zone-file form (`10 5 5060 sip.example.com.`,
+`0 issue "letsencrypt.org"`, `3 1 1 <hex>`). A value that does not parse is
+`ErrInvalidRecordValue`. `dns_resolve` answers in the same forms
+(`Service.AddRecord`, `pkg/dns/record_kinds.go`).
 `dns_add_record` returns `{"success": true}`; `dns_resolve` returns
 `{"results": [...]}`; `dns_list_zones` returns `{"zones": [...]}`.
 

@@ -46,6 +46,9 @@ func TestVMSnapshotAttestRoutes_IDsTravelInThePath(t *testing.T) {
 		{platformv1.ComputeService_ListSnapshots_FullMethodName,
 			&platformv1.ListSnapshotsRequest{VmId: "vm-1"}, &platformv1.ListSnapshotsResponse{},
 			http.MethodGet, "/api/v1/compute/vms/vm-1/snapshots", nil},
+		{platformv1.ComputeService_GetSnapshot_FullMethodName,
+			&platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "snap-1"}, &platformv1.GetSnapshotResponse{},
+			http.MethodGet, "/api/v1/compute/vms/vm-1/snapshots/snap-1", nil},
 		{platformv1.ComputeService_DeleteSnapshot_FullMethodName,
 			&platformv1.DeleteSnapshotRequest{VmId: "vm-1", SnapshotId: "snap-1"}, &platformv1.DeleteSnapshotResponse{},
 			http.MethodDelete, "/api/v1/compute/vms/vm-1/snapshots/snap-1", nil},
@@ -99,6 +102,8 @@ func TestVMSnapshotAttestRoutes_EmptyIDRejectedBeforeTheWire(t *testing.T) {
 	}{
 		{"snapshot list without VM id", platformv1.ComputeService_ListSnapshots_FullMethodName,
 			&platformv1.ListSnapshotsRequest{}, &platformv1.ListSnapshotsResponse{}},
+		{"snapshot get without snapshot id", platformv1.ComputeService_GetSnapshot_FullMethodName,
+			&platformv1.GetSnapshotRequest{VmId: "vm-1"}, &platformv1.GetSnapshotResponse{}},
 		{"snapshot delete without snapshot id", platformv1.ComputeService_DeleteSnapshot_FullMethodName,
 			&platformv1.DeleteSnapshotRequest{VmId: "vm-1"}, &platformv1.DeleteSnapshotResponse{}},
 		{"attest without VM id", platformv1.ComputeService_AttestVM_FullMethodName,

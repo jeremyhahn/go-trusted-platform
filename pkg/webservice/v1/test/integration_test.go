@@ -26,7 +26,6 @@ import (
 	"os"
 	"testing"
 
-	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
@@ -77,11 +76,7 @@ func setup() {
 	// Configure for TPM simulator test - MUST be done before DefaultTestConfig()
 	// When CertHandle is 0, the EK cert is loaded from x509 store instead of TPM NV RAM
 	app.TestConfig.TPMConfig.EK.CertHandle = 0
-	ekAuth, err := quicbaassecret.NewSecretValue("", []byte("123456"), quicbaassecret.StrategyLiteral)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to build the EK hierarchy auth: %v", err))
-	}
-	app.TestConfig.TPMConfig.EK.HierarchyAuth = ekAuth
+	app.TestConfig.TPMConfig.EK.HierarchyAuth = "123456"
 	// Use simpler IAK strategy to avoid credential activation issues with simulators
 	app.TestConfig.TPMConfig.IdentityProvisioningStrategy = "IAK"
 

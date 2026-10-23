@@ -12,8 +12,8 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package caquicbaas provides adapters for integrating QuicBaaS with go-trusted-ca.
-// This file provides a KeyStore adapter over the xkmssdk.ServiceBackend
-// key-management surface, using QuicBaaS SDK for all key operations.
+// This file provides a KeyStore adapter that implements xkmssdk.ServiceBackend
+// using QuicBaaS SDK for all key management operations.
 package caquicbaas
 
 import (
@@ -31,9 +31,8 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
-// QuicBaaSKeyStore implements the xkmssdk.ServiceBackend key-management
-// methods using QuicBaaS SDK (all but SignerStore; see the note at the end
-// of this file). This adapter allows go-trusted-ca to use
+// QuicBaaSKeyStore implements xkmssdk.ServiceBackend using QuicBaaS SDK for all
+// key management operations. This adapter allows go-trusted-ca to use
 // QuicBaaS as its underlying key storage without depending on go-xkms
 // backends for non-hardware operations.
 //
@@ -759,9 +758,5 @@ func (d *quicbaasDecrypter) Decrypt(rand io.Reader, ciphertext []byte, opts cryp
 	return resp.Plaintext, nil
 }
 
-// QuicBaaSKeyStore does not satisfy xkmssdk.ServiceBackend: go-xkms v0.49
-// added Backend.SignerStore() returning store.SignerStorer, which the
-// QuicBaaS SDK does not re-export, so the method cannot be declared here
-// without importing go-xkms directly. Restore the compile-time check
-// `var _ xkmssdk.ServiceBackend = (*QuicBaaSKeyStore)(nil)` once the SDK
-// re-exports SignerStorer.
+// Compile-time interface check
+var _ xkmssdk.ServiceBackend = (*QuicBaaSKeyStore)(nil)
