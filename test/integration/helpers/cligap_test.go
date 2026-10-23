@@ -78,6 +78,41 @@ func TestCLIUpstreamGapClassifiesKMSKeyStatusRefusal(t *testing.T) {
 	assert.Contains(t, err.Error(), "kms.Client.UpdateKeyStatus")
 }
 
+// TestCLIUpstreamGapClassifiesIAMRefusals pins the texts platformd's gRPC IAM
+// service answers role assignment and permission checks with while the SDK's
+// embedded transport refuses them (CI run 63031, TestMultiProtocolMatrix/iam).
+func TestCLIUpstreamGapClassifiesIAMRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		operation string
+		gap       string
+		text      string
+	}{
+		{"iam AssignRole", IAMAssignRoleSDKGap,
+			"UNIMPLEMENTED: embedded: unknown method: quicbaas.IAM.User/AssignRole"},
+		{"iam CheckPermission", IAMCheckPermissionSDKGap,
+			"INVALID_INPUT: embedded: invalid request type for quicbaas.IAM.PEP/Check: " +
+				"expected *iam.CheckRequest, got *iam.checkRequestInternal"},
+	} {
+		cause := errTestCLIFailed{stderr: tc.text}
+		err := CLIUpstreamGap(tc.operation, tc.gap, cause)
+
+		var gap ErrCLIUpstreamGap
+		require.ErrorAs(t, err, &gap, tc.operation)
+		assert.Equal(t, tc.operation, gap.Operation)
+		assert.Equal(t, tc.gap, gap.Issue)
+		assert.ErrorIs(t, err, cause, "the gap must keep the transport failure")
+	}
+}
+
+// TestCLIUpstreamGapRejectsIAMConflicts keeps a real IAM failure, such as a
+// leftover role, from passing as the declared SDK gap.
+func TestCLIUpstreamGapRejectsIAMConflicts(t *testing.T) {
+	cause := errTestCLIFailed{stderr: "rpc error: code = AlreadyExists desc = CreateRole: already_exists"}
+	err := CLIUpstreamGap("iam AssignRole", IAMAssignRoleSDKGap, cause)
+	assert.Equal(t, cause, err)
+	assert.False(t, errors.Is(err, ErrCLIUpstreamGap{}))
+}
+
 func TestErrCLINoFlagMatchesByType(t *testing.T) {
 	err := ErrCLINoFlag{Operation: "kms secrets store", Flag: "--expires-at"}
 

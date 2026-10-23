@@ -36,6 +36,20 @@ const SecretsSDKGapIssue = "go-quicbaas #1619"
 // *service.UpdateKeyStatusRequest, so disabling or enabling a key fails there.
 const KMSKeyStatusSDKGap = "go-quicbaas sdk/go kms.Client.UpdateKeyStatus: embedded transport rejects *kms.UpdateKeyStatusRequest"
 
+// IAMAssignRoleSDKGap names the IAM verb the pinned go-quicbaas SDK's embedded
+// transport does not serve: client/iam/user.go userClient.AssignRole sends
+// quicbaas.IAM.User/AssignRole, and transport/embedded/iam_dispatch.go
+// registers only Create/Get/Update/Delete/List for quicbaas.IAM.User, so the
+// call fails with embedded.UnknownMethodError.
+const IAMAssignRoleSDKGap = "go-quicbaas sdk/go iam userClient.AssignRole: embedded transport does not serve quicbaas.IAM.User/AssignRole"
+
+// IAMCheckPermissionSDKGap names the IAM verb the pinned go-quicbaas SDK's
+// embedded transport refuses: client/iam/pep.go pepClient.Check wraps the
+// request in *iam.checkRequestInternal, and the embedded handler for
+// quicbaas.IAM.PEP/Check (transport/embedded/handlers_iam.go
+// handleIAMPEPCheck) accepts only *iam.CheckRequest.
+const IAMCheckPermissionSDKGap = "go-quicbaas sdk/go iam pepClient.Check: embedded transport rejects *iam.checkRequestInternal for quicbaas.IAM.PEP/Check"
+
 // cliUpstreamGapMarkers are the texts platformctl prints on stderr when the
 // SDK does not serve a method: the embedded transport's own answers, and the
 // CLI's ErrSecretsSDKGap, which carries any transport's unimplemented refusal.

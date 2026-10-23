@@ -546,6 +546,59 @@ func surfaceMissing(adapter ProtocolAdapter, service, operation string, err erro
 	}
 }
 
+// iamSDKGapProtocols are the matrix transports whose IAM role-assignment and
+// permission-check verbs go through platformd's gRPC IAM service into the
+// pinned go-quicbaas SDK's embedded transport, which refuses them
+// (helpers.IAMAssignRoleSDKGap, helpers.IAMCheckPermissionSDKGap).
+var iamSDKGapProtocols = map[ProtocolType]bool{
+	ProtocolGRPCTCP: true,
+	ProtocolGRPCUDS: true,
+}
+
+// requireIAMSDKGap asserts the typed SDK-gap refusal for the transports in
+// iamSDKGapProtocols and reports whether it did; other transports return
+// false and keep their full assertions.
+func requireIAMSDKGap(t *testing.T, adapter ProtocolAdapter, operation, gap string, err error) bool {
+	t.Helper()
+	if !iamSDKGapProtocols[adapter.Name()] {
+		return false
+	}
+	require.ErrorIs(t, helpers.CLIUpstreamGap("iam "+operation, gap, err), helpers.ErrCLIUpstreamGap{},
+		"%s IAM %s must answer the declared SDK refusal (%s)", protocolName(adapter), operation, gap)
+	return true
+}
+
+// cleanupIAMUser deletes a user the IAM matrix created, so no subtest sees
+// another's leftovers.
+func cleanupIAMUser(t *testing.T, ctx context.Context, cmd iam.IAMCommands, userID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, cancel := iamCleanupContext(ctx)
+		defer cancel()
+		_, err := cmd.DeleteUser(cleanupCtx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: userID})
+		assert.NoError(t, err, "cleanup: delete IAM user %s", userID)
+	})
+}
+
+// cleanupIAMRole deletes a role the IAM matrix created, so no subtest sees
+// another's leftovers.
+func cleanupIAMRole(t *testing.T, ctx context.Context, cmd iam.IAMCommands, roleID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, cancel := iamCleanupContext(ctx)
+		defer cancel()
+		_, err := cmd.DeleteRole(cleanupCtx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: roleID})
+		assert.NoError(t, err, "cleanup: delete IAM role %s", roleID)
+	})
+}
+
+// iamCleanupContext detaches a cleanup from the subtest's context: each IAM
+// subtest cancels its context on return, before t.Cleanup runs, so a delete
+// on that context never reaches the server and leaves the entity behind.
+func iamCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+}
+
 // allProtocolNames lists every transport the matrix runner supports, for the
 // zero-transport guard's failure message.
 func allProtocolNames() []string {
@@ -1290,9 +1343,11 @@ func testIAMAuthenticate(t *testing.T, ctx context.Context, adapter ProtocolAdap
 
 func testIAMCreateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
-	email := fmt.Sprintf("matrix-test-%d@example.com", time.Now().UnixNano())
+	suffix := time.Now().UnixNano()
+	email := fmt.Sprintf("matrix-test-%d@example.com", suffix)
+	name := fmt.Sprintf("Matrix Test User %d", suffix)
 	result, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Test User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: name,
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1300,18 +1355,17 @@ func testIAMCreateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err, "IAM CreateUser should succeed")
 	require.NotNil(t, result)
 	require.NotNil(t, result.User)
-	assert.NotEmpty(t, result.User.ID, "User ID should not be empty")
+	require.NotEmpty(t, result.User.ID, "User ID should not be empty")
+	cleanupIAMUser(t, ctx, cmd, result.User.ID)
 	assert.Equal(t, email, result.User.Email)
-	if result.User.ID != "" {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: result.User.ID})
-	}
 }
 
 func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
-	email := fmt.Sprintf("matrix-get-%d@example.com", time.Now().UnixNano())
+	suffix := time.Now().UnixNano()
+	email := fmt.Sprintf("matrix-get-%d@example.com", suffix)
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Get User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: fmt.Sprintf("Matrix Get User %d", suffix),
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1319,9 +1373,7 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
-	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
-	})
+	cleanupIAMUser(t, ctx, cmd, createResult.User.ID)
 
 	result, err := cmd.GetUser(ctx, iam.GetUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	if missing := surfaceMissing(adapter, "IAM", "GetUser", err); missing != nil {
@@ -1346,9 +1398,10 @@ func testIAMListUsers(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 
 func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
-	email := fmt.Sprintf("matrix-update-%d@example.com", time.Now().UnixNano())
+	suffix := time.Now().UnixNano()
+	email := fmt.Sprintf("matrix-update-%d@example.com", suffix)
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Update User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: fmt.Sprintf("Matrix Update User %d", suffix),
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1356,11 +1409,9 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err)
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
-	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
-	})
+	cleanupIAMUser(t, ctx, cmd, createResult.User.ID)
 
-	updatedName := "Matrix Updated User"
+	updatedName := fmt.Sprintf("Matrix Updated User %d", suffix)
 	result, err := cmd.UpdateUser(ctx, iam.UpdateUserOptions{
 		TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID, Name: updatedName,
 	})
@@ -1397,10 +1448,11 @@ func testIAMDeleteUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 
 func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
-	roleID := fmt.Sprintf("matrix-role-%d", time.Now().UnixNano())
+	suffix := time.Now().UnixNano()
+	roleID := fmt.Sprintf("matrix-role-%d", suffix)
 	// The CA's certificate scopes (pkg/webservice/v1/rest/ca/handlers.go).
 	result, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role",
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: fmt.Sprintf("Matrix Test Role %d", suffix),
 		Description: "Role created by matrix integration test", Permissions: []string{"certs:read", "certs:generate"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
@@ -1409,28 +1461,30 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.Role)
-	assert.NotEmpty(t, result.Role.ID)
-	_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: result.Role.ID})
+	require.NotEmpty(t, result.Role.ID)
+	cleanupIAMRole(t, ctx, cmd, result.Role.ID)
 }
 
 func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
+	suffix := time.Now().UnixNano()
 
-	email := fmt.Sprintf("matrix-assign-%d@example.com", time.Now().UnixNano())
-	userResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Assign User"})
+	email := fmt.Sprintf("matrix-assign-%d@example.com", suffix)
+	userResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
+		TenantID: helpers.HarnessTenantID, Email: email, Name: fmt.Sprintf("Matrix Assign User %d", suffix),
+	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
 	}
 	require.NoError(t, err)
 	require.NotNil(t, userResult)
 	require.NotNil(t, userResult.User)
-	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID})
-	})
+	cleanupIAMUser(t, ctx, cmd, userResult.User.ID)
 
-	roleID := fmt.Sprintf("matrix-assign-role-%d", time.Now().UnixNano())
+	roleID := fmt.Sprintf("matrix-assign-role-%d", suffix)
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"certs:read"},
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: fmt.Sprintf("Matrix Assign Role %d", suffix),
+		Permissions: []string{"certs:read"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1438,13 +1492,14 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NoError(t, err)
 	require.NotNil(t, roleResult)
 	require.NotNil(t, roleResult.Role)
-	t.Cleanup(func() {
-		_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: roleResult.Role.ID})
-	})
+	cleanupIAMRole(t, ctx, cmd, roleResult.Role.ID)
 
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
+	if requireIAMSDKGap(t, adapter, "AssignRole", helpers.IAMAssignRoleSDKGap, err) {
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1458,6 +1513,9 @@ func testIAMCheckPermission(t *testing.T, ctx context.Context, adapter ProtocolA
 	result, err := cmd.CheckPermission(ctx, iam.CheckPermissionOptions{
 		TenantID: helpers.HarnessTenantID, SubjectID: "test-user", Action: "read", Resource: "certificates",
 	})
+	if requireIAMSDKGap(t, adapter, "CheckPermission", helpers.IAMCheckPermissionSDKGap, err) {
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "CheckPermission", err); missing != nil {
 		t.Fatal(missing)
 	}
