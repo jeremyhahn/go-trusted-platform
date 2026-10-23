@@ -1205,6 +1205,10 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	require.NoError(t, err, "Setup: SecretsStore should succeed")
 	originalVersion := storeResult.Version
 
+	// wantData is what SecretsGet must answer after the rotate: the new data,
+	// or the original data when the CLI's rotate is the declared SDK refusal.
+	wantData := []byte("new-rotated-secret-data")
+
 	t.Run("RotateSecret", func(t *testing.T) {
 		newData := []byte("new-rotated-secret-data")
 		rotateOpts := SecretsRotateOptions{
@@ -1214,6 +1218,7 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 		result, err := cmd.SecretsRotate(testCtx, rotateOpts)
 		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			wantData = originalData
 			return
 		}
 		require.NoError(t, err, "SecretsRotate should succeed")
@@ -1225,7 +1230,7 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	t.Run("VerifyRotatedSecret", func(t *testing.T) {
 		result, err := cmd.SecretsGet(testCtx, secretName)
 		require.NoError(t, err, "SecretsGet should succeed")
-		assert.True(t, bytes.Equal([]byte("new-rotated-secret-data"), result.Data), "Secret data should be rotated")
+		assert.True(t, bytes.Equal(wantData, result.Data), "Secret data should be rotated, or unchanged after a refused rotate")
 	})
 
 	t.Run("RotateNonexistentSecretFails", func(t *testing.T) {
