@@ -28,9 +28,10 @@ error:
 - **`kms key import`, `export`, `unwrap` and `backend-test`** are not
   implemented ([cli.md](cli.md) §8).
 - **`kms secrets watch`** is an SDK gap ([cli.md](cli.md) §7).
-- **`kms dek status`, `set-default`, `set-safety` and `clear-safety`** exit 1
-  over the gRPC and Unix SDK transports, the embedded-daemon default; REST,
-  QUIC and MCP serve them ([cli.md](cli.md) §7).
+- **`kms dek set-default`, `set-safety` and `clear-safety`** exit 1 over the
+  gRPC and Unix SDK transports, the embedded-daemon default; REST, QUIC and
+  MCP serve them ([cli.md](cli.md) §7). `kms dek status` works on every
+  transport.
 
 The rest of `kms key`, `kms crypto`, `kms dek` and `kms secrets` works;
 [cli.md](cli.md) §2 has the full tree.

@@ -10,10 +10,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
+	kmspb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	sdkkms "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 // fakeDEKClient implements dekclient.Client; each test sets the calls it expects.
@@ -287,7 +291,83 @@ func TestExecuteDEKRotate(t *testing.T) {
 }
 
 func TestExecuteDEKStatus(t *testing.T) {
-	t.Run("PrintsDEKAndReencryption", func(t *testing.T) {
+	t.Run("PrintsTheSourcesStatus", func(t *testing.T) {
+		source := func(_ context.Context, path string) (dekStatusOutput, error) {
+			return dekStatusOutput{dekOutput: dekOutput{Path: path, WarningPercent: 80}}, nil
+		}
+		printer, buf := newDEKJSONPrinter()
+
+		require.NoError(t, executeDEKStatus(context.Background(), source, printer, "/t/app"))
+		var out dekStatusOutput
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+		assert.Equal(t, "/t/app", out.Path)
+		assert.Equal(t, 80, out.WarningPercent)
+	})
+
+	t.Run("SourceErrorIsAStatusFailure", func(t *testing.T) {
+		svcErr := errors.New("not found")
+		source := func(context.Context, string) (dekStatusOutput, error) { return dekStatusOutput{}, svcErr }
+		err := executeDEKStatus(context.Background(), source, newTestKMSPrinter(), "/t/app")
+		assert.ErrorIs(t, err, svcErr)
+		var opErr ErrDEKOperationFailed
+		require.ErrorAs(t, err, &opErr)
+		assert.Equal(t, "status", opErr.Verb)
+	})
+}
+
+func TestPlatformDEKStatus(t *testing.T) {
+	t.Run("MapsDEKAndReencryption", func(t *testing.T) {
+		fake := &fakeDEKStatusClient{resp: &kmspb.GetDEKStatusResponse{
+			Dek: &kmspb.DEKMetadata{
+				Path:           "/t/app",
+				Algorithm:      kmspb.KeyAlgorithm_KEY_ALG_AES_256_GCM,
+				Version:        2,
+				Status:         "active",
+				CreatedAt:      dekTestCreatedAt.Unix(),
+				WarningPercent: 80,
+			},
+			ReencryptionProgress: &kmspb.ReencryptionProgress{
+				InProgress: true, TotalKeys: 10, ProcessedKeys: 4, StartedAt: dekTestCreatedAt.Unix(),
+			},
+		}}
+
+		out, err := platformDEKStatus(fake)(context.Background(), "/t/app")
+		require.NoError(t, err)
+		assert.Equal(t, "/t/app", fake.lastPath)
+		assert.Equal(t, "/t/app", out.Path)
+		assert.Equal(t, dekCreateAlgorithm, out.Algorithm)
+		assert.Equal(t, 2, out.Version)
+		assert.Equal(t, 80, out.WarningPercent)
+		assert.Equal(t, "2026-10-21T12:00:00Z", out.CreatedAt)
+		assert.Empty(t, out.RotatedAt)
+		require.NotNil(t, out.Reencryption)
+		assert.Equal(t, 4, out.Reencryption.ProcessedKeys)
+		assert.InDelta(t, 40.0, out.Reencryption.PercentComplete, 1e-9)
+		assert.Equal(t, "2026-10-21T12:00:00Z", out.Reencryption.StartedAt)
+	})
+
+	t.Run("NoReencryptionLeavesItNil", func(t *testing.T) {
+		fake := &fakeDEKStatusClient{resp: &kmspb.GetDEKStatusResponse{Dek: &kmspb.DEKMetadata{Path: "/t/app"}}}
+		out, err := platformDEKStatus(fake)(context.Background(), "/t/app")
+		require.NoError(t, err)
+		assert.Nil(t, out.Reencryption)
+	})
+
+	t.Run("NoDEKMetadataIsRefused", func(t *testing.T) {
+		fake := &fakeDEKStatusClient{resp: &kmspb.GetDEKStatusResponse{}}
+		_, err := platformDEKStatus(fake)(context.Background(), "/t/app")
+		assert.ErrorIs(t, err, ErrDEKStatusEmpty{Path: "/t/app"})
+	})
+
+	t.Run("ServiceError", func(t *testing.T) {
+		svcErr := errors.New("unavailable")
+		_, err := platformDEKStatus(&fakeDEKStatusClient{err: svcErr})(context.Background(), "/t/app")
+		assert.ErrorIs(t, err, svcErr)
+	})
+}
+
+func TestSDKDEKStatus(t *testing.T) {
+	t.Run("MapsDEKAndReencryption", func(t *testing.T) {
 		fake := &fakeDEKClient{statusFn: func(path string) (*dekclient.DEKStatusResponse, error) {
 			return &dekclient.DEKStatusResponse{
 				DEK: testDEKInfo(path),
@@ -296,11 +376,9 @@ func TestExecuteDEKStatus(t *testing.T) {
 				},
 			}, nil
 		}}
-		printer, buf := newDEKJSONPrinter()
 
-		require.NoError(t, executeDEKStatus(context.Background(), fake, printer, "/t/app"))
-		var out dekStatusOutput
-		require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+		out, err := sdkDEKStatus(fake)(context.Background(), "/t/app")
+		require.NoError(t, err)
 		assert.Equal(t, "/t/app", out.Path)
 		assert.Equal(t, 80, out.WarningPercent)
 		require.NotNil(t, out.Reencryption)
@@ -308,21 +386,162 @@ func TestExecuteDEKStatus(t *testing.T) {
 		assert.Equal(t, "2026-10-21T12:00:00Z", out.Reencryption.StartedAt)
 	})
 
-	t.Run("NoReencryptionOmitsTheObject", func(t *testing.T) {
-		fake := &fakeDEKClient{statusFn: func(path string) (*dekclient.DEKStatusResponse, error) {
-			return &dekclient.DEKStatusResponse{DEK: testDEKInfo(path)}, nil
+	t.Run("NoDEKIsRefused", func(t *testing.T) {
+		fake := &fakeDEKClient{statusFn: func(string) (*dekclient.DEKStatusResponse, error) {
+			return &dekclient.DEKStatusResponse{}, nil
 		}}
-		printer, buf := newDEKJSONPrinter()
-
-		require.NoError(t, executeDEKStatus(context.Background(), fake, printer, "/t/app"))
-		assert.NotContains(t, buf.String(), "reencryption")
+		_, err := sdkDEKStatus(fake)(context.Background(), "/t/app")
+		assert.ErrorIs(t, err, ErrDEKStatusEmpty{Path: "/t/app"})
 	})
 
 	t.Run("SDKError", func(t *testing.T) {
 		sdkErr := errors.New("not found")
 		fake := &fakeDEKClient{statusFn: func(string) (*dekclient.DEKStatusResponse, error) { return nil, sdkErr }}
-		err := executeDEKStatus(context.Background(), fake, newTestKMSPrinter(), "/t/app")
+		_, err := sdkDEKStatus(fake)(context.Background(), "/t/app")
 		assert.ErrorIs(t, err, sdkErr)
+	})
+}
+
+// fakeStatusPlatformClient is a platform.Client with only the transport and
+// the DEKManagement client dekStatusSourceFor reads.
+type fakeStatusPlatformClient struct {
+	platform.Client
+	protocol platform.Protocol
+	dek      kmspb.DEKManagementClient
+}
+
+func (f fakeStatusPlatformClient) Protocol() platform.Protocol      { return f.protocol }
+func (f fakeStatusPlatformClient) DEK() kmspb.DEKManagementClient { return f.dek }
+
+// fakeDEKManagementClient answers GetDEKStatus for dekStatusSourceFor tests.
+type fakeDEKManagementClient struct {
+	kmspb.DEKManagementClient
+	fakeDEKStatusClient
+}
+
+func (f *fakeDEKManagementClient) GetDEKStatus(ctx context.Context, in *kmspb.GetDEKStatusRequest, opts ...grpc.CallOption) (*kmspb.GetDEKStatusResponse, error) {
+	return f.fakeDEKStatusClient.GetDEKStatus(ctx, in, opts...)
+}
+
+func TestDEKStatusSourceFor(t *testing.T) {
+	noSDK := func() (dekclient.Client, error) {
+		t.Fatal("the SDK DEK client must not be opened on a transport that carries DEKManagement")
+		return nil, nil
+	}
+
+	for _, protocol := range []platform.Protocol{platform.ProtocolGRPC, platform.ProtocolUnix, platform.ProtocolQUIC} {
+		t.Run("PlatformServiceOver"+protocol.String(), func(t *testing.T) {
+			dek := &fakeDEKManagementClient{fakeDEKStatusClient: fakeDEKStatusClient{
+				resp: &kmspb.GetDEKStatusResponse{Dek: &kmspb.DEKMetadata{Path: "/t/app"}},
+			}}
+			source, err := dekStatusSourceFor(fakeStatusPlatformClient{protocol: protocol, dek: dek}, noSDK)
+			require.NoError(t, err)
+
+			out, err := source(context.Background(), "/t/app")
+			require.NoError(t, err)
+			assert.Equal(t, "/t/app", out.Path)
+			assert.Equal(t, "/t/app", dek.lastPath)
+		})
+	}
+
+	t.Run("NoPlatformConnectionIsUnavailable", func(t *testing.T) {
+		_, err := dekStatusSourceFor(fakeStatusPlatformClient{protocol: platform.ProtocolUnix}, noSDK)
+		assert.ErrorIs(t, err, ErrDEKServiceUnavailable{})
+	})
+
+	t.Run("OtherTransportsKeepTheSDKClient", func(t *testing.T) {
+		sdk := &fakeDEKClient{statusFn: func(path string) (*dekclient.DEKStatusResponse, error) {
+			return &dekclient.DEKStatusResponse{DEK: testDEKInfo(path)}, nil
+		}}
+		source, err := dekStatusSourceFor(fakeStatusPlatformClient{protocol: platform.ProtocolREST},
+			func() (dekclient.Client, error) { return sdk, nil })
+		require.NoError(t, err)
+
+		out, err := source(context.Background(), "/t/app")
+		require.NoError(t, err)
+		assert.Equal(t, "/t/app", out.Path)
+	})
+
+	t.Run("SDKClientErrorStopsTheCommand", func(t *testing.T) {
+		sdkErr := errors.New("quicbaas not configured")
+		_, err := dekStatusSourceFor(fakeStatusPlatformClient{protocol: platform.ProtocolMCP},
+			func() (dekclient.Client, error) { return nil, sdkErr })
+		assert.ErrorIs(t, err, sdkErr)
+	})
+}
+
+// fakeDEKStatusClient records the status request and answers resp or err.
+type fakeDEKStatusClient struct {
+	resp     *kmspb.GetDEKStatusResponse
+	err      error
+	lastPath string
+}
+
+func (f *fakeDEKStatusClient) GetDEKStatus(_ context.Context, in *kmspb.GetDEKStatusRequest, _ ...grpc.CallOption) (*kmspb.GetDEKStatusResponse, error) {
+	f.lastPath = in.GetPath()
+	return f.resp, f.err
+}
+
+func TestDEKAlgorithmName(t *testing.T) {
+	t.Run("KnownAlgorithmsUseTheSDKNames", func(t *testing.T) {
+		assert.Equal(t, sdkkms.AlgorithmAES256GCM.String(), dekAlgorithmName(kmspb.KeyAlgorithm_KEY_ALG_AES_256_GCM))
+		assert.Equal(t, sdkkms.AlgorithmChaCha20Poly1305.String(), dekAlgorithmName(kmspb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305))
+	})
+
+	t.Run("UnmappedAlgorithmPrintsItsEnumName", func(t *testing.T) {
+		assert.Equal(t, kmspb.KeyAlgorithm(9999).String(), dekAlgorithmName(kmspb.KeyAlgorithm(9999)))
+	})
+}
+
+func TestNewDEKOutputFromPb(t *testing.T) {
+	t.Run("NilMetadataIsEmpty", func(t *testing.T) {
+		assert.Equal(t, dekOutput{}, newDEKOutputFromPb(nil))
+	})
+
+	t.Run("CopiesEveryField", func(t *testing.T) {
+		out := newDEKOutputFromPb(&kmspb.DEKMetadata{
+			Path: "/t/app", Status: "active", IsDefault: true, RotatedAt: dekTestCreatedAt.Unix(),
+			UsageCount: 3, BytesUsed: 4, MaxUsageCount: 5, MaxBytesUsed: 6,
+			Description: "d", BackendType: "software",
+		})
+		assert.Equal(t, dekOutput{
+			Path: "/t/app", Algorithm: kmspb.KeyAlgorithm(0).String(), Status: "active", IsDefault: true,
+			RotatedAt: "2026-10-21T12:00:00Z", UsageCount: 3, BytesUsed: 4, MaxUsageCount: 5, MaxBytesUsed: 6,
+			Description: "d", BackendType: "software",
+		}, out)
+	})
+}
+
+func TestReencryptionPercent(t *testing.T) {
+	assert.InDelta(t, 25.0, reencryptionPercent(1, 4), 1e-9)
+	assert.Zero(t, reencryptionPercent(3, 0), "no keys is zero, not a division by zero")
+	assert.Zero(t, reencryptionPercent(3, -1), "a negative total is zero")
+}
+
+func TestSetDEKStatusSourceFactory(t *testing.T) {
+	t.Run("OverrideAndRestore", func(t *testing.T) {
+		called := false
+		restore := setDEKStatusSourceFactory(func(*cli.BaseCommand) (dekStatusSource, error) {
+			called = true
+			return func(context.Context, string) (dekStatusOutput, error) { return dekStatusOutput{}, nil }, nil
+		})
+
+		source, err := activeDEKStatusSourceFactory(nil)
+		require.NoError(t, err)
+		assert.NotNil(t, source)
+		assert.True(t, called)
+
+		restore()
+		assert.NotNil(t, activeDEKStatusSourceFactory)
+	})
+
+	t.Run("FactoryErrorStopsTheCommand", func(t *testing.T) {
+		factoryErr := errors.New("no daemon")
+		restore := setDEKStatusSourceFactory(func(*cli.BaseCommand) (dekStatusSource, error) { return nil, factoryErr })
+		defer restore()
+
+		_, err := activeDEKStatusSourceFactory(nil)
+		assert.ErrorIs(t, err, factoryErr)
 	})
 }
 

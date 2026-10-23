@@ -15,14 +15,18 @@ package kms
 
 import (
 	"context"
+	"time"
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 
+	kmspb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	sdkkms "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 // dekCreateAlgorithm is the AEAD every `kms dek create` DEK uses. It is the
@@ -111,6 +115,125 @@ func setDEKClientFactory(f dekClientFactory) func() {
 	return func() { activeDEKClientFactory = prev }
 }
 
+// ErrDEKStatusEmpty is returned when the DEKManagement service answers a
+// status request without the DEK's metadata.
+type ErrDEKStatusEmpty struct {
+	Path string
+}
+
+func (e ErrDEKStatusEmpty) Error() string {
+	return fmt.Sprintf("dek status %s: the DEK service returned no DEK metadata", e.Path)
+}
+
+// dekStatusClient is the quicbaas.kms.v1 DEKManagement status call platformd
+// registers beside its own services (DEKServerAdapter in pkg/api/daemon).
+type dekStatusClient interface {
+	GetDEKStatus(ctx context.Context, in *kmspb.GetDEKStatusRequest, opts ...grpc.CallOption) (*kmspb.GetDEKStatusResponse, error)
+}
+
+// dekStatusSource fetches one DEK's status in the shape `kms dek status` prints.
+type dekStatusSource func(ctx context.Context, path string) (dekStatusOutput, error)
+
+// dekStatusSourceFactory builds the source `kms dek status` reads.
+type dekStatusSourceFactory func(base *cli.BaseCommand) (dekStatusSource, error)
+
+// activeDEKStatusSourceFactory is the seam unit tests replace with a fake source.
+var activeDEKStatusSourceFactory dekStatusSourceFactory = defaultDEKStatusSourceFactory
+
+// platformDEKStatusProtocols are the platform transports that carry
+// DEKManagement: gRPC and Unix through platformd's registration, QUIC through
+// the sdk/go/transport/quic DEK mapping.
+var platformDEKStatusProtocols = map[platform.Protocol]bool{
+	platform.ProtocolGRPC: true,
+	platform.ProtocolUnix: true,
+	platform.ProtocolQUIC: true,
+}
+
+// defaultDEKStatusSourceFactory reads status from platformd's DEKManagement
+// service where the platform transport carries it: the pinned SDK DEK client
+// cannot send GetDEKStatus over its gRPC and Unix transports. Every other
+// platform transport keeps the SDK DEK client.
+func defaultDEKStatusSourceFactory(base *cli.BaseCommand) (dekStatusSource, error) {
+	return dekStatusSourceFor(base.Client(), func() (dekclient.Client, error) {
+		return activeDEKClientFactory(base)
+	})
+}
+
+// dekStatusSourceFor picks the status source for client's platform transport;
+// sdkClient opens the SDK DEK client for the transports that keep it.
+func dekStatusSourceFor(client platform.Client, sdkClient func() (dekclient.Client, error)) (dekStatusSource, error) {
+	if platformDEKStatusProtocols[client.Protocol()] {
+		dek := client.DEK()
+		if dek == nil {
+			return nil, ErrDEKServiceUnavailable{}
+		}
+		return platformDEKStatus(dek), nil
+	}
+	sdk, err := sdkClient()
+	if err != nil {
+		return nil, err
+	}
+	return sdkDEKStatus(sdk), nil
+}
+
+// setDEKStatusSourceFactory replaces the status source factory and returns a restore func.
+func setDEKStatusSourceFactory(f dekStatusSourceFactory) func() {
+	prev := activeDEKStatusSourceFactory
+	activeDEKStatusSourceFactory = f
+	return func() { activeDEKStatusSourceFactory = prev }
+}
+
+// platformDEKStatus reads status from platformd's DEKManagement service.
+func platformDEKStatus(client dekStatusClient) dekStatusSource {
+	return func(ctx context.Context, path string) (dekStatusOutput, error) {
+		resp, err := client.GetDEKStatus(ctx, &kmspb.GetDEKStatusRequest{Path: path})
+		if err != nil {
+			return dekStatusOutput{}, err
+		}
+		if resp.GetDek() == nil {
+			return dekStatusOutput{}, ErrDEKStatusEmpty{Path: path}
+		}
+		out := dekStatusOutput{dekOutput: newDEKOutputFromPb(resp.GetDek())}
+		if p := resp.GetReencryptionProgress(); p != nil {
+			out.Reencryption = &dekReencryptionOutput{
+				InProgress:      p.GetInProgress(),
+				TotalKeys:       int(p.GetTotalKeys()),
+				ProcessedKeys:   int(p.GetProcessedKeys()),
+				FailedKeys:      int(p.GetFailedKeys()),
+				PercentComplete: reencryptionPercent(p.GetProcessedKeys(), p.GetTotalKeys()),
+				StartedAt:       formatUnixOrEmpty(p.GetStartedAt()),
+			}
+		}
+		return out, nil
+	}
+}
+
+// sdkDEKStatus reads status through the go-quicbaas SDK DEK client.
+func sdkDEKStatus(client dekclient.Client) dekStatusSource {
+	return func(ctx context.Context, path string) (dekStatusOutput, error) {
+		resp, err := client.GetDEKStatus(ctx, path)
+		if err != nil {
+			return dekStatusOutput{}, err
+		}
+		if resp.DEK == nil {
+			return dekStatusOutput{}, ErrDEKStatusEmpty{Path: path}
+		}
+		out := dekStatusOutput{dekOutput: newDEKOutput(resp.DEK)}
+		if p := resp.ReencryptionProgress; p != nil {
+			out.Reencryption = &dekReencryptionOutput{
+				InProgress:      p.InProgress,
+				TotalKeys:       p.TotalKeys,
+				ProcessedKeys:   p.ProcessedKeys,
+				FailedKeys:      p.FailedKeys,
+				PercentComplete: p.PercentComplete,
+				StartedAt:       formatTimeOrEmpty(p.StartedAt),
+				ErrorMessage:    p.ErrorMessage,
+			}
+		}
+		return out, nil
+	}
+}
+
 // dekOutput is the JSON shape of one DEK. Times are RFC 3339, empty when unset.
 type dekOutput struct {
 	Path           string `json:"path"`
@@ -149,6 +272,60 @@ func newDEKOutput(info *dekclient.DEKInfo) dekOutput {
 		Description:    info.Description,
 		BackendType:    info.BackendType,
 	}
+}
+
+// dekAlgorithmNames maps the DEKManagement algorithm enum to the SDK names
+// the other `kms dek` verbs print.
+var dekAlgorithmNames = map[kmspb.KeyAlgorithm]string{
+	kmspb.KeyAlgorithm_KEY_ALG_AES_256_GCM:        sdkkms.AlgorithmAES256GCM.String(),
+	kmspb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305: sdkkms.AlgorithmChaCha20Poly1305.String(),
+}
+
+// dekAlgorithmName names alg as the SDK does; an algorithm the SDK has no
+// DEK name for prints as its enum name rather than being dropped.
+func dekAlgorithmName(alg kmspb.KeyAlgorithm) string {
+	if name, ok := dekAlgorithmNames[alg]; ok {
+		return name
+	}
+	return alg.String()
+}
+
+// formatUnixOrEmpty formats a Unix timestamp as RFC 3339, empty when unset.
+func formatUnixOrEmpty(ts int64) string {
+	if ts == 0 {
+		return ""
+	}
+	return formatTimeOrEmpty(time.Unix(ts, 0))
+}
+
+func newDEKOutputFromPb(meta *kmspb.DEKMetadata) dekOutput {
+	if meta == nil {
+		return dekOutput{}
+	}
+	return dekOutput{
+		Path:           meta.GetPath(),
+		Algorithm:      dekAlgorithmName(meta.GetAlgorithm()),
+		Version:        int(meta.GetVersion()),
+		Status:         meta.GetStatus(),
+		IsDefault:      meta.GetIsDefault(),
+		CreatedAt:      formatUnixOrEmpty(meta.GetCreatedAt()),
+		RotatedAt:      formatUnixOrEmpty(meta.GetRotatedAt()),
+		UsageCount:     meta.GetUsageCount(),
+		BytesUsed:      meta.GetBytesUsed(),
+		MaxUsageCount:  meta.GetMaxUsageCount(),
+		MaxBytesUsed:   meta.GetMaxBytesUsed(),
+		WarningPercent: int(meta.GetWarningPercent()),
+		Description:    meta.GetDescription(),
+		BackendType:    meta.GetBackendType(),
+	}
+}
+
+// reencryptionPercent is processed/total as a percentage, zero with no keys.
+func reencryptionPercent(processed, total int32) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(processed) * 100 / float64(total)
 }
 
 type dekListOutput struct {
@@ -404,29 +581,25 @@ func newDEKStatusCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Get DEK status, AEAD usage and re-encryption progress",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDEK(getFlags(), func(ctx context.Context, client dekclient.Client, printer *cli.Printer) error {
-				return executeDEKStatus(ctx, client, printer, args[0])
-			})
+			base, err := cli.NewBaseCommand(getFlags())
+			if err != nil {
+				return err
+			}
+			defer base.Close()
+
+			source, err := activeDEKStatusSourceFactory(base)
+			if err != nil {
+				return err
+			}
+			return executeDEKStatus(base.Context(), source, base.Printer(), args[0])
 		},
 	}
 }
 
-func executeDEKStatus(ctx context.Context, client dekclient.Client, printer *cli.Printer, path string) error {
-	resp, err := client.GetDEKStatus(ctx, path)
+func executeDEKStatus(ctx context.Context, source dekStatusSource, printer *cli.Printer, path string) error {
+	out, err := source(ctx, path)
 	if err != nil {
 		return ErrDEKOperationFailed{Verb: "status", Path: path, Err: err}
-	}
-	out := dekStatusOutput{dekOutput: newDEKOutput(resp.DEK)}
-	if p := resp.ReencryptionProgress; p != nil {
-		out.Reencryption = &dekReencryptionOutput{
-			InProgress:      p.InProgress,
-			TotalKeys:       p.TotalKeys,
-			ProcessedKeys:   p.ProcessedKeys,
-			FailedKeys:      p.FailedKeys,
-			PercentComplete: p.PercentComplete,
-			StartedAt:       formatTimeOrEmpty(p.StartedAt),
-			ErrorMessage:    p.ErrorMessage,
-		}
 	}
 	return printer.Print(out)
 }
