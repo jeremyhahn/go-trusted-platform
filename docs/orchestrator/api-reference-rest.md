@@ -1,6 +1,6 @@
 # Orchestrator REST API Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-22
+> **Status: REFERENCE** · Last verified: 2026-10-23
 > The `/api/v1/orchestrator` routes, their parameters and HTTP statuses.
 
 | Property | Value |
@@ -8,10 +8,32 @@
 | Endpoint | `https://host:8443` |
 | Base path | `/api/v1/orchestrator` |
 | Handlers | `OrchestratorHandlers` (`pkg/api/rest/orchestrator_handlers.go`) |
+| Served by | webservice v1 router (`pkg/webservice/v1/router.go`), daemon REST listener (`pkg/api/daemon/rest_service.go`) |
 | SDK routes | `sdk/go/transport/rest/orchestrator.go` |
 
 Every route calls the same `OrchestratorGRPCService` the other transports
 call. Responses are the RPC response in the proto3 JSON mapping.
+
+## Serving and authorization
+
+The webservice v1 router (`orchestratorRoutes`, `pkg/webservice/v1/router.go`)
+serves the routes from the same `OrchestratorHandlers` the daemon REST listener
+mounts. When the daemon has no orchestrator service the webservice does not
+mount them.
+
+A request passes three checks, in this order:
+
+1. **Admin role gate.** The routes sit in the webservice's admin-gated
+   group: no session is `401`, a session without the admin role is `403`.
+2. **Scope.** Each route needs the scope in the table below:
+   `orchestrator:read` for reads, `orchestrator:write` for disable, enable,
+   close and cancel. A token without it is `403`. Under the legacy JWT
+   handler, which carries no scopes, the role gate alone decides.
+3. **Tenant.** A route naming `{tenant_id}` serves an admin of that tenant
+   and an admin of the system tenant, and answers `403` to any other caller
+   (`tenant.AuthorizeTenantAccess`, [tenant API](../tenant/api.md)). The
+   caller's tenant is the session's tenant. `/health` and `/sessions` name
+   no tenant.
 
 ## Routes
 
@@ -50,9 +72,9 @@ field (`tenant_id`, `agent_id`, `session_id`, `job_id`) with
 |-----------|-------------|
 | Success | `200` |
 | `INVALID_ARGUMENT`, or a bad body or query parameter | `400` |
-| `UNAUTHENTICATED` | `401` |
-| `PERMISSION_DENIED`, or a token without the route's scope | `403` |
+| `UNAUTHENTICATED`, or no session | `401` |
+| `PERMISSION_DENIED`; a session without the admin role or the route's scope; a `{tenant_id}` that is neither the caller's tenant nor a system-tenant caller | `403` |
 | `NOT_FOUND` | `404` |
 | `FAILED_PRECONDITION` | `409` |
-| `UNAVAILABLE`, or no orchestrator service on the daemon | `503` |
+| `UNAVAILABLE`, or the daemon REST listener has no orchestrator service | `503` |
 | `INTERNAL` | `500` |
