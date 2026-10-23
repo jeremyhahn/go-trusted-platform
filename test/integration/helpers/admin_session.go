@@ -110,6 +110,18 @@ func (e ErrAdminClaimStep) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrAdminClaimStep) Unwrap() error { return e.Cause }
 
+// SetupProbeFailure describes a failed adapter Setup probe made through
+// NewAdminHTTPClient. When the admin session could not be opened the
+// endpoint did answer, so the message names the claim step that failed
+// instead of calling the endpoint unreachable.
+func SetupProbeFailure(err error) string {
+	var step ErrAdminClaimStep
+	if errors.As(err, &step) {
+		return step.Error()
+	}
+	return "endpoint not reachable: " + err.Error()
+}
+
 // ErrAdminBundleUnreadable reports that the first-boot admin bundle could
 // not be loaded.
 type ErrAdminBundleUnreadable struct {

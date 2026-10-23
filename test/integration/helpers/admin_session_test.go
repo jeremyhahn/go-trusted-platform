@@ -520,3 +520,36 @@ func TestAdminSessionAdminBearerTransportFailsBeforeTheRequest(t *testing.T) {
 		t.Errorf("the gated route was called without a bearer")
 	}
 }
+
+// A Setup probe whose admin session failed reached the endpoint, so the
+// message must name the claim step and its HTTP answer, not call the
+// endpoint unreachable.
+func TestAdminSessionSetupProbeFailureNamesTheStep(t *testing.T) {
+	bundleDir, cert := writeAdminBundle(t)
+	fake, server := newFakeClaimServer(t, cert)
+	fake.configure(func(f *fakeClaimServer) { f.challengeFails = http.StatusForbidden })
+	session := NewAdminSession(server.URL, bundleDir, filepath.Join(t.TempDir(), "s.json"), server.Client())
+	client := &http.Client{Transport: &adminBearerTransport{session: session, base: server.Client().Transport}}
+
+	resp, err := client.Get(server.URL + "/health")
+	if err == nil {
+		t.Fatalf("probe without a session reached the server: HTTP %d", resp.StatusCode)
+	}
+	got := SetupProbeFailure(err)
+	want := "admin session: " + AdminStepChallenge + ": HTTP 403"
+	if !strings.HasPrefix(got, want) {
+		t.Errorf("SetupProbeFailure = %q, want prefix %q", got, want)
+	}
+	if strings.Contains(got, "not reachable") {
+		t.Errorf("SetupProbeFailure = %q calls an answering endpoint unreachable", got)
+	}
+}
+
+// A dial failure is still reported as an unreachable endpoint.
+func TestAdminSessionSetupProbeFailureKeepsUnreachable(t *testing.T) {
+	cause := errors.New("dial tcp 127.0.0.1:1: connect: connection refused")
+	got := SetupProbeFailure(cause)
+	if got != "endpoint not reachable: "+cause.Error() {
+		t.Errorf("SetupProbeFailure = %q, want the unreachable form", got)
+	}
+}

@@ -67,7 +67,7 @@ func (a *RESTAdapter) Setup(ctx context.Context) error {
 	if err != nil {
 		return &RESTAdapterError{
 			Operation: "Setup",
-			Message:   "endpoint not reachable: " + err.Error(),
+			Message:   helpers.SetupProbeFailure(err),
 		}
 	}
 	defer resp.Body.Close()
