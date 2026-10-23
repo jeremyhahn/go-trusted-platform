@@ -439,18 +439,6 @@ func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer, guard *r
 	s.logger.Info("NTP REST routes registered")
 }
 
-// SetOrchestratorHandlers wires the go-quicbaas agent-fleet REST routes onto
-// the same OrchestratorServiceServer that backs gRPC, QUIC, MCP and the Unix
-// socket. A nil server leaves the routes unmounted. guard checks each
-// route's orchestrator:* scope; nil refuses every route. A route naming a
-// tenant serves that tenant's callers and systemTenantID's only.
-func (s *RESTServer) SetOrchestratorHandlers(server platformv1.OrchestratorServiceServer, guard *restapi.ScopeGuard, systemTenantID string) {
-	if server == nil {
-		return
-	}
-	restapi.NewOrchestratorHandlers(server, guard, systemTenantID, s.logger).RegisterRoutes(s.router)
-}
-
 // SetVPNHandlers wires the VPN control-plane REST handlers onto the daemon's
 // REST router so /api/v1/vpn/* is served. The handlers delegate to the same
 // in-process VPNServiceServer that backs gRPC, QUIC, MCP, and the Unix

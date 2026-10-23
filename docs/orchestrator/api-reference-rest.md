@@ -8,7 +8,7 @@
 | Endpoint | `https://host:8443` |
 | Base path | `/api/v1/orchestrator` |
 | Handlers | `OrchestratorHandlers` (`pkg/api/rest/orchestrator_handlers.go`) |
-| Served by | webservice v1 router (`pkg/webservice/v1/router.go`), daemon REST listener (`pkg/api/daemon/rest_service.go`) |
+| Served by | webservice v1 router (`pkg/webservice/v1/router.go`) |
 | SDK routes | `sdk/go/transport/rest/orchestrator.go` |
 
 Every route calls the same `OrchestratorGRPCService` the other transports
@@ -17,9 +17,9 @@ call. Responses are the RPC response in the proto3 JSON mapping.
 ## Serving and authorization
 
 The webservice v1 router (`orchestratorRoutes`, `pkg/webservice/v1/router.go`)
-serves the routes from the same `OrchestratorHandlers` the daemon REST listener
-mounts. When the daemon has no orchestrator service the webservice does not
-mount them.
+serves the routes over the daemon's `OrchestratorGRPCService`; it is their only
+REST listener, and the daemon REST listener mounts none. When the daemon has no
+orchestrator service the webservice does not mount them.
 
 A request passes three checks, in this order:
 
@@ -76,5 +76,5 @@ field (`tenant_id`, `agent_id`, `session_id`, `job_id`) with
 | `PERMISSION_DENIED`; a session without the admin role or the route's scope; a `{tenant_id}` that is neither the caller's tenant nor a system-tenant caller | `403` |
 | `NOT_FOUND` | `404` |
 | `FAILED_PRECONDITION` | `409` |
-| `UNAVAILABLE`, or the daemon REST listener has no orchestrator service | `503` |
+| `UNAVAILABLE`, or handlers built with no orchestrator service | `503` |
 | `INTERNAL` | `500` |

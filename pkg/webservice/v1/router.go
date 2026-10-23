@@ -926,8 +926,8 @@ func sessionCaller(r *http.Request) *platformtoken.AuthorizedContext {
 }
 
 // orchestratorRoutes serves the go-quicbaas agent-fleet routes
-// (/api/v1/orchestrator/...) from the same restapi.OrchestratorHandlers the
-// daemon REST server mounts, backed by the platform orchestrator service
+// (/api/v1/orchestrator/...) from restapi.OrchestratorHandlers, their only
+// REST listener, backed by the platform orchestrator service
 // over the SDK Orchestrator() client. The routes sit behind the admin role
 // gate and their orchestrator:read / orchestrator:write scopes; a route
 // naming a tenant serves that tenant's callers and the system tenant only.

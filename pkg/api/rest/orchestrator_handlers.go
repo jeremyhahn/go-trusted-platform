@@ -58,8 +58,8 @@ type CallerRouteGuard interface {
 
 // OrchestratorHandlers binds the agent-fleet REST routes to the in-process
 // OrchestratorServiceServer that also backs gRPC, QUIC, MCP and the Unix
-// socket. Both REST listeners mount the same handlers: the daemon REST
-// server and the webservice.
+// socket. The webservice v1 router is the one REST listener that mounts
+// them; the daemon REST server does not.
 type OrchestratorHandlers struct {
 	protoResponder
 	orchestrator   platformv1.OrchestratorServiceServer

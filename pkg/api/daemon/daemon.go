@@ -1537,7 +1537,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if ntpGRPCService != nil {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
-		daemon.concreteRestServer.SetOrchestratorHandlers(orchestratorGRPCService, restGuard, config.PlatformTenantID)
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
 		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
 		if computeService != nil {
@@ -2035,7 +2034,8 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	}
 
 	// Wire the orchestrator so the orchestrator_* tools delegate to the same
-	// OrchestratorGRPCService instance REST, gRPC, QUIC and Unix use.
+	// OrchestratorGRPCService instance gRPC, QUIC and Unix use, and the
+	// webservice serves REST from (OrchestratorGRPCServiceServer).
 	if d.orchestratorGRPCService != nil {
 		serviceProvider.SetOrchestratorService(d.orchestratorGRPCService)
 	}
@@ -3206,8 +3206,9 @@ func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 	return d.ntpGRPCService
 }
 
-// OrchestratorGRPCServiceServer returns the orchestrator gRPC service backing
-// /api/v1/orchestrator. It is never nil once New returns.
+// OrchestratorGRPCServiceServer returns the orchestrator gRPC service the
+// webservice v1 router serves /api/v1/orchestrator from; the daemon REST
+// listener mounts no orchestrator route. It is never nil once New returns.
 func (d *Daemon) OrchestratorGRPCServiceServer() *OrchestratorGRPCService {
 	return d.orchestratorGRPCService
 }
