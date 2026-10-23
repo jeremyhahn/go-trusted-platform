@@ -825,7 +825,21 @@ func (r *Registry) InvalidateSession(clientID string) {
 // - With registry: registry.example.com/myrepo/myimage:v1
 // - With port: localhost:5000/myimage:v1, registry.io:443/myrepo/myimage:tag
 // - With digest: myrepo/myimage@sha256:abc123...
-var imageRefRegex = regexp.MustCompile(`^(?:(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?)/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9_][a-zA-Z0-9._-]*)?(?:@sha256:[a-f0-9]{64})?$`)
+//
+// Repository path components and tags follow the OCI distribution-spec
+// grammar ("Pulling manifests"): a component is
+// [a-z0-9]+((\.|_|__|-+)[a-z0-9]+)* and a tag is
+// [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}.
+var imageRefRegex = regexp.MustCompile(`^(?:(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?)/)?` +
+	ociPathComponent + `(?:/` + ociPathComponent + `)*` +
+	`(?::` + ociTag + `)?(?:@sha256:[a-f0-9]{64})?$`)
+
+const (
+	// ociPathComponent is one OCI distribution-spec repository path component.
+	ociPathComponent = `[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*`
+	// ociTag is an OCI distribution-spec tag (at most 128 characters).
+	ociTag = `[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}`
+)
 
 // validateImageRef validates an image reference format
 func validateImageRef(ref string) error {

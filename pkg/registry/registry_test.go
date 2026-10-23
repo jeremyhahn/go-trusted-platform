@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1063,6 +1064,16 @@ func TestValidateImageRef(t *testing.T) {
 		{"uppercase", "MyRepo/MyImage:v1", true},
 		{"special chars", "my-repo/my_image:v1", false},
 		{"dots in name", "my.repo/my.image:v1", false},
+		// OCI distribution-spec repository and tag grammar.
+		{"double underscore separator", "my__repo/image:v1", false},
+		{"hyphen run separator", "my---repo/image:v1", false},
+		{"triple underscore separator", "my___repo/image:v1", true},
+		{"trailing separator", "myrepo-/image:v1", true},
+		{"integration name", "grpc-1792717075-push-basic-20261023005754-333050821:v1", false},
+		{"mixed-case integration name", "gRPC-1792717075-push-basic-20261023005754-333050821:v1", true},
+		{"128-char tag", "alpine:" + strings.Repeat("a", 128), false},
+		{"129-char tag", "alpine:" + strings.Repeat("a", 129), true},
+		{"tag starting with dot", "alpine:.v1", true},
 	}
 
 	for _, tt := range tests {
