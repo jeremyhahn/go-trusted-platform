@@ -213,9 +213,10 @@ func printGatewaySnapshot(w io.Writer, snap *platformv1.GatewaySnapshot) {
 			pipeline.GetBridge(), pipeline.GetOwner(), pipeline.GetTerminal(), pipeline.GetFailMode())
 	}
 	if overlay := snap.GetOverlay(); overlay != nil {
-		fmt.Fprintf(w, "Overlay      running=%t local=%s vnis=%d remote-vteps=%d macs=%d/%d prefixes=%d refused=%d\n",
+		fmt.Fprintf(w, "Overlay      running=%t local=%s vnis=%d remote-vteps=%d macs=%d/%d prefixes=%d refused=%d refused-replays=%d\n",
 			overlay.GetRunning(), overlay.GetLocalVtep(), overlay.GetVniCount(), overlay.GetRemoteVtepCount(),
-			overlay.GetLocalMacCount(), overlay.GetRemoteMacCount(), overlay.GetPrefixCount(), overlay.GetRefusedBindings())
+			overlay.GetLocalMacCount(), overlay.GetRemoteMacCount(), overlay.GetPrefixCount(), overlay.GetRefusedBindings(),
+			overlay.GetRefusedReplays())
 		if counters := overlay.GetNdCounters(); counters != nil {
 			fmt.Fprintf(w, "  nd punted=%d answered=%d meter-dropped=%d queue-dropped=%d fell-through=%d\n",
 				counters.GetPunted(), counters.GetAnswered(), counters.GetMeterDropped(), counters.GetQueueDropped(), counters.GetFellThrough())

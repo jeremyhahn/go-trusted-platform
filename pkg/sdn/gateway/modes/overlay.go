@@ -132,6 +132,10 @@ type OverlayModeStatus struct {
 	// local host's IP.
 	RefusedBindings uint64
 
+	// RefusedReplays is how many replays of a refused VTEP's routes failed,
+	// leaving the VTEP refused for the next sweep to replay again.
+	RefusedReplays uint64
+
 	// L3VNI is the IP-VRF of symmetric IRB; zero when off.
 	L3VNI uint32
 
@@ -493,6 +497,9 @@ type OverlayModeHandler struct {
 	// refusedBindings counts the remote bindings refused or held back for
 	// a conflict.
 	refusedBindings uint64
+
+	// refusedReplays counts the replays of a refused VTEP that failed.
+	refusedReplays uint64
 
 	// ndOwners indexes the hosts by their IPv6 bindings, for answering
 	// punted solicitations; mu guards it.
@@ -1264,6 +1271,7 @@ func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
 		VNICount:                 len(h.segments),
 		PrefixCount:              len(h.prefixes),
 		RefusedBindings:          h.refusedBindings,
+		RefusedReplays:           h.refusedReplays,
 		L3VNI:                    h.config.L3VNI,
 		ARPSuppressionEnabled:    h.config.ARPSuppression,
 		NDSuppression:            h.ndStatus(),
