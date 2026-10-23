@@ -76,7 +76,7 @@ func postJSONAs(t *testing.T, router *mux.Router, path, token string, body any) 
 // scopedAuthorizer grants each token the scopes listed for it and refuses
 // any other token. It records the scope it was asked for.
 type scopedAuthorizer struct {
-	scopes   map[string][]string
+	scopes map[string][]string
 	// tenants is the tenant each token is a member of; a token absent
 	// here has none.
 	tenants  map[string]string
