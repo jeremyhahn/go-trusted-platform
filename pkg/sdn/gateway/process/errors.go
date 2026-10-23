@@ -249,6 +249,18 @@ func (e *ErrCgroup) Error() string {
 
 func (e *ErrCgroup) Unwrap() error { return e.Cause }
 
+// ErrCgroupFormat reports a cgroup interface file whose content is not the
+// shape the kernel writes: a counter that does not parse, or a flat-keyed
+// file without a key every kernel that has the file carries.
+type ErrCgroupFormat struct {
+	Path string
+	Line string
+}
+
+func (e *ErrCgroupFormat) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: cgroup file %q: unexpected content %q", e.Path, e.Line)
+}
+
 // ErrHardening reports a child-side privilege drop that failed. The child
 // exits on it: running with more privilege than its class allows is not a
 // degraded mode, it is the thing the model exists to prevent.
