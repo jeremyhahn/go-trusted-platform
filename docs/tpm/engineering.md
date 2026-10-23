@@ -176,6 +176,17 @@ downgrade is invisible in every downstream artefact.
      reference's kms path (`ConsumeSOPINHandoff`, `pkg/app/sopin_handoff.go`)
      before the secret references are resolved, then shreds the file; a
      literal `platform.so-pin` makes it discard the staged file instead.
+     With no SO PIN persisted at that path yet (first provision) the staged
+     PIN is stored as is. A staged PIN equal to the persisted one is shredded
+     unwritten. A staged PIN that differs (a firstboot retry after reboot
+     with `factory-reset-on-firstboot: false` generates a new PIN, which the
+     owned TPM's `tpmowner.Prepare` rejects) replaces the persisted one only
+     once the TPM confirms it as the owner auth (`tpmowner.VerifyOwnerAuth`;
+     the handoff opens the TPM through `OpenTPM`, which `InitTPM` then
+     reuses). A rejected PIN, or one staged for a TPM with no owner auth set,
+     is shredded and logged as `SOPINHandoffRejectedError`, keeping the
+     persisted PIN; a TPM that cannot be asked fails the start with
+     `SOPINHandoffError` and keeps both for the next start.
    - **The `TPM_RC_BAD_AUTH` chain this closes.** firstboot once generated a
      random SO PIN, took ownership with it and discarded it at exit. platformd
      then presented its own SO PIN, every owner-authorized command failed with
