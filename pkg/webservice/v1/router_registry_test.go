@@ -107,6 +107,7 @@ type testHandlerRegistry struct {
 	dnsService            dns.DNSService
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
+	orchestratorService   platformv1.OrchestratorServiceServer
 	vpnService            platformv1.VPNServiceServer
 	appServices           restapi.AppServiceServers
 	overlayService        platformv1.OverlayServiceServer
@@ -286,6 +287,10 @@ func (r *testHandlerRegistry) PXEWebhookEnabled() bool {
 
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return r.ntpService
+}
+
+func (r *testHandlerRegistry) OrchestratorServiceServer() platformv1.OrchestratorServiceServer {
+	return r.orchestratorService
 }
 
 func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
@@ -29,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
@@ -216,6 +218,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.kmsRoutes()
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
+	v1Router.orchestratorRoutes()
 	v1Router.vpnRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
@@ -897,6 +900,52 @@ func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.Handl
 		return next
 	}
 	return g.authorizer.RequireScope(scope)(next).ServeHTTP
+}
+
+// RequireCaller is Require for a route that decides on who is calling: next
+// receives the caller of the session the role gate admitted, or nil when
+// the request carries none.
+func (g scopeRouteGuard) RequireCaller(scope string, next restapi.CallerHandlerFunc) http.HandlerFunc {
+	return g.Require(scope, func(w http.ResponseWriter, r *http.Request) {
+		next(w, r, sessionCaller(r))
+	})
+}
+
+// sessionCaller is the authenticated caller of r's session, or nil.
+func sessionCaller(r *http.Request) *platformtoken.AuthorizedContext {
+	session, ok := iammw.GetSessionFromContext(r.Context())
+	if !ok || session == nil {
+		return nil
+	}
+	return &platformtoken.AuthorizedContext{
+		Subject:  session.UserID(),
+		TenantID: session.TenantID(),
+		Roles:    session.Roles(),
+	}
+}
+
+// orchestratorRoutes serves the go-quicbaas agent-fleet routes
+// (/api/v1/orchestrator/...) from the same restapi.OrchestratorHandlers the
+// daemon REST server mounts, backed by the platform orchestrator service
+// over the SDK Orchestrator() client. The routes sit behind the admin role
+// gate and their orchestrator:read / orchestrator:write scopes; a route
+// naming a tenant serves that tenant's callers and the system tenant only.
+func (v1Router *Router) orchestratorRoutes() {
+	server := v1Router.restHandlerRegistry.OrchestratorServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Orchestrator service server is nil - orchestrator routes not registered")
+		return
+	}
+	guard := scopeRouteGuard{}
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		guard.authorizer = scoped
+	}
+	restapi.NewOrchestratorHandlers(
+		server,
+		guard,
+		v1Router.restHandlerRegistry.TenantID(),
+		v1Router.logger.Slog()).
+		RegisterVersionedRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) pxeRoutes() {

@@ -810,6 +810,7 @@ type RestHandlerRegistry interface {
 	PXEServiceServer() platformv1.PXEServiceServer
 	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
+	OrchestratorServiceServer() platformv1.OrchestratorServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
@@ -1036,6 +1037,9 @@ type RegistryParams struct {
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer
 	VPNServiceServer  platformv1.VPNServiceServer
+	// OrchestratorServiceServer is the daemon's OrchestratorService, the
+	// instance behind every other transport.
+	OrchestratorServiceServer platformv1.OrchestratorServiceServer
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -2099,6 +2103,12 @@ func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.
 func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return registry.params.NTPServiceServer
+}
+
+// OrchestratorServiceServer returns the in-process OrchestratorService gRPC
+// implementation, or nil.
+func (registry *HandlerRegistry) OrchestratorServiceServer() platformv1.OrchestratorServiceServer {
+	return registry.params.OrchestratorServiceServer
 }
 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.

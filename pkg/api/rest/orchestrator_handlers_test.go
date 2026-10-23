@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -55,8 +56,28 @@ func (s *orchestratorTestServer) CancelJob(_ context.Context, req *platformv1.Ca
 
 func orchestratorRouter(server platformv1.OrchestratorServiceServer) *mux.Router {
 	router := mux.NewRouter()
-	NewOrchestratorHandlers(server, operatorGuard(), nil).RegisterRoutes(router)
+	guard := NewScopeGuard(tenantOperatorAuthorizer{tenantID: "acme"}, nil, nil)
+	NewOrchestratorHandlers(server, guard, "system", nil).RegisterRoutes(router)
 	return router
+}
+
+// tenantOperatorAuthorizer admits operatorToken with every scope, as a
+// member of tenantID.
+type tenantOperatorAuthorizer struct{ tenantID string }
+
+func (a tenantOperatorAuthorizer) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+	if token != operatorToken {
+		return nil, ErrOrchestratorServiceNotAvailable{}
+	}
+	return &platformtoken.AuthorizedContext{Subject: token, TenantID: a.tenantID, Scopes: []string{"*:*"}}, nil
+}
+
+func TestOrchestratorTenantRoutesRefuseAnotherTenant(t *testing.T) {
+	rec := serveOrchestrator(orchestratorRouter(&orchestratorTestServer{}), http.MethodGet,
+		"/api/v1/orchestrator/tenants/other/jobs")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d (%s), want 403", rec.Code, rec.Body)
+	}
 }
 
 func serveOrchestrator(router http.Handler, method, target string) *httptest.ResponseRecorder {

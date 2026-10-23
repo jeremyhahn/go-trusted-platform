@@ -220,7 +220,7 @@ func guardedRouter(guard *ScopeGuard) *mux.Router {
 	NewNTPHandlers(nil, guard, nil).RegisterRoutes(router)
 	NewAppServiceHandlers(AppServiceServers{}, guard, nil).RegisterRoutes(router)
 	NewComputeHandlers(nil, guard, nil).RegisterRoutes(router)
-	NewOrchestratorHandlers(nil, guard, nil).RegisterRoutes(router)
+	NewOrchestratorHandlers(nil, guard, "", nil).RegisterRoutes(router)
 	return router
 }
 
