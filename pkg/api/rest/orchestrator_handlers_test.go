@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -161,6 +163,134 @@ func TestOrchestratorHandlerErrors(t *testing.T) {
 			rec := serveOrchestrator(orchestratorRouter(tt.server), tt.method, tt.target)
 			if rec.Code != tt.want {
 				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body, tt.want)
+			}
+		})
+	}
+}
+
+// orchestratorRecordingServer serves every orchestrator RPC: it records the
+// request it was given and answers an empty response, or err.
+type orchestratorRecordingServer struct {
+	platformv1.UnimplementedOrchestratorServiceServer
+
+	got proto.Message
+	err error
+}
+
+func orchestratorAnswer[T proto.Message](s *orchestratorRecordingServer, req proto.Message, resp T) (T, error) {
+	s.got = req
+	if s.err != nil {
+		var none T
+		return none, s.err
+	}
+	return resp, nil
+}
+
+func (s *orchestratorRecordingServer) Health(_ context.Context, req *platformv1.OrchestratorHealthRequest) (*platformv1.OrchestratorHealthResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.OrchestratorHealthResponse{})
+}
+
+func (s *orchestratorRecordingServer) ListAgents(_ context.Context, req *platformv1.ListOrchestratorAgentsRequest) (*platformv1.ListOrchestratorAgentsResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.ListOrchestratorAgentsResponse{})
+}
+
+func (s *orchestratorRecordingServer) GetAgent(_ context.Context, req *platformv1.GetOrchestratorAgentRequest) (*platformv1.GetOrchestratorAgentResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.GetOrchestratorAgentResponse{})
+}
+
+func (s *orchestratorRecordingServer) DisableAgent(_ context.Context, req *platformv1.DisableOrchestratorAgentRequest) (*platformv1.DisableOrchestratorAgentResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.DisableOrchestratorAgentResponse{})
+}
+
+func (s *orchestratorRecordingServer) EnableAgent(_ context.Context, req *platformv1.EnableOrchestratorAgentRequest) (*platformv1.EnableOrchestratorAgentResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.EnableOrchestratorAgentResponse{})
+}
+
+func (s *orchestratorRecordingServer) ListSessions(_ context.Context, req *platformv1.ListOrchestratorSessionsRequest) (*platformv1.ListOrchestratorSessionsResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.ListOrchestratorSessionsResponse{})
+}
+
+func (s *orchestratorRecordingServer) CloseSession(_ context.Context, req *platformv1.CloseOrchestratorSessionRequest) (*platformv1.CloseOrchestratorSessionResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.CloseOrchestratorSessionResponse{})
+}
+
+func (s *orchestratorRecordingServer) ListJobs(_ context.Context, req *platformv1.ListOrchestratorJobsRequest) (*platformv1.ListOrchestratorJobsResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.ListOrchestratorJobsResponse{})
+}
+
+func (s *orchestratorRecordingServer) GetJob(_ context.Context, req *platformv1.GetOrchestratorJobRequest) (*platformv1.GetOrchestratorJobResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.GetOrchestratorJobResponse{})
+}
+
+func (s *orchestratorRecordingServer) CancelJob(_ context.Context, req *platformv1.CancelOrchestratorJobRequest) (*platformv1.CancelOrchestratorJobResponse, error) {
+	return orchestratorAnswer(s, req, &platformv1.CancelOrchestratorJobResponse{})
+}
+
+// orchestratorRouteCalls is every orchestrator route, called for tenant
+// acme, with the RPC request it must bind from the path.
+var orchestratorRouteCalls = []struct {
+	method string
+	target string
+	want   proto.Message
+}{
+	{http.MethodGet, "/api/v1/orchestrator/health", &platformv1.OrchestratorHealthRequest{}},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/acme/agents", &platformv1.ListOrchestratorAgentsRequest{TenantId: "acme"}},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/acme/agents/a1", &platformv1.GetOrchestratorAgentRequest{TenantId: "acme", AgentId: "a1"}},
+	{http.MethodPost, "/api/v1/orchestrator/tenants/acme/agents/a1/disable", &platformv1.DisableOrchestratorAgentRequest{TenantId: "acme", AgentId: "a1"}},
+	{http.MethodPost, "/api/v1/orchestrator/tenants/acme/agents/a1/enable", &platformv1.EnableOrchestratorAgentRequest{TenantId: "acme", AgentId: "a1"}},
+	{http.MethodGet, "/api/v1/orchestrator/sessions", &platformv1.ListOrchestratorSessionsRequest{}},
+	{http.MethodDelete, "/api/v1/orchestrator/sessions/s1", &platformv1.CloseOrchestratorSessionRequest{SessionId: "s1"}},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/acme/jobs", &platformv1.ListOrchestratorJobsRequest{TenantId: "acme"}},
+	{http.MethodGet, "/api/v1/orchestrator/tenants/acme/jobs/j1", &platformv1.GetOrchestratorJobRequest{TenantId: "acme", JobId: "j1"}},
+	{http.MethodPost, "/api/v1/orchestrator/tenants/acme/jobs/j1/cancel", &platformv1.CancelOrchestratorJobRequest{TenantId: "acme", JobId: "j1"}},
+}
+
+func TestOrchestratorEveryRouteServesItsRPC(t *testing.T) {
+	for _, call := range orchestratorRouteCalls {
+		t.Run(call.method+" "+call.target, func(t *testing.T) {
+			server := &orchestratorRecordingServer{}
+			rec := serveOrchestrator(orchestratorRouter(server), call.method, call.target)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body)
+			}
+			if !proto.Equal(server.got, call.want) {
+				t.Fatalf("RPC request = %v, want %v", server.got, call.want)
+			}
+		})
+	}
+}
+
+func TestOrchestratorEveryRouteMapsTheServiceError(t *testing.T) {
+	for _, call := range orchestratorRouteCalls {
+		t.Run(call.method+" "+call.target, func(t *testing.T) {
+			server := &orchestratorRecordingServer{err: status.Error(codes.NotFound, "no such orchestrator object")}
+			rec := serveOrchestrator(orchestratorRouter(server), call.method, call.target)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d (%s), want 404", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestOrchestratorTenantRoutesOwnTenantOrSystem(t *testing.T) {
+	for _, call := range orchestratorRouteCalls {
+		if !strings.Contains(call.target, "/tenants/acme/") {
+			continue
+		}
+		t.Run(call.method+" "+call.target, func(t *testing.T) {
+			other := &orchestratorRecordingServer{}
+			rec := serveOrchestrator(orchestratorRouter(other), call.method,
+				strings.Replace(call.target, "/tenants/acme/", "/tenants/globex/", 1))
+			if rec.Code != http.StatusForbidden || other.got != nil {
+				t.Fatalf("another tenant: status = %d, RPC called = %v; want 403 before the RPC", rec.Code, other.got != nil)
+			}
+
+			system := &orchestratorRecordingServer{}
+			router := mux.NewRouter()
+			guard := NewScopeGuard(tenantOperatorAuthorizer{tenantID: "system"}, nil, nil)
+			NewOrchestratorHandlers(system, guard, "system", nil).RegisterRoutes(router)
+			if rec := serveOrchestrator(router, call.method, call.target); rec.Code != http.StatusOK {
+				t.Fatalf("system tenant: status = %d (%s), want 200", rec.Code, rec.Body)
 			}
 		})
 	}
