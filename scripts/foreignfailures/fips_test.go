@@ -476,7 +476,7 @@ func TestParseFIPSBaselineRejectsMalformedRows(t *testing.T) {
 
 func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	b := repositoryFIPSBaseline(t)
-	require.Len(t, b.entries, 3)
+	require.Len(t, b.entries, 5)
 	for _, e := range b.entries {
 		assert.Equal(t, kindPanic, e.Kind)
 		assert.Equal(t, fipsPanic, e.Message)
@@ -487,6 +487,10 @@ func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	assert.Contains(t, b.tests, testKey{Package: "pkg/vpn/agent", Name: vpnPanic})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: appPanic})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: appHiddenPanic})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestIDevIDSigner_NilPublicKey"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify"})
+	assert.Equal(t, 4, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
+	assert.Equal(t, 0, b.rowsIn("pkg/dns"))
 }
 
 func TestTheSkipPatternOnlyDropsWhatItMatches(t *testing.T) {

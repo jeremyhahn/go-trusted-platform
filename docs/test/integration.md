@@ -788,8 +788,12 @@ the go-quicbaas v0.16.0-alpha adoption):
 
 - `pkg/vpn/agent` `TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey`
 - `pkg/app` `TestDeviceActivation_IDevIDOverMTLS`
-- `pkg/app` `TestFetchProfileAndActivate_IDevIDOverMTLS`, which runs after
-  the first and surfaces only in the rerun's second round
+- `pkg/app` `TestFetchProfileAndActivate_IDevIDOverMTLS`,
+  `TestIDevIDSigner_NilPublicKey` and
+  `TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify`, which each run
+  after the one before and surface only in the rerun's rounds 1 to 3; all
+  four `pkg/app` rows reach `CreateIDevID` through `newSimulatedIDevID`, so
+  a `pkg/app` rerun is bounded at four rounds
 
 ## Protocol Parity Assertions
 

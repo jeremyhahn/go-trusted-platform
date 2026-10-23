@@ -51,13 +51,36 @@ func appPanicRound(t *testing.T, panicked string, passed ...string) fakeRound {
 	return fakeRound{out: b.String(), err: errExit}
 }
 
+// hiddenPanicBaseline writes a FIPS baseline with the fixture's two rows
+// and appHiddenPanic's, so these tests do not move with the repository's
+// rows, which grow as reruns surface more panics.
+func hiddenPanicBaseline(t *testing.T) string {
+	t.Helper()
+	row := func(pkg, name string) string {
+		return strings.Join([]string{"panic", pkg, name, "go-quicbaas#1389+go-trusted-platform#937", "go-quicbaas v0.16.0-alpha",
+			"github.com/google/go-tpm/tpm2.(*policySession).Authorize", fipsPanic}, "\t") + "\n"
+	}
+	path := filepath.Join(t.TempDir(), "foreign-failures-fips.tsv")
+	text := row("pkg/vpn/agent", vpnPanic) + row("pkg/app", appPanic) + row("pkg/app", appHiddenPanic)
+	require.NoError(t, os.WriteFile(path, []byte(text), 0o600))
+	return path
+}
+
+// hiddenPanicRows loads hiddenPanicBaseline.
+func hiddenPanicRows(t *testing.T) *baseline {
+	t.Helper()
+	b, err := loadFIPSBaseline(hiddenPanicBaseline(t))
+	require.NoError(t, err)
+	return b
+}
+
 // runHiddenPanic runs the FIPS job on the fixture log with f.
 func runHiddenPanic(t *testing.T, f *fakeGo) (int, string, string) {
 	t.Helper()
 	logPath := filepath.Join(t.TempDir(), "fips.log")
 	require.NoError(t, os.WriteFile(logPath, []byte(readFixture(t, "fips-panics.log")), 0o600))
 	var stdout, stderr bytes.Buffer
-	code := runIn(fipsEnv(f), []string{"-job", "fips", "-baseline", filepath.Join("..", "..", ".github", "foreign-failures-fips.tsv"),
+	code := runIn(fipsEnv(f), []string{"-job", "fips", "-baseline", hiddenPanicBaseline(t),
 		"-tags", "fips codec_cbor", logPath}, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
@@ -168,7 +191,7 @@ func TestARerunPastItsBoundGatesWithATypedError(t *testing.T) {
 	// A listed panic in every round: the second repeats a test the round
 	// excluded, as a misbehaving -run would. The bound stops the loop.
 	f := hiddenPanicGo(appPanicRound(t, appHiddenPanic, appPasses), appPanicRound(t, appHiddenPanic, appPasses), appPanicRound(t, appHiddenPanic))
-	rr := &rerunner{goCmd: f.command, module: defaultModule, baseline: repositoryFIPSBaseline(t), stdout: &bytes.Buffer{}}
+	rr := &rerunner{goCmd: f.command, module: defaultModule, baseline: hiddenPanicRows(t), stdout: &bytes.Buffer{}}
 	lines, hidden, err := rr.settle(context.Background(), rerun{Package: "pkg/app", Exclude: appPanic})
 	var be *RerunBoundError
 	require.ErrorAs(t, err, &be)
@@ -184,7 +207,7 @@ func TestARerunPastItsBoundGatesWithATypedError(t *testing.T) {
 
 func TestASecondRoundExcludesOnlyNamesTheListingCarries(t *testing.T) {
 	f := hiddenPanicGo(appPanicRound(t, appHiddenPanic, appPasses))
-	rr := &rerunner{goCmd: f.command, module: defaultModule, baseline: repositoryFIPSBaseline(t), stdout: &bytes.Buffer{}}
+	rr := &rerunner{goCmd: f.command, module: defaultModule, baseline: hiddenPanicRows(t), stdout: &bytes.Buffer{}}
 	names, err := rr.others(rerun{Package: "pkg/app", Exclude: appPanic, Hidden: []string{appHiddenPanic}}, app, []byte(f.lists[app]))
 	require.NoError(t, err)
 	assert.Equal(t, []string{appPasses, appSDK, appLast}, names)
