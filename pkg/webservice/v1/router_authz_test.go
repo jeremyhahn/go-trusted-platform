@@ -265,6 +265,7 @@ type probeDeviceHandler struct{ webdevice.RestHandler }
 type probeBootHandler struct{ webdevice.BootHandler }
 type probeClaimCeremony struct{ adminclaim.FIDO2Ceremony }
 type probeClaimFactors struct{ adminclaim.FactorLister }
+type probeClaimAccounts struct{ adminclaim.AdminAccounts }
 type probeClaimUsers struct{ service.UserServicer }
 type probeClaimIssuer struct{ adminclaim.TokenIssuer }
 
@@ -278,6 +279,7 @@ func adminClaimFixture(t *testing.T, logger *logging.Logger, respWriter response
 		Logger:        logger,
 		Ceremony:      &probeClaimCeremony{},
 		Factors:       &probeClaimFactors{},
+		Accounts:      &probeClaimAccounts{},
 		Users:         &probeClaimUsers{},
 		TokenIssuer:   &probeClaimIssuer{},
 		TrustAnchors:  x509.NewCertPool(),

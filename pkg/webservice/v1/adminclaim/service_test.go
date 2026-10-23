@@ -20,6 +20,8 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -44,9 +47,55 @@ type harness struct {
 	pki      *pki
 	ceremony *fakeCeremony
 	factors  *fakeFactors
+	accounts *fakeAccounts
 	users    *fakeUsers
 	issuer   *fakeIssuer
 	logs     *logSink
+}
+
+// fakeAccounts is the backbone IAM user client: one page per entry of
+// pages, an optional list or update failure, and the updates it was sent.
+type fakeAccounts struct {
+	pages     []iamsdk.ListUsersResponse
+	listErr   error
+	updateErr error
+	requests  []iamsdk.ListUsersRequest
+	updated   map[string]string
+}
+
+// newFakeAccounts holds the firstboot admin, with no email, on one page.
+func newFakeAccounts() *fakeAccounts {
+	return &fakeAccounts{pages: []iamsdk.ListUsersResponse{{
+		Users: []iamsdk.User{{ID: "7", Username: "operator"}, {ID: "42", Username: common.AdminUsername}},
+	}}}
+}
+
+func (f *fakeAccounts) ListUsers(_ context.Context, _ string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+	f.requests = append(f.requests, *req)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	index := 0
+	if req.PageToken != "" {
+		parsed, err := strconv.Atoi(req.PageToken)
+		if err != nil {
+			return nil, err
+		}
+		index = parsed
+	}
+	page := f.pages[index]
+	return &page, nil
+}
+
+func (f *fakeAccounts) UpdateUser(_ context.Context, _, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	if f.updated == nil {
+		f.updated = map[string]string{}
+	}
+	f.updated[userID] = req.Email
+	return &iamsdk.User{ID: userID, Email: req.Email}, nil
 }
 
 func newHarness(t *testing.T) *harness {
@@ -63,15 +112,17 @@ func newHarness(t *testing.T) *harness {
 				Success: true, CredentialID: "cred-1",
 			},
 		},
-		factors: &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}},
-		users:   newFakeUsers(),
-		issuer:  &fakeIssuer{token: "console-jwt"},
-		logs:    &logSink{},
+		factors:  &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}},
+		accounts: newFakeAccounts(),
+		users:    newFakeUsers(),
+		issuer:   &fakeIssuer{token: "console-jwt"},
+		logs:     &logSink{},
 	}
 	svc, err := NewService(ServiceParams{
 		Logger:       logging.NewLogger(slog.LevelDebug, h.logs),
 		Ceremony:     h.ceremony,
 		Factors:      h.factors,
+		Accounts:     h.accounts,
 		Users:        h.users,
 		TokenIssuer:  h.issuer,
 		TrustAnchors: p.pool,
@@ -104,6 +155,7 @@ func TestNewService_RejectsMissingDependencies(t *testing.T) {
 		Logger:       testLogger(),
 		Ceremony:     &fakeCeremony{},
 		Factors:      &fakeFactors{},
+		Accounts:     newFakeAccounts(),
 		Users:        newFakeUsers(),
 		TokenIssuer:  &fakeIssuer{},
 		TrustAnchors: p.pool,
@@ -117,6 +169,7 @@ func TestNewService_RejectsMissingDependencies(t *testing.T) {
 		{"logger", func(p *ServiceParams) { p.Logger = nil }, "logger"},
 		{"ceremony", func(p *ServiceParams) { p.Ceremony = nil }, "FIDO2 ceremony client"},
 		{"factors", func(p *ServiceParams) { p.Factors = nil }, "auth factors client"},
+		{"accounts", func(p *ServiceParams) { p.Accounts = nil }, "IAM account client"},
 		{"users", func(p *ServiceParams) { p.Users = nil }, "user service"},
 		{"issuer", func(p *ServiceParams) { p.TokenIssuer = nil }, "token issuer"},
 		{"anchors", func(p *ServiceParams) { p.TrustAnchors = nil }, "admin trust anchor"},
@@ -451,6 +504,103 @@ func TestBeginPasskey_RejectsBadToken(t *testing.T) {
 		require.ErrorAs(t, err, &ErrClaimTokenInvalid{})
 	}
 	assert.Zero(t, h.ceremony.beginCalls)
+}
+
+// The firstboot admin has no email, and the SDK registers a passkey only
+// for an account its keystore finds by email. Begin gives the admin account
+// the configured email first, and only that account.
+func TestBeginPasskey_ProvisionsAdminEmail(t *testing.T) {
+	h := newHarness(t)
+	token := h.claimTo(t)
+
+	_, err := h.svc.BeginPasskey(context.Background(), token)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"42": testAdminEmail}, h.accounts.updated)
+	assert.Equal(t, 1, h.ceremony.beginCalls)
+}
+
+func TestBeginPasskey_KeepsMatchingEmail(t *testing.T) {
+	h := newHarness(t)
+	h.accounts.pages[0].Users[1].Email = strings.ToUpper(testAdminEmail)
+	token := h.claimTo(t)
+
+	_, err := h.svc.BeginPasskey(context.Background(), token)
+	require.NoError(t, err)
+	assert.Empty(t, h.accounts.updated)
+	assert.Equal(t, 1, h.ceremony.beginCalls)
+}
+
+func TestBeginPasskey_FollowsPages(t *testing.T) {
+	h := newHarness(t)
+	h.accounts.pages = []iamsdk.ListUsersResponse{
+		{Users: []iamsdk.User{{ID: "7", Username: "operator"}}, Pagination: iamsdk.PaginationInfo{NextPageToken: "1"}},
+		{Users: []iamsdk.User{{ID: "42", Username: common.AdminUsername}}},
+	}
+	token := h.claimTo(t)
+
+	_, err := h.svc.BeginPasskey(context.Background(), token)
+	require.NoError(t, err)
+	require.Len(t, h.accounts.requests, 2)
+	assert.Equal(t, "1", h.accounts.requests[1].PageToken)
+	assert.Equal(t, map[string]string{"42": testAdminEmail}, h.accounts.updated)
+}
+
+func TestBeginPasskey_RefusesWithoutAdminAccount(t *testing.T) {
+	cases := map[string][]iamsdk.ListUsersResponse{
+		"no admin":            {{Users: []iamsdk.User{{ID: "7", Username: "operator"}}}},
+		"repeated page token": {{Users: []iamsdk.User{{ID: "7", Username: "operator"}}, Pagination: iamsdk.PaginationInfo{NextPageToken: "0"}}},
+	}
+	for name, pages := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.accounts.pages = pages
+			token := h.claimTo(t)
+
+			_, err := h.svc.BeginPasskey(context.Background(), token)
+			var missing ErrAdminAccountMissing
+			require.ErrorAs(t, err, &missing)
+			assert.Equal(t, common.AdminUsername, missing.Username)
+			assert.Zero(t, h.ceremony.beginCalls)
+		})
+	}
+}
+
+func TestBeginPasskey_RefusesConflictingEmail(t *testing.T) {
+	h := newHarness(t)
+	h.accounts.pages[0].Users[1].Email = "someone-else@example.com"
+	token := h.claimTo(t)
+
+	_, err := h.svc.BeginPasskey(context.Background(), token)
+	var conflict ErrAdminEmailConflict
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, "someone-else@example.com", conflict.Account)
+	assert.Empty(t, h.accounts.updated)
+	assert.Zero(t, h.ceremony.beginCalls)
+}
+
+func TestBeginPasskey_WrapsAccountClientErrors(t *testing.T) {
+	cause := errors.New("iam unavailable")
+	cases := map[string]struct {
+		set func(*fakeAccounts)
+		op  string
+	}{
+		"list":   {func(f *fakeAccounts) { f.listErr = cause }, "list"},
+		"update": {func(f *fakeAccounts) { f.updateErr = cause }, "set email"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			tc.set(h.accounts)
+			token := h.claimTo(t)
+
+			_, err := h.svc.BeginPasskey(context.Background(), token)
+			var lookup ErrAdminAccountLookup
+			require.ErrorAs(t, err, &lookup)
+			assert.Equal(t, tc.op, lookup.Op)
+			require.ErrorIs(t, err, cause)
+			assert.Zero(t, h.ceremony.beginCalls)
+		})
+	}
 }
 
 func TestFinishPasskey_HappyPath(t *testing.T) {
@@ -905,6 +1055,7 @@ func TestMultiInstanceRefusesCeremony(t *testing.T) {
 		Logger:        testLogger(),
 		Ceremony:      &fakeCeremony{},
 		Factors:       &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}},
+		Accounts:      newFakeAccounts(),
 		Users:         newFakeUsers(),
 		TokenIssuer:   &fakeIssuer{token: "console-jwt"},
 		TrustAnchors:  p.pool,

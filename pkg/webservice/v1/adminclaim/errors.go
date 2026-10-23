@@ -111,6 +111,51 @@ func (e ErrMultiInstanceUnsupported) Error() string {
 		"its one-time state is process-local and factor enrolment is not yet atomic across instances (see #170)"
 }
 
+// ErrAdminAccountMissing is returned when the operating tenant holds no
+// backbone account with the firstboot admin's username, so there is no
+// account to enrol the claim passkey against.
+type ErrAdminAccountMissing struct {
+	TenantID string
+	Username string
+}
+
+// Error implements the error interface.
+func (e ErrAdminAccountMissing) Error() string {
+	return fmt.Sprintf("adminclaim: tenant %s has no account named %s", e.TenantID, e.Username)
+}
+
+// ErrAdminEmailConflict is returned when the firstboot admin account
+// already carries an email other than the configured admin-email. The
+// claim refuses rather than overwrite it: the passkey would otherwise be
+// enrolled against an address the account's owner never set.
+type ErrAdminEmailConflict struct {
+	Configured string
+	Account    string
+}
+
+// Error implements the error interface.
+func (e ErrAdminEmailConflict) Error() string {
+	return fmt.Sprintf("adminclaim: admin-email %s does not match the admin account's email %s",
+		e.Configured, e.Account)
+}
+
+// ErrAdminAccountLookup is returned when the backbone account the claim
+// enrols against cannot be read or given its email.
+type ErrAdminAccountLookup struct {
+	Op    string
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrAdminAccountLookup) Error() string {
+	return fmt.Sprintf("adminclaim: admin account %s: %v", e.Op, e.Cause)
+}
+
+// Unwrap returns the underlying SDK error.
+func (e ErrAdminAccountLookup) Unwrap() error {
+	return e.Cause
+}
+
 // ErrAlreadyClaimed is returned when the admin identity already carries an
 // operator-enrolled authenticator. Re-claiming would let anyone holding a
 // copy of the bootstrap certificate displace the operator's passkey while

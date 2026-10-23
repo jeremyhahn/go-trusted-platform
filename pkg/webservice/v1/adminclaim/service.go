@@ -87,6 +87,7 @@ import (
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -148,6 +149,19 @@ type FactorLister interface {
 	List(ctx context.Context, userID string) (*quicbaassdk.AuthFactorListResponse, error)
 }
 
+// AdminAccounts is the slice of the SDK IAM user client the claim needs to
+// give the firstboot admin account its email. qrdb first-boot creates that
+// account with a username and no email login key, while the SDK WebAuthn
+// relying party resolves the account it enrols against with GetByEmail and,
+// with public registration off, refuses an address it cannot resolve. The
+// claim therefore sets the configured admin-email on the account first: the
+// "provisioned by an administrator" path the relying party accepts.
+// Satisfied by restiam.IAMClient.
+type AdminAccounts interface {
+	ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
+	UpdateUser(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
+}
+
 // TokenIssuer mints the console bearer handed back when a claim completes.
 type TokenIssuer interface {
 	GenerateToken(user *entities.User) (string, error)
@@ -160,6 +174,9 @@ type ServiceParams struct {
 	Ceremony FIDO2Ceremony
 	// Factors reports which auth factors the admin identity carries.
 	Factors FactorLister
+	// Accounts reads and updates the backbone admin account, so the claim
+	// can give it the configured email before the ceremony looks it up.
+	Accounts AdminAccounts
 	// Users is the platform-local user store the console authenticates
 	// against. The claim materialises the admin there with the admin role
 	// so the RBAC route guards resolve it from the issued token.
@@ -204,6 +221,7 @@ type Service struct {
 	logger        *logging.Logger
 	ceremony      FIDO2Ceremony
 	factors       FactorLister
+	accounts      AdminAccounts
 	users         service.UserServicer
 	tokenIssuer   TokenIssuer
 	trustAnchors  *x509.CertPool
@@ -231,6 +249,9 @@ func NewService(params ServiceParams) (*Service, error) {
 	if params.Factors == nil {
 		return nil, ErrDependencyRequired{Name: "auth factors client"}
 	}
+	if params.Accounts == nil {
+		return nil, ErrDependencyRequired{Name: "IAM account client"}
+	}
 	if params.Users == nil {
 		return nil, ErrDependencyRequired{Name: "user service"}
 	}
@@ -254,6 +275,7 @@ func NewService(params ServiceParams) (*Service, error) {
 		logger:        params.Logger,
 		ceremony:      params.Ceremony,
 		factors:       params.Factors,
+		accounts:      params.Accounts,
 		users:         params.Users,
 		tokenIssuer:   params.TokenIssuer,
 		trustAnchors:  params.TrustAnchors,
@@ -429,11 +451,64 @@ func (s *Service) BeginPasskey(
 	if _, err := s.refuseIfClaimed(ctx); err != nil {
 		return nil, err
 	}
+	if err := s.provisionAdminEmail(ctx); err != nil {
+		return nil, err
+	}
 	return s.ceremony.BeginRegistration(s.tenantContext(ctx),
 		&quicbaassdk.FIDO2BeginRegistrationRequest{
 			Email:       s.adminEmail,
 			DisplayName: s.adminUsername,
 		})
+}
+
+// adminAccountPageSize bounds each page of the admin-account lookup.
+const adminAccountPageSize = 100
+
+// provisionAdminEmail makes the firstboot admin account resolvable by the
+// configured admin-email before the ceremony looks it up (see
+// AdminAccounts). An account that already carries that email is left
+// alone; one carrying a different email is refused, never overwritten.
+func (s *Service) provisionAdminEmail(ctx context.Context) error {
+	ctx = s.tenantContext(ctx)
+	account, err := s.findAdminAccount(ctx)
+	if err != nil {
+		return err
+	}
+	switch {
+	case strings.EqualFold(account.Email, s.adminEmail):
+		return nil
+	case account.Email != "":
+		return ErrAdminEmailConflict{Configured: s.adminEmail, Account: account.Email}
+	}
+	if _, err := s.accounts.UpdateUser(ctx, s.tenantID, account.ID,
+		&iamsdk.UpdateUserRequest{Email: s.adminEmail}); err != nil {
+		return ErrAdminAccountLookup{Op: "set email", Cause: err}
+	}
+	s.logger.Infof("adminclaim: admin account %s given its configured email", account.ID)
+	return nil
+}
+
+// findAdminAccount pages through the operating tenant's accounts for the
+// one named by the firstboot admin username. The platform IAM views omit
+// the username, so the lookup goes through the SDK client directly.
+func (s *Service) findAdminAccount(ctx context.Context) (*iamsdk.User, error) {
+	req := &iamsdk.ListUsersRequest{PageSize: adminAccountPageSize}
+	for {
+		page, err := s.accounts.ListUsers(ctx, s.tenantID, req)
+		if err != nil {
+			return nil, ErrAdminAccountLookup{Op: "list", Cause: err}
+		}
+		for i := range page.Users {
+			if page.Users[i].Username == s.adminUsername {
+				return &page.Users[i], nil
+			}
+		}
+		next := page.Pagination.NextPageToken
+		if next == "" || next == req.PageToken {
+			return nil, ErrAdminAccountMissing{TenantID: s.tenantID, Username: s.adminUsername}
+		}
+		req = &iamsdk.ListUsersRequest{PageSize: adminAccountPageSize, PageToken: next}
+	}
 }
 
 // FinishPasskey completes the ceremony, materialises the platform-local

@@ -568,12 +568,24 @@ sequenceDiagram
     CLI-->>Op: token + console URL
     Op->>Br: paste token at /setup/admin-claim
     Br->>PD: POST /admin/claim/passkey/begin  (X-Admin-Claim)
-    PD->>SDK: FIDO2().BeginRegistration("admin")
+    PD->>SDK: IAM ListUsers / UpdateUser (admin gets admin-email if unset)
+    PD->>SDK: FIDO2().BeginRegistration(admin-email)
     Br->>PD: POST /admin/claim/passkey/finish (X-Admin-Claim)
     PD->>SDK: FIDO2().FinishRegistration
     PD->>PD: materialise local admin user with role "admin"
     PD-->>Br: console bearer
 ```
+
+qrdb first-boot creates the `admin` account without an email, and the SDK
+registers a passkey only for an account its keystore finds **by email**; with
+self-service registration off it refuses any other with "public registration
+is disabled". So passkey begin first gives the backbone `admin` account the
+configured `admin-email` through the IAM user API (the authorized
+user-creation path), then begins registration. An account that already has
+that email (any case) is left alone. A different email on it is refused
+(`ErrAdminEmailConflict`), as is a tenant with no `admin` account
+(`ErrAdminAccountMissing`), and neither starts a ceremony. Self-service
+registration stays off.
 
 Two proofs of possession are accepted, and the **transport** decides which,
 never the caller:

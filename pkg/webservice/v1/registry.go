@@ -1590,6 +1590,7 @@ func (registry *HandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler
 		Logger:        params.Logger,
 		Ceremony:      params.FIDO2SDKClient,
 		Factors:       params.FactorsSDKClient,
+		Accounts:      params.IAMClient,
 		Users:         params.ServiceRegistry.UserService(),
 		TokenIssuer:   registry.jwtService,
 		TrustAnchors:  anchors,

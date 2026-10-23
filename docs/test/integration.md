@@ -484,7 +484,9 @@ one without a dotted domain). Without it platformd logs
 `adminclaim: admin email is required`, leaves the routes unregistered, and
 every REST leg fails its first call with a 404 on `/api/v1/admin/claim/status`.
 `TestIntegrationConfig_RunMode` (`pkg/app/integration_config_test.go`) fails
-when the harness config loses it. The minted
+when the harness config loses it. Passkey begin gives the firstboot `admin`
+account that email before registering, so the SDK finds it with self-service
+registration still off (docs/auth/architecture.md §6b.3). The minted
 bearer is written to `PLATFORM_ADMIN_SESSION_FILE` (mode 0600); later binaries
 reuse it, refresh it through `/api/v1/login/refresh` when less than 30 minutes
 remain, and claim again only when the cache is for another webservice or the
