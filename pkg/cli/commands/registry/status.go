@@ -187,6 +187,12 @@ func convertStatusDomainResponse(resp *regsvc.RegistryStatusResult) *StatusResul
 	// Check component health
 	for _, component := range resp.Components {
 		switch component.Name {
+		case "storage":
+			if result.Status.Storage == nil {
+				result.Status.Storage = &StorageStatus{}
+			}
+			result.Status.Storage.Backend = component.Details["backend"]
+			result.Status.Storage.Healthy = component.Status == regsvc.HealthStatusHealthy
 		case "attestation":
 			if result.Status.Attestation == nil {
 				result.Status.Attestation = &AttestationStatus{}
