@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
@@ -117,6 +118,18 @@ func webserviceTLSPorts(a *App) []string {
 	return ports
 }
 
+// adminClaimServed reports whether platformd registers /api/v1/admin/claim
+// for a: only the webservice registry mounts it, and only with an
+// admin-email (pkg/webservice/v1/registry.go AdminClaimRestHandler). The
+// address must also pass the IAM pattern the claim's passkey enrolment and
+// the platform-local admin user are held to (pkg/platform/service/email.go).
+func adminClaimServed(a *App) bool {
+	if len(a.WebServices) == 0 || a.AdminEmail == "" {
+		return false
+	}
+	return service.ValidateEmail(a.AdminEmail) == nil
+}
+
 // TestIntegrationConfig_RunMode pins the serve path each integration config
 // takes. A webservices entry sends `platformd serve` into runWithWebservices
 // (pkg/daemon/commands/serve.go), the path production runs.
@@ -140,13 +153,16 @@ func TestIntegrationConfig_RunMode(t *testing.T) {
 	tests := []struct {
 		path  string
 		ports []string
+		claim bool
 		mode  string
 	}{
-		{integrationConfig, []string{restPort}, "runWithWebservices, REST on the webservice"},
-		{barrierGateConfig, nil, "daemon-only, REST on the daemon listener"},
+		{integrationConfig, []string{restPort}, true, "runWithWebservices, REST and /api/v1/admin/claim on the webservice"},
+		{barrierGateConfig, nil, false, "daemon-only, REST on the daemon listener"},
 	}
 	for _, tt := range tests {
-		assert.Equal(t, tt.ports, webserviceTLSPorts(loadTemplate(t, tt.path)), "%s: %s", tt.path, tt.mode)
+		a := loadTemplate(t, tt.path)
+		assert.Equal(t, tt.ports, webserviceTLSPorts(a), "%s: %s", tt.path, tt.mode)
+		assert.Equal(t, tt.claim, adminClaimServed(a), "%s: %s (admin-email %q)", tt.path, tt.mode, a.AdminEmail)
 	}
 }
 
@@ -162,6 +178,16 @@ func TestIntegrationConfig_RunModeMismatch(t *testing.T) {
 
 	twoServices := &App{WebServices: []*v1.Config{{TLSPort: 8443}, {TLSPort: 9443}}}
 	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(twoServices), "a second webservice changes the mode the pin names")
+
+	webservice := []*v1.Config{{TLSPort: 8443}}
+	assert.False(t, adminClaimServed(&App{WebServices: webservice}),
+		"no admin-email: the registry leaves /api/v1/admin/claim unregistered")
+	assert.False(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@localhost"}),
+		"an address IAM refuses (no dotted domain) cannot back the claim")
+	assert.False(t, adminClaimServed(&App{AdminEmail: "admin@integration.internal"}),
+		"daemon-only: no webservice mounts the admin-claim routes, whatever the email")
+	assert.True(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@integration.internal"}),
+		"a webservice with an IAM-valid admin-email serves the claim")
 }
 
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can

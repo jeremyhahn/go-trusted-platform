@@ -476,7 +476,15 @@ The first request of the run claims the console through
 `/api/v1/admin/claim` (docs/auth/architecture.md §6b): status, challenge,
 verify (the challenge signed with `admin.key`), then passkey begin and finish
 with a test-side software authenticator (ES256, "none" attestation) against
-the `webauthn` relying party in `test/integration/config.yaml`. The minted
+the `webauthn` relying party in `test/integration/config.yaml`. The webservice
+registry builds those routes only when the config names the firstboot admin
+account: `admin-email: admin@integration.internal` in
+`test/integration/config.yaml` (an address in the harness DNS zone; IAM refuses
+one without a dotted domain). Without it platformd logs
+`adminclaim: admin email is required`, leaves the routes unregistered, and
+every REST leg fails its first call with a 404 on `/api/v1/admin/claim/status`.
+`TestIntegrationConfig_RunMode` (`pkg/app/integration_config_test.go`) fails
+when the harness config loses it. The minted
 bearer is written to `PLATFORM_ADMIN_SESSION_FILE` (mode 0600); later binaries
 reuse it, refresh it through `/api/v1/login/refresh` when less than 30 minutes
 remain, and claim again only when the cache is for another webservice or the

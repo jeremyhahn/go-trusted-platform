@@ -12,6 +12,12 @@ platform-dir: /tmp/platformd-integration
 config-dir: /etc/trusted-platform
 log-dir: /tmp/platformd-integration/log
 ca-dir: /tmp/platformd-integration/ca
+# The firstboot admin account the console claim enrols its passkey against
+# (pkg/app/app.go AdminEmail). The webservice registry builds the
+# /api/v1/admin/claim routes only when it is set, and the admin session the
+# REST adapters open starts there (docs/test/integration.md, "Admin session").
+# The address is in the harness DNS zone below; IAM requires a dotted domain.
+admin-email: admin@integration.internal
 
 # Domain for test certificates
 domain: localhost
