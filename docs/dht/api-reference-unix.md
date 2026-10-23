@@ -223,7 +223,7 @@ Get detailed information about a specific node.
   "jsonrpc": "2.0",
   "result": {
     "node_id": "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
-    "addresses": ["/ip4/192.168.1.100/tcp/4001"],
+    "addresses": ["/ip4/192.0.2.10/tcp/4001"],
     "public_key": "CAASXjBcMA0GCSqGSIb3DQEBAQUAA0sAMEgCQQC...",
     "last_seen": "2026-01-07T10:30:00Z",
     "latency_ms": 5,
@@ -268,7 +268,7 @@ List all known nodes in the routing table.
     "nodes": [
       {
         "node_id": "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
-        "addresses": ["/ip4/192.168.1.100/tcp/4001"],
+        "addresses": ["/ip4/192.0.2.10/tcp/4001"],
         "last_seen": "2026-01-07T10:30:00Z",
         "status": "active"
       }

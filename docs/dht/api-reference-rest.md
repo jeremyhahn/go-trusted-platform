@@ -149,7 +149,7 @@ GET /node/{node-id}
 ```json
 {
   "id": "node-abc123def456",
-  "address": "192.168.1.100:9443",
+  "address": "192.0.2.10:9443",
   "publicKey": "-----BEGIN PUBLIC KEY-----\n...",
   "status": "online",
   "lastSeen": "2026-01-07T14:30:00Z",
@@ -193,13 +193,13 @@ GET /nodes
   "nodes": [
     {
       "id": "node-abc123def456",
-      "address": "192.168.1.100:9443",
+      "address": "192.0.2.10:9443",
       "status": "online",
       "lastSeen": "2026-01-07T14:30:00Z"
     },
     {
       "id": "node-xyz789ghi012",
-      "address": "192.168.1.101:9443",
+      "address": "192.0.2.11:9443",
       "status": "online",
       "lastSeen": "2026-01-07T14:29:55Z"
     }
