@@ -17,7 +17,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +59,12 @@ func lifecycleService(t *testing.T, httpPort int) Service {
 	ipxeCfg.TFTPPort = lifecycleUDPPort(t)
 	ipxeCfg.LocalFilesDir = t.TempDir()
 	ipxeCfg.InstallsDir = t.TempDir()
+	// Hermetic firmware: the required ipxe.efi is seeded in a temp dir and
+	// downloads are forbidden, so a test that would reach boot.ipxe.org
+	// fails with ipxe.ErrFirmwareUnavailable instead of touching the network.
+	ipxeCfg.FirmwareDir = t.TempDir()
+	ipxeCfg.FirmwareOffline = true
+	require.NoError(t, os.WriteFile(filepath.Join(ipxeCfg.FirmwareDir, "ipxe.efi"), []byte("test firmware"), 0o600))
 	ipxeCfg.BootEntries = []ipxe.BootEntry{
 		{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"},
 	}
@@ -135,6 +144,7 @@ func TestService_Start_ListenerBindFails(t *testing.T) {
 	var failed ErrProvisioningFailed
 	require.True(t, errors.As(err, &failed), "want ErrProvisioningFailed, got %v", err)
 	assert.Equal(t, "failed to start iPXE server", failed.Reason)
+	assert.ErrorIs(t, err, syscall.EADDRINUSE, "Start must fail for the taken HTTP port, not another reason")
 	require.False(t, svc.IsRunning())
 
 	require.NoError(t, taken.Close())
