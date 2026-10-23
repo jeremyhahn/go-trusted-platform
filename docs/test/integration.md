@@ -364,7 +364,9 @@ the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`.
 
 The `sdn` key runs `./test/integration/sdn/` and
-`./test/integration/sdn/mock_bgp/...` within its 5 minutes, not
+`./test/integration/sdn/mock_bgp/...` within its 15 minutes (its tests run
+one at a time and take about 11; the runner's `TARGET_TIMEOUTS` comment has
+the breakdown), not
 `./test/integration/sdn/...`: the load generators in `sdn/stress` keep every
 CPU busy for about 270 s, and running beside the `sdn` package they starved
 ovs-vswitchd, `platformd` and `platformctl` until it ran out of time (#973).
