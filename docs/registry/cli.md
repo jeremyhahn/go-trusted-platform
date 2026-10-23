@@ -190,6 +190,16 @@ the `storage`, `attestation`, `encryption` and `metrics` objects.
 has its gate on — it prints the effective `require_attestation`, the golden PCR
 set, the AIK allowlist and the quote freshness bound.
 
+The storage backend comes from the service's `storage` component (`api.md`
+§6) and is printed twice, as `storage_backend` and inside `storage`:
+
+```json
+{"healthy": true, "status": "running", "version": "…", "uptime_seconds": 60,
+  "image_count": 3, "total_size": 2048, "storage_backend": "quicbaas",
+  "storage": {"backend": "quicbaas", "healthy": true, "used_bytes": 2048, "image_count": 3, …},
+  "attestation": {…}, "encryption": {…}}
+```
+
 ---
 
 ## 8. Exit codes and output

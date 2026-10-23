@@ -366,6 +366,11 @@ func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	if resp.StartedAt != 0 && resp.Timestamp != 0 {
 		result.Uptime = fromMilli(resp.Timestamp).Sub(fromMilli(resp.StartedAt))
 	}
+	for _, c := range resp.Components {
+		if c.Name == storageComponentName {
+			result.StorageBackend = c.Details[storageBackendDetail]
+		}
+	}
 	return result, nil
 }
 

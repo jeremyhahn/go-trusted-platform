@@ -400,7 +400,11 @@ gatewayd, and a call that cannot reach the `datapath` process answers
 gatewayd enables the `memory` and `cpu` controllers in each `cgroup-parent`
 directory it creates; the `cgroup-root` itself must already offer them to its
 children (`cgroup.subtree_control`), which systemd does on a host and a
-container needs delegated.
+container needs delegated. Each process's leaf accounting is in the gatewayd
+log: `process memory` (`memory.current`, `memory.peak`, `memory.oom_kill`) when
+the process stops, and the same `memory` fields on every `process down,
+restarting` line, so an OOM kill behind a restart and a class's real peak are
+on record. The counters belong to the leaf and carry over a relaunch.
 The account must exist, and **the configuration file and every file it names
 must be readable by it**: the child reads them after it drops privileges, and
 it exits with an error rather than start without them. For the proxy that

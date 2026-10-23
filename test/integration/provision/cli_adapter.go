@@ -79,8 +79,10 @@ func (c *CLIAdapter) Teardown() error {
 	return nil
 }
 
-// createTestConfig creates a minimal platformctl config file targeting the
-// test daemon, matching the ceremony CLI adapter layout.
+// createTestConfig writes the shared harness platformctl config targeting
+// the test daemon. Beyond the Unix socket it points the CLI's quicbaas client
+// at platformd's gRPC listener with the harness mTLS files, which the kms
+// verbs the fixture runs (`kms key csr`) open (docs/kms/cli.md §3).
 func (c *CLIAdapter) createTestConfig() error {
 	tmpDir, err := os.MkdirTemp("", "platformctl-provision-test-*")
 	if err != nil {

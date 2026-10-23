@@ -128,6 +128,58 @@ func TestIntegrationConfig_TCPSwtpmNotASocket(t *testing.T) {
 	assert.Empty(t, socket)
 }
 
+// swtpmProvisionScript provisions the harness swtpm's EK and EK certificate.
+const swtpmProvisionScript = "../../build/docker/devcontainer/swtpm-provision.sh"
+
+// The EK certificate NV indices swtpm_setup writes, from the Low Range of
+// the TCG EK Credential Profile v2.1 §2.2.1.4 (0x01C00002 - 0x01C0000C).
+const (
+	ekCertIndexRSA2048 uint32 = 0x01C00002
+	ekCertIndexECCP256 uint32 = 0x01C0000A
+)
+
+// harnessEKCertIndex returns the NV index swtpm_setup writes the EK
+// certificate to, as the provisioning script invokes it: the RSA 2048 index,
+// or the ECC P256 index under --ecc. It returns false when the script does
+// not ask for an EK certificate.
+func harnessEKCertIndex(script []byte) (uint32, bool) {
+	if !bytes.Contains(script, []byte("--create-ek-cert")) {
+		return 0, false
+	}
+	if bytes.Contains(script, []byte("--ecc")) {
+		return ekCertIndexECCP256, true
+	}
+	return ekCertIndexRSA2048, true
+}
+
+// The harness swtpm carries a manufacturer-style EK certificate in NV. With
+// no tpm.ek.cert-handle, go-xkms looks the certificate up in the platform
+// certificate store instead, never reads NV, and `tpm ek certificate`
+// answers NotFound on every transport.
+func TestIntegrationConfig_EKCertificateAtHarnessIndex(t *testing.T) {
+	script, err := os.ReadFile(swtpmProvisionScript)
+	require.NoError(t, err)
+	index, ok := harnessEKCertIndex(script)
+	require.True(t, ok, "swtpm-provision.sh creates the EK certificate")
+
+	for _, path := range []string{integrationConfig, barrierGateConfig} {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.TPMConfig.EK, "%s: tpm.ek", path)
+		assert.Equal(t, index, a.TPMConfig.EK.CertHandle,
+			"%s: tpm.ek.cert-handle is the NV index swtpm_setup writes the EK certificate to", path)
+	}
+}
+
+func TestIntegrationConfig_EKCertIndexFollowsSwtpmSetup(t *testing.T) {
+	index, ok := harnessEKCertIndex([]byte("swtpm_setup --tpm2 --createek --create-ek-cert --ecc"))
+	assert.True(t, ok)
+	assert.Equal(t, ekCertIndexECCP256, index)
+
+	index, ok = harnessEKCertIndex([]byte("swtpm_setup --tpm2 --createek"))
+	assert.False(t, ok, "no EK certificate without --create-ek-cert")
+	assert.Zero(t, index)
+}
+
 // TestIntegrationConfig_LoadsWithDNSServer loads the integration config the
 // way platformd does (strict network/sdn check, full decode) and checks the
 // dns section strictly too: every key decodes, and it configures a server,

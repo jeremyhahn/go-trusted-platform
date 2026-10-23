@@ -254,7 +254,10 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	if adj := readTrimmed(t, fmt.Sprintf("/proc/%d/oom_score_adj", before[victim])); adj == "-1000" {
 		t.Fatalf("%s child oom_score_adj = %s: the OOM killer cannot kill it", victim, adj)
 	}
-	oomBefore := memoryEvent(t, leaf, "oom_kill")
+	// The child's charge just before the limit drops is what the kernel
+	// has to reclaim or kill to fit 1 MiB.
+	usageBefore := leafMemory(t, gw.cgroups(), victim)
+	logMemory(t, victim, "before the 1 MiB limit", usageBefore)
 	failedBefore := load.failed.Load()
 
 	// Take swap away so reclaim cannot satisfy the limit, then set one far
@@ -270,8 +273,10 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	// it holds no task, and the kernel counts an OOM kill before the victim's
 	// memory is freed. So the count has risen by now, or the child was never
 	// killed and no relaunch can follow.
-	if oom := memoryEvent(t, leaf, "oom_kill"); oom <= oomBefore {
-		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, oom, oomBefore)
+	usageAfter := leafMemory(t, gw.cgroups(), victim)
+	logMemory(t, victim, "after the 1 MiB limit", usageAfter)
+	if usageAfter.OOMKill <= usageBefore.OOMKill {
+		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, usageAfter.OOMKill, usageBefore.OOMKill)
 	}
 
 	after := gw.awaitRelaunch(t, victim, before, probes[victim])
@@ -841,6 +846,18 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 	select {
 	case <-g.exited:
 	default:
+		// Each class's leaf accounting at the end of a normal run is the
+		// measured basis for its MemoryMax (#955); gatewayd removes the
+		// leaves as it stops, so it is read first. A read failure is
+		// reported, not fatal: the stop below must still happen.
+		for name := range g.children(t) {
+			usage, err := g.cgroups().Memory(name)
+			if err != nil {
+				t.Errorf("%s leaf memory: %v", name, err)
+				continue
+			}
+			logMemory(t, name, "at teardown", usage)
+		}
 		if err := g.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Errorf("signal gatewayd: %v", err)
 		}
@@ -862,9 +879,41 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 	if t.Failed() {
 		t.Logf("gatewayd log:\n%s", g.log(t))
 	}
-	if err := os.Remove(filepath.Join(cgroupRoot, g.cgroupParent)); err != nil && !os.IsNotExist(err) {
-		t.Errorf("remove cgroup parent (a leaf left behind?): %v", err)
+	g.removeCgroups(t)
+}
+
+// removeCgroups removes the test's cgroup parent. A reaped child leaves
+// its leaf only after its last context switch, so every leaf gatewayd did
+// not remove is first waited on until the kernel reports it empty
+// (cgroup.events "populated 0"); the parent cannot be removed before.
+func (g *supervisedGatewayd) removeCgroups(t *testing.T) {
+	parent := filepath.Join(cgroupRoot, g.cgroupParent)
+	entries, err := os.ReadDir(parent)
+	if os.IsNotExist(err) {
+		return
 	}
+	if err != nil {
+		t.Errorf("list cgroup parent: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue // an interface file, not a leaf
+		}
+		if err := g.cgroups().Remove(ctx, entry.Name()); err != nil {
+			t.Errorf("remove cgroup leaf %s: %v", entry.Name(), err)
+		}
+	}
+	if err := os.Remove(parent); err != nil && !os.IsNotExist(err) {
+		t.Errorf("remove cgroup parent: %v", err)
+	}
+}
+
+// cgroups is the view of the cgroup tree gatewayd places its children in.
+func (g *supervisedGatewayd) cgroups() *process.CgroupManager {
+	return &process.CgroupManager{Root: cgroupRoot, Parent: g.cgroupParent}
 }
 
 func (g *supervisedGatewayd) log(t *testing.T) string {
@@ -1048,19 +1097,20 @@ func writeCgroupFile(t *testing.T, path, value string) {
 	}
 }
 
-// memoryEvent returns one counter from a leaf's memory.events.
-func memoryEvent(t *testing.T, leaf, event string) int64 {
+// leafMemory reads a child's leaf accounting.
+func leafMemory(t *testing.T, cgroups *process.CgroupManager, name string) process.MemoryUsage {
 	t.Helper()
-	for _, line := range strings.Split(readTrimmed(t, filepath.Join(leaf, "memory.events")), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == event {
-			count, err := strconv.ParseInt(fields[1], 10, 64)
-			if err != nil {
-				t.Fatalf("memory.events %s = %q: %v", event, fields[1], err)
-			}
-			return count
-		}
+	usage, err := cgroups.Memory(name)
+	if err != nil {
+		t.Fatalf("%s leaf memory: %v", name, err)
 	}
-	t.Fatalf("%s/memory.events has no %s counter", leaf, event)
-	return 0
+	return usage
+}
+
+// logMemory records a leaf's accounting in the job log: the measured
+// numbers behind every class's MemoryMax and behind an OOM kill.
+func logMemory(t *testing.T, name, when string, usage process.MemoryUsage) {
+	t.Helper()
+	t.Logf("%s memory %s: memory.current %d, memory.peak %d, memory.events max %d oom %d oom_kill %d",
+		name, when, usage.Current, usage.Peak, usage.Max, usage.OOM, usage.OOMKill)
 }

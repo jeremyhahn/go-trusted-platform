@@ -557,7 +557,9 @@ func RegistryErrorStatus(err error) error {
 		return status.Error(codes.NotFound, e.Error())
 	case ErrArtifactAlreadyExists:
 		return status.Error(codes.AlreadyExists, e.Error())
-	case ErrInvalidArtifactDigest, ErrInvalidArtifactReference, ErrMissingRepository, ErrMissingReference:
+	case ErrInvalidArtifactDigest, ErrMissingRepository, ErrMissingReference:
+		return status.Error(codes.InvalidArgument, e.Error())
+	case ErrInvalidArtifactReference:
 		return status.Error(codes.InvalidArgument, e.Error())
 	case ErrRegistryOperationFailed:
 		return status.Errorf(codes.Internal, "registry operation %s failed: %s", e.Operation, e.Reason)
