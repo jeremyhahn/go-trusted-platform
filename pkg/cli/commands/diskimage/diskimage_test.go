@@ -355,6 +355,12 @@ func TestMergeOverrides(t *testing.T) {
 	if _, err := mergeOverrides(template, filepath.Join(dir, "missing.yaml")); !errors.As(err, &build) {
 		t.Errorf("missing overrides error = %v", err)
 	}
+	// The merged config is a temporary file; a temp dir that cannot hold it
+	// is a build failure, not a path to a file that does not exist.
+	t.Setenv("TMPDIR", filepath.Join(dir, "no-such-dir"))
+	if _, err := mergeOverrides(template, overrides); !errors.As(err, &build) || !strings.Contains(build.Reason, "creating the merged config") {
+		t.Errorf("unwritable temp dir error = %v", err)
+	}
 }
 
 func TestCommandErrorPaths(t *testing.T) {
@@ -409,6 +415,34 @@ func TestCommandErrorPaths(t *testing.T) {
 	}
 	if err := run("create", "--binaries-dir", bins, "--overrides", filepath.Join(t.TempDir(), "o.yaml"), "--skip-preflight"); !errors.As(err, &build) {
 		t.Errorf("create with overrides but no template error = %v", err)
+	}
+
+	// netboot refuses an unknown set, and overrides with no template, before
+	// it resolves binaries or builds anything.
+	var unknown ErrUnknownMediaSet
+	if err := run("netboot", "--sets", "nope"); !errors.As(err, &unknown) || unknown.Name != "nope" {
+		t.Errorf("netboot with an unknown set error = %v", err)
+	}
+	build = ErrBuildFailed{}
+	if err := run("netboot", "--overrides", filepath.Join(t.TempDir(), "o.yaml"), "--work-dir", t.TempDir()); !errors.As(err, &build) || !strings.Contains(build.Reason, "--overrides requires a --platform-config template") {
+		t.Errorf("netboot with overrides but no template error = %v", err)
+	}
+	if err := run("diskless-root"); !errors.As(err, &required) {
+		t.Errorf("diskless-root without config error = %v", err)
+	}
+
+	// test boot parses its forwards before it boots, and an --expect deadline
+	// does not mask why the boot itself failed.
+	var forward ErrInvalidPortForward
+	if err := run("test", "boot", "--forward", "8080"); !errors.As(err, &forward) || forward.Spec != "8080" {
+		t.Errorf("test boot with a bad forward error = %v", err)
+	}
+	dir := t.TempDir()
+	var bootErr *pkgdiskimage.BootError
+	err := run("test", "boot", "--image", filepath.Join(dir, "missing.img"), "--uboot", filepath.Join(dir, "missing.bin"),
+		"--work-dir", dir, "--serial-log", filepath.Join(dir, "serial.log"), "--expect", "login:", "--timeout", "1s")
+	if !errors.As(err, &bootErr) || bootErr.Step != "opening the image" {
+		t.Errorf("test boot --expect of a missing image error = %v", err)
 	}
 }
 

@@ -40,7 +40,8 @@ type fakeBarrierClient struct {
 	recoveryRecReq  *quicbaassdk.QRDBBarrierRecoverWithKeysRequest
 
 	// Counters for parameter-less calls.
-	sealCalls int
+	sealCalls   int
+	statusCalls int
 
 	// Canned responses.
 	statusResp         *quicbaassdk.QRDBBarrierStatusResponse
@@ -109,6 +110,7 @@ func (f *fakeBarrierClient) BarrierSeal(_ context.Context) error {
 	return f.sealErr
 }
 func (f *fakeBarrierClient) BarrierStatus(_ context.Context) (*quicbaassdk.QRDBBarrierStatusResponse, error) {
+	f.statusCalls++
 	return f.statusResp, f.statusErr
 }
 func (f *fakeBarrierClient) BarrierInitializeShamir(_ context.Context, req *quicbaassdk.QRDBBarrierInitializeShamirRequest) (*quicbaassdk.QRDBBarrierInitializeShamirResponse, error) {

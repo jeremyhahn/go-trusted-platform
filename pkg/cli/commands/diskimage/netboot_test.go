@@ -68,6 +68,12 @@ func TestRunNetboot_FailsBeforeBuilding(t *testing.T) {
 	if err := runNetboot(&cli.CommonFlags{}, flags); !errors.As(err, &notFound) {
 		t.Errorf("missing binaries error = %v", err)
 	}
+	emptyARM64 := filepath.Join(t.TempDir(), "empty-arm64")
+	flags = &netbootFlags{sets: []string{container.MediaSetARM64Virt}, arm64BinariesDir: emptyARM64, sourceDateEpoch: -1}
+	flags.alpineVersion, flags.workDir = "3.22.2", t.TempDir()
+	if err := runNetboot(&cli.CommonFlags{}, flags); !errors.As(err, &notFound) || notFound.Dir != emptyARM64 {
+		t.Errorf("missing arm64 binaries error = %v", err)
+	}
 	// A diskless build without a timestamp would not be reproducible.
 	t.Setenv("SOURCE_DATE_EPOCH", "")
 	var epoch ErrSourceDateEpoch

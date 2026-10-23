@@ -400,6 +400,31 @@ func TestErrInvalidRevocationReason(t *testing.T) {
 	assert.Equal(t, "invalid revocation reason: bad-reason", err.Error())
 }
 
+func TestErrReadCSRFailed(t *testing.T) {
+	err := ErrReadCSRFailed{Path: "/tmp/fleet.csr", Reason: "no such file or directory"}
+
+	assert.Equal(t, "failed to read certificate signing request /tmp/fleet.csr: no such file or directory", err.Error())
+}
+
+func TestErrNoCertificateIssued(t *testing.T) {
+	assert.Equal(t, "the CA returned no certificate", ErrNoCertificateIssued{}.Error())
+}
+
+func TestErrWriteCertificateFailed(t *testing.T) {
+	err := ErrWriteCertificateFailed{Path: "/tmp/leaf.pem", Reason: "permission denied"}
+
+	assert.Equal(t, "failed to write certificate to /tmp/leaf.pem: permission denied", err.Error())
+}
+
+func TestWrappedError(t *testing.T) {
+	cause := ErrCRLEmpty{}
+	err := &WrappedError{Msg: "failed to list certificates", Err: cause}
+
+	assert.Equal(t, "failed to list certificates: "+cause.Error(), err.Error())
+	assert.Equal(t, cause, err.Unwrap())
+	assert.ErrorIs(t, err, cause)
+}
+
 // TestErrNotImplemented verifies the error message format.
 func TestErrNotImplemented(t *testing.T) {
 	err := ErrNotImplemented{Operation: "dual-mode"}
