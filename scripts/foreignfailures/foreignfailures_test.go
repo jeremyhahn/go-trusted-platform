@@ -190,6 +190,95 @@ func TestAMultiPackageTargetAttributesEachPackage(t *testing.T) {
 	assert.Equal(t, "TestKMS/gRPC/HMAC", v.Hits[0].Name)
 }
 
+// The sdn target's two package patterns and its section lines, as run_test
+// printed them in CI job 280944 (#973, bebfac996).
+const (
+	sdnPatterns     = "test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."
+	sdnStartLine    = "--- Testing ./test/integration/sdn/ ./test/integration/sdn/mock_bgp/... (sdn) ---"
+	sdnEndLine      = "--- FAIL: ./test/integration/sdn/ ./test/integration/sdn/mock_bgp/... ---"
+	sdnStressLine   = "--- Testing ./test/integration/sdn/stress/... (sdn-stress) ---"
+	sdnTestBaseline = "# kind\tpackage\tname\tupstream\tclosing_release\n" +
+		"test\ttest/integration/sdn\tTestSDNFlows/OVS/Install\tgo-quicbaas#1\tfirst go-quicbaas tag closing #1\n" +
+		"test\ttest/integration/sdn/mock_bgp\tTestMockBGP/Peer\tgo-quicbaas#2\tfirst go-quicbaas tag closing #2\n"
+)
+
+// sdnTarget is the sdn target failing in both of its packages: bgpFailLines
+// are the failed tests of test/integration/sdn/mock_bgp.
+func sdnTarget(bgpFailLines ...string) target {
+	body := []string{
+		"    --- FAIL: TestSDNFlows/OVS/Install (0.01s)",
+		"--- FAIL: TestSDNFlows (0.02s)",
+		"FAIL",
+		"FAIL\t" + module + "test/integration/sdn\t3.0s",
+	}
+	body = append(body, bgpFailLines...)
+	body = append(body, "FAIL", "FAIL\t"+module+"test/integration/sdn/mock_bgp\t1.0s", "FAIL")
+	return target{name: "sdn", pkg: sdnPatterns, body: body, failed: true}
+}
+
+func TestAMultiPathTargetWithOnlyListedFailuresPasses(t *testing.T) {
+	stress := target{name: "sdn-stress", pkg: "test/integration/sdn/stress/..."}
+	logText := suiteOutput(sdnTarget("    --- FAIL: TestMockBGP/Peer (0.01s)", "--- FAIL: TestMockBGP (0.01s)"), stress)
+	require.Contains(t, logText, "\n"+sdnStartLine+"\n")
+	require.Contains(t, logText, "\n"+sdnEndLine+"\n")
+	require.Contains(t, logText, "\n"+sdnStressLine+"\n")
+
+	v := check(t, sdnTestBaseline, logText)
+	assert.False(t, v.gating())
+	assert.Empty(t, v.Unattributable)
+	assert.Empty(t, v.Unlisted)
+	require.Len(t, v.Hits, 2)
+	assert.Equal(t, "test/integration/sdn", v.Hits[0].Package)
+	assert.Equal(t, "TestSDNFlows/OVS/Install", v.Hits[0].Name)
+	assert.Equal(t, "test/integration/sdn/mock_bgp", v.Hits[1].Package)
+	assert.Equal(t, "TestMockBGP/Peer", v.Hits[1].Name)
+}
+
+func TestAMultiPathTargetWithAnUnlistedLeafGatesAndNamesIt(t *testing.T) {
+	logText := suiteOutput(sdnTarget(
+		"    --- FAIL: TestMockBGP/Peer (0.01s)",
+		"    --- FAIL: TestMockBGP/Withdraw (0.01s)",
+		"--- FAIL: TestMockBGP (0.02s)",
+	))
+	v := check(t, sdnTestBaseline, logText)
+	assert.True(t, v.gating())
+	assert.Empty(t, v.Unattributable)
+	assert.Equal(t, []failure{{Package: "test/integration/sdn/mock_bgp", Name: "TestMockBGP/Withdraw"}}, v.Unlisted)
+	require.Len(t, v.Hits, 2)
+}
+
+func TestAMultiPathSectionWithNoClosingLineGates(t *testing.T) {
+	logText := sdnStartLine + "\n" +
+		"    --- FAIL: TestSDNFlows/OVS/Install (0.01s)\n" +
+		"--- FAIL: TestSDNFlows (0.02s)\n" +
+		"FAIL\n" +
+		"FAIL\t" + module + "test/integration/sdn\t3.0s\n" +
+		sdnStressLine + "\n"
+	v := check(t, sdnTestBaseline, logText)
+	assert.True(t, v.gating())
+	log, err := parseSuiteLog("suite.log", defaultModule, strings.NewReader(logText))
+	require.NoError(t, err)
+	require.Contains(t, log.sections, "sdn")
+	assert.Equal(t, "test/integration/sdn/ test/integration/sdn/mock_bgp/...", log.sections["sdn"].Pattern)
+	assert.False(t, log.sections["sdn"].Ended)
+	assert.Contains(t, log.sections["sdn"].Problems, "the section ended without the runner's PASS/FAIL line")
+}
+
+func TestPackagePatterns(t *testing.T) {
+	assert.Equal(t, "test/integration/iam", packagePatterns("./test/integration/iam"))
+	assert.Equal(t, "test/integration/sdn/ test/integration/sdn/mock_bgp/...",
+		packagePatterns("./test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."))
+	assert.Equal(t, packagePatterns(sdnPatterns), packagePatterns("./"+sdnPatterns))
+}
+
+func TestPackagePatternsBlankOrDifferentInput(t *testing.T) {
+	assert.Equal(t, "", packagePatterns(""))
+	assert.Equal(t, "", packagePatterns("   "))
+	// A pattern missing from the end line never closes the section.
+	assert.NotEqual(t, packagePatterns("./test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."),
+		packagePatterns("./test/integration/sdn/"))
+}
+
 func TestFailuresBeforeAPassingPackageGate(t *testing.T) {
 	odd := target{name: "kms", pkg: "test/integration/kms/...", failed: true, body: []string{
 		"        --- FAIL: TestKMS/gRPC/HMAC (0.01s)",

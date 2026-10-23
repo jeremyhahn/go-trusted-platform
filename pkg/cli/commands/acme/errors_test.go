@@ -18,56 +18,70 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestErrDaemonConnectionRequired verifies ErrDaemonConnectionRequired error
-func TestErrDaemonConnectionRequired(t *testing.T) {
+func TestErrACMEDaemonCallMissing(t *testing.T) {
 	testCases := []struct {
 		name     string
-		command  string
+		err      ErrACMEDaemonCallMissing
 		expected string
 	}{
 		{
-			name:     "download command",
-			command:  "download",
-			expected: "daemon connection required for download command",
+			name:     "register",
+			err:      ErrACMEDaemonCallMissing{Command: "register", Section: "§7.3 newAccount"},
+			expected: "acme register: platformd has no ACME call for RFC 8555 §7.3 newAccount (SDK gap)",
 		},
 		{
-			name:     "register command",
-			command:  "register",
-			expected: "daemon connection required for register command",
-		},
-		{
-			name:     "renew command",
-			command:  "renew",
-			expected: "daemon connection required for renew command",
-		},
-		{
-			name:     "rotate-key command",
-			command:  "rotate-key",
-			expected: "daemon connection required for rotate-key command",
+			name:     "rotate-key",
+			err:      ErrACMEDaemonCallMissing{Command: "rotate-key", Section: "§7.3.5 key change"},
+			expected: "acme rotate-key: platformd has no ACME call for RFC 8555 §7.3.5 key change (SDK gap)",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ErrDaemonConnectionRequired{Command: tc.command}
-			assert.Equal(t, tc.expected, err.Error())
-
-			// Verify error interface implementation
-			var e error = err
-			assert.NotNil(t, e)
+			assert.Equal(t, tc.expected, tc.err.Error())
 		})
 	}
 }
 
 // TestErrDaemonConnectionRequired_ErrorsAs verifies errors.As works
-func TestErrDaemonConnectionRequired_ErrorsAs(t *testing.T) {
-	err := ErrDaemonConnectionRequired{Command: "test"}
+func TestErrACMEDaemonCallMissing_ErrorsIs(t *testing.T) {
+	var err error = ErrACMEDaemonCallMissing{Command: "renew", Section: "§7.4 order and finalize"}
 
-	var targetErr ErrDaemonConnectionRequired
-	assert.True(t, errors.As(err, &targetErr))
-	assert.Equal(t, "test", targetErr.Command)
+	assert.True(t, errors.Is(err, ErrACMEDaemonCallMissing{Command: "renew", Section: "§7.4 order and finalize"}))
+	assert.False(t, errors.Is(err, ErrACMEDaemonCallMissing{Command: "download", Section: "§7.4.2 certificate download"}),
+		"a gap for another verb must not match")
+
+	var targetErr ErrACMEDaemonCallMissing
+	require.True(t, errors.As(err, &targetErr))
+	assert.Equal(t, "renew", targetErr.Command)
+}
+
+// TestValidationErrors verifies the input-validation errors name the bad value
+func TestValidationErrors(t *testing.T) {
+	testCases := []struct {
+		name     string
+		err      error
+		contains []string
+	}{
+		{name: "missing email", err: ErrMissingEmail{}, contains: []string{"--email"}},
+		{name: "invalid email", err: ErrInvalidEmail{Email: "bad"}, contains: []string{`"bad"`}},
+		{name: "invalid authz", err: ErrInvalidAuthorizationType{Type: "x"}, contains: []string{`"x"`, "permanent-identifier"}},
+		{name: "invalid challenge", err: ErrInvalidChallengeType{Type: "y"}, contains: []string{`"y"`, "device-attest-01"}},
+		{name: "invalid URL", err: ErrInvalidCertificateURL{URL: "http://z"}, contains: []string{`"http://z"`, "https"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, want := range tc.contains {
+				assert.Contains(t, tc.err.Error(), want)
+			}
+			assert.False(t, errors.Is(tc.err, ErrACMEDaemonCallMissing{}), "a validation error is not the gap")
+		})
+	}
 }
 
 // TestErrRegisterAccountFailed verifies ErrRegisterAccountFailed error
@@ -352,7 +366,12 @@ func TestErrMissingSubjectField_ErrorsAs(t *testing.T) {
 // TestAllErrorTypes_ImplementErrorInterface verifies all error types implement error
 func TestAllErrorTypes_ImplementErrorInterface(t *testing.T) {
 	// This test ensures all custom error types properly implement the error interface
-	var _ error = ErrDaemonConnectionRequired{}
+	var _ error = ErrACMEDaemonCallMissing{}
+	var _ error = ErrMissingEmail{}
+	var _ error = ErrInvalidEmail{}
+	var _ error = ErrInvalidAuthorizationType{}
+	var _ error = ErrInvalidChallengeType{}
+	var _ error = ErrInvalidCertificateURL{}
 	var _ error = ErrRegisterAccountFailed{}
 	var _ error = ErrRenewCertificateFailed{}
 	var _ error = ErrDownloadCertificateFailed{}
@@ -369,9 +388,10 @@ func TestAllErrorTypes_ImplementErrorInterface(t *testing.T) {
 // TestErrorMessages_AreDescriptive verifies error messages are user-friendly
 func TestErrorMessages_AreDescriptive(t *testing.T) {
 	// Verify error messages contain helpful information
-	err1 := ErrDaemonConnectionRequired{Command: "register"}
-	assert.Contains(t, err1.Error(), "daemon")
+	err1 := ErrACMEDaemonCallMissing{Command: "register", Section: "§7.3 newAccount"}
+	assert.Contains(t, err1.Error(), "platformd")
 	assert.Contains(t, err1.Error(), "register")
+	assert.Contains(t, err1.Error(), "RFC 8555 §7.3")
 
 	err2 := ErrMissingAuthorizationValue{}
 	assert.Contains(t, err2.Error(), "--cn")
@@ -385,7 +405,12 @@ func TestErrorMessages_AreDescriptive(t *testing.T) {
 // TestErrorTypes_AreDistinct verifies error types are distinguishable
 func TestErrorTypes_AreDistinct(t *testing.T) {
 	errors := []error{
-		ErrDaemonConnectionRequired{Command: "test"},
+		ErrACMEDaemonCallMissing{Command: "test", Section: "test"},
+		ErrMissingEmail{},
+		ErrInvalidEmail{Email: "test"},
+		ErrInvalidAuthorizationType{Type: "test"},
+		ErrInvalidChallengeType{Type: "test"},
+		ErrInvalidCertificateURL{URL: "test"},
 		ErrRegisterAccountFailed{Reason: "test"},
 		ErrRenewCertificateFailed{Reason: "test"},
 		ErrDownloadCertificateFailed{Reason: "test"},
@@ -406,9 +431,9 @@ func TestErrorTypes_AreDistinct(t *testing.T) {
 }
 
 // TestErrDaemonConnectionRequired_EmptyCommand verifies behavior with empty command
-func TestErrDaemonConnectionRequired_EmptyCommand(t *testing.T) {
-	err := ErrDaemonConnectionRequired{Command: ""}
-	assert.Equal(t, "daemon connection required for  command", err.Error())
+func TestErrACMEDaemonCallMissing_EmptyFields(t *testing.T) {
+	err := ErrACMEDaemonCallMissing{}
+	assert.Equal(t, "acme : platformd has no ACME call for RFC 8555  (SDK gap)", err.Error())
 }
 
 // TestErrMissingSubjectField_EmptyField verifies behavior with empty field

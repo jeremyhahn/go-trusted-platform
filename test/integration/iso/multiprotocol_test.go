@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -211,7 +212,12 @@ func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
 	return filepath.Join(binDir, "platformd"), platformConfig
 }
 
-// ensureBuiltISO returns an ISO rebuilt from the extracted tree, building it first.
+// ensureBuiltISO returns an ISO customized and rebuilt from the extracted tree,
+// building it first. Its callers boot it in a VM: the customization installs the
+// autoinstaller, whose inittab ends with a power-off, so the guest exits whether
+// the install passes or fails. A stock Alpine tree never powers off and runs
+// into the VM timeout (docs/installer/cli.md, "A VM test waits until the guest
+// powers off").
 func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
 	t.Helper()
 	isoPath := builtISOPath(workDir)
@@ -220,7 +226,30 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	}
 
 	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
-	result, err := cmd.Build(ctx, BuildOptions{SourceDir: isoDir, Output: isoPath, VolumeID: "TEST_ISO"})
+	platformdPath, platformConfig := customizeInputs(t)
+	customized, err := cmd.Customize(ctx, CustomizeOptions{
+		ISODir:         isoDir,
+		PlatformdPath:  platformdPath,
+		PlatformConfig: platformConfig,
+		WorkDir:        workDir,
+	})
+	if err != nil {
+		t.Fatalf("missing prerequisite: customizing the ISO fixture: %v", err)
+	}
+	if customized == nil || !customized.Success {
+		t.Fatalf("missing prerequisite: customizing the ISO fixture reported no success: %+v", customized)
+	}
+	if err := requireOfflineRepository(isoDir); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
+	// The customized EFI GRUB finds its root by volume label: without --config,
+	// iso customize bakes the default output label into it, so the build must
+	// write that label or the guest stops at the GRUB menu with no kernel.
+	result, err := cmd.Build(ctx, BuildOptions{
+		SourceDir: isoDir,
+		Output:    isoPath,
+		VolumeID:  pkgiso.DefaultISOBuildConfig().OutputLabel,
+	})
 	if err != nil {
 		t.Fatalf("missing prerequisite: building the ISO fixture: %v", err)
 	}
@@ -231,6 +260,22 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 		t.Fatalf("missing prerequisite: %v", ErrISONotFound{Path: isoPath})
 	}
 	return isoPath
+}
+
+// offlineRepositoryIndex is the index of the APK repository iso customize
+// pre-fetches into an ISO tree for the default architecture.
+func offlineRepositoryIndex(isoDir string) string {
+	return filepath.Join(isoDir, "apks-prefetch", pkgiso.DefaultISOBuildConfig().Architecture, "APKINDEX.tar.gz")
+}
+
+// requireOfflineRepository refuses a customized tree the autoinstall cannot
+// install from, before a VM boots it.
+func requireOfflineRepository(isoDir string) error {
+	index := offlineRepositoryIndex(isoDir)
+	if !FileExists(index) {
+		return ErrOfflineRepositoryMissing{Index: index}
+	}
+	return nil
 }
 
 // installOptions installs isoPath onto the work directory's test disk.
@@ -708,13 +753,42 @@ func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir s
 	t.Logf("TestInstall completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
 }
 
+// vmCleanupMargin is the part of the test's deadline a VM command leaves for
+// killing its process group (serialWaitDelay) and the test's cleanup.
+const vmCleanupMargin = 2 * time.Minute
+
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
 	diskPath := ensureInstalledDisk(t, ctx, cmd, workDir)
 
-	testCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	// Bound the boot by the test's own deadline, less a margin for the
+	// process-group kill and cleanup, so a hung guest fails TestBoot with its
+	// output instead of panicking the package at its go test timeout.
+	bootCtx := ctx
+	if deadline, ok := t.Deadline(); ok {
+		var cancelBoot context.CancelFunc
+		bootCtx, cancelBoot = context.WithDeadline(ctx, deadline.Add(-vmCleanupMargin))
+		defer cancelBoot()
+	}
+	testCtx, cancel := context.WithTimeout(bootCtx, 30*time.Minute)
 	defer cancel()
 
+	// The CLI's own --timeout ends the boot inside testCtx, leaving it the
+	// margin to stop QEMU and report: its error then carries the tail of
+	// the guest console (ErrBootTimeout) instead of the runner killing it.
+	deadline, ok := testCtx.Deadline()
+	require.True(t, ok, "testCtx has a deadline")
+	bootTimeout := time.Until(deadline) - vmCleanupMargin
+	if bootTimeout <= 0 {
+		t.Fatalf("missing prerequisite: %s left before the test deadline, under the %s cleanup margin",
+			time.Until(deadline), vmCleanupMargin)
+	}
+
+	// An installed node never powers off: its getty's login prompt on the
+	// serial console, after OpenRC's default runlevel, ends the boot
+	// (docs/installer/cli.md).
 	opts := TestBootOptions{
+		Timeout:    bootTimeout,
+		Expect:     "login:",
 		Disk:       diskPath,
 		Memory:     4096,
 		CPUs:       2,
@@ -770,4 +844,118 @@ func TestISOErrorHandling(t *testing.T) {
 			t.Logf("Download from invalid mirror failed as expected: %v", err)
 		}
 	})
+}
+
+// recordingISOCommands records the order of the ISO verbs the fixture helpers
+// call. Build writes its output so the helper finds the ISO it asked for. Only
+// the verbs ensureBuiltISO reaches on an extracted tree are implemented; any
+// other call panics on the nil embedded interface.
+type recordingISOCommands struct {
+	ISOCommands
+	calls     []string
+	customize CustomizeOptions
+	build     BuildOptions
+}
+
+func (r *recordingISOCommands) Customize(_ context.Context, opts CustomizeOptions) (*CustomizeResult, error) {
+	r.calls = append(r.calls, "customize")
+	r.customize = opts
+	// A real iso customize pre-fetches the offline repository by default.
+	index := offlineRepositoryIndex(opts.ISODir)
+	if err := os.MkdirAll(filepath.Dir(index), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(index, []byte("index"), 0o644); err != nil {
+		return nil, err
+	}
+	return &CustomizeResult{Success: true, ISODir: opts.ISODir}, nil
+}
+
+func (r *recordingISOCommands) Build(_ context.Context, opts BuildOptions) (*BuildResult, error) {
+	r.calls = append(r.calls, "build")
+	r.build = opts
+	if err := os.WriteFile(opts.Output, []byte("iso"), 0o600); err != nil {
+		return nil, err
+	}
+	return &BuildResult{Success: true, OutputISO: opts.Output}, nil
+}
+
+// fixtureWorkDir returns a work directory holding an extracted ISO tree, with
+// the binaries customizeInputs requires beside a stand-in platformctl, so the
+// fixture helpers call no verb before Customize.
+func fixtureWorkDir(t *testing.T) string {
+	t.Helper()
+	workDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(extractedISODir(workDir), 0o755))
+
+	binDir := t.TempDir()
+	for _, name := range []string{"platformctl", "platformd", "platform-initrd", "gatewayd"} {
+		require.NoError(t, os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755))
+	}
+	t.Setenv(EnvPlatformCTL, filepath.Join(binDir, "platformctl"))
+	return workDir
+}
+
+// TestEnsureBuiltISO_CustomizesBeforeBuilding pins the VM fixture: the ISO the
+// VM tests boot carries the autoinstaller, so its guest powers off.
+func TestEnsureBuiltISO_CustomizesBeforeBuilding(t *testing.T) {
+	workDir := fixtureWorkDir(t)
+	cmd := &recordingISOCommands{}
+
+	isoPath := ensureBuiltISO(t, context.Background(), cmd, workDir)
+
+	assert.Equal(t, builtISOPath(workDir), isoPath)
+	assert.Equal(t, []string{"customize", "build"}, cmd.calls)
+	assert.Equal(t, extractedISODir(workDir), cmd.customize.ISODir)
+	assert.Equal(t, "platformd", filepath.Base(cmd.customize.PlatformdPath))
+	assert.True(t, FileExists(cmd.customize.PlatformConfig))
+}
+
+// TestEnsureBuiltISO_BuildsWithTheLabelGRUBSearches pins the fixture's volume
+// label to the one iso customize bakes into the EFI GRUB (no --config, so the
+// default output label). A different label leaves the guest's GRUB with
+// "no such device" and no kernel to boot.
+func TestEnsureBuiltISO_BuildsWithTheLabelGRUBSearches(t *testing.T) {
+	workDir := fixtureWorkDir(t)
+	cmd := &recordingISOCommands{}
+
+	ensureBuiltISO(t, context.Background(), cmd, workDir)
+
+	assert.Empty(t, cmd.customize.ConfigFile)
+	assert.Equal(t, "TRUSTED_PLATFORM", cmd.build.VolumeID)
+	assert.Equal(t, pkgiso.DefaultISOBuildConfig().OutputLabel, cmd.build.VolumeID)
+}
+
+func TestRequireOfflineRepository_AcceptsAPrefetchedTree(t *testing.T) {
+	isoDir := t.TempDir()
+	index := offlineRepositoryIndex(isoDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(index), 0o755))
+	require.NoError(t, os.WriteFile(index, []byte("index"), 0o644))
+
+	assert.Equal(t, filepath.Join(isoDir, "apks-prefetch", "x86_64", "APKINDEX.tar.gz"), index)
+	assert.NoError(t, requireOfflineRepository(isoDir))
+}
+
+// The stock Alpine tree carries apks/ but not the packages the install adds:
+// such a tree is refused before a VM spends minutes failing in the guest.
+func TestRequireOfflineRepository_RefusesAStockTree(t *testing.T) {
+	isoDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(isoDir, "apks", "x86_64"), 0o755))
+
+	err := requireOfflineRepository(isoDir)
+
+	var missing ErrOfflineRepositoryMissing
+	require.ErrorAs(t, err, &missing)
+	assert.Equal(t, offlineRepositoryIndex(isoDir), missing.Index)
+}
+
+func TestEnsureBuiltISO_ReusesAnExistingISO(t *testing.T) {
+	workDir := fixtureWorkDir(t)
+	require.NoError(t, os.WriteFile(builtISOPath(workDir), []byte("iso"), 0o600))
+	cmd := &recordingISOCommands{}
+
+	isoPath := ensureBuiltISO(t, context.Background(), cmd, workDir)
+
+	assert.Equal(t, builtISOPath(workDir), isoPath)
+	assert.Empty(t, cmd.calls)
 }

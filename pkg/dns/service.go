@@ -1214,6 +1214,9 @@ func (s *Service) DeleteRecord(ctx context.Context, name string, recordType stri
 		return &RecordError{Op: "find the zone of", Type: recordType, Name: name, Err: err}
 	}
 
+	if _, err := FindRecord(&zone.RecordSet, recordType, name); err != nil {
+		return err
+	}
 	kind.remove(zone, name)
 
 	return s.Save(ctx, zone)
@@ -1221,8 +1224,7 @@ func (s *Service) DeleteRecord(ctx context.Context, name string, recordType stri
 
 // GetRecord retrieves a DNS record by name and type.
 func (s *Service) GetRecord(ctx context.Context, name string, recordType string) (interface{}, error) {
-	kind, err := lookupRecordKind(recordType)
-	if err != nil {
+	if _, err := lookupRecordKind(recordType); err != nil {
 		return nil, err
 	}
 
@@ -1231,13 +1233,7 @@ func (s *Service) GetRecord(ctx context.Context, name string, recordType string)
 		return nil, &RecordError{Op: "find the zone of", Type: recordType, Name: name, Err: err}
 	}
 
-	for _, rec := range kind.records(&zone.RecordSet) {
-		if rec.name == name {
-			return rec.record, nil
-		}
-	}
-
-	return nil, &RecordError{Op: "find", Type: recordType, Name: name, Err: ErrRecordNotFound}
+	return FindRecord(&zone.RecordSet, recordType, name)
 }
 
 // ListRecords lists all records in a zone.

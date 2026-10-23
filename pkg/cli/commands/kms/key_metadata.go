@@ -23,6 +23,8 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -240,4 +242,24 @@ func executeKeyMetadataUpdate(ctx context.Context, client quicbaassdk.KMSClient,
 
 	printer.PrintSuccess(fmt.Sprintf("Key %s metadata updated", keyID))
 	return printer.Print(newKeyMetadataOutput(meta))
+}
+
+// applyGeneratedKeyName sets name as the display name of the key that
+// generated describes and records it there. The generate request's one name
+// field is the key ID (docs/kms/api.md §2), so `key generate --name` is key
+// metadata set once the key exists.
+func applyGeneratedKeyName(ctx context.Context, client quicbaassdk.KMSClient, generated *kmssvc.GenerateKeyResult, name string) error {
+	keyID := generated.Key.KeyID
+	meta, err := client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
+		KeyID: keyID,
+		Name:  name,
+	})
+	if err != nil {
+		return ErrUpdateKeyMetadataFailed{KeyID: keyID, Err: err}
+	}
+	if generated.Metadata == nil {
+		generated.Metadata = &kmssvc.KeyMetadata{}
+	}
+	generated.Metadata.Name = meta.Name
+	return nil
 }

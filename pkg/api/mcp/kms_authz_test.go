@@ -311,6 +311,13 @@ func kmsSecretToolCases() []kmsSecretToolCase {
 					return map[string]interface{}{}, nil
 				}
 			}},
+		{"secret_get_by_prefix", "secrets:read", map[string]interface{}{"prefix": "app/"},
+			func(s *mockServiceProvider, ran *bool) {
+				s.secretGetByPrefixFunc = func(context.Context, string, bool, int, string) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
 		{"dek_create", "kms:write", dekPath,
 			func(s *mockServiceProvider, ran *bool) {
 				s.dekCreateFunc = func(context.Context, *DEKCreateRequest) (interface{}, error) {

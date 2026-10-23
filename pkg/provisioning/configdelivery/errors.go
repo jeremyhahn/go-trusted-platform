@@ -262,6 +262,14 @@ func (e ErrRemoteSignNotConfigured) Error() string {
 	return "configdelivery: remote signing not configured for this device: " + e.Reason
 }
 
+// Is reports whether the target is an ErrRemoteSignNotConfigured, so
+// errors.Is finds the condition through any wrapping error (e.g. the
+// ErrSignFailed a KMS not-found passes through at the signer boundary).
+func (e ErrRemoteSignNotConfigured) Is(target error) bool {
+	_, ok := target.(ErrRemoteSignNotConfigured)
+	return ok
+}
+
 // ErrSignerUnavailable indicates no DB key signer is wired into the control
 // plane, so the remote digest-signing endpoint cannot fulfil any request.
 type ErrSignerUnavailable struct{}
@@ -284,6 +292,13 @@ func (e ErrSignFailed) Error() string {
 // Unwrap returns the underlying error.
 func (e ErrSignFailed) Unwrap() error {
 	return e.Cause
+}
+
+// Is reports whether the target is an ErrSignFailed, so errors.Is finds the
+// condition from the returned error itself, with or without a wrapper.
+func (e ErrSignFailed) Is(target error) bool {
+	_, ok := target.(ErrSignFailed)
+	return ok
 }
 
 // ErrCertUnavailable indicates the companion DB certificate could not be

@@ -50,7 +50,5 @@ Examples:
 
 // runRotateKey executes the rotate-key command
 func runRotateKey(flags *cli.CommonFlags) error {
-	// Daemon connection required for ACME operations
-	// Dual-mode support will be added later
-	return ErrDaemonConnectionRequired{Command: "rotate-key"}
+	return ErrACMEDaemonCallMissing{Command: "rotate-key", Section: "§7.3.5 key change"}
 }

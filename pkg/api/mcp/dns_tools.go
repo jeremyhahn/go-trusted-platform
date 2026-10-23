@@ -239,11 +239,13 @@ func dnsToolMethod[Req any, PReq interface {
 	}
 }
 
-// dnsRecordGetSchema is the ListRecords request plus the record name.
+// dnsRecordGetSchema is the ListRecords request plus the record name, without
+// the page: a get searches every record of the type.
 func dnsRecordGetSchema() map[string]interface{} {
 	schema := appToolSchema((&platformv1.ListRecordsRequest{}).ProtoReflect().Descriptor(), "zone_name", "type", "name")
 	if properties, ok := schema["properties"].(map[string]interface{}); ok {
 		properties["name"] = map[string]interface{}{"type": "string"}
+		delete(properties, "pagination")
 	}
 	return schema
 }
@@ -266,6 +268,7 @@ func dnsRecordGet(server platformv1.DNSServiceServer, ctx context.Context, args 
 		return nil, ErrDNSRecordNameRequired
 	}
 
+	request.Pagination = nil
 	response, err := server.ListRecords(ctx, request)
 	if err != nil {
 		return nil, err

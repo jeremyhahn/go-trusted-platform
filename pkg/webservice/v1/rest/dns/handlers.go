@@ -286,14 +286,17 @@ func (h *DNSHandlers) ListZones(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
+	total := int64(len(responseZones))
+	start := min(int64(offset), total)
+	end := min(start+int64(limit), total)
 
 	h.respWriter.Success200(w, r, ListZonesResponse{
 		PaginatedResponse: PaginatedResponse{
-			Total:  int64(len(responseZones)),
+			Total:  total,
 			Limit:  limit,
 			Offset: offset,
 		},
-		Zones: responseZones,
+		Zones: responseZones[start:end],
 	})
 }
 

@@ -1,6 +1,6 @@
 # Compute Orchestrator Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/compute/`, `pkg/qemu/`, `pkg/swtpm/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/compute/`, `pkg/qemu/`, `pkg/swtpm/` · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
@@ -381,6 +381,14 @@ TPM state files in `{workDir}/tpm/`:
 - `.lock` - Lock file
 - `swtpm.sock` - Unix socket (ephemeral)
 - `swtpm.log` - Daemon logs
+
+A socket path at or past the Unix limit (`unixSocketPathMax`), or a state
+directory outside `/tmp` and `/var/run`, makes swtpm run from a short temp
+directory (`/tmp/swtpm-<n>/`) with a copy of the state. Start then points
+QEMU's `-chardev` and the instance's `tpm_socket` metadata at the socket swtpm
+actually listens on. Stop copies the state back, removes the temp directory
+and restores the configured socket path, so a restart or reboot relocates
+afresh instead of binding in the removed directory.
 
 ## TAP/Network Integration
 

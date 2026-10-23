@@ -25,6 +25,28 @@ const (
 
 // AddPort adds a port to a bridge
 func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Port, error) {
+	return c.AddPortWithType(ctx, bridgeName, portName, "")
+}
+
+// interfaceTypes are the Interface table type values Open vSwitch implements
+// (ovs-vswitchd.conf.db(5), Interface "type"). The empty type is "system": an
+// existing kernel network device of the port's name.
+var interfaceTypes = map[string]bool{
+	"": true, "system": true, "internal": true, "tap": true, "patch": true,
+	"geneve": true, "gre": true, "vxlan": true, "lisp": true, "stt": true,
+	"erspan": true, "ip6erspan": true, "ip6gre": true, "gtpu": true,
+	"bareudp": true, "srv6": true, "dpdk": true, "dpdkvhostuserclient": true,
+	"afxdp": true, "afxdp-nonpmd": true,
+}
+
+// AddPortWithType adds a port to a bridge whose single interface has the
+// given Open vSwitch type, written in the same transaction that creates it:
+// an "internal" port never exists, even briefly, as a system interface that
+// would attach a kernel device of the same name.
+func (c *Client) AddPortWithType(ctx context.Context, bridgeName, portName, ifType string) (*Port, error) {
+	if !interfaceTypes[ifType] {
+		return nil, &ErrInvalidPortType{Type: ifType}
+	}
 	if bridgeName == "" {
 		return nil, ErrInvalidBridgeName
 	}
@@ -47,7 +69,7 @@ func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Por
 	// Create interface row
 	interfaceRow := map[string]interface{}{
 		"name": portName,
-		"type": "",
+		"type": ifType,
 	}
 	interfaceInsert := NewInsertOperation(interfaceTable, interfaceRow, "new_interface")
 

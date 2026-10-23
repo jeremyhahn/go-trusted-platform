@@ -155,6 +155,14 @@ type BundleActionResponse struct {
 	Message  string `json:"message,omitempty"`
 }
 
+// StartBundleResponse is the start reply: the action result plus the running
+// state and the swtpm socket a guest VM attaches to.
+type StartBundleResponse struct {
+	BundleActionResponse
+	Running    bool   `json:"running"`
+	SocketPath string `json:"socket_path"`
+}
+
 // QuoteRequest represents a TPM quote request.
 type QuoteRequest struct {
 	Nonce string `json:"nonce"`
@@ -533,11 +541,15 @@ func (h *VTPMHandlers) handleStartBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := BundleActionResponse{
-		BundleID: bundleID,
-		Action:   "start",
-		Success:  true,
-		Message:  "vTPM started successfully",
+	resp := StartBundleResponse{
+		BundleActionResponse: BundleActionResponse{
+			BundleID: bundleID,
+			Action:   "start",
+			Success:  true,
+			Message:  "vTPM started successfully",
+		},
+		Running:    h.service.IsRunning(bundleID),
+		SocketPath: h.service.GetTPMSocketPath(bundleID),
 	}
 
 	h.logger.Info("vTPM started", "id", bundleID)

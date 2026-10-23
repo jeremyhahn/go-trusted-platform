@@ -1166,6 +1166,86 @@ func TestGetTenantByName_FromIAMAfterCacheInvalidation(t *testing.T) {
 	}
 }
 
+// renameInIAM gives the IAM record a new name, as the SDK's embedded
+// transport does when it stores an update's DisplayName as the name.
+func renameInIAM(iamClient *mockIAMClient, id, name string) {
+	iamClient.mu.Lock()
+	defer iamClient.mu.Unlock()
+	iamClient.tenants[id].Name = name
+}
+
+// lookUpByIAMName asserts that a by-name lookup reaching the IAM fallback
+// for a cached tenant is refused and leaves the cached record in place.
+func lookUpByIAMName(t *testing.T, manager *Manager, iamClient *mockIAMClient, created *TenantEntity, want State) {
+	t.Helper()
+	ctx := context.Background()
+
+	renameInIAM(iamClient, created.ID, "Renamed Display Name")
+
+	_, err := manager.GetTenantByName(ctx, "Renamed Display Name")
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrTenantNotFound for a display name, got %v", err)
+	}
+
+	entity, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetTenant: %v", err)
+	}
+	if entity.State != want {
+		t.Errorf("expected state %q after the IAM fallback, got %q", want, entity.State)
+	}
+
+	byName, err := manager.GetTenantByName(ctx, created.Name)
+	if err != nil {
+		t.Fatalf("the tenant's own name must still resolve: %v", err)
+	}
+	if byName.ID != created.ID {
+		t.Errorf("expected ID %q, got %q", created.ID, byName.ID)
+	}
+}
+
+func TestGetTenantByName_IAMFallbackKeepsSuspendedState(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "suspended-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to suspend tenant: %v", err)
+	}
+
+	lookUpByIAMName(t, manager, iamClient, created, StateSuspended)
+
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Errorf("resume after the IAM fallback: %v", err)
+	}
+}
+
+func TestGetTenantByName_IAMFallbackKeepsResumedState(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "resumed-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to suspend tenant: %v", err)
+	}
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to resume tenant: %v", err)
+	}
+
+	lookUpByIAMName(t, manager, iamClient, created, StateActive)
+
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Errorf("suspend after the IAM fallback: %v", err)
+	}
+}
+
 func TestGetTenantByName_IAMListError(t *testing.T) {
 	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
@@ -1225,6 +1305,50 @@ func TestListTenants_WithTenants(t *testing.T) {
 
 	if total != 3 {
 		t.Errorf("expected total 3, got %d", total)
+	}
+}
+
+// A list must not replace the platform's cached tenant with IAM's bare
+// projection: IAM carries no lifecycle state, quotas or labels, so a
+// clobbered tenant reads back "created" and can no longer be suspended.
+func TestListTenants_KeepsCachedTenantState(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	quota := ComputeQuota{MaxVMs: 100}
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:         "listed-tenant",
+		Labels:       map[string]string{"team": "a"},
+		ComputeQuota: &quota,
+	})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
+	tenants, _, err := manager.ListTenants(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(tenants) != 1 || tenants[0].State != StateActive {
+		t.Fatalf("expected one active tenant in the list, got %+v", tenants)
+	}
+
+	got, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get tenant: %v", err)
+	}
+	if got.State != StateActive {
+		t.Errorf("expected state %q after list, got %q", StateActive, got.State)
+	}
+	if got.ComputeQuota.MaxVMs != 100 {
+		t.Errorf("expected MaxVMs 100 after list, got %d", got.ComputeQuota.MaxVMs)
+	}
+	if got.Labels["team"] != "a" {
+		t.Errorf("expected label team=a after list, got %v", got.Labels)
+	}
+
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Errorf("expected suspend after list to succeed, got %v", err)
 	}
 }
 
@@ -1619,28 +1743,53 @@ func TestResumeTenant_Success(t *testing.T) {
 	}
 }
 
-func TestResumeTenant_NotSuspended(t *testing.T) {
+func TestResumeTenant_ActiveIsIdempotent(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "test-tenant"})
 	if err != nil {
 		t.Fatalf("failed to create tenant: %v", err)
 	}
 
-	// Try to resume without suspending
-	err = manager.ResumeTenant(ctx, created.ID)
-	if err == nil {
-		t.Fatal("expected error resuming non-suspended tenant")
+	// Resuming an active tenant is a same-state transition and succeeds
+	// (docs/tenant/engineering.md §2 rule 3).
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Fatalf("expected idempotent resume of an active tenant, got %v", err)
 	}
 
+	entity, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get tenant: %v", err)
+	}
+	if entity.State != StateActive {
+		t.Errorf("expected state %q, got %q", StateActive, entity.State)
+	}
+	if !entity.UpdatedAt.Equal(created.UpdatedAt) {
+		t.Errorf("a no-op resume must not touch UpdatedAt: was %v, now %v", created.UpdatedAt, entity.UpdatedAt)
+	}
+}
+
+func TestResumeTenant_NotSuspendedOrActive(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "test-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
+	// A record rebuilt from IAM after the cache lost it is "created"
+	// (§6): resume is defined for a suspended tenant only.
+	manager.InvalidateCache(created.ID)
+
+	err = manager.ResumeTenant(ctx, created.ID)
 	var invalidTransition ErrInvalidTransition
 	if !errors.As(err, &invalidTransition) {
-		t.Errorf("expected ErrInvalidTransition, got %T", err)
+		t.Fatalf("expected ErrInvalidTransition, got %T: %v", err, err)
+	}
+	if invalidTransition.From != StateCreated || invalidTransition.To != StateActive {
+		t.Errorf("expected created -> active, got %s -> %s", invalidTransition.From, invalidTransition.To)
 	}
 }
 
@@ -1861,18 +2010,34 @@ func TestGetUsage_NoUsageTracker(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "test-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+
 	// GetUsage degrades gracefully when the optional quota subsystem is
 	// not wired: it returns an empty usage snapshot (no error) so that
 	// dashboards and admin tools can still render the page.
-	usage, err := manager.GetUsage(ctx, "test-tenant")
+	usage, err := manager.GetUsage(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("expected no error when usage tracker not configured, got %v", err)
 	}
 	if usage == nil {
 		t.Fatal("expected non-nil usage snapshot")
 	}
-	if usage.TenantID != "test-tenant" {
-		t.Errorf("expected TenantID test-tenant, got %q", usage.TenantID)
+	if usage.TenantID != created.ID {
+		t.Errorf("expected TenantID %s, got %q", created.ID, usage.TenantID)
+	}
+}
+
+func TestGetUsage_NoUsageTracker_TenantNotFound(t *testing.T) {
+	manager, _ := newTestManager(t)
+
+	_, err := manager.GetUsage(context.Background(), "missing-tenant")
+
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrTenantNotFound, got %v", err)
 	}
 }
 
@@ -1930,18 +2095,90 @@ func TestCheckQuota_Exceeded(t *testing.T) {
 	}
 }
 
-func TestCheckQuota_NoQuotaEnforcer(t *testing.T) {
+// newTenantWithQuotas creates a tenant on an enforcer-less manager, the
+// IAM-only wiring platformd uses, so CheckQuota reads the entity quotas.
+func newTenantWithQuotas(t *testing.T) (*Manager, *TenantEntity) {
+	t.Helper()
 	manager, _ := newTestManager(t)
+
+	created, err := manager.CreateTenant(context.Background(), &CreateTenantRequest{
+		Name: "test-tenant",
+		ComputeQuota: &ComputeQuota{
+			MaxVMs:  10,
+			UsedVMs: 8,
+		},
+		NetworkQuota: &NetworkQuota{MaxBandwidthMbps: 100},
+		StorageQuota: &StorageQuota{MaxSnapshots: 4},
+	})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	return manager, created
+}
+
+func TestCheckQuota_NoQuotaEnforcer_WithinLimits(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
 	ctx := context.Background()
 
-	err := manager.CheckQuota(ctx, "test-tenant", quota.ResourceVMs, 1)
-	if err == nil {
-		t.Fatal("expected error when quota enforcer not configured")
+	checks := map[quota.ResourceType]int64{
+		quota.ResourceVMs:       2,
+		quota.ResourceBandwidth: 100,
+		quota.ResourceSnapshots: 4,
 	}
+	for resource, amount := range checks {
+		if err := manager.CheckQuota(ctx, created.ID, resource, amount); err != nil {
+			t.Errorf("CheckQuota(%s, %d): expected no error, got %v", resource, amount, err)
+		}
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_Exceeded(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
+
+	err := manager.CheckQuota(context.Background(), created.ID, quota.ResourceVMs, 3)
+
+	var exceeded ErrQuotaExceeded
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected ErrQuotaExceeded, got %v", err)
+	}
+	if exceeded.Requested != 3 || exceeded.Available != 2 {
+		t.Errorf("expected requested 3 available 2, got requested %d available %d",
+			exceeded.Requested, exceeded.Available)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_UnsetLimitExceeded(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
+
+	// No container limit was set, so none are available.
+	err := manager.CheckQuota(context.Background(), created.ID, quota.ResourceContainers, 1)
+
+	var exceeded ErrQuotaExceeded
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected ErrQuotaExceeded, got %v", err)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_TenantNotFound(t *testing.T) {
+	manager, _ := newTestManager(t)
+
+	err := manager.CheckQuota(context.Background(), "missing-tenant", quota.ResourceVMs, 1)
+
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrTenantNotFound, got %v", err)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_UntrackedResource(t *testing.T) {
+	manager, created := newTenantWithQuotas(t)
+
+	// The entity tracks volume capacity in GB, not a volume count.
+	err := manager.CheckQuota(context.Background(), created.ID, quota.ResourceVolumes, 1)
 
 	var invalidReq ErrInvalidRequest
 	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
 	}
 }
 

@@ -153,6 +153,10 @@ tpm:
   ek:
     debug: true
     handle: 0x81010001
+    # Where provision_swtpm_state writes the harness EK certificate, the
+    # TCG EK Credential Profile 2.1 §2.2.1.4 RSA 2048 index. Without it
+    # go-xkms reads the EK certificate only from the certificate store.
+    cert-handle: 0x01C00002
     hash: SHA-256
     rsa:
       size: 2048

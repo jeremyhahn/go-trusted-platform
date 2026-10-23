@@ -92,7 +92,7 @@ func runQuote(flags *cli.CommonFlags, bundleID, nonce, pcrs string) error {
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 

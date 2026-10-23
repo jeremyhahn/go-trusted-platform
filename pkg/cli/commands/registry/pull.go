@@ -51,7 +51,8 @@ The image reference should be in the format:
   [registry/]repository[:tag|@digest]
 
 Output:
-  Use --output to specify a file to write to. If not specified, writes to stdout.
+  Use --output-file to specify a file to write to. If not specified, the
+  image document is written to stdout and nothing else is.
 
 Decryption:
   If the image is encrypted, use --decrypt to automatically decrypt
@@ -69,7 +70,9 @@ Verification:
 	cmd.Flags().BoolVarP(&decrypt, "decrypt", "d", false, "decrypt encrypted image layers")
 	cmd.Flags().BoolVar(&verify, "verify", false, "verify image signature")
 	cmd.Flags().StringVarP(&platform, "platform", "p", "", "target platform (e.g., linux/amd64)")
-	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "output file path (writes to stdout if not provided)")
+	// Not --output: that is the global output-format flag, and a local flag of
+	// the same name would shadow it, so --output json would name a file.
+	cmd.Flags().StringVar(&outputFile, "output-file", "", "output file path (writes to stdout if not provided)")
 
 	return cmd
 }

@@ -29,8 +29,10 @@ import (
 )
 
 const (
-	// serialTailLines is how many serial lines ErrGRUBMenuNoBoot quotes.
-	serialTailLines = 20
+	// serialTailLines is how many output lines ErrGRUBMenuNoBoot and a
+	// failed command's ErrVerbFailed quote: the CLI error plus the guest's
+	// last console lines before it powered off.
+	serialTailLines = 40
 	// serialCheckInterval is how often runWatched asks the detector whether
 	// a waiting menu has run out its grace.
 	serialCheckInterval = time.Second
@@ -146,11 +148,7 @@ func (c *CLIAdapter) runWatched(ctx context.Context, timeout time.Duration, dete
 	cmd := exec.CommandContext(runCtx, c.binaryPath, args...)
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	cmd.WaitDelay = serialWaitDelay
+	killGroupOnCancel(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -210,5 +208,22 @@ func (c *CLIAdapter) runWatched(ctx context.Context, timeout time.Duration, dete
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		return output.Bytes(), ErrCommandTimeout{Command: strings.Join(args, " "), Timeout: timeout.String()}
 	}
-	return output.Bytes(), err
+	if err != nil {
+		// The command prints its error last: quoting the tail names the
+		// cause instead of only the exit status, bounded to serialTailLines.
+		return output.Bytes(), ErrVerbFailed{Stderr: strings.Join(detector.tail, "\n"), Err: err}
+	}
+	return output.Bytes(), nil
+}
+
+// killGroupOnCancel makes cancelling cmd's context kill its whole process
+// group, not only platformctl: a QEMU grandchild would otherwise keep the
+// output pipe open and block Wait past the test's deadline. WaitDelay bounds
+// the wait for the pipe once the group is killed.
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = serialWaitDelay
 }

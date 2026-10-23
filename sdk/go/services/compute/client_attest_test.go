@@ -39,6 +39,12 @@ type fakeComputeClient struct {
 	logsReq     *platformv1.GetContainerLogsRequest
 	logsEntries []*platformv1.LogEntry
 	logsErr     error
+
+	createResp *platformv1.CreateContainerResponse
+}
+
+func (f *fakeComputeClient) CreateContainer(ctx context.Context, in *platformv1.CreateContainerRequest, opts ...grpc.CallOption) (*platformv1.CreateContainerResponse, error) {
+	return f.createResp, nil
 }
 
 func (f *fakeComputeClient) AttestContainer(ctx context.Context, in *platformv1.AttestContainerRequest, opts ...grpc.CallOption) (*platformv1.AttestContainerResponse, error) {
@@ -226,5 +232,41 @@ func TestAttestContainerDomain_RPCError(t *testing.T) {
 	var attestErr *ErrAttestContainerFailed
 	if !errors.As(err, &attestErr) {
 		t.Fatalf("expected ErrAttestContainerFailed, got: %T", err)
+	}
+}
+
+func TestCreateContainerDomain_SuccessStatusReturnsTheContainer(t *testing.T) {
+	fake := &fakeComputeClient{createResp: &platformv1.CreateContainerResponse{
+		Container: &platformv1.Container{Id: "c-1"},
+		Status:    &platformv1.Status{Success: true, Message: "Container created successfully"},
+	}}
+	client := NewClientFromGRPC(fake)
+
+	container, err := client.CreateContainerDomain(context.Background(), &CreateContainerParams{Name: "web", Image: "alpine"})
+	if err != nil {
+		t.Fatalf("CreateContainerDomain: %v", err)
+	}
+	if container == nil || container.ID != "c-1" {
+		t.Fatalf("container = %+v, want ID c-1", container)
+	}
+}
+
+func TestCreateContainerDomain_FailedStatusIsAnErrorNamingTheContainer(t *testing.T) {
+	fake := &fakeComputeClient{createResp: &platformv1.CreateContainerResponse{
+		Container: &platformv1.Container{Id: "c-2"},
+		Status:    &platformv1.Status{Success: false, Message: "Container created but attestation failed: no TPM"},
+	}}
+	client := NewClientFromGRPC(fake)
+
+	container, err := client.CreateContainerDomain(context.Background(), &CreateContainerParams{Name: "web", Image: "alpine", AttestOnCreate: true})
+	var incomplete *ErrContainerCreateIncomplete
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("error = %v, want ErrContainerCreateIncomplete", err)
+	}
+	if incomplete.ID != "c-2" || incomplete.Message != "Container created but attestation failed: no TPM" {
+		t.Errorf("error = %+v, want ID c-2 and the daemon's message", incomplete)
+	}
+	if container == nil || container.ID != "c-2" {
+		t.Errorf("container = %+v, want the created container c-2 returned with the error", container)
 	}
 }

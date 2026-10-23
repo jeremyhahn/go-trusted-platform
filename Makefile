@@ -2084,6 +2084,12 @@ integration-test-webservice: docker-builder-load
 integration-test-sdn: build-devcontainer
 	$(call run-integration-suite,sdn)
 
+.PHONY: integration-test-sdn-stress
+## integration-test-sdn-stress: Run the SDN stress generators (test/integration/sdn/stress) in development container
+## Kept out of integration-test-sdn: they keep every CPU busy for minutes and starved the sdn package's OVS calls.
+integration-test-sdn-stress: build-devcontainer
+	$(call run-integration-suite,sdn-stress)
+
 .PHONY: integration-test-sdn-shell
 ## integration-test-sdn-shell: Start interactive shell for SDN testing
 integration-test-sdn-shell: build-devcontainer
@@ -2173,7 +2179,13 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 
 # The docker build arguments every devcontainer stage shares. $(comma) because a
 # literal comma inside $(if ...) would end its condition.
+# The key of the image's apt layer: the UTC day, so Debian's fixes reach the
+# image within a day although BuildKit caches the layer. Pass APT_REFRESH=<key>
+# to rebuild against a fixed key.
+APT_REFRESH ?= $(shell date -u +%Y-%m-%d)
+
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
+	--build-arg APT_REFRESH=$(APT_REFRESH) \
 	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)

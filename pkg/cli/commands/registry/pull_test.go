@@ -16,6 +16,8 @@ package registry
 import (
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -98,7 +100,7 @@ func TestNewPullCommand_HasFlags(t *testing.T) {
 		{name: "decrypt", shorthand: "d"},
 		{name: "verify", shorthand: ""},
 		{name: "platform", shorthand: "p"},
-		{name: "output", shorthand: "o"},
+		{name: "output-file", shorthand: ""},
 	}
 
 	for _, tt := range tests {
@@ -113,6 +115,56 @@ func TestNewPullCommand_HasFlags(t *testing.T) {
 					tt.shorthand, tt.name, flag.Shorthand)
 			}
 		})
+	}
+}
+
+// pullUnderRoot mounts the pull command under a root that carries the global
+// --output/-o format flag, as platformctl does, and parses args against it.
+func pullUnderRoot(t *testing.T, args ...string) (format, outputFile string) {
+	t.Helper()
+	root := &cobra.Command{Use: "platformctl"}
+	root.PersistentFlags().StringVarP(&format, "output", "o", "table", "output format")
+	root.AddCommand(NewPullCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} }))
+
+	pull, rest, err := root.Find(append([]string{"pull"}, args...))
+	if err != nil {
+		t.Fatalf("find pull: %v", err)
+	}
+	if err := pull.ParseFlags(rest); err != nil {
+		t.Fatalf("parse %v: %v", args, err)
+	}
+	outputFile, err = pull.Flags().GetString("output-file")
+	if err != nil {
+		t.Fatalf("output-file flag: %v", err)
+	}
+	return format, outputFile
+}
+
+// The global --output selects the format on pull; a pull-local flag of the
+// same name once shadowed it, so --output json named a file and the table
+// renderer wrote "// Image pulled successfully" to stdout.
+func TestNewPullCommand_GlobalOutputSelectsFormat(t *testing.T) {
+	for _, args := range [][]string{
+		{"--output", "json", "registry.example.com/app:v1"},
+		{"-o", "json", "registry.example.com/app:v1"},
+	} {
+		format, outputFile := pullUnderRoot(t, args...)
+		if format != "json" {
+			t.Errorf("%v: format = %q, want json", args, format)
+		}
+		if outputFile != "" {
+			t.Errorf("%v: output file = %q, want none", args, outputFile)
+		}
+	}
+}
+
+func TestNewPullCommand_OutputFileNamesTheFile(t *testing.T) {
+	format, outputFile := pullUnderRoot(t, "--output-file", "image.json", "registry.example.com/app:v1")
+	if outputFile != "image.json" {
+		t.Errorf("output file = %q, want image.json", outputFile)
+	}
+	if format != "table" {
+		t.Errorf("format = %q, want the table default", format)
 	}
 }
 
@@ -215,7 +267,7 @@ func TestNewPullCommand_DefaultFlagValues(t *testing.T) {
 		t.Errorf("expected platform default to be empty, got %q", platformFlag.DefValue)
 	}
 
-	outputFlag := cmd.Flags().Lookup("output")
+	outputFlag := cmd.Flags().Lookup("output-file")
 	if outputFlag == nil {
 		t.Fatal("output flag not found")
 	}
@@ -246,7 +298,7 @@ func TestNewPullCommand_FlagUsage(t *testing.T) {
 		t.Error("platform flag should have usage text")
 	}
 
-	outputFlag := cmd.Flags().Lookup("output")
+	outputFlag := cmd.Flags().Lookup("output-file")
 	if outputFlag.Usage == "" {
 		t.Error("output flag should have usage text")
 	}
@@ -345,7 +397,7 @@ func TestNewPullCommand_FlagTypes(t *testing.T) {
 	}
 
 	// Verify output is a string flag
-	outputFlag := cmd.Flags().Lookup("output")
+	outputFlag := cmd.Flags().Lookup("output-file")
 	if outputFlag == nil {
 		t.Fatal("output flag not found")
 	}

@@ -39,7 +39,7 @@
 //
 //	platformctl iam user create --tenant <id> --email <email> [--name <name>] [--roles <roles>]
 //	platformctl iam user get <tenant> <user-id>
-//	platformctl iam user list --tenant <id> [--limit <n>] [--offset <n>]
+//	platformctl iam user list --tenant <id> [--page <n>] [--page-size <n>]
 //	platformctl iam user update <tenant> <user-id> [--name <name>] [--email <email>]
 //	platformctl iam user delete <tenant> <user-id>
 //	platformctl iam user assign-role <tenant> <user-id> <role-id>

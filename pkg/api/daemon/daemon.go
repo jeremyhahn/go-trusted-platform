@@ -1372,8 +1372,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// gRPC (TCP and UDS), QUIC and the embedded transport through
 	// iamGRPCService, MCP through createMCPServer. Servers start in Start(),
 	// so wiring it here is race-free.
-	iamTokenService := newIAMTokenService(
-		selectIAMTokenVerifier(platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
+	iamTokenService := newIAMTokenService(iamTokenVerifierFor(
+		config, logger, platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
 	if iamGRPCService != nil {
 		iamGRPCService.SetTokenService(iamTokenService)
 	}
@@ -2044,8 +2044,16 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	if d.kmsService != nil {
 		if initErr := d.kmsService.initializeServers(); initErr != nil {
 			d.logger.Warn("KMS service MCP initialization failed", "error", initErr)
-		} else if d.kmsService.DEKServer() != nil {
-			serviceProvider.SetDEKService(d.kmsService.DEKServer())
+		} else {
+			if d.kmsService.DEKServer() != nil {
+				serviceProvider.SetDEKService(d.kmsService.DEKServer())
+			}
+			// secret_get_by_prefix and secret_rollback call the gRPC
+			// SecretsManagement adapter.
+			if d.kmsService.SecretsServer() != nil {
+				serviceProvider.SetSecretsPrefixService(d.kmsService.SecretsServer())
+				serviceProvider.SetSecretsServer(d.kmsService.SecretsServer())
+			}
 		}
 	}
 

@@ -62,6 +62,12 @@ const (
 	KMSSubRotateDEK byte = 0x0C
 	// KMSSubDeleteDEK removes a data encryption key.
 	KMSSubDeleteDEK byte = 0x0D
+	// KMSSubSetDefaultDEK marks a DEK as the default for its path level.
+	KMSSubSetDefaultDEK byte = 0x0E
+	// KMSSubSetDEKSafety sets a DEK's AEAD safety limits.
+	KMSSubSetDEKSafety byte = 0x0F
+	// KMSSubClearDEKSafety removes a DEK's AEAD safety limits.
+	KMSSubClearDEKSafety byte = 0x10
 )
 
 // Secrets sub-opcodes.

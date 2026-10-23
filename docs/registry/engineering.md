@@ -30,7 +30,7 @@ type TrustedRegistry interface {
 }
 ```
 
-> **Correction (2026-08-18).** An earlier draft of `architecture.md` gave
+> **Correction.** An earlier draft of `architecture.md` gave
 > `List(ctx, opts ListOptions) ([]ImageManifest, error)` and passed `image
 > Image` by value. Both are wrong: the option type is **`RegistryListOptions`**,
 > not `ListOptions` (which is a different type belonging to other packages), and
@@ -60,7 +60,8 @@ session state; do not widen it to return the session itself.
 | `NewImageEncryptor(kms KMSClient, opts ...EncryptorOption) (*ImageEncryptor, error)` | `encryption.go` | Per-layer DEK envelope encryption |
 | `NewQuicBaaSStorage(client QuicBaaSStorageClient, opts ...StorageOption) (*QuicBaaSStorage, error)` | `storage.go` | The production blob backend |
 | `NewFileStorageClient(root string) (*FileStorageClient, error)` | `file_storage.go` | Local filesystem backend for development and tests |
-| `NewLocalKMSClient(root string) (*LocalKMSClient, error)` | `local_kms.go` | Single-node KMS. **Reached by the shipped daemon** — see the correction below |
+| `NewLocalKMSClient(root string) (*LocalKMSClient, error)` | `local_kms.go` | Single-node KMS for layer encryption only. **Reached by the shipped daemon** — see the correction below |
+| `NewSDKSigner(keys SDKKeyReader, crypto SDKSignClient) (*SDKSigner, error)` | `sdk_signer.go` | Manifest signer on the SDK KMS (`Security().KMS()`, `Security().Crypto()`); never creates a key |
 | `NewGRPCAdapter(r *Registry) *GRPCAdapter` | `grpc_adapter.go` | Bridges `*Registry` to the generated `RegistryService` server |
 
 The four option types — `RegistryOption`, `EncryptorOption`, `StorageOption`
@@ -107,6 +108,32 @@ a live backend. They are the fault-injection points:
 7. **Concurrency is bounded by configuration, not by the caller.**
    `max_concurrent_pulls` and `max_concurrent_pushes` gate the corresponding
    paths; exceeding them blocks rather than failing.
+8. **Push options travel as push-metadata annotations, not proto fields.**
+   `overwrite`, `encrypt` (`PushAnnotationEncrypt`) and `encrypt-key-id`
+   (`PushAnnotationKeyID`) set `PushOptions` in `pushOptionsOf`; only the
+   value `"true"` turns a flag on. An encrypted push stamps the manifest with
+   `ManifestAnnotationEncrypted` and the KMS key ID
+   (`ManifestAnnotationKeyID`), which is how Push and Inspect report it.
+   `sign` (`PushAnnotationSign`) sets `SignImage` and `signing-key-id`
+   (`PushAnnotationSigningKeyID`) names the key, default `registry-default`.
+   Push drops any caller-supplied signature annotation, then signs last —
+   after encryption, so the signature covers the encryption annotations —
+   through the `SigningKMSClient` (`WithSigner`), which in the daemon is
+   `SDKSigner` on the SDK KMS. It signs the SHA-256 of
+   `manifestSigningPayload`, which is the manifest JSON with its reference,
+   minus signature annotations and timestamps. The manifest records
+   `org.letstrust.registry.{signed,signing-key-id,signature-algorithm,signature}`
+   (ECDSA P-256 or P-384, ASN.1 DER, base64). If no signer is wired (the
+   daemon has no SDK client), the push is refused with
+   `ErrSigningNotConfigured`. If the SDK KMS has no key of that ID, the push
+   is refused with `ErrManifestSigningFailed` wrapping
+   `ErrSigningKeyUnavailable`; the key is never created, and that includes
+   `registry-default`, which an operator creates. Any other KMS failure is
+   `ErrManifestSigningFailed`. In both cases nothing is stored,
+   and an unsigned image is never reported as signed. The
+   image config is decoded before anything is stored: a config that is not
+   JSON is `ErrInvalidManifest`, and Inspect reports its `os`,
+   `architecture` and `author`.
 
 ---
 
@@ -131,6 +158,8 @@ ones a caller must handle by type:
 | `ErrInvalidDigest` / `ErrInvalidImageRef` / `ErrInvalidManifest` | Malformed input | yes |
 | `ErrImageEmpty` | Push carried no layers | yes |
 | `ErrEncryptionNotConfigured` | `--encrypt` with no encryption backend | yes |
+| `ErrSigningNotConfigured` | `--sign` with no signer; gRPC `FailedPrecondition`, never `Internal` | yes |
+| `ErrManifestSigningFailed` | The KMS refused to sign; nothing is stored | yes |
 | `ErrEncryptionFailed` / `ErrDecryptionFailed` | Crypto operation failed | yes |
 | `ErrKeyNotFound` / `ErrKeyNotFoundLocal` / `ErrKeyCreationFailed` / `ErrKeyWrapFailed` / `ErrKeyUnwrapFailed` | KMS path failures | yes |
 | `ErrInvalidConfig` | Rejected at construction, before the listener opens | yes |
@@ -238,7 +267,7 @@ trouble or corruption. It now names the version instead.
 `TestDecodeEncryptedLayer_RejectsRetiredVersion` pins that, and is a diagnosis
 path rather than a migration.
 
-**Correction (2026-09-03, #209): "not supported" is not the same as "not
+**Correction (#209): "not supported" is not the same as "not
 reached", and this section previously implied it was.** `LocalKMSClient` is
 wired by `pkg/daemon/commands/registry_init.go` (`registryDistBackend`, called
 from `serve.go`), so the shipped daemon does construct it: it backs the
@@ -275,7 +304,7 @@ showed five red packages while this one failed silently.
 | Transport parity | see [api.md](api.md) | REST, gRPC, MCP, Unix, embedded |
 
 **Known gap — record, do not paper over.** This repository has **no
-`CommandDefinition` type** (grepped repo-wide, 2026-08-18), so the parity
+`CommandDefinition` type**, so the parity
 requirement in `conventions/feature-docs.md` §4 — every `cli.md` verb has a
 `CommandDefinition` in the integration parity suite — is **unmet repo-wide**,
 not only here. It is listed as an owner question in the migration report rather

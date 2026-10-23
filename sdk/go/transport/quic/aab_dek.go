@@ -32,12 +32,15 @@ import (
 // dekMethodSubOpcodes routes DEKManagement methods to their sub-opcode byte
 // under OpKMSExtendedCategory.
 var dekMethodSubOpcodes = map[string]byte{
-	kmspb.DEKManagement_CreateDEK_FullMethodName:    quicwire.KMSSubCreateDEK,
-	kmspb.DEKManagement_ListDEKs_FullMethodName:     quicwire.KMSSubListDEKs,
-	kmspb.DEKManagement_GetDEK_FullMethodName:       quicwire.KMSSubGetDEK,
-	kmspb.DEKManagement_GetDEKStatus_FullMethodName: quicwire.KMSSubGetDEKStatus,
-	kmspb.DEKManagement_RotateDEK_FullMethodName:    quicwire.KMSSubRotateDEK,
-	kmspb.DEKManagement_DeleteDEK_FullMethodName:    quicwire.KMSSubDeleteDEK,
+	kmspb.DEKManagement_CreateDEK_FullMethodName:      quicwire.KMSSubCreateDEK,
+	kmspb.DEKManagement_ListDEKs_FullMethodName:       quicwire.KMSSubListDEKs,
+	kmspb.DEKManagement_GetDEK_FullMethodName:         quicwire.KMSSubGetDEK,
+	kmspb.DEKManagement_GetDEKStatus_FullMethodName:   quicwire.KMSSubGetDEKStatus,
+	kmspb.DEKManagement_RotateDEK_FullMethodName:      quicwire.KMSSubRotateDEK,
+	kmspb.DEKManagement_DeleteDEK_FullMethodName:      quicwire.KMSSubDeleteDEK,
+	kmspb.DEKManagement_SetDefaultDEK_FullMethodName:  quicwire.KMSSubSetDefaultDEK,
+	kmspb.DEKManagement_SetDEKSafety_FullMethodName:   quicwire.KMSSubSetDEKSafety,
+	kmspb.DEKManagement_ClearDEKSafety_FullMethodName: quicwire.KMSSubClearDEKSafety,
 }
 
 // init merges the DEK mapping into the shared adapter tables before the

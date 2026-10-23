@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
@@ -422,13 +421,11 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 // the CA never holds. The payload is a CASignCSRRequest. The caller's
 // platform token must grant ca:sign-csr: a request authenticated without
 // one (a legacy token validator) is refused here even when the dispatcher's
-// CASignCSRPermission check let it through.
+// CASignCSRPermission check let it through. So is an operator client
+// certificate presented with no token: its grant is the peer's, not a
+// token's (docs/ca/api.md §4).
 func (h *CAHandler) SignCSR(ctx context.Context, payload []byte) *quicwire.Response {
-	var authCtx *platformtoken.AuthorizedContext
-	if granted, ok := AuthorizedContextFromContext(ctx); ok {
-		authCtx = granted
-	}
-	if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+	if err := issuance.AuthorizeSignCSR(tokenAuthorizedContext(ctx)); err != nil {
 		return h.errorResponse(quicwire.StatusPermissionDenied, err)
 	}
 	if h.ca == nil {
@@ -644,61 +641,18 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *quicwire.Request) *qui
 		return h.errorResponse(quicwire.StatusNotFound, ErrCACertNotFound{Serial: renewReq.Serial})
 	}
 
-	caReq := &quicbaasca.CACertificateRequest{
-		Subject: quicbaasca.CASubject{
-			CommonName:         existingCert.Subject.CommonName,
-			Organization:       firstOrEmpty(existingCert.Subject.Organization),
-			OrganizationalUnit: firstOrEmpty(existingCert.Subject.OrganizationalUnit),
-			Country:            firstOrEmpty(existingCert.Subject.Country),
-			Province:           firstOrEmpty(existingCert.Subject.Province),
-			Locality:           firstOrEmpty(existingCert.Subject.Locality),
-			Address:            firstOrEmpty(existingCert.Subject.StreetAddress),
-			PostalCode:         firstOrEmpty(existingCert.Subject.PostalCode),
-		},
-		Valid:       int(renewReq.ExtendDays),
-		IsCA:        existingCert.IsCA,
-		MaxPathLen:  existingCert.MaxPathLen,
-		KeyUsage:    existingCert.KeyUsage,
-		ExtKeyUsage: existingCert.ExtKeyUsage,
-	}
-
-	if len(existingCert.DNSNames) > 0 || len(existingCert.IPAddresses) > 0 ||
-		len(existingCert.EmailAddresses) > 0 || len(existingCert.URIs) > 0 {
-		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
-			DNS:   existingCert.DNSNames,
-			Email: existingCert.EmailAddresses,
-		}
-		for _, ip := range existingCert.IPAddresses {
-			caReq.SANS.IPs = append(caReq.SANS.IPs, ip.String())
-		}
-		for _, uri := range existingCert.URIs {
-			caReq.SANS.URIs = append(caReq.SANS.URIs, uri.String())
-		}
-	}
-
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           existingCert.Subject.CommonName,
-		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyType:      xkmssdk.KeyTypeTLS,
-	}
-
-	// Supersede the existing certificate before issuing the renewal.
-	// DeleteKeys must be true: it removes the old cert-store entry and the
-	// leaf's CN-namespaced key — without it IssueCertificate fails with
-	// ErrCertificateAlreadyExists. Mirrors the gRPC and REST renew handlers.
-	if revokeErr := h.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true}); revokeErr != nil {
-		h.logger.Error(revokeErr, "failed to supersede old certificate during renewal")
-		return h.errorResponse(quicwire.StatusInternalError, ErrCARenewFailed{Cause: revokeErr})
-	}
-
-	issuedRenew, err := h.ca.IssueCertificate(ctx, caReq)
+	newCert, err := issuance.Renew(ctx, h.ca, existingCert, issuance.RenewOptions{
+		ValidDays:    int(renewReq.ExtendDays),
+		PreserveSANs: renewReq.PreserveAttrs,
+	})
 	if err != nil {
 		h.logger.Error(err, "failed to renew certificate")
+		var storesErr *issuance.RenewStoresUnavailableError
+		if errors.As(err, &storesErr) {
+			return h.errorResponse(quicwire.StatusUnavailable, ErrCARenewFailed{Cause: err})
+		}
 		return h.errorResponse(quicwire.StatusInternalError, ErrCARenewFailed{Cause: err})
 	}
-
-	newCert := issuedRenew.Certificate
 	resp := &CARenewResponse{
 		OldSerial:   renewReq.Serial,
 		Certificate: h.certToFull(newCert, true),

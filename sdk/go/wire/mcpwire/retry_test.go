@@ -61,6 +61,16 @@ func rpcAnswer(t *testing.T, result interface{}, rpcErr *JSONRPCError) http.Hand
 	}
 }
 
+// okToolResult is the CallToolResult of a tool whose output is {"ok": true}.
+func okToolResult(t *testing.T) *CallToolResult {
+	t.Helper()
+	result, err := NewCallToolResult(map[string]interface{}{"ok": true})
+	if err != nil {
+		t.Fatalf("NewCallToolResult: %v", err)
+	}
+	return result
+}
+
 // statusAnswer answers with a bare HTTP status and the given headers.
 func statusAnswer(code int, header ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -117,12 +127,12 @@ func TestClient_AnswersOnPurposeAreNotRetried(t *testing.T) {
 				return rpcAnswer(t, toolErrorResult, nil)
 			},
 			check: func(t *testing.T, result interface{}, err error) {
-				if err != nil {
-					t.Fatalf("err = %v, want the tool error as the result", err)
+				var toolErr *ErrToolFailed
+				if !errors.As(err, &toolErr) || toolErr.Message != "refused" {
+					t.Errorf("err = %v, want ErrToolFailed with message refused", err)
 				}
-				fields, ok := result.(map[string]interface{})
-				if !ok || fields["isError"] != true {
-					t.Errorf("result = %v, want the tool error result", result)
+				if result != nil {
+					t.Errorf("result = %v, want nil for a failed tool", result)
 				}
 			},
 		},
@@ -169,7 +179,7 @@ func TestClient_RetriesWhenTheServerAsks(t *testing.T) {
 		t.Run("HTTP "+strconv.Itoa(code), func(t *testing.T) {
 			server, attempts := countingServer(t,
 				statusAnswer(code),
-				rpcAnswer(t, map[string]interface{}{"ok": true}, nil))
+				rpcAnswer(t, okToolResult(t), nil))
 			client := retryTestClient(t, server.URL, time.Millisecond)
 
 			if _, err := client.CallTool(context.Background(), "iam_create_user", nil); err != nil {
@@ -202,7 +212,7 @@ func TestClient_RetriesWhenTheServerAsks(t *testing.T) {
 func TestClient_HonoursRetryAfter(t *testing.T) {
 	server, attempts := countingServer(t,
 		statusAnswer(http.StatusTooManyRequests, "Retry-After", "0"),
-		rpcAnswer(t, map[string]interface{}{"ok": true}, nil))
+		rpcAnswer(t, okToolResult(t), nil))
 	client := retryTestClient(t, server.URL, time.Hour)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -24,6 +24,7 @@ type fakeDEKClient struct {
 	lastList   *dekclient.ListDEKsRequest
 	lastRotate *dekclient.RotateDEKRequest
 	lastDelete *dekclient.DeleteDEKRequest
+	lastSafety *dekclient.SetDEKSafetyRequest
 	lastPath   string
 }
 
@@ -82,15 +83,21 @@ func (f *fakeDEKClient) GetDEKStatus(ctx context.Context, path string) (*dekclie
 }
 
 func (f *fakeDEKClient) SetDefaultDEK(ctx context.Context, path string) (*dekclient.SetDefaultDEKResponse, error) {
-	return nil, errKMSLifecycleMock{method: "SetDefaultDEK"}
+	f.lastPath = path
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &dekclient.SetDefaultDEKResponse{Path: path, PreviousDefault: "tenants/a/old"}, nil
 }
 
 func (f *fakeDEKClient) SetDEKSafety(ctx context.Context, req *dekclient.SetDEKSafetyRequest) error {
-	return errKMSLifecycleMock{method: "SetDEKSafety"}
+	f.lastSafety = req
+	return f.err
 }
 
 func (f *fakeDEKClient) ClearDEKSafety(ctx context.Context, path string) error {
-	return errKMSLifecycleMock{method: "ClearDEKSafety"}
+	f.lastPath = path
+	return f.err
 }
 
 func (f *fakeDEKClient) StartReencryption(ctx context.Context, req *dekclient.StartReencryptionRequest) (*dekclient.StartReencryptionResponse, error) {
@@ -164,6 +171,27 @@ func TestDEKServerAdapter_DelegatesToDEKClient(t *testing.T) {
 	assert.InDelta(t, 50.0, st.GetUsagePercent(), 0.001, "the byte limit (10/20) dominates the count limit (25/100)")
 	assert.Equal(t, int32(4), st.GetReencryptionProgress().GetProcessedKeys())
 	assert.True(t, st.GetReencryptionProgress().GetInProgress())
+
+	def, err := adapter.SetDefaultDEK(ctx, &pb.SetDefaultDEKRequest{Path: "tenants/a/dek"})
+	require.NoError(t, err)
+	assert.Equal(t, "tenants/a/dek", client.lastPath)
+	assert.Equal(t, "tenants/a/dek", def.GetPath())
+	assert.Equal(t, "tenants/a/old", def.GetPreviousDefault())
+
+	safety, err := adapter.SetDEKSafety(ctx, &pb.SetDEKSafetyRequest{
+		Path: "tenants/a/dek", MaxOperations: 1000, MaxBytes: 4096, WarningPercent: 75,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, &dekclient.SetDEKSafetyRequest{
+		Path: "tenants/a/dek", MaxOperations: 1000, MaxBytes: 4096, WarningPercent: 75,
+	}, client.lastSafety)
+	assert.Equal(t, "tenants/a/dek", safety.GetPath())
+
+	client.lastPath = ""
+	cleared, err := adapter.ClearDEKSafety(ctx, &pb.ClearDEKSafetyRequest{Path: "tenants/a/dek"})
+	require.NoError(t, err)
+	assert.Equal(t, "tenants/a/dek", client.lastPath)
+	assert.Equal(t, "tenants/a/dek", cleared.GetPath())
 }
 
 func TestDEKServerAdapter_Errors(t *testing.T) {
@@ -189,13 +217,28 @@ func TestDEKServerAdapter_Errors(t *testing.T) {
 			_, err := a.GetDEKStatus(ctx, &pb.GetDEKStatusRequest{Path: path})
 			return err
 		},
+		"SetDefaultDEK": func(a *DEKServerAdapter, path string) error {
+			_, err := a.SetDefaultDEK(ctx, &pb.SetDefaultDEKRequest{Path: path})
+			return err
+		},
+		"SetDEKSafety": func(a *DEKServerAdapter, path string) error {
+			_, err := a.SetDEKSafety(ctx, &pb.SetDEKSafetyRequest{Path: path})
+			return err
+		},
+		"ClearDEKSafety": func(a *DEKServerAdapter, path string) error {
+			_, err := a.ClearDEKSafety(ctx, &pb.ClearDEKSafetyRequest{Path: path})
+			return err
+		},
 	}
 	failing := map[string]codes.Code{
-		"CreateDEK":    codes.Internal,
-		"GetDEK":       codes.NotFound,
-		"RotateDEK":    codes.Internal,
-		"DeleteDEK":    codes.Internal,
-		"GetDEKStatus": codes.NotFound,
+		"CreateDEK":      codes.Internal,
+		"GetDEK":         codes.NotFound,
+		"RotateDEK":      codes.Internal,
+		"DeleteDEK":      codes.Internal,
+		"GetDEKStatus":   codes.NotFound,
+		"SetDefaultDEK":  codes.Internal,
+		"SetDEKSafety":   codes.Internal,
+		"ClearDEKSafety": codes.Internal,
 	}
 
 	for name, call := range calls {

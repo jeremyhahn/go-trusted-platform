@@ -193,12 +193,25 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 
 // CallTool executes a tool on the MCP server.
 func (c *Client) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (interface{}, error) {
+	return c.CallToolWithin(ctx, name, arguments, 0)
+}
+
+// CallToolWithin calls a tool whose reply may take longer than the client's
+// Timeout, such as a graceful VM stop: each attempt waits up to window for
+// the reply. A window shorter than the client's Timeout leaves the Timeout
+// in force, so a call never gets less time than the client grants every
+// call; ctx still bounds the whole call.
+func (c *Client) CallToolWithin(ctx context.Context, name string, arguments map[string]interface{}, window time.Duration) (interface{}, error) {
 	params := map[string]interface{}{
 		"name":      name,
 		"arguments": arguments,
 	}
 
-	return c.call(ctx, "tools/call", params)
+	result, err := c.callWithin(ctx, "tools/call", params, window)
+	if err != nil {
+		return nil, err
+	}
+	return ToolOutput(result)
 }
 
 // ListResources retrieves the list of available resources from the server.
@@ -243,6 +256,26 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // call makes a JSON-RPC call to the MCP server.
 func (c *Client) call(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	return c.callWithin(ctx, method, params, 0)
+}
+
+// httpClientWithin returns the HTTP client for a call whose reply may take
+// up to window: the client's own when window does not exceed its Timeout,
+// otherwise a copy sharing its transport with the longer timeout.
+func (c *Client) httpClientWithin(window time.Duration) *http.Client {
+	if window <= c.httpClient.Timeout || c.httpClient.Timeout == 0 {
+		return c.httpClient
+	}
+	longer := *c.httpClient
+	longer.Timeout = window
+	return &longer
+}
+
+// callWithin sends one JSON-RPC request, retrying as the config allows, with
+// each attempt bounded by window when it is longer than the client's Timeout.
+func (c *Client) callWithin(ctx context.Context, method string, params interface{}, window time.Duration) (interface{}, error) {
+	httpClient := c.httpClientWithin(window)
+
 	c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock()
@@ -272,7 +305,7 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (i
 	}
 	err := quicbaas.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
 		attempt++
-		res, reqErr := c.doRequest(ctx, req, token)
+		res, reqErr := c.doRequest(ctx, httpClient, req, token)
 		if reqErr != nil {
 			backoff.observe(reqErr)
 			c.logger.Debug("MCP request failed",
@@ -297,7 +330,7 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (i
 }
 
 // doRequest performs the actual HTTP request.
-func (c *Client) doRequest(ctx context.Context, req *JSONRPCRequest, token string) (interface{}, error) {
+func (c *Client) doRequest(ctx context.Context, httpClient *http.Client, req *JSONRPCRequest, token string) (interface{}, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to marshal request", Err: err}
@@ -313,7 +346,7 @@ func (c *Client) doRequest(ctx context.Context, req *JSONRPCRequest, token strin
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, &WrappedError{Msg: "request failed", Err: err}
 	}

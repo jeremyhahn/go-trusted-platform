@@ -17,6 +17,9 @@ platformctl iam
     app      Manage OAuth applications
 ```
 
+**`list` pages by page number, not by offset.** `--page` counts from `1`;
+there is no `--limit` or `--offset`.
+
 **Every verb is tenant-explicit.** `get`, `delete` and the role verbs take
 `<tenant-id>` as a **positional argument**; `create`, `update` and `list` take
 `--tenant` (required). That is deliberate: it makes the ambiguity the REST
@@ -51,7 +54,7 @@ at the CLI.
 |---|---|---|
 | `create` | — | `--tenant` (required), `--email` (required), `--name`, `--roles`, `--groups`, `--attributes` |
 | `get` | `<tenant-id> <user-id>` | — |
-| `list` | — | `--tenant` (required) |
+| `list` | — | `--tenant` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`), `--email`, `--role`, `--group` |
 | `update` | — | `--tenant` (required), `--user-id` (required), `--email`, `--name`, `--roles`, `--groups`, `--attributes` |
 | `delete` | `<tenant-id> <user-id>` | — |
 | `assign-role` | `<tenant-id> <user-id> <role>` | — |
@@ -60,11 +63,20 @@ at the CLI.
 **`update` replaces rather than merges.** The help text says so explicitly for
 `--roles`, `--groups` and `--attributes`: *"(replaces existing)"*. Passing
 `--roles admin` on a user who had `admin,operator` leaves them with `admin`
-alone. To add a role, use `assign-role`.
+alone. To add a role, use `assign-role`. `update` without `--roles` leaves the
+roles alone.
+
+`<role>` and `--roles` take role names (`admin`) or role IDs; a role the tenant
+does not hold is refused as not found and nothing is changed.
 
 `--attributes` is comma-separated `key=value` pairs.
 
+`list` filters with `--email`, `--role` (a role ID) and `--group` (a group ID).
+They are the request's `email_filter`, `role_filter` and `group_filter`, which
+every transport carries.
+
 ```bash
+platformctl iam user list --tenant tenant-a --role admin --group platform-ops
 platformctl iam user create --tenant tenant-a --email ops@example.com \
     --name "Ops" --roles operator --groups platform-ops
 platformctl iam user get tenant-a u-0f21
@@ -80,7 +92,7 @@ platformctl iam user revoke-role tenant-a u-0f21 admin
 |---|---|---|
 | `create` | `<group-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d` |
 | `get` | `<tenant-id> <group-id>` | — |
-| `list` | — | `--tenant`/`-t` (required) |
+| `list` | — | `--tenant`/`-t` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
 | `update` | `<group-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d` |
 | `delete` | `<tenant-id> <group-id>` | — |
 | `add-member` | `<tenant-id> <group-id> <user-id>` | **NOT IMPLEMENTED** |
@@ -108,7 +120,7 @@ As a partial workaround, `iam user create --groups ...` and
 |---|---|---|
 | `create` | `<role-id>` | `--tenant` (required) |
 | `get` | `<tenant-id> <role-id>` | — |
-| `list` | — | `--tenant` (required) |
+| `list` | — | `--tenant` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
 | `update` | `<role-id>` | `--tenant` (required) |
 | `delete` | `<tenant-id> <role-id>` | — |
 
@@ -147,7 +159,7 @@ OAuth applications.
 |---|---|---|
 | `register` | — | `--tenant` (required), `--name` (required), `--redirect-uris`, `--grant-types` (default `authorization_code`), `--response-types` (default `code`), `--resource-prefix` |
 | `get` | `<tenant-id> <client-id>` | — |
-| `list` | — | `--tenant` (required) |
+| `list` | — | `--tenant` (required), `--page` (default `1`), `--page-size` (default `50`) |
 | `update` | — | `--tenant` (required), `--client-id` (required), plus the same optional flags |
 | `delete` | `<tenant-id> <client-id>` | — |
 | `rotate-secret` | `<tenant-id> <client-id>` | — |

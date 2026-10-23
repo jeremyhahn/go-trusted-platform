@@ -700,7 +700,7 @@ func (a *RESTAdapter) Start(ctx context.Context, opts StartOptions) (*StartResul
 		return nil, err
 	}
 
-	var resp bundleActionAPIResponse
+	var resp startBundleAPIResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, &RESTAdapterError{
 			Operation: "Start",
@@ -710,8 +710,9 @@ func (a *RESTAdapter) Start(ctx context.Context, opts StartOptions) (*StartResul
 	}
 
 	return &StartResult{
-		BundleID: resp.BundleID,
-		Running:  resp.Success,
+		BundleID:   resp.BundleID,
+		Running:    resp.Running,
+		SocketPath: resp.SocketPath,
 	}, nil
 }
 
@@ -1219,6 +1220,14 @@ type bundleActionAPIResponse struct {
 	Action   string `json:"action"`
 	Success  bool   `json:"success"`
 	Message  string `json:"message,omitempty"`
+}
+
+// startBundleAPIResponse is the start reply: the action result plus the
+// running state and the swtpm socket path.
+type startBundleAPIResponse struct {
+	bundleActionAPIResponse
+	Running    bool   `json:"running"`
+	SocketPath string `json:"socket_path"`
 }
 
 type bundleStateAPIResponse struct {

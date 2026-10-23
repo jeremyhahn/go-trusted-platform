@@ -121,7 +121,7 @@ type daemon struct {
 // --enable-mtls stays: the CLI talks over the Unix socket, but a fresh
 // swtpm has no EK certificate and platformd issues one from its CA, which
 // takes the identity that flag sets up. The suite's config is daemon-only
-// (no webservices section) like the runner's.
+// (no webservices section); the runner's adds one webservice listener.
 func startDaemon(t *testing.T, in inputs) *daemon {
 	t.Helper()
 	logDir := t.TempDir()

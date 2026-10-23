@@ -62,7 +62,12 @@ func (p *verdictPolls) serve(w http.ResponseWriter, r *http.Request) {
 			resp.Error = &mcpwire.JSONRPCError{Code: mcpwire.InternalError,
 				Message: "rpc error: code = ResourceExhausted desc = attestation: verdicts were missed"}
 		default:
-			resp.Result = p.pages[0]
+			result, err := mcpwire.NewCallToolResult(p.pages[0])
+			if err != nil {
+				resp.Error = &mcpwire.JSONRPCError{Code: mcpwire.InternalError, Message: err.Error()}
+			} else {
+				resp.Result = result
+			}
 			p.pages = p.pages[1:]
 		}
 		p.mu.Unlock()

@@ -138,8 +138,9 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // =============================================================================
 
 // Create creates a new container via CLI.
-// Supported options: name, image, command, environment, labels, workdir, user,
-// privileged, network mode, memory, cpus, restart policy, and attestation.
+// Supported options: name, image, command, environment, labels, workdir,
+// privileged, network mode, memory, cpus, and attestation. platformctl takes
+// no --user or --restart: the daemon does not apply either yet.
 func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
 	if opts.Name == "" {
 		return nil, ErrCommandFailed{Command: "container create", Output: "container name is required", Err: fmt.Errorf("empty name")}
@@ -148,10 +149,12 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 		return nil, ErrCommandFailed{Command: "container create", Output: "container image is required", Err: fmt.Errorf("empty image")}
 	}
 
-	args := []string{"container", "create", opts.Name, "--image", opts.Image}
+	// platformctl container create takes the name as --name, not as an
+	// argument, and each command word as its own --cmd.
+	args := []string{"container", "create", "--name", opts.Name, "--image", opts.Image}
 
-	if len(opts.Command) > 0 {
-		args = append(args, "--command", strings.Join(opts.Command, " "))
+	for _, word := range opts.Command {
+		args = append(args, "--cmd", word)
 	}
 
 	for k, v := range opts.Environment {
@@ -166,16 +169,12 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 		args = append(args, "--workdir", opts.WorkingDir)
 	}
 
-	if opts.User != "" {
-		args = append(args, "--user", opts.User)
-	}
-
 	if opts.Privileged {
 		args = append(args, "--privileged")
 	}
 
 	if opts.NetworkMode != "" {
-		args = append(args, "--network", opts.NetworkMode)
+		args = append(args, "--network-mode", opts.NetworkMode)
 	}
 
 	if opts.Memory > 0 {
@@ -183,11 +182,7 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*Container
 	}
 
 	if opts.CPUs > 0 {
-		args = append(args, "--cpus", strconv.FormatFloat(opts.CPUs, 'f', 2, 64))
-	}
-
-	if opts.RestartPolicy != "" {
-		args = append(args, "--restart", opts.RestartPolicy)
+		args = append(args, "--cpu", strconv.FormatFloat(opts.CPUs, 'f', 2, 64))
 	}
 
 	if opts.AttestOnCreate {

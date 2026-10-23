@@ -92,11 +92,29 @@ func startSpeaker(t *testing.T, routerID string, listenPort int32) *server.BgpSe
 		global.ListenAddresses = []string{rrAddress}
 	}
 	require.NoError(t, s.StartBgp(context.Background(), &api.StartBgpRequest{Global: global}))
-	t.Cleanup(func() {
-		require.NoError(t, s.StopBgp(context.Background(), &api.StopBgpRequest{}))
-		s.Stop()
-	})
 	return s
+}
+
+// stopFabric stops the route reflector, then each VTEP, when the test ends.
+//
+// The order closes a data race inside GoBGP v4.9.0, which runs each peer's
+// FSM handler on its own goroutine: one peer's PeerDown propagates its
+// withdrawals to every other neighbour, reading their config without a lock
+// (propagateUpdateToNeighbors, server.go:1474), while a neighbour going down
+// at the same instant writes its own (handleFSMMessage, server.go:1687).
+// VTEPs stopped first drop their sessions together and the RR runs those
+// PeerDowns at once. StopBgp on the RR instead deletes its neighbours one by
+// one inside a single management operation that holds the server lock every
+// FSM handler waits on, and returns only after the handlers exit; the VTEPs
+// then stop with nothing left on the RR to race.
+func stopFabric(t *testing.T, rr *server.BgpServer, vteps ...*server.BgpServer) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, s := range append([]*server.BgpServer{rr}, vteps...) {
+			require.NoError(t, s.StopBgp(context.Background(), &api.StopBgpRequest{}))
+			s.Stop()
+		}
+	})
 }
 
 // startRouteReflector starts an RR that has no configured neighbours at
@@ -336,6 +354,7 @@ func TestRealGoBGP_RTConstrainFiltersEVPN(t *testing.T) {
 	a := startVTEP(t, "10.0.0.2")
 	b := startVTEP(t, "10.0.0.3")
 	c := startVTEP(t, "10.0.0.4")
+	stopFabric(t, rr, a, b, c)
 
 	bVNIs := receivedVNIs(t, b)
 	cVNIs := receivedVNIs(t, c)
@@ -385,6 +404,7 @@ func probeRR(t *testing.T, source string, rrPort int32) ([]byte, error) {
 func TestRealGoBGP_DynamicNeighborsAdmitOnlyTheFabric(t *testing.T) {
 	rr, rrPort := startRouteReflector(t)
 	inside := startVTEP(t, "10.0.0.2")
+	stopFabric(t, rr, inside)
 	rrVNIs := receivedVNIs(t, rr)
 
 	joinVNI(t, inside, "127.0.0.2", 300)

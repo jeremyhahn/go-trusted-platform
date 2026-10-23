@@ -265,6 +265,15 @@ func runKeyGenerate(flags *cli.CommonFlags, keyID, algorithm, purpose string, ex
 	if err != nil {
 		return &WrappedError{Msg: "failed to generate key", Err: err}
 	}
+	if name != "" {
+		kmsClient, err := openKMSClient(base)
+		if err != nil {
+			return err
+		}
+		if err := applyGeneratedKeyName(ctx, kmsClient, resp, name); err != nil {
+			return err
+		}
+	}
 
 	printer := base.Printer()
 

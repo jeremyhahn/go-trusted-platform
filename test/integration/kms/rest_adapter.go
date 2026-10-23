@@ -18,7 +18,7 @@ package kms
 import (
 	"bytes"
 	"context"
-	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,8 +28,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -85,7 +84,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	r.httpClient = helpers.NewAdminHTTPClient(30 * time.Second)
 
 	// Verify connectivity by checking backend status
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)
+	_, statusCode, err := r.doRequest(ctx, http.MethodGet, daemonKMSStatusPath, nil)
 	if err != nil {
 		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
 	}
@@ -204,31 +203,41 @@ func (r *RESTAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	req := &service.GenerateKeyRequest{
-		Name:               keyName(opts),
-		Description:        opts.Description,
-		Owner:              opts.Owner,
-		Exportable:         opts.Exportable,
-		DeletionProtection: opts.DeletionProtection,
-		KeyAttributes:      r.algorithmStringToKeyAttributes(opts.Algorithm),
-		Usage:              r.purposeToKeyUsage(opts.Purpose),
-	}
-
 	// The body's name is the key ID (docs/kms/api.md §2); the display name
 	// follows as key metadata.
-	restReq := r.convertToGenerateKeyRequest(req)
+	restReq := restapi.KMSGenerateKeyRequest{
+		KeySpec:     daemonKeySpec(opts),
+		Name:        keyName(opts),
+		Description: opts.Description,
+		Owner:       opts.Owner,
+	}
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/keys", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.GenerateKeyResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSGenerateKeyResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
+	if restResp.Key == nil {
+		return nil, ErrRESTMissingInResponse{Operation: "GenerateKey", Field: "key"}
+	}
 
-	result := r.convertToKeyGenerateResult(&restResp)
+	result := &KeyGenerateResult{
+		KeyID:     restResp.Key.KeyID,
+		Version:   restResp.Key.Version,
+		Algorithm: daemonAlgorithmName(restResp.Key.Algorithm),
+		Status:    daemonStatusName(restResp.Key.Status),
+		CreatedAt: grpcUnixToTime(restResp.Key.CreatedAt),
+	}
+	if md := restResp.Metadata; md != nil {
+		result.Name = md.Name
+		result.Description = md.Description
+		result.Exportable = md.Exportable
+		result.DeletionProtection = md.DeletionProtection
+	}
 	if err := applyKeyDisplay(ctx, r, opts, result); err != nil {
 		return nil, err
 	}
@@ -251,12 +260,32 @@ func (r *RESTAdapter) KeyGet(ctx context.Context, keyID string, version uint64) 
 		return nil, err
 	}
 
-	var restResp resttypes.KeyInfoResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSGetKeyResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
+	if restResp.Key == nil {
+		return nil, ErrRESTMissingInResponse{Operation: "GetKey", Field: "key"}
+	}
 
-	return r.convertToKeyGetResult(&restResp), nil
+	result := &KeyGetResult{
+		KeyID:     restResp.Key.KeyID,
+		Version:   restResp.Key.Version,
+		Algorithm: daemonAlgorithmName(restResp.Key.Algorithm),
+		Status:    daemonStatusName(restResp.Key.Status),
+		CreatedAt: grpcUnixToTime(restResp.Key.CreatedAt),
+	}
+	if md := restResp.Metadata; md != nil {
+		result.UpdatedAt = grpcUnixToTime(md.UpdatedAt)
+		result.LastUsedAt = grpcUnixToTime(md.LastUsedAt)
+		result.Name = md.Name
+		result.Description = md.Description
+		result.Owner = md.Owner
+		result.Exportable = md.Exportable
+		result.DeletionProtection = md.DeletionProtection
+		result.Usage = daemonUsageNames(md.Usage)
+	}
+	return result, nil
 }
 
 // KeyList lists all keys via REST API.
@@ -279,12 +308,28 @@ func (r *RESTAdapter) KeyList(ctx context.Context, opts KeyListOptions) (*KeyLis
 		return nil, err
 	}
 
-	var restResp resttypes.ListKeysResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSListKeysResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
-	return r.convertToKeyListResult(&restResp), nil
+	keys := make([]KeySummary, 0, len(restResp.Keys))
+	for _, k := range restResp.Keys {
+		keys = append(keys, KeySummary{
+			KeyID:     k.KeyID,
+			Version:   k.Version,
+			Algorithm: daemonAlgorithmName(k.Algorithm),
+			Status:    daemonStatusName(k.Status),
+			CreatedAt: grpcUnixToTime(k.CreatedAt),
+		})
+	}
+
+	return &KeyListResult{
+		Keys:       keys,
+		TotalCount: restResp.TotalCount,
+		HasMore:    restResp.HasMore,
+		NextCursor: restResp.NextCursor,
+	}, nil
 }
 
 // KeyDelete deletes a key via REST API.
@@ -311,15 +356,15 @@ func (r *RESTAdapter) KeyDelete(ctx context.Context, keyID string, opts KeyDelet
 		return nil, err
 	}
 
-	// The current REST contract returns an empty JSON object on success;
-	// echo the request key so callers can correlate. Status and
-	// DeletionDate are no longer reported on this transport.
-	if err := r.handleResponse(respBody, statusCode, nil); err != nil {
+	var restResp restapi.KMSDeleteKeyResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
 	return &KeyDeleteResult{
-		KeyID: keyID,
+		KeyID:        restResp.KeyID,
+		Status:       daemonStatusName(restResp.Status),
+		DeletionDate: grpcUnixToTime(restResp.DeletionDate),
 	}, nil
 }
 
@@ -329,34 +374,24 @@ func (r *RESTAdapter) KeyRotate(ctx context.Context, keyID string, retainOldVers
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	// The current REST rotate contract takes no request body and responds
-	// with {key_id, new_version} only. retainOldVersion is not expressible
-	// on this transport; the versioned key store always retains prior
-	// versions.
 	path := "/api/v1/kms/keys/" + url.PathEscape(keyID) + "/rotate"
+	restReq := restapi.KMSRotateKeyRequest{RetainOldVersion: retainOldVersion}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, nil)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.RotateKeyResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSRotateKeyResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
-	}
-
-	// old_version is no longer reported on the wire; versions increment
-	// sequentially, so derive it from new_version.
-	newVersion := uint64(restResp.NewVersion)
-	var oldVersion uint64
-	if newVersion > 0 {
-		oldVersion = newVersion - 1
 	}
 
 	return &KeyRotateResult{
 		KeyID:      restResp.KeyID,
-		OldVersion: oldVersion,
-		NewVersion: newVersion,
+		OldVersion: restResp.OldVersion,
+		NewVersion: restResp.NewVersion,
+		RotatedAt:  grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -384,12 +419,28 @@ func (r *RESTAdapter) KeyVersions(ctx context.Context, keyID string, opts KeyVer
 		return nil, err
 	}
 
-	var restResp resttypes.ListKeyVersionsResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSGetKeyVersionsResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
-	return r.convertToKeyVersionsResult(keyID, &restResp), nil
+	versions := make([]KeyVersionInfo, 0, len(restResp.Versions))
+	for _, v := range restResp.Versions {
+		versions = append(versions, KeyVersionInfo{
+			Version:    v.Version,
+			Algorithm:  daemonAlgorithmName(v.Algorithm),
+			Status:     daemonStatusName(v.Status),
+			CreatedAt:  grpcUnixToTime(v.CreatedAt),
+			DisabledAt: grpcUnixToTime(v.DisabledAt),
+		})
+	}
+
+	return &KeyVersionsResult{
+		KeyID:      restResp.KeyID,
+		Versions:   versions,
+		HasMore:    restResp.HasMore,
+		NextCursor: restResp.NextCursor,
+	}, nil
 }
 
 // KeyStatus updates the status of a key via REST API.
@@ -631,28 +682,38 @@ func (r *RESTAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOptio
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/encrypt/%s", opts.KeyID)
-	// The current REST contract has no separate nonce field: the nonce
-	// travels inside the returned ciphertext envelope.
-	restReq := resttypes.EncryptRequest{
-		Plaintext: opts.Plaintext,
-		Context:   opts.Context,
+	restReq := restapi.KMSEncryptRequest{
+		KeyID:     opts.KeyID,
+		Plaintext: base64.StdEncoding.EncodeToString(opts.Plaintext),
+		Context:   encodeOptionalBytes(opts.Context),
+		Nonce:     encodeOptionalBytes(opts.Nonce),
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/encrypt", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.EncryptResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSEncryptResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
+		return nil, err
+	}
+
+	ciphertext, err := decodeBytes(restResp.Ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := decodeBytes(restResp.Nonce)
+	if err != nil {
 		return nil, err
 	}
 
 	return &CryptoEncryptResult{
 		KeyID:      restResp.KeyID,
-		KeyVersion: uint64(restResp.Version),
-		Ciphertext: restResp.Ciphertext,
+		KeyVersion: restResp.KeyVersion,
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+		Timestamp:  grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -662,31 +723,34 @@ func (r *RESTAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOptio
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/decrypt/%s", opts.KeyID)
-	// The nonce is carried inside the ciphertext envelope on the current
-	// contract, so opts.Nonce is not sent separately.
-	restReq := resttypes.DecryptRequest{
-		Ciphertext: opts.Ciphertext,
-		Context:    opts.Context,
-		Version:    int(opts.KeyVersion),
+	restReq := restapi.KMSDecryptRequest{
+		KeyID:      opts.KeyID,
+		Ciphertext: base64.StdEncoding.EncodeToString(opts.Ciphertext),
+		Context:    encodeOptionalBytes(opts.Context),
+		Nonce:      encodeOptionalBytes(opts.Nonce),
+		KeyVersion: opts.KeyVersion,
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/decrypt", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.DecryptResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSDecryptResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
-	// The response carries only the plaintext; echo the key coordinates
-	// that were used for the request.
+	plaintext, err := decodeBytes(restResp.Plaintext)
+	if err != nil {
+		return nil, err
+	}
+
 	return &CryptoDecryptResult{
-		KeyID:      opts.KeyID,
-		KeyVersion: opts.KeyVersion,
-		Plaintext:  restResp.Plaintext,
+		KeyID:      restResp.KeyID,
+		KeyVersion: restResp.KeyVersion,
+		Plaintext:  plaintext,
+		Timestamp:  grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -696,27 +760,37 @@ func (r *RESTAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/sign/%s", opts.KeyID)
-	restReq := resttypes.SignRequest{
-		Data: opts.Message,
-		Hash: opts.HashAlgorithm,
+	hashAlgorithm, err := daemonHashAlgorithm(opts.HashAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	restReq := restapi.KMSSignRequest{
+		KeyID:         opts.KeyID,
+		Message:       base64.StdEncoding.EncodeToString(opts.Message),
+		HashAlgorithm: hashAlgorithm,
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/sign", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.SignResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSSignResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
+		return nil, err
+	}
+
+	signature, err := decodeBytes(restResp.Signature)
+	if err != nil {
 		return nil, err
 	}
 
 	return &CryptoSignResult{
 		KeyID:         restResp.KeyID,
-		KeyVersion:    uint64(restResp.Version),
-		Signature:     restResp.Signature,
-		HashAlgorithm: opts.HashAlgorithm,
+		KeyVersion:    restResp.KeyVersion,
+		Signature:     signature,
+		HashAlgorithm: daemonHashName(restResp.HashAlgorithm),
+		Timestamp:     grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -726,52 +800,66 @@ func (r *RESTAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/verify/%s", opts.KeyID)
-	restReq := resttypes.VerifyRequest{
-		Data:      opts.Message,
-		Signature: opts.Signature,
-		Hash:      opts.HashAlgorithm,
-		Version:   int(opts.KeyVersion),
+	hashAlgorithm, err := daemonHashAlgorithm(opts.HashAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	restReq := restapi.KMSVerifyRequest{
+		KeyID:         opts.KeyID,
+		Message:       base64.StdEncoding.EncodeToString(opts.Message),
+		Signature:     base64.StdEncoding.EncodeToString(opts.Signature),
+		HashAlgorithm: hashAlgorithm,
+		KeyVersion:    opts.KeyVersion,
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/verify", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.VerifyResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSVerifyResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
 	return &CryptoVerifyResult{
-		KeyID:      opts.KeyID,
-		KeyVersion: opts.KeyVersion,
+		KeyID:      restResp.KeyID,
+		KeyVersion: restResp.KeyVersion,
 		Valid:      restResp.Valid,
+		Timestamp:  grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
 // CryptoHash computes a cryptographic hash via REST API.
 func (r *RESTAdapter) CryptoHash(ctx context.Context, data []byte, algorithm string) (*CryptoHashResult, error) {
-	path := "/api/v1/kms/hash"
-	restReq := resttypes.HashRequest{
-		Data: data,
-		Hash: algorithm,
+	hashAlgorithm, err := daemonHashAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
+	}
+	restReq := restapi.KMSHashRequest{
+		Data:      base64.StdEncoding.EncodeToString(data),
+		Algorithm: hashAlgorithm,
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/hash", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.HashResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSHashResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
+		return nil, err
+	}
+
+	hash, err := decodeBytes(restResp.Hash)
+	if err != nil {
 		return nil, err
 	}
 
 	return &CryptoHashResult{
-		Algorithm: restResp.Hash,
-		Hash:      restResp.Digest,
+		Algorithm: daemonHashName(restResp.Algorithm),
+		Hash:      hash,
+		Timestamp: grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -781,26 +869,37 @@ func (r *RESTAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*
 		return nil, ErrRESTMissingParameter{Parameter: "key_id"}
 	}
 
-	path := fmt.Sprintf("/api/v1/kms/hmac/%s", opts.KeyID)
-	restReq := resttypes.HMACRequest{
-		Data: opts.Message,
-		Hash: opts.HashAlgorithm,
+	hashAlgorithm, err := daemonHashAlgorithm(opts.HashAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	restReq := restapi.KMSHMACRequest{
+		KeyID:         opts.KeyID,
+		Message:       base64.StdEncoding.EncodeToString(opts.Message),
+		HashAlgorithm: hashAlgorithm,
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/hmac", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.HMACResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSHMACResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
+		return nil, err
+	}
+
+	mac, err := decodeBytes(restResp.HMAC)
+	if err != nil {
 		return nil, err
 	}
 
 	return &CryptoHMACResult{
 		KeyID:         restResp.KeyID,
-		HMAC:          restResp.HMAC,
-		HashAlgorithm: opts.HashAlgorithm,
+		KeyVersion:    restResp.KeyVersion,
+		HMAC:          mac,
+		HashAlgorithm: daemonHashName(restResp.HashAlgorithm),
+		Timestamp:     grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -836,23 +935,28 @@ func (r *RESTAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMA
 
 // CryptoRandom generates random bytes via REST API.
 func (r *RESTAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRandomResult, error) {
-	path := "/api/v1/kms/random"
-	restReq := resttypes.GenerateRandomRequest{
-		NumBytes: numBytes,
+	restReq := restapi.KMSRandomRequest{
+		NumBytes: int32(numBytes),
 	}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
+	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/kms/random", restReq)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.GenerateRandomResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	var restResp restapi.KMSRandomResponse
+	if err := r.handleDaemonResponse(respBody, statusCode, &restResp); err != nil {
+		return nil, err
+	}
+
+	randomBytes, err := decodeBytes(restResp.RandomBytes)
+	if err != nil {
 		return nil, err
 	}
 
 	return &CryptoRandomResult{
-		RandomBytes: restResp.Bytes,
+		RandomBytes: randomBytes,
+		Timestamp:   grpcUnixToTime(restResp.Timestamp),
 	}, nil
 }
 
@@ -1366,155 +1470,22 @@ func (r *RESTAdapter) SecretsStatus(ctx context.Context, name string, enabled bo
 // =============================================================================
 
 // algorithmStringToKeyAttributes converts an algorithm string to KeyAttributes.
-func (r *RESTAdapter) algorithmStringToKeyAttributes(algorithm string) *xkmssdk.KeyAttributes {
-	attrs := &xkmssdk.KeyAttributes{}
-
-	switch algorithm {
-	case "AES-128-GCM":
-		attrs.SymmetricAlgorithm = xkmssdk.SymmetricAES128GCM
-	case "AES-192-GCM":
-		attrs.SymmetricAlgorithm = xkmssdk.SymmetricAES192GCM
-	case "AES-256-GCM":
-		attrs.SymmetricAlgorithm = xkmssdk.SymmetricAES256GCM
-	case "CHACHA20-POLY1305":
-		attrs.SymmetricAlgorithm = xkmssdk.SymmetricChaCha20Poly1305
-	case "XCHACHA20-POLY1305":
-		attrs.SymmetricAlgorithm = xkmssdk.SymmetricXChaCha20Poly1305
-	case "RSA-2048":
-		attrs.KeyAlgorithm = x509.RSA
-		attrs.RSAAttributes = &xkmssdk.RSAAttributes{KeySize: 2048}
-	case "RSA-3072":
-		attrs.KeyAlgorithm = x509.RSA
-		attrs.RSAAttributes = &xkmssdk.RSAAttributes{KeySize: 3072}
-	case "RSA-4096":
-		attrs.KeyAlgorithm = x509.RSA
-		attrs.RSAAttributes = &xkmssdk.RSAAttributes{KeySize: 4096}
-	case "ECDSA-P256":
-		attrs.KeyAlgorithm = x509.ECDSA
-	case "ECDSA-P384":
-		attrs.KeyAlgorithm = x509.ECDSA
-	case "ECDSA-P521":
-		attrs.KeyAlgorithm = x509.ECDSA
-	case "ED25519":
-		attrs.KeyAlgorithm = x509.Ed25519
-	}
-
-	return attrs
-}
-
 // purposeToKeyUsage converts a purpose string to KeyUsage slice.
-func (r *RESTAdapter) purposeToKeyUsage(purpose string) []service.KeyUsage {
-	switch purpose {
-	case "encrypt":
-		return []service.KeyUsage{service.KeyUsageEncrypt, service.KeyUsageDecrypt}
-	case "sign":
-		return []service.KeyUsage{service.KeyUsageSign, service.KeyUsageVerify}
-	case "mac":
-		return []service.KeyUsage{service.KeyUsageGenerateMAC, service.KeyUsageVerifyMAC}
-	case "wrap":
-		return []service.KeyUsage{service.KeyUsageWrapKey}
-	case "derive":
-		return []service.KeyUsage{service.KeyUsageDeriveKey}
-	default:
-		return nil
-	}
-}
-
 // convertToGenerateKeyRequest maps the domain generate request onto the
 // REST wire contract, including the generate-time protection flags now
 // carried end-to-end by the QuicBaaS SDK kms client.
-func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyRequest) *resttypes.GenerateKeyRequest {
-	restReq := &resttypes.GenerateKeyRequest{
-		Name:               req.Name,
-		Description:        req.Description,
-		Tags:               req.Tags,
-		Owner:              req.Owner,
-		Usage:              r.keyUsageToStrings(req.Usage),
-		Exportable:         req.Exportable,
-		DeletionProtection: req.DeletionProtection,
-	}
-
-	if req.KeyAttributes != nil {
-		restReq.Algorithm = r.keyAttributesToAlgorithmString(req.KeyAttributes)
-		restReq.KeySpec = &resttypes.KMSKeySpec{
-			Algorithm: restReq.Algorithm,
-			KeySize:   int(r.getKeySize(req.KeyAttributes)),
-			Usage:     restReq.Usage,
-		}
-	}
-
-	return restReq
-}
-
 // convertToKeyGenerateResult converts REST response to KeyGenerateResult.
-func (r *RESTAdapter) convertToKeyGenerateResult(resp *resttypes.GenerateKeyResponse) *KeyGenerateResult {
-	return &KeyGenerateResult{
-		Exportable:         resp.Exportable,
-		DeletionProtection: resp.DeletionProtection,
-		KeyID:              resp.KeyID,
-		Version:            uint64(resp.Version),
-		Algorithm:          resp.Algorithm,
-	}
-}
-
 // convertToKeyGetResult converts REST response to KeyGetResult. The
 // current contract reports created_at and rotated_at; rotation is the
 // only update it reports, so rotated_at is surfaced as UpdatedAt.
 // Status / Owner / Exportable / DeletionProtection / LastUsedAt are no
 // longer part of the wire.
-func (r *RESTAdapter) convertToKeyGetResult(resp *resttypes.KeyInfoResponse) *KeyGetResult {
-	return &KeyGetResult{
-		KeyID:     resp.KeyID,
-		Version:   uint64(resp.Version),
-		Algorithm: resp.Algorithm,
-		Name:      resp.Name,
-		Usage:     resp.Usage,
-		CreatedAt: resp.CreatedAt,
-		UpdatedAt: resp.RotatedAt,
-	}
-}
-
 // convertToKeyListResult converts REST response to KeyListResult. The
 // current contract returns the full key list without pagination
 // metadata, so TotalCount is derived from the returned slice.
-func (r *RESTAdapter) convertToKeyListResult(resp *resttypes.ListKeysResponse) *KeyListResult {
-	result := &KeyListResult{
-		TotalCount: int32(len(resp.Keys)),
-	}
-
-	for _, k := range resp.Keys {
-		result.Keys = append(result.Keys, KeySummary{
-			KeyID:     k.KeyID,
-			Version:   uint64(k.Version),
-			Algorithm: k.Algorithm,
-			CreatedAt: k.CreatedAt,
-		})
-	}
-
-	return result
-}
-
 // convertToKeyVersionsResult converts REST response to
 // KeyVersionsResult. The current contract does not echo the key ID or
 // pagination metadata, so the request key ID is carried through.
-func (r *RESTAdapter) convertToKeyVersionsResult(keyID string, resp *resttypes.ListKeyVersionsResponse) *KeyVersionsResult {
-	result := &KeyVersionsResult{
-		KeyID: keyID,
-	}
-
-	for _, v := range resp.Versions {
-		result.Versions = append(result.Versions, KeyVersionInfo{
-			Version:    uint64(v.Version),
-			Algorithm:  v.Algorithm,
-			Status:     v.Status,
-			CreatedAt:  v.CreatedAt,
-			DisabledAt: v.DisabledAt,
-		})
-	}
-
-	return result
-}
-
 // convertToDEKCreateResult converts REST response to DEKCreateResult.
 // The current contract returns only path / version / algorithm.
 func (r *RESTAdapter) convertToDEKCreateResult(resp *resttypes.CreateDEKResponse) *DEKCreateResult {
@@ -1569,103 +1540,14 @@ func (r *RESTAdapter) convertToDEKListResult(resp *resttypes.ListDEKsResponse) *
 // =============================================================================
 
 // keyAttributesToAlgorithmString converts KeyAttributes to REST algorithm string.
-func (r *RESTAdapter) keyAttributesToAlgorithmString(attrs *xkmssdk.KeyAttributes) string {
-	if attrs == nil {
-		return "UNSPECIFIED"
-	}
-
-	// Check symmetric algorithms first
-	switch attrs.SymmetricAlgorithm {
-	case xkmssdk.SymmetricAES128GCM:
-		return "AES-128-GCM"
-	case xkmssdk.SymmetricAES192GCM:
-		return "AES-192-GCM"
-	case xkmssdk.SymmetricAES256GCM:
-		return "AES-256-GCM"
-	case xkmssdk.SymmetricChaCha20Poly1305:
-		return "CHACHA20-POLY1305"
-	case xkmssdk.SymmetricXChaCha20Poly1305:
-		return "XCHACHA20-POLY1305"
-	}
-
-	// Check asymmetric algorithms using x509.PublicKeyAlgorithm constants
-	switch attrs.KeyAlgorithm {
-	case x509.RSA:
-		if attrs.RSAAttributes != nil {
-			switch attrs.RSAAttributes.KeySize {
-			case 2048:
-				return "RSA-2048"
-			case 3072:
-				return "RSA-3072"
-			case 4096:
-				return "RSA-4096"
-			}
-		}
-		return "RSA-2048"
-	case x509.ECDSA:
-		if attrs.ECCAttributes != nil && attrs.ECCAttributes.Curve != nil {
-			switch attrs.ECCAttributes.Curve.Params().BitSize {
-			case 256:
-				return "ECDSA-P256"
-			case 384:
-				return "ECDSA-P384"
-			case 521:
-				return "ECDSA-P521"
-			}
-		}
-		return "ECDSA-P256"
-	case x509.Ed25519:
-		return "ED25519"
-	}
-
-	return "UNSPECIFIED"
-}
-
 // getKeySize extracts key size from KeyAttributes.
-func (r *RESTAdapter) getKeySize(attrs *xkmssdk.KeyAttributes) int32 {
-	if attrs == nil {
-		return 0
-	}
-	if attrs.RSAAttributes != nil {
-		return int32(attrs.RSAAttributes.KeySize)
-	}
-	return 0
-}
-
 // keyUsageToStrings converts service KeyUsage to REST usage strings,
 // skipping usages the current wire vocabulary cannot express.
-func (r *RESTAdapter) keyUsageToStrings(usages []service.KeyUsage) []string {
-	result := make([]string, 0, len(usages))
-	for _, u := range usages {
-		if s := r.keyUsageToString(u); s != "" {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
 // keyUsageToString converts service KeyUsage to the current REST usage
 // vocabulary (ENCRYPT / DECRYPT / SIGN / VERIFY / WRAP / UNWRAP). MAC
 // usages map onto SIGN / VERIFY, the closest expressible intent. An
 // empty string is returned for usages the wire cannot express so they
 // can be filtered out instead of failing server-side validation.
-func (r *RESTAdapter) keyUsageToString(usage service.KeyUsage) string {
-	switch usage {
-	case service.KeyUsageEncrypt:
-		return "ENCRYPT"
-	case service.KeyUsageDecrypt:
-		return "DECRYPT"
-	case service.KeyUsageSign, service.KeyUsageGenerateMAC:
-		return "SIGN"
-	case service.KeyUsageVerify, service.KeyUsageVerifyMAC:
-		return "VERIFY"
-	case service.KeyUsageWrapKey:
-		return "WRAP"
-	default:
-		return ""
-	}
-}
-
 // =============================================================================
 // Error Types
 // =============================================================================

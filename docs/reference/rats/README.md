@@ -1,6 +1,7 @@
 # RATS and attestation reference standards
 
-> **Status: REFERENCE** · Last verified: 2026-10-20
+> **Status: REFERENCE** · Last verified: 2026-10-21
+> Index of the RATS standards copied verbatim into this folder.
 
 The standards in this directory are copied verbatim and never edited; a new revision replaces its file. Pinned drafts have a standards-watch line in [ROADMAP.md](../../../ROADMAP.md) Dependencies.
 

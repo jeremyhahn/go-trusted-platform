@@ -1660,6 +1660,14 @@ func (e ErrContainerAttestNotSupported) Error() string {
 	return "container attestation not implemented"
 }
 
+// ErrContainerCreateNoInstance is returned when the orchestrator reports a
+// container created but answers no instance for it.
+type ErrContainerCreateNoInstance struct{}
+
+func (e ErrContainerCreateNoInstance) Error() string {
+	return "the orchestrator answered no container instance"
+}
+
 // ErrContainerInvalidParameter is returned when a container operation receives an invalid parameter
 type ErrContainerInvalidParameter struct {
 	Parameter string

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -78,6 +79,26 @@ func (e ErrRESTRequestFailed) GRPCStatus() *status.Status {
 		code = codes.Unknown
 	}
 	return status.New(code, e.Error())
+}
+
+// ErrRESTEmptyPathSegment indicates the REST route carries an empty path
+// segment (`//` or a trailing `/`) and is refused before the request leaves
+// the adapter, so it cannot be read by the router as another route.
+type ErrRESTEmptyPathSegment struct {
+	Operation string
+	Path      string
+}
+
+func (e ErrRESTEmptyPathSegment) Error() string {
+	return fmt.Sprintf("compute: REST refused %s: empty path segment in %q",
+		e.Operation, e.Path)
+}
+
+// GRPCStatus reports InvalidArgument: an empty id is the caller's argument
+// error, the same code the gRPC and MCP adapters report for a missing
+// required field, so the transport leaves hold their assertions.
+func (e ErrRESTEmptyPathSegment) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrRESTSetupFailed indicates the REST endpoint is unreachable.
@@ -147,8 +168,22 @@ func (a *RESTAdapter) Name() string {
 
 // call sends in as protobuf JSON (when non-nil) with query appended to the
 // route, and decodes a 2xx reply into out with protojson.
+// pathHasEmptySegment reports whether path carries an empty segment: `//`
+// anywhere, or a trailing `/`. Such a path is refused before it leaves the
+// adapter, because the daemon's router cleans `//` and would read the next
+// segment as, e.g., a VM id, answering 404 for a missing argument.
+func pathHasEmptySegment(path string) bool {
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	return strings.Contains(path, "//") || strings.HasSuffix(path, "/")
+}
+
 func (a *RESTAdapter) call(ctx context.Context, method, path string, query url.Values, in, out proto.Message) error {
 	operation := method + " " + path
+	if pathHasEmptySegment(path) {
+		return ErrRESTEmptyPathSegment{Operation: operation, Path: path}
+	}
 	var bodyReader io.Reader
 	if in != nil {
 		data, err := protojson.Marshal(in)

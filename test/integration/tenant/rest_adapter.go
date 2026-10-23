@@ -418,15 +418,11 @@ func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 		"amount":   opts.Amount,
 	}
 
+	// The server answers a quota refusal with allowed=false; any error, such
+	// as an unknown tenant, is the caller's to see (docs/tenant/api.md §3).
 	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
 	if err != nil {
-		return &CheckQuotaResult{
-			TenantID: opts.TenantID,
-			Resource: opts.Resource,
-			Amount:   opts.Amount,
-			Allowed:  false,
-			Message:  err.Error(),
-		}, nil
+		return nil, err
 	}
 
 	var result CheckQuotaResult

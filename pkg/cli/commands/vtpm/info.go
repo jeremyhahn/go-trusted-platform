@@ -67,7 +67,7 @@ func runInfo(flags *cli.CommonFlags, bundleID string) error {
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 

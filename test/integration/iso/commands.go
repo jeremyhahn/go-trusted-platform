@@ -274,6 +274,8 @@ type TestInstallOptions struct {
 // TestBootOptions contains options for boot tests.
 type TestBootOptions struct {
 	Disk        string
+	Timeout     time.Duration // --timeout: console to a log in WorkDir, its tail on failure
+	Expect      string        // --expect: the serial-console milestone that ends the boot
 	Memory      int
 	CPUs        int
 	WorkDir     string

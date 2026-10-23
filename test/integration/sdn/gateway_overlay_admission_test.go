@@ -322,6 +322,10 @@ func TestGatewayOverlayAdmittedVTEPMultiProtocol(t *testing.T) {
 	}
 }
 
+// seedGatewayOverlayTelemetry posts a telemetry snapshot the way a gateway
+// does. The daemon REST server mounts the gatewayd-facing routes
+// (docs/gateway/api.md); the client certificate's name is the gateway ID the
+// handler attributes the snapshot to.
 func seedGatewayOverlayTelemetry(t *testing.T, ctx context.Context, gatewayID string, vteps []gwstate.AdmittedVTEPState) {
 	t.Helper()
 

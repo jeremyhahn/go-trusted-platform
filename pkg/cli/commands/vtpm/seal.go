@@ -96,7 +96,7 @@ func runSeal(flags *cli.CommonFlags, bundleID, data, pcrs, authValue string) err
 
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
-		return ErrDaemonConnectionRequired{}
+		return ErrDaemonConnectionRequired{Err: err}
 	}
 	defer base.Close()
 

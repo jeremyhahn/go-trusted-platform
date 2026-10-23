@@ -41,9 +41,9 @@ func TestForeignTenant_IAM(t *testing.T) {
 
 	unix := NewUnixAdapter()
 	require.NoError(t, unix.Setup(ctx), "Unix setup")
-	// A cleanup, not a defer: cleanups run last in, first out after the
-	// test returns, so ensureIAMTenant's DeleteTenant cleanup, registered
-	// after this one, runs while the connection is still open.
+	// A cleanup, not a defer: ensureIAMTenant deletes the tenant in a cleanup
+	// over this connection, and cleanups run after defers, last in first out,
+	// so the connection closes only after that delete.
 	t.Cleanup(func() {
 		require.NoError(t, unix.Teardown(context.Background()), "Unix teardown")
 	})

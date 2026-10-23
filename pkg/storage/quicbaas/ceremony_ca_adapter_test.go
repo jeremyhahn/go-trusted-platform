@@ -15,14 +15,23 @@ package quicbaas
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
 )
 
 // =============================================================================
@@ -129,7 +138,7 @@ func TestTranslateSignCSROptions_NilIsNil(t *testing.T) {
 
 // TestTranslateSignCSROptions_CopiesAllFields verifies every field of the
 // qrdb options struct is copied into the xkms struct without loss.
-func TestTranslateSignCSROptions_CopiesAllFields(t *testing.T) {
+func TestTranslateSignCSROptions_CopiesPolicyDropsRoleLabel(t *testing.T) {
 	in := &quicbaas.QRDBCeremonySignCSROptions{
 		Profile:      "security-officer",
 		ValidityDays: 30,
@@ -138,10 +147,120 @@ func TestTranslateSignCSROptions_CopiesAllFields(t *testing.T) {
 	}
 	out := translateSignCSROptions(in)
 	require.NotNil(t, out)
-	assert.Equal(t, in.Profile, out.Profile)
+	assert.Empty(t, out.Profile, "the ceremony role label is not a go-xkms profile name")
 	assert.Equal(t, in.ValidityDays, out.ValidityDays)
 	assert.Equal(t, in.KeyUsage, out.KeyUsage)
 	assert.Equal(t, in.ExtKeyUsage, out.ExtKeyUsage)
+}
+
+// TestCeremonyCAAdapter_SignCSRWithCeremonyRoleOptions signs a CSR through a
+// real go-xkms CA with the options go-qrdb's ceremony passes for each role
+// (ceremony.roleProfileMap). The ceremony reports any adapter error as
+// "ceremony: CSR signing failed", so a role label the CA rejects fails every
+// POST /api/v1/ceremony/sign-csr.
+func TestCeremonyCAAdapter_SignCSRWithCeremonyRoleOptions(t *testing.T) {
+	ca := newSoftwareCeremonyCA(t)
+	adapter := NewCeremonyCAAdapter(func() xkmssdk.TrustedCA { return ca })
+
+	roles := map[string]*quicbaas.QRDBCeremonySignCSROptions{
+		"admin": {
+			Profile:      "administrator",
+			ValidityDays: 365,
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		},
+		"so": {
+			Profile:      "security-officer",
+			ValidityDays: 365,
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		},
+		"user": {
+			Profile:      "user",
+			ValidityDays: 90,
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		},
+	}
+	for role, opts := range roles {
+		t.Run(role, func(t *testing.T) {
+			cert, err := adapter.SignCSR(context.Background(), newCeremonyCSR(t, "officer-"+role), opts)
+			require.NoError(t, err)
+			assert.Equal(t, "officer-"+role, cert.Subject.CommonName)
+			assert.Equal(t, opts.KeyUsage, cert.KeyUsage)
+			assert.Equal(t, opts.ExtKeyUsage, cert.ExtKeyUsage)
+			validity := cert.NotAfter.Sub(cert.NotBefore)
+			assert.Equal(t, time.Duration(opts.ValidityDays)*24*time.Hour, validity)
+		})
+	}
+}
+
+// TestCeremonyCAAdapter_SignCSRRejectsMalformedCSR checks the adapter returns
+// the CA's refusal for a CSR that does not parse, rather than a certificate.
+func TestCeremonyCAAdapter_SignCSRRejectsMalformedCSR(t *testing.T) {
+	ca := newSoftwareCeremonyCA(t)
+	adapter := NewCeremonyCAAdapter(func() xkmssdk.TrustedCA { return ca })
+
+	cert, err := adapter.SignCSR(context.Background(), []byte("not a csr"), &quicbaas.QRDBCeremonySignCSROptions{
+		Profile:      "administrator",
+		ValidityDays: 365,
+	})
+	require.Error(t, err)
+	assert.Nil(t, cert)
+}
+
+// newSoftwareCeremonyCA builds a real go-xkms root CA over in-memory stores:
+// the software keystore and certificate store the bootstrap CA factory uses
+// in the test environment.
+func newSoftwareCeremonyCA(t *testing.T) xkmssdk.TrustedCA {
+	t.Helper()
+	root, _, err := xkmsca.NewCA(context.Background(), &xkmsca.Params{
+		Identity: []xkmsca.CAIdentity{{
+			Subject: xkmsca.CASubject{CommonName: "ceremony-test-root", Organization: "Test Org", Country: "US"},
+			Valid:   1,
+			Keys: []*xkmssdk.KeyConfig{{
+				KeyAlgorithm:       "RSA",
+				Hash:               "SHA-256",
+				SignatureAlgorithm: "SHA256-RSAPSS",
+				RSAConfig:          &xkmssdk.KeyRSAConfig{KeySize: 2048},
+			}},
+			KeystoreType: xkmssdk.StoreSoftware,
+			IsRoot:       true,
+		}},
+		KeyStoreFactory: func(string) (xkmsbackend.Backend, error) {
+			pkcs8, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
+				KeyStorage:         xkmssdk.NewStorageMemory(),
+				AllowPlaintextKeys: true,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+				Backend:     pkcs8,
+				CertStorage: xkmssdk.NewStorageMemory(),
+			})
+		},
+		CertStoreFactory: func(string) (xkmscertstore.CertStore, error) {
+			return xkmssdk.NewCertStore(&xkmssdk.CertStoreConfig{
+				CertStorage: xkmssdk.NewStorageCertAdapter(xkmssdk.NewStorageMemory()),
+			})
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, root)
+	return root
+}
+
+// newCeremonyCSR returns a PEM CSR for commonName signed by a fresh P-256 key.
+func newCeremonyCSR(t *testing.T, commonName string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: commonName},
+	}, key)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 }
 
 // TestTranslateIssueCertRequest_NilIsNil verifies the helper short-circuits

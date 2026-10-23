@@ -15,7 +15,6 @@ package ovs
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -62,7 +61,7 @@ func (c *Client) CreateBridgeWithOptions(ctx context.Context, name string, opts 
 	if opts != nil {
 		datapathType = opts.DatapathType
 		if !isValidFailMode(opts.FailMode) {
-			return nil, &MessageError{Msg: fmt.Sprintf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", opts.FailMode)}
+			return nil, &ErrInvalidFailMode{FailMode: opts.FailMode}
 		}
 		for _, proto := range opts.Protocols {
 			if !isValidProtocol(proto) {
@@ -260,7 +259,7 @@ func (c *Client) UpdateBridge(ctx context.Context, name string, updates map[stri
 // suite on Open vSwitch 3.5 (#614).
 func (c *Client) SetBridgeFailMode(ctx context.Context, name string, failMode string) error {
 	if !isValidFailMode(failMode) {
-		return &MessageError{Msg: fmt.Sprintf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", failMode)}
+		return &ErrInvalidFailMode{FailMode: failMode}
 	}
 	if name == "" {
 		return ErrInvalidBridgeName

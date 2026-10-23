@@ -130,7 +130,7 @@ func TestInjectEKCertificate_CAUnavailable(t *testing.T) {
 
 	// This will fail because we can't connect to the socket
 	// But we're testing the error type
-	_, err = service.injectEKCertificate(ctx, "/nonexistent/socket.sock", opts)
+	_, err = service.injectEKCertificate(ctx, "/nonexistent/socket.sock", t.TempDir(), opts)
 	if err == nil {
 		t.Error("injectEKCertificate should fail with nonexistent socket")
 	}
@@ -158,7 +158,7 @@ func TestInjectEKCertificate_InvalidSocketPath(t *testing.T) {
 	}
 
 	// Try with empty socket path
-	_, err = service.injectEKCertificate(ctx, "", opts)
+	_, err = service.injectEKCertificate(ctx, "", t.TempDir(), opts)
 	if err == nil {
 		t.Error("injectEKCertificate should fail with empty socket path")
 	}

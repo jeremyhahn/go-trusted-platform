@@ -96,6 +96,13 @@ func TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests(t *testing.T) 
 	}{
 		{"no device id", &platformv1.AttestDeviceRequest{Evidence: []byte(`{"quote":"x"}`)}},
 		{"no evidence", &platformv1.AttestDeviceRequest{DeviceId: itoa(f.device.ID)}},
+		// Evidence the verifier cannot evaluate is the caller's to correct:
+		// a typed refusal, never an internal error (REST 400, not 500).
+		{"evidence without pcrs", &platformv1.AttestDeviceRequest{
+			DeviceId: itoa(f.device.ID),
+			Evidence: []byte(`{"quote":"cQ==","signature":"cw==","nonce":"bg=="}`),
+		}},
+		{"evidence not json", &platformv1.AttestDeviceRequest{DeviceId: itoa(f.device.ID), Evidence: []byte("not json")}},
 	}
 
 	for _, tt := range tests {
