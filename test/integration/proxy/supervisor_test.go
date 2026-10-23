@@ -866,7 +866,9 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		select {
 		case <-g.exited:
 			if g.exitErr != nil {
-				t.Errorf("gatewayd shutdown: %v", g.exitErr)
+				// "signal: terminated" means gatewayd had no SIGTERM handler
+				// yet and Go's default action killed it mid-start.
+				t.Errorf("gatewayd shutdown on SIGTERM: %v, want exit status 0 from its stop path", g.exitErr)
 			}
 		case <-deadline.C:
 			t.Errorf("gatewayd did not stop within 30s of SIGTERM")

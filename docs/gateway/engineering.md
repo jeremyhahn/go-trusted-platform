@@ -955,6 +955,16 @@ unexported `hardenOps` seam so the ordering is a unit test rather than a
 hope — the drop is irreversible, so a test that made the real calls would
 strip the test binary for the rest of the run.
 
+`gatewayd serve` takes `SIGINT` and `SIGTERM` before it starts anything
+(`runServe`). A stop that arrives while the gateway is still starting waits
+until startup ends, then takes the orderly stop path
+(`TestServeStopsOnASignalSentWhileStarting`). Registering any later leaves a
+window in which Go's default action kills gatewayd: no `gw.Stop`, no
+supervisor shutdown, death by the signal.
+`TestGatewaydSupervisorDeathLeavesTheDatapath` hit that window when it
+stopped a successor whose children answered the test's probes before the
+supervisor had finished starting.
+
 **Every thread, not one: the drop re-executes (#657).**
 `prctl` and `capset` apply to the calling thread only, while the Go runtime
 has started several threads before `main` runs, so the steps above harden one
