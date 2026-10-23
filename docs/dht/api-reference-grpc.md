@@ -1,5 +1,7 @@
 # DHT gRPC API Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document provides comprehensive documentation for the DHT service gRPC API.
 
 ## Connection

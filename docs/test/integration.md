@@ -562,15 +562,24 @@ devcontainer image so a developer and CI run the same thing:
 
 | Job | Tier | What it runs |
 |-----|------|--------------|
-| `image` | PR | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
+| `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) |
+| `image` | docs | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
 | `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
-| `lint`, `sdkjs`, `security`, `build`, `test` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls`; the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
+| `lint` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls` |
+| `sdkjs`, `security`, `build`, `test` | docs | Native-runner checks: the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
 | `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
 | `fips` | main only | `make test-fips`; outside the gate |
 
 The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
-labelled `ci:full`. `CI Gate` passes when every PR-tier job passed and every
-full-tier job passed or was not selected.
+labelled `ci:full`. The docs tier runs on every run except a docs-only PR: one
+whose every changed file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`),
+none of them a page a unit test reads (`DOCS_TESTED_PATTERN`, today
+`docs/daemon/` and `docs/web/`). A docs-only PR runs `lint` and `CI Gate`
+only; `ci:full` overrides it, and so does any doubt in the diff. `CI Gate`
+passes when every PR-tier job passed, every docs-tier job passed or skipped on
+a docs-only PR (`docs_only` reading exactly `true`), and every full-tier job
+passed or was not selected. `pkg/arch/citiers_test.go` holds the tiers, the
+gate's `needs` and its check lines to one another.
 
 The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
 the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
@@ -581,7 +590,10 @@ Its suppressions are `build/docker/devcontainer/trivyignore-image.yaml`, not
 the root `.trivyignore`: each entry is scoped by path to one package copy and
 carries its reason and an `expired_at` date, after which the finding fails the
 gate again. Today it holds only advisories in the dependencies npm itself
-bundles, which no Node or npm release fixes yet.
+bundles, which no Node or npm release fixes yet. A Debian package finding
+that the mirror has already fixed is not suppressed: bump the dated
+`APT_REFRESH` build argument in the `base` stage, which rebuilds the cached apt
+layer so its `apt-get upgrade` takes the fix.
 
 The images come from one Dockerfile, `build/docker/devcontainer/Dockerfile`,
 built from the repository root. `scripts/tool-pins.sh` holds the base image and
@@ -632,6 +644,56 @@ unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 
 To run a stage locally as CI does: `make docker-build`, then
 `make docker-run CMD='make test'`.
+
+### Foreign-Failure Baseline
+
+Company Agent ruling 125: a failure in a class that ruling 104 counts as
+foreign (fixed only by an upstream release this repository pins, and named
+on an open upstream issue) does not block a merge. Such failures are listed in
+`.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
+nothing is admin-merged.
+
+CI runs `make integration-test IT_FOREIGN_BASELINE=1`. The suites' output
+still goes to the job log, and is also written to `IT_LOG`. When the suites
+pass, nothing else happens. When they fail, `scripts/foreignfailures` decides
+the step's result instead:
+
+- It passes only when every failed leaf test is a row of the baseline.
+- It fails, naming each one, on a failed leaf the baseline does not list.
+- It fails closed on anything it cannot attribute to a listed test: a build
+  or compile failure, a panic or timeout, a package that failed with no
+  failing test, a target that failed outside go test, or a log without the
+  runner's closing summary.
+
+It prints the baseline hits per upstream issue. Rows that did not fail are
+reported as a notice; they do not fail the step. `ci-gate` reads the job's
+result unchanged.
+
+A local `make integration-test` leaves `IT_FOREIGN_BASELINE` unset, so it
+exits with the suites' own status and shows every failure.
+
+The file is tab-separated, with the columns `kind`, `package`, `name`,
+`upstream` and `closing_release`:
+
+| Column | Value |
+|--------|-------|
+| `kind` | `test` (one leaf test) or `job` (one runner target in `ALL_TARGETS`) |
+| `package` | the module-relative package, e.g. `test/integration/kms` |
+| `name` | the full leaf name, e.g. `TestKMS/gRPC/HMAC`; for `job`, the target |
+| `upstream` | the open issue, `repo#number`; several are joined by `+` |
+| `closing_release` | the release whose adoption fixes it |
+
+**Adding an entry:**
+
+- Only a ruling-104 foreign class may be listed, with its open upstream issue.
+- Add one row per failing leaf, copied exactly from the job log.
+- There are no wildcards or patterns, so a new failure can never hide under
+  an existing row.
+- `go test ./scripts/foreignfailures/` refuses a malformed, incomplete or
+  duplicated row.
+
+**Removing an entry:** a row is removed in the PR that adopts its
+`closing_release`.
 
 ## Protocol Parity Assertions
 

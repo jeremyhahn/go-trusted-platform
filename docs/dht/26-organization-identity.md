@@ -1,5 +1,7 @@
 # Organization Identity for Anti-Sybil Protections
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 Organization Identity addresses a critical vulnerability in the trusted DHT network: the current per-TPM owner model (`OwnerID = SHA256(IDevID pubkey)`) allows well-funded attackers to acquire multiple devices and effectively bypass the 10% single-owner CA pool limit. With FROST threshold at 33-40%, an attacker controlling 33-40 hardware TPMs could theoretically control certificate signing operations.

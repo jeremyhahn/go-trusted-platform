@@ -292,6 +292,34 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 	})
 }
 
+// TestNewAttestingRuntime covers layering the SDK attesting runtime over a
+// caller's own Tier 0 runtime.
+func TestNewAttestingRuntime(t *testing.T) {
+	t.Run("attests over the supplied Tier 0 runtime", func(t *testing.T) {
+		attesting, err := NewAttestingRuntime(&stubContainerRuntime{}, newMockHostTPM(), slog.Default())
+		if err != nil {
+			t.Fatalf("NewAttestingRuntime: %v", err)
+		}
+		if attesting == nil {
+			t.Fatal("expected an attesting runtime")
+		}
+	})
+
+	t.Run("rejects a nil host TPM", func(t *testing.T) {
+		_, err := NewAttestingRuntime(&stubContainerRuntime{}, nil, slog.Default())
+		var want ErrHostTPMRequired
+		if !errors.As(err, &want) {
+			t.Fatalf("error = %v, want ErrHostTPMRequired", err)
+		}
+	})
+
+	t.Run("rejects a nil Tier 0 runtime", func(t *testing.T) {
+		if _, err := NewAttestingRuntime(nil, newMockHostTPM(), slog.Default()); err == nil {
+			t.Fatal("an attesting runtime with no Tier 0 runtime must be refused")
+		}
+	})
+}
+
 // TestAttestationSpec covers the reconstruction of the SDK spec from a
 // measurement-log entry, which is what the golden-PCR comparison runs against.
 func TestAttestationSpec(t *testing.T) {
