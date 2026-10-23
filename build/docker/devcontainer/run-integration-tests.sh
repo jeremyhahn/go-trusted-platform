@@ -201,8 +201,8 @@ declare -A TARGET_NO_DAEMON=(
 # is out of the default set: platformd builds its PXE service with no
 # backend, so every PXE call answers SERVICE_NOT_CONFIGURED. bootstrap stays
 # runnable by name but is out of the default set too: its DANE tests need TLSA
-# records for _8443._tcp.localhost., and the shared daemon-only platformd
-# publishes none (no webservices, DANE off, no zone holds localhost.).
+# records for _8443._tcp.localhost., and the shared platformd publishes none
+# (DANE off, no zone holds localhost.).
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,

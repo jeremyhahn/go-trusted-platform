@@ -538,9 +538,19 @@ The Makefile automatically handles:
   REST on 8443 (TLS only, certificate CN and SAN `localhost`, issued by the
   platform CA in `ca-bundle.crt`), mounting the webservice routers the REST
   adapters call. gRPC (10443), QUIC (9444), MCP (9445) and the Unix socket stay
-  on the daemon. A daemon-only harness answers 404 on every webservice route;
-  `TestIntegrationConfig_ServesRESTThroughWebservice` (`pkg/app`) checks the
-  section against the runner's `PLATFORMD_REST_PORT`, and the `restroutes`
+  on the daemon. `platformd serve` takes `runWithWebservices`
+  (`pkg/daemon/commands/serve.go`): `leaveRESTToWebservice` sets
+  `RESTRoutesOnly`, so the daemon opens no REST listener and the webservice
+  mounts the daemon's REST routes (`daemonRESTRoutes`) and the gatewayd-facing
+  control plane on 8443. The Unix socket binds in the daemon's `Start`, after
+  the CA and the webservice certificate and before the webservice listener.
+  A daemon-only harness answers 404 on every webservice route.
+  `TestIntegrationConfig_RunMode` (`pkg/app`) pins the mode of both configs:
+  this one serves REST from one webservice on the runner's
+  `PLATFORMD_REST_PORT`, and `test/integration/barrier_gate/config.yaml` stays
+  daemon-only (that suite starts its own platformd on its own ports).
+  `TestIntegrationConfig_ServesRESTThroughWebservice` checks the section's
+  listener, certificate and key, and the `restroutes`
   smoke suite fails on a bare router 404, when the public
   `/api/v1/platform/service-registry` does not answer 200, or when the
   admin-gated `/api/v1/platform/health` or `/api/v1/dns/zones` does not answer

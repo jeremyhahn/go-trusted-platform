@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
 
 // integrationConfig is the platformd config run-integration-tests.sh starts
@@ -106,18 +107,61 @@ func TestIntegrationConfig_EKCertIsTheSwtpmNVIndex(t *testing.T) {
 	}
 }
 
-// TestIntegrationConfig_DaemonOnly pins both integration configs to
-// daemon-only mode. A webservices entry makes `platformd serve` take
-// runWithWebservices (pkg/daemon/commands/serve.go), which turns the daemon
-// REST listener off (EnableREST = false) and builds the CA and webserver
-// before the Unix socket exists; the runner then never sees its socket and
-// every REST adapter loses its endpoint. The gatewayd-facing routes the sdn
-// suite needs are on the daemon REST server.
-func TestIntegrationConfig_DaemonOnly(t *testing.T) {
-	for _, path := range []string{integrationConfig, barrierGateConfig} {
-		a := loadTemplate(t, path)
-		assert.Empty(t, a.WebServices, "%s: webservices switches platformd out of daemon-only mode", path)
+// webserviceTLSPorts returns the TLS port of every webservice a config
+// declares. None means daemon-only: `platformd serve` takes runDaemonOnly.
+func webserviceTLSPorts(a *App) []string {
+	var ports []string
+	for _, ws := range a.WebServices {
+		ports = append(ports, strconv.Itoa(ws.TLSPort))
 	}
+	return ports
+}
+
+// TestIntegrationConfig_RunMode pins the serve path each integration config
+// takes. A webservices entry sends `platformd serve` into runWithWebservices
+// (pkg/daemon/commands/serve.go), the path production runs.
+// leaveRESTToWebservice sets RESTRoutesOnly: the daemon builds its REST route
+// table but opens no REST listener, and the webservice mounts that table
+// (daemonRESTRoutes) beside the webservice routers and the gatewayd-facing
+// control plane. The Unix socket binds in platformDaemon.Start, after
+// LoadOrInitCA and InitWebServer and before any webservice listener runs.
+//
+// The harness config serves REST from one webservice on the runner's
+// PLATFORMD_REST_PORT, where PLATFORM_REST_ENDPOINT points. The barrier-gate
+// config stays daemon-only: its suite starts its own platformd on its own
+// ports and reaches REST on the daemon listener
+// (test/integration/barrier_gate/helpers.go).
+func TestIntegrationConfig_RunMode(t *testing.T) {
+	script, err := os.ReadFile(integrationRunner)
+	require.NoError(t, err)
+	restPort, ok := harnessRESTPort(script)
+	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+
+	tests := []struct {
+		path  string
+		ports []string
+		mode  string
+	}{
+		{integrationConfig, []string{restPort}, "runWithWebservices, REST on the webservice"},
+		{barrierGateConfig, nil, "daemon-only, REST on the daemon listener"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.ports, webserviceTLSPorts(loadTemplate(t, tt.path)), "%s: %s", tt.path, tt.mode)
+	}
+}
+
+// TestIntegrationConfig_RunModeMismatch proves the run-mode pin can fail: a
+// daemon-only config, or a webservice on another port, does not serve REST
+// where the runner's adapters dial.
+func TestIntegrationConfig_RunModeMismatch(t *testing.T) {
+	daemonOnly := &App{}
+	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(daemonOnly), "no webservice serves no REST port")
+
+	otherPort := &App{WebServices: []*v1.Config{{TLSPort: 9443}}}
+	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(otherPort), "a webservice on 9443 is not the runner's 8443")
+
+	twoServices := &App{WebServices: []*v1.Config{{TLSPort: 8443}, {TLSPort: 9443}}}
+	assert.NotEqual(t, []string{"8443"}, webserviceTLSPorts(twoServices), "a second webservice changes the mode the pin names")
 }
 
 // TestIntegrationConfig_TCPSwtpmNotASocket proves the socket check above can
