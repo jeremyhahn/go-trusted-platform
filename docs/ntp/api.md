@@ -300,7 +300,8 @@ REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 never-implemented `OpProv*` range (the provisioning surface actually ships under
 `OpProvisioningCategory`, `0xCF`). `0x51` is `OpIAMCategory` (IAM tenant records, #767); `0x52` is
 `OpVPNCategory`, and `0x53`–`0x55` are the cache, scheduler and messaging
-categories ([../sdk/api.md](../sdk/api.md) §3.5).
+categories ([../sdk/api.md](../sdk/api.md) §3.5). `0x60` is object storage
+([../objectstorage/api-reference-quic.md](../objectstorage/api-reference-quic.md)).
 The same reclamation precedent applies to `OpAttestCollectHost` and
 `OpVMExtendedCategory` — see [`docs/daemon/api.md`](../daemon/api.md) §4 for why
 opcode values repeat across categories.

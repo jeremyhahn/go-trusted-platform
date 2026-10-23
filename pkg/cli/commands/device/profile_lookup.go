@@ -33,6 +33,7 @@ func NewProfileLookupCommands(getFlags func() *cli.CommonFlags) []*cobra.Command
 		newProfileListCommand(getFlags),
 		newProfileDeleteCommand(getFlags),
 		newProfileMatchCommand(getFlags),
+		newProfileFindConfigCommand(getFlags),
 	}
 }
 
@@ -144,6 +145,60 @@ func runProfileMatch(flags *cli.CommonFlags, opts profileMatchOptions) error {
 			return ErrNoMatchingProfile(opts)
 		}
 		return ErrProfileMatchFailed{Cause: err}
+	}
+	return outputProfile(base, flags, profile)
+}
+
+// profileFindConfigOptions holds the device identity find-config looks up.
+type profileFindConfigOptions struct {
+	EKSerial   string
+	MACAddress string
+}
+
+// newProfileFindConfigCommand creates the profile find-config subcommand.
+func newProfileFindConfigCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var opts profileFindConfigOptions
+	cmd := &cobra.Command{
+		Use:   "find-config",
+		Short: "Find the device profile stored for a device's identity",
+		Long: `Find the device profile stored for a device's EK serial or MAC address.
+Unlike match, this compares the identity a profile was created for, not its
+match rules. At least one of --ek-serial or --mac is required. No profile for
+the identity is an error.
+
+Examples:
+  platformctl device profile find-config --ek-serial 0123456789ABCDEF
+  platformctl device profile find-config --mac 52:54:00:aa:bb:01 --output json`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProfileFindConfig(getFlags(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.EKSerial, "ek-serial", "", "device EK certificate serial")
+	cmd.Flags().StringVar(&opts.MACAddress, "mac", "", "device MAC address")
+	return cmd
+}
+
+// runProfileFindConfig looks up the profile stored for a device identity and
+// renders it like profile get.
+func runProfileFindConfig(flags *cli.CommonFlags, opts profileFindConfigOptions) error {
+	if opts.EKSerial == "" && opts.MACAddress == "" {
+		return ErrProfileConfigIdentityRequired{}
+	}
+
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	deviceClient := device.NewClientFromGRPC(base.Client().Device())
+	profile, err := deviceClient.FindConfigForDevice(base.Context(), opts.EKSerial, opts.MACAddress)
+	if err != nil {
+		if isNotFound(err) {
+			return ErrNoConfigForDevice(opts)
+		}
+		return ErrProfileFindConfigFailed{Cause: err}
 	}
 	return outputProfile(base, flags, profile)
 }

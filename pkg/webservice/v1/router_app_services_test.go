@@ -59,11 +59,22 @@ func (s *countingMessagingServer) GetChannel(context.Context, *platformv1.GetMes
 	return &platformv1.GetMessagingChannelResponse{}, nil
 }
 
+type countingObjectStorageServer struct {
+	platformv1.UnimplementedObjectStorageServiceServer
+	calls int
+}
+
+func (s *countingObjectStorageServer) HeadObject(context.Context, *platformv1.HeadObjectRequest) (*platformv1.HeadObjectResponse, error) {
+	s.calls++
+	return &platformv1.HeadObjectResponse{}, nil
+}
+
 // appServiceProbes are one route of each application service.
 var appServiceProbes = []string{
 	"/api/v1/cache/config",
 	"/api/v1/scheduler/jobs/7",
 	"/api/v1/messaging/channels/orders",
+	"/api/v1/object-storage/object/metadata?key=docs:a.txt",
 }
 
 func appServiceServing(t *testing.T, registry *testHandlerRegistry, target string) int {
@@ -80,9 +91,10 @@ func TestAppServiceRoutes_ReachTheSharedServers(t *testing.T) {
 	cache := &countingCacheServer{}
 	scheduler := &countingSchedulerServer{}
 	messaging := &countingMessagingServer{}
+	objects := &countingObjectStorageServer{}
 	registry := &testHandlerRegistry{
 		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
-		appServices:  restapi.AppServiceServers{Cache: cache, Scheduler: scheduler, Messaging: messaging},
+		appServices:  restapi.AppServiceServers{Cache: cache, Scheduler: scheduler, Messaging: messaging, ObjectStorage: objects},
 	}
 
 	for _, target := range appServiceProbes {
@@ -91,13 +103,15 @@ func TestAppServiceRoutes_ReachTheSharedServers(t *testing.T) {
 	assert.Equal(t, 1, cache.calls)
 	assert.Equal(t, 1, scheduler.calls)
 	assert.Equal(t, 1, messaging.calls)
+	assert.Equal(t, 1, objects.calls)
 }
 
 func TestAppServiceRoutes_AreGated(t *testing.T) {
 	servers := restapi.AppServiceServers{
-		Cache:     &countingCacheServer{},
-		Scheduler: &countingSchedulerServer{},
-		Messaging: &countingMessagingServer{},
+		Cache:         &countingCacheServer{},
+		Scheduler:     &countingSchedulerServer{},
+		Messaging:     &countingMessagingServer{},
+		ObjectStorage: &countingObjectStorageServer{},
 	}
 	anonymous := &testHandlerRegistry{tokenHandler: &anonymousAuth{}, appServices: servers}
 	user := &testHandlerRegistry{

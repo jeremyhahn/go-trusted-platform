@@ -52,6 +52,8 @@ QUIC opcode for update zone, sign zone, DNSSEC status or register.
 - **Daemon-native opcodes** (`0x22`, `0x23`, `0x27`, `0x2A`, `0x2C`) carry the
   flat snake_case fields in the table. `0x22` deletes the record and adds it
   again with `value`; `ttl` defaults to 3600.
+- `0x2A` answers an empty `internal_domain` or `public_domain` when that
+  server is not configured (`dns.internal` / `dns.public` absent).
 
 ## Status bytes
 

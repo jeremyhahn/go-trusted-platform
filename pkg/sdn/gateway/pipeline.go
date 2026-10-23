@@ -391,18 +391,6 @@ func (e *ErrPipelineOwned) Error() string {
 	return fmt.Sprintf("gateway: bridge %s pipeline is owned by %s", e.Bridge, e.Owner)
 }
 
-// ErrPipelineTerminalUnavailable is returned for a terminal the runtime
-// cannot honour yet.
-type ErrPipelineTerminalUnavailable struct {
-	Terminal PipelineTerminal
-	Reason   string
-}
-
-// Error implements the error interface.
-func (e *ErrPipelineTerminalUnavailable) Error() string {
-	return fmt.Sprintf("gateway: pipeline terminal %q is unavailable: %s", e.Terminal, e.Reason)
-}
-
 // ErrPipelineTerminalUnknown is returned for a terminal the runtime does
 // not define.
 type ErrPipelineTerminalUnknown struct {

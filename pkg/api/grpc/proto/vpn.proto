@@ -105,6 +105,28 @@ message VPNGatewayStatus {
   // rejected_peers are the enrolled peers this gateway refused (a zone it
   // does not serve). Each is refused admission; the rest of the set applies.
   repeated VPNRejectedPeer rejected_peers = 12;
+  // revocations counts the revoked leases by reason.
+  map<string, uint64> revocations = 13;
+  // posture_violations counts the posture rules that refused an admission
+  // or a renewal, by rule name; past 64 distinct rules the rest count as
+  // "other".
+  map<string, uint64> posture_violations = 14;
+  // reattest is how long the renewal re-attestations took to verify.
+  VPNDurationHistogram reattest = 15;
+}
+
+// VPNDurationHistogram is a cumulative histogram of durations.
+message VPNDurationHistogram {
+  uint64 count = 1;
+  double sum_seconds = 2;
+  // buckets are cumulative: each counts the observations at or under its
+  // upper bound. Observations over the last bound count only in count.
+  repeated VPNHistogramBucket buckets = 3;
+}
+
+message VPNHistogramBucket {
+  double upper_bound_seconds = 1;
+  uint64 count = 2;
 }
 
 // VPNRejectedPeer is one enrolment a gateway refused, and why.

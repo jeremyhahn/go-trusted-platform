@@ -177,7 +177,7 @@ over it — "generate this platform's PK/KEK/DB set" is not an RPC.
 | Verify an Authenticode signature | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(Authenticode).VerifyFile(path)` / `.Verify(r)` |
 | Extract the embedded signing certificate | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(Authenticode).ExtractCertificateFile(path)` / `.ExtractCertificate(r)` |
 | Read the signing time from a signed PE | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `authenticode.SigningTime(r)` |
-| RFC 3161 timestamping | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | **PLANNED** — `SignerOptions.TimestampURL` is accepted and `addTimestamp` returns `ErrRFC3161NotImplemented`, logged as a non-fatal warning |
+| RFC 3161 timestamping | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `SignerOptions.TimestampURL` — the token is embedded as the SPC RFC 3161 unauthenticated attribute and checked by `Verify`; a TSA that cannot stamp fails signing with `*TimestampError` |
 
 These are file-manipulation operations over local paths. There is no sensible
 RPC shape for "build a UKI from `/boot/vmlinuz`" that does not amount to shipping

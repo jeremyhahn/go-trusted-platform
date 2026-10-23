@@ -42,6 +42,8 @@ const (
 	cacheBasePath     = "/cache"
 	schedulerBasePath = "/scheduler"
 	messagingBasePath = "/messaging"
+
+	objectStorageBasePath = "/object-storage"
 )
 
 // Application service route scopes; they match the CacheService,
@@ -57,6 +59,10 @@ const (
 	scopeMessagingRead   = "messaging:read"
 	scopeMessagingWrite  = "messaging:write"
 	scopeMessagingDelete = "messaging:delete"
+
+	scopeObjectStorageRead   = "objectstorage:read"
+	scopeObjectStorageWrite  = "objectstorage:write"
+	scopeObjectStorageDelete = "objectstorage:delete"
 )
 
 // appUnmarshalOptions decodes request bodies; unknown fields are refused so a
@@ -127,13 +133,14 @@ func (e ErrAppUnknownField) Error() string {
 // also back gRPC, QUIC, MCP and the Unix socket. A nil server leaves its
 // routes answering 503.
 type AppServiceServers struct {
-	Cache     platformv1.CacheServiceServer
-	Scheduler platformv1.SchedulerServiceServer
-	Messaging platformv1.MessagingServiceServer
+	Cache         platformv1.CacheServiceServer
+	Scheduler     platformv1.SchedulerServiceServer
+	Messaging     platformv1.MessagingServiceServer
+	ObjectStorage platformv1.ObjectStorageServiceServer
 }
 
-// AppServiceHandlers binds the Cache, Scheduler and Messaging REST routes to
-// their servers.
+// AppServiceHandlers binds the Cache, Scheduler, Messaging and ObjectStorage
+// REST routes to their servers.
 type AppServiceHandlers struct {
 	servers AppServiceServers
 	guard   RouteGuard
@@ -179,6 +186,9 @@ type appRESTRoute struct {
 func cacheServer(s AppServiceServers) platformv1.CacheServiceServer         { return s.Cache }
 func schedulerServer(s AppServiceServers) platformv1.SchedulerServiceServer { return s.Scheduler }
 func messagingServer(s AppServiceServers) platformv1.MessagingServiceServer { return s.Messaging }
+func objectStorageServer(s AppServiceServers) platformv1.ObjectStorageServiceServer {
+	return s.ObjectStorage
+}
 
 // appRESTRoutes maps each gRPC method to its REST route.
 //
@@ -203,6 +213,17 @@ func messagingServer(s AppServiceServers) platformv1.MessagingServiceServer { re
 //	GET    /api/v1/messaging/channels/{channel}/stats              - GetChannelStats (messaging:read)
 //	GET    /api/v1/messaging/stats                                 - GetStats (messaging:read)
 //	GET    /api/v1/messaging/dedup-stats                           - GetDedupStats (messaging:read)
+//	POST   /api/v1/object-storage/objects                          - PutObject (objectstorage:write)
+//	GET    /api/v1/object-storage/objects?prefix=&tenant_id=&...   - ListObjects (objectstorage:read)
+//	POST   /api/v1/object-storage/objects/copy                     - CopyObject (objectstorage:write)
+//	GET    /api/v1/object-storage/objects/by-tag?tag_name=&...     - ListObjectsByTag (objectstorage:read)
+//	GET    /api/v1/object-storage/object?key=&tenant_id=&...       - GetObject (objectstorage:read)
+//	DELETE /api/v1/object-storage/object?key=&tenant_id=           - DeleteObject (objectstorage:delete)
+//	GET    /api/v1/object-storage/object/metadata?key=&tenant_id=  - HeadObject (objectstorage:read)
+//	GET    /api/v1/object-storage/tenants/{tenant_id}/objects      - ListTenantObjects (objectstorage:read)
+//
+// Object keys hold ':' and '/', so they travel in the query string or the
+// body, never in the path.
 var appRESTRoutes = map[string]appRESTRoute{
 	platformv1.CacheService_GetStats_FullMethodName: {
 		verb: http.MethodGet, path: cacheBasePath + "/stats", scope: scopeCacheRead, query: []string{"entity_type"},
@@ -299,6 +320,44 @@ var appRESTRoutes = map[string]appRESTRoute{
 	platformv1.MessagingService_GetDedupStats_FullMethodName: {
 		verb: http.MethodGet, path: messagingBasePath + "/dedup-stats", scope: scopeMessagingRead,
 		invoke: appRESTMethod(appservices.ServiceMessaging, messagingServer, platformv1.MessagingServiceServer.GetDedupStats),
+	},
+	platformv1.ObjectStorageService_PutObject_FullMethodName: {
+		verb: http.MethodPost, path: objectStorageBasePath + "/objects", scope: scopeObjectStorageWrite, body: true, success: http.StatusCreated,
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.PutObject),
+	},
+	platformv1.ObjectStorageService_ListObjects_FullMethodName: {
+		verb: http.MethodGet, path: objectStorageBasePath + "/objects", scope: scopeObjectStorageRead,
+		query:  []string{"prefix", "tenant_id", "limit", "cursor", "include_tags"},
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.ListObjects),
+	},
+	platformv1.ObjectStorageService_CopyObject_FullMethodName: {
+		verb: http.MethodPost, path: objectStorageBasePath + "/objects/copy", scope: scopeObjectStorageWrite, body: true, success: http.StatusCreated,
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.CopyObject),
+	},
+	platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName: {
+		verb: http.MethodGet, path: objectStorageBasePath + "/objects/by-tag", scope: scopeObjectStorageRead,
+		query:  []string{"tag_name", "tag_value", "tenant_id", "limit", "cursor"},
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.ListObjectsByTag),
+	},
+	platformv1.ObjectStorageService_GetObject_FullMethodName: {
+		verb: http.MethodGet, path: objectStorageBasePath + "/object", scope: scopeObjectStorageRead,
+		query:  []string{"key", "tenant_id", "include_metadata"},
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.GetObject),
+	},
+	platformv1.ObjectStorageService_DeleteObject_FullMethodName: {
+		verb: http.MethodDelete, path: objectStorageBasePath + "/object", scope: scopeObjectStorageDelete,
+		query:  []string{"key", "tenant_id"},
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.DeleteObject),
+	},
+	platformv1.ObjectStorageService_HeadObject_FullMethodName: {
+		verb: http.MethodGet, path: objectStorageBasePath + "/object/metadata", scope: scopeObjectStorageRead,
+		query:  []string{"key", "tenant_id"},
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.HeadObject),
+	},
+	platformv1.ObjectStorageService_ListTenantObjects_FullMethodName: {
+		verb: http.MethodGet, path: objectStorageBasePath + "/tenants/{tenant_id}/objects", scope: scopeObjectStorageRead,
+		query:  []string{"limit", "cursor", "include_tags"},
+		invoke: appRESTMethod(appservices.ServiceObjectStorage, objectStorageServer, platformv1.ObjectStorageServiceServer.ListTenantObjects),
 	},
 }
 

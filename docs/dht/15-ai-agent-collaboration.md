@@ -1,5 +1,7 @@
 # AI Agent Collaboration Network
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document specifies the AI Agent Collaboration Network feature for go-trusted-platform, enabling AI agents to collaborate on the DHT network via MCP (Model Context Protocol) and native APIs.
 
 ---

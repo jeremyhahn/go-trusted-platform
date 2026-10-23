@@ -27,7 +27,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -58,10 +57,12 @@ func TestComputeMultiProtocol(t *testing.T) {
 		}
 	})
 
+	// A protocol that fails stops the test: the remaining protocols drive the
+	// same daemon and would spend their deadlines on the same fault.
 	gate := helpers.NewAdapterGate(t, "compute", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -75,8 +76,12 @@ func TestComputeMultiProtocol(t *testing.T) {
 			t.Run("VMListFiltered", func(t *testing.T) { testVMListFiltered(t, ctx, adapter) })
 			t.Run("VMCreateWithLabels", func(t *testing.T) { testVMCreateWithLabels(t, ctx, adapter) })
 			t.Run("VMDeleteNotFound", func(t *testing.T) { testVMDeleteNotFound(t, ctx, adapter) })
+			t.Run("VMCreateRefusesUnsupportedField", func(t *testing.T) { testVMCreateRefusesUnsupportedField(t, ctx, adapter, fixture) })
 			t.Run("VMSuspendResumeReboot", func(t *testing.T) { testVMSuspendResumeReboot(t, ctx, adapter, fixture) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
@@ -87,21 +92,24 @@ type snapshotAdapter interface {
 	SnapshotCommands
 }
 
-// TestComputeSnapshotsMultiProtocol drives the snapshot verbs on every
-// transport whose SDK adapter carries them.
+// TestComputeSnapshotsMultiProtocol drives the snapshot verbs on every API
+// transport.
 func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
 	adapters := []snapshotAdapter{
+		NewRESTAdapter(),
 		NewGRPCAdapter(),
 		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute snapshots", helpers.AdapterNames(adapters)...)
-	for _, adapter := range adapters {
+	for i, adapter := range adapters {
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
@@ -111,10 +119,13 @@ func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 
 			t.Run("VMSnapshots", func(t *testing.T) { testVMSnapshots(t, ctx, adapter) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
-// testVMSnapshots creates, lists, restores and deletes a snapshot of a
+// testVMSnapshots creates, lists, gets, restores and deletes a snapshot of a
 // running VM, then checks a deleted snapshot answers NotFound.
 func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter) {
 	vmName := generateTestVMName("snap-" + uuid.New().String()[:8])
@@ -123,7 +134,7 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
 		t.Fatalf("CreateVM failed: %v", err)
@@ -155,6 +166,14 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	requireSnapshotListed(t, ctx, adapter, vmID, snapshotName, true)
 
 	snapshot := SnapshotOptions{VMID: vmID, SnapshotID: snapshotName}
+	got, err := adapter.GetSnapshot(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if got.ID != snapshotName || got.VMID != vmID {
+		t.Errorf("GetSnapshot = %+v, want ID %q on VM %q", *got, snapshotName, vmID)
+	}
+
 	if err := adapter.RestoreSnapshot(ctx, snapshot); err != nil {
 		t.Fatalf("RestoreSnapshot failed: %v", err)
 	}
@@ -167,6 +186,16 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	err = adapter.DeleteSnapshot(ctx, snapshot)
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("DeleteSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+
+	_, err = adapter.GetSnapshot(ctx, snapshot)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+
+	_, err = adapter.ListSnapshots(ctx, "")
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("ListSnapshots without a VM id over %s: got %v, want InvalidArgument", adapter.Name(), err)
 	}
 }
 
@@ -190,26 +219,29 @@ func requireSnapshotListed(t *testing.T, ctx context.Context, adapter snapshotAd
 	}
 }
 
-// attestAdapter is a transport that carries both the VM verbs and the
-// attestation verbs.
-type attestAdapter interface {
+// migrationAdapter is a transport that carries the destination half of a
+// two-phase migration.
+type migrationAdapter interface {
 	ComputeCommands
-	AttestCommands
+	MigrationCommands
 }
 
-// TestComputeAttestationMultiProtocol drives the VM attestation verbs
-// through every SDK transport that carries them against the real
-// orchestrator.
-func TestComputeAttestationMultiProtocol(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+// TestComputeMigrationMultiProtocol holds the migration refusals against the
+// running daemon on every transport: the local-qemu orchestrator can receive
+// a migration, so the request checks behind it answer, not FailedPrecondition.
+func TestComputeMigrationMultiProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t.Cleanup(cancel)
 
-	adapters := []attestAdapter{
+	adapters := []migrationAdapter{
+		NewRESTAdapter(),
 		NewGRPCAdapter(),
 		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
 	}
 
-	gate := helpers.NewAdapterGate(t, "compute attestation", helpers.AdapterNames(adapters)...)
+	gate := helpers.NewAdapterGate(t, "compute migration", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
@@ -220,8 +252,60 @@ func TestComputeAttestationMultiProtocol(t *testing.T) {
 				}
 			})
 
+			t.Run("MigrationRefusals", func(t *testing.T) { testMigrationRefusals(t, ctx, adapter) })
+		})
+	}
+}
+
+func testMigrationRefusals(t *testing.T, ctx context.Context, adapter migrationAdapter) {
+	_, err := adapter.PrepareMigration(ctx, PrepareMigrationOptions{VMName: "guest", Mode: "live"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("PrepareMigration without a guest over %s: got %v, want InvalidArgument", adapter.Name(), err)
+	}
+
+	err = adapter.FinalizeMigration(ctx, "recv-"+uuid.New().String()[:8], false)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("FinalizeMigration of an unknown receiver over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+}
+
+// attestAdapter is a transport that carries both the VM verbs and the
+// attestation verbs.
+type attestAdapter interface {
+	ComputeCommands
+	AttestCommands
+}
+
+// TestComputeAttestationMultiProtocol drives the VM attestation verbs
+// through every API transport against the real orchestrator.
+func TestComputeAttestationMultiProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
+
+	adapters := []attestAdapter{
+		NewRESTAdapter(),
+		NewGRPCAdapter(),
+		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
+	}
+
+	gate := helpers.NewAdapterGate(t, "compute attestation", helpers.AdapterNames(adapters)...)
+	for i, adapter := range adapters {
+		adapter := adapter
+		passed := t.Run(adapter.Name(), func(t *testing.T) {
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
+			t.Cleanup(func() {
+				if err := adapter.Teardown(ctx); err != nil {
+					t.Logf("Warning: teardown failed: %v", err)
+				}
+			})
+
 			t.Run("VMAttestation", func(t *testing.T) { testVMAttestation(t, ctx, adapter) })
 		})
+		if !passed {
+			t.Fatalf("%s failed; stopping before the remaining protocols %v", adapter.Name(), helpers.AdapterNames(adapters[i+1:]))
+		}
 	}
 }
 
@@ -234,7 +318,7 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 		TPM:        true,
 	})
 	if err != nil {
@@ -252,13 +336,18 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 
 	// swtpm runs only while the VM runs, so a stopped VM has no quote.
 	_, err = adapter.AttestVM(ctx, AttestVMOptions{VMID: vmID, Nonce: nonce, PCRIndices: []uint32{0, 7}})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("AttestVM of a stopped VM over %s: got %v, want FailedPrecondition", adapter.Name(), err)
+	if want := sdkWrongStateCode(adapter.Name()); status.Code(err) != want {
+		t.Errorf("AttestVM of a stopped VM over %s: got %v, want %v", adapter.Name(), err, want)
 	}
 
 	_, err = adapter.AttestVM(ctx, AttestVMOptions{VMID: "missing-" + uuid.New().String(), Nonce: nonce})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("AttestVM of an unknown VM over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+
+	_, err = adapter.AttestVM(ctx, AttestVMOptions{Nonce: nonce})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("AttestVM without a VM id over %s: got %v, want InvalidArgument", adapter.Name(), err)
 	}
 
 	_, err = adapter.VerifyVMAttestation(ctx, VerifyVMAttestationOptions{
@@ -269,6 +358,16 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("VerifyVMAttestation without a quote over %s: got %v, want InvalidArgument", adapter.Name(), err)
 	}
+}
+
+// sdkWrongStateCode is the class a VM in the wrong state reaches an SDK
+// adapter as. The REST server renders FailedPrecondition as 400, which the
+// SDK REST transport reads back as InvalidArgument.
+func sdkWrongStateCode(adapter string) codes.Code {
+	if adapter == "REST" {
+		return codes.InvalidArgument
+	}
+	return codes.FailedPrecondition
 }
 
 // =============================================================================
@@ -288,10 +387,10 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM failed: %v", err)
 	}
 
@@ -315,7 +414,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 	// Get VM - verify stopped
 	getResult, err := adapter.GetVM(ctx, GetVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetVM after create failed: %v", err)
 	}
 
@@ -330,7 +429,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 	// Start VM
 	startResult, err := adapter.StartVM(ctx, StartVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("StartVM failed: %v", err)
 	}
 
@@ -354,7 +453,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		TimeoutSeconds: 30,
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("StopVM failed: %v", err)
 	}
 
@@ -378,7 +477,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		DeleteDisks: true,
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("DeleteVM failed: %v", err)
 	}
 
@@ -406,7 +505,7 @@ func testVMGet(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 		Firmware:   "uefi",
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM failed: %v", err)
 	}
 
@@ -423,7 +522,7 @@ func testVMGet(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 
 	getResult, err := adapter.GetVM(ctx, GetVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetVM failed: %v", err)
 	}
 
@@ -464,7 +563,7 @@ func testVMList(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 			DiskSizeGB: 1,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateVM[%d] failed: %v", i, err)
 		}
 		vmIDs = append(vmIDs, result.VMID)
@@ -486,7 +585,7 @@ func testVMList(t *testing.T, ctx context.Context, adapter ComputeCommands) {
 	// List all VMs
 	listResult, err := adapter.ListVMs(ctx, ListVMsOptions{})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("ListVMs failed: %v", err)
 	}
 
@@ -527,7 +626,7 @@ func testVMListFiltered(t *testing.T, ctx context.Context, adapter ComputeComman
 		},
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM failed: %v", err)
 	}
 
@@ -549,7 +648,7 @@ func testVMListFiltered(t *testing.T, ctx context.Context, adapter ComputeComman
 		},
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("ListVMs with filter failed: %v", err)
 	}
 
@@ -590,7 +689,7 @@ func testVMCreateWithLabels(t *testing.T, ctx context.Context, adapter ComputeCo
 		Labels:     labels,
 	})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreateVM with labels failed: %v", err)
 	}
 
@@ -608,7 +707,7 @@ func testVMCreateWithLabels(t *testing.T, ctx context.Context, adapter ComputeCo
 	// Retrieve VM and verify labels
 	getResult, err := adapter.GetVM(ctx, GetVMOptions{VMID: vmID})
 	if err != nil {
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetVM failed: %v", err)
 	}
 
@@ -637,31 +736,28 @@ func testVMDeleteNotFound(t *testing.T, ctx context.Context, adapter ComputeComm
 		return
 	}
 
-	surface.SkipIfNotImplemented(t, err)
+	surface.RequireImplemented(t, err)
 
 	// The operation should have returned an error; we just verify it did
 	t.Logf("Delete non-existent VM returned expected error: %v", err)
 }
 
-// wrongStateClass reports whether err is the error class a transport answers
-// a lifecycle verb sent to a VM in the wrong state with.
-type wrongStateClass func(err error) bool
+// errorClass reports whether err is the error class a transport answers a
+// failed request with.
+type errorClass func(err error) bool
 
 // wrongStateClasses maps each adapter to its wrong-state error class. gRPC,
-// Unix and QUIC carry the FailedPrecondition code, MCP a JSON-RPC code of the
-// FailedPrecondition class, REST answers 400 and the CLI exits non-zero with
-// the gRPC code in its output.
-var wrongStateClasses = map[string]wrongStateClass{
+// Unix, QUIC and MCP carry the FailedPrecondition code (the SDK MCP transport
+// turns the JSON-RPC code of that class back into it), REST answers 400 and
+// the CLI exits non-zero with the gRPC code in its output.
+var wrongStateClasses = map[string]errorClass{
 	"gRPC": isFailedPrecondition,
 	"Unix": isFailedPrecondition,
 	"QUIC": isFailedPrecondition,
+	"MCP":  isFailedPrecondition,
 	"REST": func(err error) bool {
 		var restErr ErrRESTRequestFailed
 		return errors.As(err, &restErr) && restErr.StatusCode == http.StatusBadRequest
-	},
-	"MCP": func(err error) bool {
-		var mcpErr ErrMCPRequestFailed
-		return errors.As(err, &mcpErr) && mcpwire.ClassForCode(mcpErr.Code) == codes.FailedPrecondition
 	},
 	"CLI": func(err error) bool {
 		var cliErr ErrCLIExecution
@@ -671,6 +767,64 @@ var wrongStateClasses = map[string]wrongStateClass{
 
 func isFailedPrecondition(err error) bool {
 	return status.Code(err) == codes.FailedPrecondition
+}
+
+// refusedFieldClasses maps each adapter to the error class CreateVM answers a
+// config field the backend cannot honour with. gRPC, Unix, QUIC and MCP carry
+// the InvalidArgument code, REST answers 400 and the CLI exits non-zero with
+// the gRPC code in its output.
+var refusedFieldClasses = map[string]errorClass{
+	"gRPC": isInvalidArgument,
+	"Unix": isInvalidArgument,
+	"QUIC": isInvalidArgument,
+	"MCP":  isInvalidArgument,
+	"REST": func(err error) bool {
+		var restErr ErrRESTRequestFailed
+		return errors.As(err, &restErr) && restErr.StatusCode == http.StatusBadRequest
+	},
+	"CLI": func(err error) bool {
+		var cliErr ErrCLIExecution
+		return errors.As(err, &cliErr) && strings.Contains(cliErr.Output, "code = "+codes.InvalidArgument.String())
+	},
+}
+
+func isInvalidArgument(err error) bool {
+	return status.Code(err) == codes.InvalidArgument
+}
+
+// testVMCreateRefusesUnsupportedField asks for BIOS firmware, which the
+// local-qemu backend cannot boot: the request fails with the transport's
+// refused-field class and leaves no VM behind.
+func testVMCreateRefusesUnsupportedField(t *testing.T, ctx context.Context, adapter ComputeCommands, fixture *GRPCAdapter) {
+	isRefused, ok := refusedFieldClasses[adapter.Name()]
+	if !ok {
+		t.Fatalf("no refused-field error class for adapter %s", adapter.Name())
+	}
+
+	vmName := generateTestVMName("refused-" + uuid.New().String()[:8])
+	_, err := adapter.CreateVM(ctx, CreateVMOptions{
+		Name:       vmName,
+		CPUs:       1,
+		MemoryMB:   256,
+		DiskSizeGB: 1,
+		Firmware:   "bios",
+	})
+	if err == nil {
+		t.Fatalf("CreateVM with BIOS firmware over %s succeeded, want a refusal", adapter.Name())
+	}
+	if !isRefused(err) {
+		t.Errorf("CreateVM with BIOS firmware over %s: got %v, want the transport's refused-field class", adapter.Name(), err)
+	}
+
+	listResult, err := fixture.ListVMs(ctx, ListVMsOptions{})
+	if err != nil {
+		t.Fatalf("fixture ListVMs failed: %v", err)
+	}
+	for _, vm := range listResult.VMs {
+		if vm.Name == vmName {
+			t.Errorf("refused CreateVM over %s left VM %s (%s) behind", adapter.Name(), vm.Name, vm.VMID)
+		}
+	}
 }
 
 // testVMSuspendResumeReboot drives suspend, resume and reboot through the
@@ -689,7 +843,7 @@ func testVMSuspendResumeReboot(t *testing.T, ctx context.Context, adapter Comput
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
 		t.Fatalf("fixture CreateVM failed: %v", err)

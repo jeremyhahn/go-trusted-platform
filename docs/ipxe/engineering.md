@@ -121,6 +121,12 @@ ignores load options in any case. The bootstrap container sets it for an
 installed `diskless-nbd` node
 ([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
 
+iPXE carries no enrollment of its own, on any architecture or boot model.
+Every node enrols through the same `enroll-01` or `endorse-01` client: a disk
+node in `platformd`'s first boot, a `diskless-nbd` node in the installer,
+before it first attaches its export, so it holds the IDevID the export admits
+([installer engineering](../installer/engineering.md#enrolling-before-the-attach)).
+
 A `DeviceLookup` returns `ErrDeviceNotFound` for a MAC it has no assignment
 for; `/boot/device/<mac>.ipxe` answers that with 404 and any other lookup
 error with 500. The route accepts the MAC dashed (iPXE's `${mac:hexhyp}`) or

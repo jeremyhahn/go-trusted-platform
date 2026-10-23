@@ -135,6 +135,5 @@ the shape signed off rather than treating this list as approved scope.
 `conventions/feature-docs.md` §4 requires every verb here to have a matching
 `CommandDefinition` in the integration parity suite. There are no verbs, so the
 requirement is vacuously satisfied for this feature. Separately, **this
-repository defines no `CommandDefinition` type at all** (grepped repo-wide,
-2026-08-18), so the requirement is unmet repo-wide and is raised as an owner
-question.
+repository defines no `CommandDefinition` type at all**, so the requirement is
+unmet repo-wide and is an open owner question.

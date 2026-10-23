@@ -275,6 +275,12 @@ changing, validate before applying, roll back if wrong.
 | `0x0A` | `StatusUnavailable` | 503 |
 | `0x0B` | `StatusNotImplemented` | 501 |
 
+A typed refusal carries its error text as the response payload, as the gRPC
+status message and the REST body do, so a client tells one refusal from another
+with the same status byte. The ceremony, PIV, LUKS and FIDO2 category handlers
+share one table for this (`phase35QUICRefusals`, `pkg/api/daemon/phase35_quic.go`);
+an untyped failure is `StatusInternalError` with no payload.
+
 ### Category opcodes — read this before writing any QUIC client
 
 The opcode is a **single byte** with a **two-level extension**: certain values
@@ -294,7 +300,8 @@ distinct values, twenty-three names:
 | `0x53` | `OpCacheCategory` | Cache through the composed go-quicbaas SDK; sub-opcodes `CacheSub*` `0x01`–`0x04`, scopes `cache:read`/`cache:write`/`cache:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x55` | `OpMessagingCategory` | Messaging through the composed go-quicbaas SDK; sub-opcodes `MessagingSub*` `0x01`–`0x08`, scopes `messaging:read`/`messaging:write`/`messaging:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
-| `0x69` | `OpVMExtendedCategory` | VM verbs (create, delete, start, stop, get, list `0x60`–`0x65`; reboot, suspend, resume `0xB6`–`0xB8`), snapshot create, restore, delete, list (`0xBB`–`0xBE`), attest and verify attestation (`0xB9`, `0xBF`) and operational sub-opcodes (`0xCC`–`0xD0`), each answered by `ComputeService` ([`docs/compute/api.md`](../compute/api.md) §2, §3, §5, §6). The top-level bytes `0x60`–`0x68` and `0x6A` are unassigned and refused as unclassified (#704) |
+| `0x60` | `OpObjectStorageCategory` | Object storage through the composed go-quicbaas SDK; sub-opcodes `ObjectStorageSub*` `0x01`–`0x08`, scopes `objectstorage:read`/`objectstorage:write`/`objectstorage:delete` ([docs/objectstorage/api-reference-quic.md](../objectstorage/api-reference-quic.md)) |
+| `0x69` | `OpVMExtendedCategory` | VM verbs (create, delete, start, stop, get, list `0x60`–`0x65`; reboot, suspend, resume `0xB6`–`0xB8`), snapshot get, create, restore, delete, list (`0xBA`–`0xBE`), attest and verify attestation (`0xB9`, `0xBF`) and operational sub-opcodes (`0xCC`–`0xD2`, including the destination-side prepare and finalize migration `0xD1`, `0xD2`), each answered by `ComputeService` ([`docs/compute/api.md`](../compute/api.md) §2, §3, §5, §6). The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned and refused as unclassified (#704) |
 | `0x90` | `OpClusterCategory` | Cluster; sub-opcodes `ClusterSub*` `0x01`–`0x05`, one per `ClusterService` RPC, scopes `cluster:read`/`cluster:write` ([`docs/cluster/api.md`](../cluster/api.md)). Reclaimed from the never-implemented `OpJWTCreate` |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
@@ -304,8 +311,8 @@ distinct values, twenty-three names:
 | `0x9E` | `OpTenantBarrierCategory` | Per-tenant barrier |
 | `0x9F` | `OpBMCCategory` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC ([`docs/bmc/api.md`](../bmc/api.md)) |
 | `0xCC` | `OpSwitchCategory` | Physical switch; sub-opcodes `SwitchSub*` `0x01`–`0x05` |
-| `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4) |
-| `0xCE` | `OpSecretsCategory` | Secrets |
+| `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4); subs `0x08`–`0x0D` are the `DEKManagement` calls (`docs/kms/api.md` §4) |
+| `0xCE` | `OpSecretsCategory` | Secrets; sub-opcodes `SecretsSub*` `0x01`–`0x0B`: store, get, list, delete, rotation-policy set/get (`0x01`–`0x06`), then version get, version list, rotate, rollback, status (`0x07`–`0x0B`), scopes `secrets:read`/`secrets:list`/`secrets:write`/`secrets:delete` ([`docs/kms/api.md`](../kms/api.md) §4) |
 | `0xCF` | `OpProvisioningCategory` | Provisioning / config delivery. Device sub-opcodes `0x20`–`0x29` (profile assign/unassign, attestation certificate, diskless boot certificate and delivery, disable/enable, template create, profile from template, find matching profile) are routed first — [`docs/device/api.md`](../device/api.md) §3.7 |
 
 **This is why opcode values repeat.** `OpOverlayStatus`, `OpGatewayStatus` and
@@ -373,7 +380,7 @@ All three catalogs **deny an unlisted entry** — MCP since #300, QUIC since
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **every registered RPC**, unary and streaming, across every `platform.v1` service, the four quicbaas KMS services and `grpc.health.v1.Health`; a contract test keeps it that way | **denied**: the OIDC interceptor answers `PermissionDenied` (`ErrMethodNotClassified`) before it reads a token, unless the method is on the documented pre-auth list |
-| MCP (`pkg/api/mcp/authz.go`) | **all 479 registered tools** (12 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); `TestEveryRegisteredToolIsClassified` (`authz_completeness_test.go`) fails if a registered tool has none (#304) |
+| MCP (`pkg/api/mcp/authz.go`) | **all 487 registered tools** (12 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); `TestEveryRegisteredToolIsClassified` (`authz_completeness_test.go`) fails if a registered tool has none (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 Per-service scopes are listed in each feature folder. A new RPC must carry the

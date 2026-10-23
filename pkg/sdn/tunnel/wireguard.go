@@ -17,6 +17,7 @@ package tunnel
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"net"
 
@@ -34,6 +35,7 @@ const wireGuardUnavailableReason = ""
 // wgOps abstracts the WireGuard control socket for tests.
 type wgOps interface {
 	ConfigureDevice(name string, cfg wgtypes.Config) error
+	Device(name string) (*wgtypes.Device, error)
 	Close() error
 }
 
@@ -49,6 +51,10 @@ func newRealWGOps() (wgOps, error) {
 
 func (r *realWGOps) ConfigureDevice(name string, cfg wgtypes.Config) error {
 	return r.client.ConfigureDevice(name, cfg)
+}
+
+func (r *realWGOps) Device(name string) (*wgtypes.Device, error) {
+	return r.client.Device(name)
 }
 
 func (r *realWGOps) Close() error { return r.client.Close() }
@@ -110,12 +116,9 @@ func (m *Manager) createWireGuard(ctx context.Context, config TunnelConfig) erro
 	if err != nil {
 		return err
 	}
-	if m.wg == nil {
-		ops, err := newRealWGOps()
-		if err != nil {
-			return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
-		}
-		m.wg = ops
+	ops, err := m.wireGuardOps()
+	if err != nil {
+		return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
 	}
 	link := &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: config.Name, MTU: config.effectiveMTU()}}
 	if err := m.nl.LinkAdd(link); err != nil {
@@ -125,7 +128,7 @@ func (m *Manager) createWireGuard(ctx context.Context, config TunnelConfig) erro
 	if err != nil {
 		return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
 	}
-	if err := m.wg.ConfigureDevice(config.Name, devCfg); err != nil {
+	if err := ops.ConfigureDevice(config.Name, devCfg); err != nil {
 		_ = m.nl.LinkDel(created)
 		return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
 	}
@@ -170,4 +173,129 @@ func (m *Manager) rekeyWireGuard(ctx context.Context, config TunnelConfig) error
 		return &ErrRekeyFailed{Name: config.Name, Cause: err}
 	}
 	return nil
+}
+
+// wireGuardOps returns the manager's WireGuard control socket, opening it on
+// first use.
+func (m *Manager) wireGuardOps() (wgOps, error) {
+	if m.wg == nil {
+		ops, err := newRealWGOps()
+		if err != nil {
+			return nil, err
+		}
+		m.wg = ops
+	}
+	return m.wg, nil
+}
+
+// adoptWireGuard reports whether link is this WireGuard tunnel, left running
+// by a killed datapath: a WireGuard link of the configured MTU, up, with
+// exactly the tunnel addresses, the configured private key and, when one is
+// configured, the listen port. Unlike an IPsec SA, everything that keys the
+// device is configuration the manager reads back and compares. An adopted
+// device's peers are reconciled by diff, so the session to a peer that is
+// still wanted is never torn down.
+func (m *Manager) adoptWireGuard(ctx context.Context, link vnl.Link, config TunnelConfig) (bool, error) {
+	if !linkMatches(link, config) {
+		return false, nil
+	}
+	if ok, err := m.hasTunnelAddresses(link, config); err != nil || !ok {
+		return false, err
+	}
+	key, err := fetchKey(ctx, m.keys, config.Name, config.WireGuard.KeyRef, wireGuardKeyLen)
+	if err != nil {
+		return false, err
+	}
+	defer zeroize(key)
+	want, err := wireGuardDeviceConfig(config, key)
+	if err != nil {
+		return false, err
+	}
+	defer zeroize(want.PrivateKey[:])
+	ops, err := m.wireGuardOps()
+	if err != nil {
+		return false, err
+	}
+	device, err := ops.Device(config.Name)
+	if err != nil {
+		return false, err
+	}
+	defer zeroize(device.PrivateKey[:])
+	if subtle.ConstantTimeCompare(device.PrivateKey[:], want.PrivateKey[:]) != 1 {
+		return false, nil
+	}
+	if want.ListenPort != nil && device.ListenPort != *want.ListenPort {
+		return false, nil
+	}
+	diff := wireGuardPeerDiff(device.Peers, want.Peers)
+	if len(diff) == 0 {
+		return true, nil
+	}
+	if err := ops.ConfigureDevice(config.Name, wgtypes.Config{Peers: diff}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// wireGuardPeerDiff is the peer changes that take a device's installed peers
+// to want without touching a peer that is already as wanted: a peer not
+// wanted is removed, and a wanted peer that is missing or differs is set in
+// place, which keeps its session.
+func wireGuardPeerDiff(installed []wgtypes.Peer, want []wgtypes.PeerConfig) []wgtypes.PeerConfig {
+	wanted := make(map[wgtypes.Key]bool, len(want))
+	for _, peer := range want {
+		wanted[peer.PublicKey] = true
+	}
+	current := make(map[wgtypes.Key]wgtypes.Peer, len(installed))
+	var diff []wgtypes.PeerConfig
+	for _, peer := range installed {
+		current[peer.PublicKey] = peer
+		if !wanted[peer.PublicKey] {
+			diff = append(diff, wgtypes.PeerConfig{PublicKey: peer.PublicKey, Remove: true})
+		}
+	}
+	for _, peer := range want {
+		have, ok := current[peer.PublicKey]
+		if ok && wireGuardPeerMatches(have, peer) {
+			continue
+		}
+		if ok && have.PresharedKey != (wgtypes.Key{}) {
+			// The tunnel configures no preshared key: clear the one installed.
+			peer.PresharedKey = &wgtypes.Key{}
+		}
+		diff = append(diff, peer)
+	}
+	return diff
+}
+
+// wireGuardPeerMatches reports whether an installed peer is as want sets it.
+func wireGuardPeerMatches(have wgtypes.Peer, want wgtypes.PeerConfig) bool {
+	if have.PresharedKey != (wgtypes.Key{}) {
+		return false
+	}
+	if want.Endpoint != nil && (have.Endpoint == nil || have.Endpoint.String() != want.Endpoint.String()) {
+		return false
+	}
+	if want.PersistentKeepaliveInterval != nil && have.PersistentKeepaliveInterval != *want.PersistentKeepaliveInterval {
+		return false
+	}
+	return sameIPNets(have.AllowedIPs, want.AllowedIPs)
+}
+
+// sameIPNets reports whether have and want hold the same networks, in any
+// order.
+func sameIPNets(have, want []net.IPNet) bool {
+	if len(have) != len(want) {
+		return false
+	}
+	set := make(map[string]bool, len(have))
+	for _, n := range have {
+		set[n.String()] = true
+	}
+	for _, n := range want {
+		if !set[n.String()] {
+			return false
+		}
+	}
+	return true
 }

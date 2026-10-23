@@ -54,7 +54,6 @@ type mockContainerOrchestrator struct {
 	attestError  error
 	attestReport *container.AttestationReport
 	logsContent  string
-	closed       bool
 }
 
 func newMockContainerOrchestrator() *mockContainerOrchestrator {
@@ -219,7 +218,6 @@ func (m *mockContainerOrchestrator) VerifyImage(ctx context.Context, ref string)
 }
 
 func (m *mockContainerOrchestrator) Close() error {
-	m.closed = true
 	return nil
 }
 

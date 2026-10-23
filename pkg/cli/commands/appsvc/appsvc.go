@@ -11,8 +11,8 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package appsvc implements the platformctl cache, scheduler and messaging
-// command groups (#704). Each command calls one RPC of its service through
+// Package appsvc implements the platformctl cache, scheduler, messaging and
+// objectstorage command groups (#704). Each command calls one RPC of its service through
 // the SDK client and prints the reply.
 package appsvc
 
@@ -64,9 +64,10 @@ func sdkClient[C any](service func(platform.Client) C) clientFactory[C] {
 }
 
 var (
-	newCacheClient     = sdkClient(platform.Client.Cache)
-	newSchedulerClient = sdkClient(platform.Client.Scheduler)
-	newMessagingClient = sdkClient(platform.Client.Messaging)
+	newCacheClient         = sdkClient(platform.Client.Cache)
+	newSchedulerClient     = sdkClient(platform.Client.Scheduler)
+	newMessagingClient     = sdkClient(platform.Client.Messaging)
+	newObjectStorageClient = sdkClient(platform.Client.ObjectStorage)
 )
 
 // outputFunc renders a command result. Tests replace it to capture output.

@@ -26,7 +26,8 @@ const (
 	// (revoke, metadata get/update, policy get/set, supported algorithms).
 	OpKMSExtendedCategory byte = 0xCD
 	// OpSecretsCategory multiplexes secrets sub-operations
-	// (store, get, list, delete, rotation-policy get/set).
+	// (store, get, list, delete, rotation-policy get/set, versions, rotate,
+	// rollback, status).
 	OpSecretsCategory byte = 0xCE
 )
 
@@ -49,6 +50,18 @@ const (
 	// not a kms permission. It lives here because the single-byte CA range
 	// is full and the operation certifies a KMS key.
 	KMSSubSignCSR byte = 0x07
+	// KMSSubCreateDEK creates a named data encryption key (DEKManagement).
+	KMSSubCreateDEK byte = 0x08
+	// KMSSubListDEKs lists data encryption keys under a path prefix.
+	KMSSubListDEKs byte = 0x09
+	// KMSSubGetDEK retrieves a data encryption key's metadata by path.
+	KMSSubGetDEK byte = 0x0A
+	// KMSSubGetDEKStatus retrieves a DEK's usage and re-encryption status.
+	KMSSubGetDEKStatus byte = 0x0B
+	// KMSSubRotateDEK creates a new version of a data encryption key.
+	KMSSubRotateDEK byte = 0x0C
+	// KMSSubDeleteDEK removes a data encryption key.
+	KMSSubDeleteDEK byte = 0x0D
 )
 
 // Secrets sub-opcodes.
@@ -65,4 +78,14 @@ const (
 	SecretsSubSetRotationPolicy byte = 0x05
 	// SecretsSubGetRotationPolicy retrieves the automatic rotation policy.
 	SecretsSubGetRotationPolicy byte = 0x06
+	// SecretsSubGetVersion retrieves one version of a secret, with its data.
+	SecretsSubGetVersion byte = 0x07
+	// SecretsSubListVersions lists the versions of a secret.
+	SecretsSubListVersions byte = 0x08
+	// SecretsSubRotate stores new data as the secret's next version.
+	SecretsSubRotate byte = 0x09
+	// SecretsSubRollback makes an earlier version current again.
+	SecretsSubRollback byte = 0x0A
+	// SecretsSubUpdateStatus enables or disables a secret.
+	SecretsSubUpdateStatus byte = 0x0B
 )

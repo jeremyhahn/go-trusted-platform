@@ -73,6 +73,27 @@ export interface VPNGatewayStatus {
   leases: VPNLease[];
   posturePolicyErrors: string[];
   rejectedPeers: VPNRejectedPeer[];
+  /** Revoked leases by reason */
+  revocations: Record<string, string>;
+  /** Posture rules that refused an admission or renewal, by rule; past 64 rules the rest count as "other" */
+  postureViolations: Record<string, string>;
+  /** How long the renewal re-attestations took to verify; null when the gateway reports no VPN section */
+  reattest: VPNDurationHistogram | null;
+}
+
+/**
+ * A cumulative histogram of durations
+ */
+export interface VPNDurationHistogram {
+  count: string;
+  sumSeconds: number;
+  /** Cumulative: each counts the observations at or under its upper bound */
+  buckets: VPNHistogramBucket[];
+}
+
+export interface VPNHistogramBucket {
+  upperBoundSeconds: number;
+  count: string;
 }
 
 /**

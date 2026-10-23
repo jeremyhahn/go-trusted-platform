@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -213,7 +214,7 @@ func addTAPPort(bridge, port string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
 		"--", "set", "interface", port, "type=tap")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -226,7 +227,7 @@ func addInternalPort(bridge, port string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
 		"--", "set", "interface", port, "type=internal")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -245,7 +246,7 @@ func addPatchPort(bridge, port, peer string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
 		"--", "set", "interface", port, "type=patch",
 		fmt.Sprintf("options:peer=%s", peer))
 	output, err := cmd.CombinedOutput()

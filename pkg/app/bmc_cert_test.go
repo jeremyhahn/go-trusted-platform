@@ -501,6 +501,16 @@ func TestIssueBMCCertificateCore_ACMEPath(t *testing.T) {
 	if acme.callCnt != 1 {
 		t.Errorf("acme.callCnt = %d", acme.callCnt)
 	}
+	if acme.lastReq.AuthzValue != "bmc01.internal" || acme.lastReq.ChallengeType != "dns-01" {
+		t.Errorf("ACME authz = %q/%q, want bmc01.internal/dns-01", acme.lastReq.AuthzValue, acme.lastReq.ChallengeType)
+	}
+	csr, err := x509.ParseCertificateRequest(acme.lastReq.CSR)
+	if err != nil {
+		t.Fatalf("ACME request carried an unparsable CSR: %v", err)
+	}
+	if csr.Subject.CommonName != "bmc01.internal" {
+		t.Errorf("CSR CommonName = %q, want bmc01.internal", csr.Subject.CommonName)
+	}
 	if local.callCnt != 0 {
 		t.Error("local CA called when ACME configured")
 	}
@@ -512,6 +522,9 @@ func TestIssueBMCCertificateCore_ACMEPath(t *testing.T) {
 	}
 	if !bytesContainsPEMBlock(dep.keyPEMSeenBs, "PRIVATE KEY") {
 		t.Error("deployer did not receive key PEM")
+	}
+	if dep.closeCalls != 0 {
+		t.Errorf("injected deployer closed %d times; the caller owns it", dep.closeCalls)
 	}
 }
 
@@ -530,6 +543,9 @@ func TestIssueBMCCertificateCore_LocalCAFallback(t *testing.T) {
 	}
 	if local.callCnt != 1 {
 		t.Errorf("local.callCnt = %d", local.callCnt)
+	}
+	if got := local.lastReq.Subject.CommonName; got != "bmc01.internal" {
+		t.Errorf("local CA request CommonName = %q, want bmc01.internal", got)
 	}
 	if target == nil {
 		t.Fatal("nil target")

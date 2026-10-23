@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -27,7 +28,7 @@ import (
 )
 
 // infoOnlyTPM is a minimal xkmssdk.TrustedPlatformModule implementation
-// that supports only Info() + FixedProperties() + Config() — enough for
+// that supports only Info() + FixedProperties() + Config() + ReadPCRs() — enough for
 // the TPMGRPCService.Info path. All other methods panic to surface any
 // incorrect reliance on them from the Info handler.
 //
@@ -56,6 +57,11 @@ func (t *infoOnlyTPM) Config() *xkmssdk.TPMConfig {
 // FixedProperties returns nil to exercise the partial-response path.
 func (t *infoOnlyTPM) FixedProperties() (*xkmssdk.PropertiesFixed, error) {
 	return nil, nil
+}
+
+// ReadPCRs reports the two banks a typical TPM allocates, as the TPM names them.
+func (t *infoOnlyTPM) ReadPCRs(_ []uint) ([]xkmssdk.PCRBank, error) {
+	return []xkmssdk.PCRBank{{Algorithm: "SHA1"}, {Algorithm: "SHA256"}}, nil
 }
 
 func TestTPMGRPCService_Info_UnavailableBeforeInjection(t *testing.T) {
@@ -90,6 +96,10 @@ func TestTPMGRPCService_Info_SucceedsAfterInjection(t *testing.T) {
 	}
 	if !resp.IsSimulator {
 		t.Errorf("Info.IsSimulator: want true, got false")
+	}
+	wantBanks := []platformv1.PCRBank{platformv1.PCRBank_PCR_BANK_SHA1, platformv1.PCRBank_PCR_BANK_SHA256}
+	if !slices.Equal(resp.PcrBanks, wantBanks) {
+		t.Errorf("Info.PcrBanks: want %v, got %v", wantBanks, resp.PcrBanks)
 	}
 }
 

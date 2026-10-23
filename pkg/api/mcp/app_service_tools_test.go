@@ -72,6 +72,16 @@ func (f *fakeMCPMessaging) Publish(_ context.Context, in *platformv1.PublishMess
 	return &platformv1.PublishMessageResponse{}, nil
 }
 
+type fakeMCPObjectStorage struct {
+	platformv1.UnimplementedObjectStorageServiceServer
+	put *platformv1.PutObjectRequest
+}
+
+func (f *fakeMCPObjectStorage) PutObject(_ context.Context, in *platformv1.PutObjectRequest) (*platformv1.PutObjectResponse, error) {
+	f.put = in
+	return &platformv1.PutObjectResponse{Key: in.GetKey(), Version: 3}, nil
+}
+
 // appServiceTestProvider is a ServiceProvider that serves the application
 // services.
 type appServiceTestProvider struct {
@@ -101,6 +111,7 @@ func TestAppServiceTools_MatchTheGRPCCatalogAndTheSDK(t *testing.T) {
 		platformv1.CacheService_ServiceDesc,
 		platformv1.SchedulerService_ServiceDesc,
 		platformv1.MessagingService_ServiceDesc,
+		platformv1.ObjectStorageService_ServiceDesc,
 	} {
 		for _, m := range desc.Methods {
 			declared++
@@ -141,6 +152,7 @@ func TestAppServiceTools_AreRegisteredWithTheRequestSchema(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{"type": "object", "additionalProperties": map[string]interface{}{"type": "string"}},
 		publish["metadata"])
 	assert.Equal(t, []string{"channel"}, registered["messaging_publish"].InputSchema["required"])
+	assert.Equal(t, []string{"key", "target_backend"}, registered["objectstorage_put"].InputSchema["required"])
 }
 
 func TestAppValueSchema_TypesEveryKind(t *testing.T) {
@@ -164,7 +176,10 @@ func TestAppValueSchema_TypesEveryKind(t *testing.T) {
 // comes back in it.
 func TestAppServiceTools_CallTheServer(t *testing.T) {
 	cacheServer, schedulerServer, messagingServer := &fakeMCPCache{}, &fakeMCPScheduler{}, &fakeMCPMessaging{}
-	registry := newAppServiceTestRegistry(AppServiceServers{Cache: cacheServer, Scheduler: schedulerServer, Messaging: messagingServer})
+	objectStorageServer := &fakeMCPObjectStorage{}
+	registry := newAppServiceTestRegistry(AppServiceServers{
+		Cache: cacheServer, Scheduler: schedulerServer, Messaging: messagingServer, ObjectStorage: objectStorageServer,
+	})
 	ctx := context.Background()
 
 	result, err := registry.ExecuteTool(ctx, "cache_stats", map[string]interface{}{"entity_type": "users"})
@@ -189,6 +204,16 @@ func TestAppServiceTools_CallTheServer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("hi"), messagingServer.published.GetPayload())
 	assert.Equal(t, map[string]interface{}{}, result)
+
+	result, err = registry.ExecuteTool(ctx, "objectstorage_put", map[string]interface{}{
+		"key": "docs:a.txt", "value": "aGk=", "tags": map[string]interface{}{"env": "prod"}, "target_backend": "local",
+		"replication_policy": map[string]interface{}{"mode": "quorum", "min_replicas": 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []byte("hi"), objectStorageServer.put.GetValue())
+	assert.Equal(t, "quorum", objectStorageServer.put.GetReplicationPolicy().GetMode())
+	assert.Equal(t, int32(2), objectStorageServer.put.GetReplicationPolicy().GetMinReplicas())
+	assert.Equal(t, map[string]interface{}{"key": "docs:a.txt", "version": "3"}, result)
 
 	// No arguments decode into an empty request.
 	_, err = registry.ExecuteTool(ctx, "cache_stats", nil)
@@ -237,4 +262,10 @@ func TestAppServiceTools_Errors(t *testing.T) {
 	// An RPC the server does not implement stays Unimplemented.
 	_, err = registry.ExecuteTool(ctx, "scheduler_status", nil)
 	assert.Equal(t, codes.Unimplemented, status.Code(err))
+
+	// The object storage tools answer Unavailable without their server.
+	_, err = registry.ExecuteTool(ctx, "objectstorage_get", map[string]interface{}{"key": "docs:a.txt"})
+	var notConfigured ErrAppServiceNotConfigured
+	require.True(t, errors.As(err, &notConfigured), "error = %v", err)
+	assert.Equal(t, "objectstorage", notConfigured.Service)
 }

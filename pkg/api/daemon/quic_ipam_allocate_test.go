@@ -37,7 +37,7 @@ func newQUICIPAMAdapter(t *testing.T) (*fullGatewayQUICAdapter, ipam.Allocator) 
 	ctx := context.Background()
 	require.NoError(t, alloc.CreatePool(ctx, &ipam.Pool{ID: "p1", Name: "p1", CIDR: netip.MustParsePrefix("10.9.0.0/29")}))
 	require.NoError(t, alloc.CreatePool(ctx, &ipam.Pool{ID: "p2", Name: "p2", CIDR: netip.MustParsePrefix("10.9.1.0/29")}))
-	return newFullGatewayQUICAdapter(alloc, nil, nil, nil, nil), alloc
+	return newFullGatewayQUICAdapter(alloc, nil, nil, nil, nil, nil), alloc
 }
 
 // TestQUICAllocateRelease_RoundTrip is the #730 regression: QUIC allocate and

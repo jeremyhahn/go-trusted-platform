@@ -10,13 +10,12 @@
 
 set -e
 
+# shellcheck source=build/docker/devcontainer/swtpm-provision.sh
+source /usr/local/lib/devcontainer/swtpm-provision.sh
+
 # =============================================================================
 # Environment Setup
 # =============================================================================
-
-# Source nvm if available
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 # Ensure Go environment
 export GOPATH="${GOPATH:-/go}"
@@ -229,9 +228,12 @@ start_swtpm() {
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
 
-    # Initialize TPM state
+    # Provision it like shipped hardware, with an EK and an EK certificate
     echo "Initializing swtpm state..."
-    swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+    if ! provision_swtpm_state /tmp/swtpm; then
+        echo "ERROR: the swtpm has no EK and EK certificate"
+        return 1
+    fi
 
     # Start swtpm daemon
     echo "Starting swtpm daemon..."
@@ -423,7 +425,6 @@ verify_tools() {
     echo "Go:           $(go version 2>/dev/null || echo 'NOT FOUND')"
     echo "swtpm:        $(swtpm --version 2>&1 | head -1 || echo 'NOT FOUND')"
     echo "QEMU:         $(qemu-system-x86_64 --version 2>/dev/null | head -1 || echo 'NOT FOUND')"
-    echo "QEMU-CanoKey: $(/usr/local/bin/qemu-system-x86_64-canokey --version 2>/dev/null | head -1 || echo 'NOT FOUND')"
     echo "OVS:          $(ovs-vsctl --version 2>/dev/null | head -1 || echo 'NOT FOUND')"
     echo "xorriso:      $(xorriso --version 2>&1 | head -1 || echo 'NOT FOUND')"
     echo "Node:         $(node -v 2>/dev/null || echo 'NOT FOUND')"

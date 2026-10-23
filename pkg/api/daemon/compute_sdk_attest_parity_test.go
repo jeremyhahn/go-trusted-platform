@@ -60,7 +60,7 @@ var vmAttestSDKVerbs = []vmSnapshotSDKVerb{
 }
 
 func TestVMAttestSDKParity_AttestThenVerify(t *testing.T) {
-	for _, transport := range vmSnapshotAttestSDKTransports {
+	for _, transport := range vmSDKTransports {
 		t.Run(transport.name, func(t *testing.T) {
 			provider, svc, orch := seededVMPair()
 			client := transport.dial(t, provider, svc)
@@ -91,7 +91,7 @@ func TestVMAttestSDKParity_AttestThenVerify(t *testing.T) {
 
 func TestVMAttestSDKParity_UnknownVM(t *testing.T) {
 	notFound := &compute.SentinelCauseError{Sentinel: compute.ErrInstanceNotFound, Cause: &compute.MessageError{Msg: "no such vm"}}
-	for _, transport := range vmSnapshotAttestSDKTransports {
+	for _, transport := range vmSDKTransports {
 		for _, verb := range vmAttestSDKVerbs {
 			t.Run(transport.name+" "+verb.name, func(t *testing.T) {
 				provider, svc, orch := seededVMPair()
@@ -108,7 +108,7 @@ func TestVMAttestSDKParity_UnknownVM(t *testing.T) {
 
 func TestVMAttestSDKParity_NoVTPM(t *testing.T) {
 	noVTPM := &compute.SentinelCauseError{Sentinel: compute.ErrVTPMNotAvailable, Cause: &compute.MessageError{Msg: "vm has no vtpm"}}
-	for _, transport := range vmSnapshotAttestSDKTransports {
+	for _, transport := range vmSDKTransports {
 		for _, verb := range vmAttestSDKVerbs {
 			t.Run(transport.name+" "+verb.name, func(t *testing.T) {
 				provider, svc, orch := seededVMPair()

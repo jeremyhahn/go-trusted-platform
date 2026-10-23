@@ -26,7 +26,10 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -171,6 +174,7 @@ type TPM2InfoResponse struct {
 	IsSimulator  bool              `codec:"is_simulator"`
 	FIPSMode     bool              `codec:"fips_mode"`
 	MaxNVRAMSize uint32            `codec:"max_nvram_size"`
+	PCRBanks     []string          `codec:"pcr_banks"`
 	Properties   map[string]string `codec:"properties"`
 	Timestamp    int64             `codec:"timestamp"`
 }
@@ -181,11 +185,7 @@ type TPM2ProvisionRequest struct {
 }
 
 // TPM2StatusResponse represents a generic status response.
-type TPM2StatusResponse struct {
-	Success   bool   `codec:"success"`
-	Message   string `codec:"message"`
-	Timestamp int64  `codec:"timestamp"`
-}
+type TPM2StatusResponse = quicwire.TPM2StatusResponse
 
 // TPM2ClearRequest represents a TPM clear request.
 type TPM2ClearRequest struct {
@@ -268,11 +268,7 @@ type TPM2ReadPCRsResponse struct {
 }
 
 // TPM2ExtendPCRRequest represents a PCR extend request.
-type TPM2ExtendPCRRequest struct {
-	PCRIndex int    `codec:"pcr_index"`
-	HashAlg  string `codec:"hash_alg"`
-	Data     []byte `codec:"data"`
-}
+type TPM2ExtendPCRRequest = quicwire.TPM2ExtendPCRRequest
 
 // TPM2EventLogResponse represents an event log response.
 type TPM2EventLogResponse struct {
@@ -316,12 +312,7 @@ type TPM2UnsealResponse struct {
 }
 
 // TPM2CapabilitiesResponse represents TPM capabilities.
-type TPM2CapabilitiesResponse struct {
-	Algorithms []string `codec:"algorithms"`
-	Commands   []string `codec:"commands"`
-	ECCCurves  []string `codec:"ecc_curves"`
-	Timestamp  int64    `codec:"timestamp"`
-}
+type TPM2CapabilitiesResponse = quicwire.TPM2CapabilitiesResponse
 
 // TPM2NVReadRequest represents an NV read request. Field names mirror
 // the gRPC ReadNVRAMRequest proto (index / size / offset / password).
@@ -372,15 +363,11 @@ type TPM2NVListResponse struct {
 }
 
 // TPM2PlatformAttributesResponse represents platform attributes.
-type TPM2PlatformAttributesResponse struct {
-	Device       string `codec:"device"`
-	IsFIPS       bool   `codec:"is_fips"`
-	PCRExtended  bool   `codec:"pcr_extended"`
-	CanSeal      bool   `codec:"can_seal"`
-	IsSimulator  bool   `codec:"is_simulator"`
-	Manufacturer string `codec:"manufacturer"`
-	Timestamp    int64  `codec:"timestamp"`
-}
+type TPM2PlatformAttributesResponse = quicwire.TPM2PlatformAttributesResponse
+
+// TPM2KeyRef names a provisioned key by its persistent handle and
+// algorithm.
+type TPM2KeyRef = quicwire.TPM2KeyRef
 
 // TPM2IDevIDCSRRequest represents an IDevID CSR creation request.
 type TPM2IDevIDCSRRequest struct {
@@ -416,7 +403,8 @@ func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *quicwire.
 
 	resp := &TPM2InfoResponse{
 		Info:       info,
-		Version:    "2.0",
+		Version:    tpmattrs.Version,
+		PCRBanks:   tpmattrs.ActivePCRBanks(h.tpm),
 		Properties: tpmsrk.InfoProperties(h.tpm),
 		Timestamp:  time.Now().Unix(),
 	}
@@ -484,7 +472,7 @@ func (h *TPM2Handler) handleClear(ctx context.Context, payload []byte) *quicwire
 		lockoutAuth = []byte(req.OwnerPassword)
 	}
 
-	if err := h.tpm.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(h.tpm, lockoutAuth); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
@@ -573,18 +561,15 @@ func (h *TPM2Handler) handleActivateCredential(ctx context.Context, payload []by
 
 // handleCreateEK creates an Endorsement Key.
 func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *quicwire.Response {
-	ekAttrs, err := h.tpm.EKAttributes()
+	ekAttrs, err := tpmek.Create(h.tpm)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	if err := h.tpm.CreateEK(ekAttrs); err != nil {
-		return h.tpmErrorResponse(err)
-	}
-
-	return h.encodeResponse(&TPM2StatusResponse{
-		Success:   true,
-		Message:   fmt.Sprintf("EK created at handle 0x%08X", ekAttrs.TPMAttributes.Handle),
+	return h.encodeResponse(&TPM2KeyResponse{
+		Handle:    uint32(ekAttrs.TPMAttributes.Handle),
+		PublicKey: ekAttrs.TPMAttributes.PublicKeyBytes,
+		Algorithm: ekAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().Unix(),
 	})
 }
@@ -957,7 +942,7 @@ func (h *TPM2Handler) handleExtendPCR(ctx context.Context, payload []byte) *quic
 
 	return h.encodeResponse(&TPM2StatusResponse{
 		Success:   true,
-		Message:   fmt.Sprintf("PCR %d extended", req.PCRIndex),
+		Message:   tpmpcr.ExtendedMessage(req.PCRIndex),
 		Timestamp: time.Now().Unix(),
 	})
 }
@@ -1061,25 +1046,15 @@ func (h *TPM2Handler) handleUnseal(ctx context.Context, payload []byte) *quicwir
 
 // handleCapabilities returns TPM supported algorithms, commands, and ECC curves.
 func (h *TPM2Handler) handleCapabilities(ctx context.Context, payload []byte) *quicwire.Response {
-	algorithms, algErr := h.tpm.SupportedAlgorithms()
-	if algErr != nil {
-		return h.tpmErrorResponse(algErr)
-	}
-
-	commands, cmdErr := h.tpm.SupportedCommands()
-	if cmdErr != nil {
-		return h.tpmErrorResponse(cmdErr)
-	}
-
-	curves, curveErr := h.tpm.SupportedECCCurves()
-	if curveErr != nil {
-		return h.tpmErrorResponse(curveErr)
+	caps, err := tpmattrs.ReadCapabilities(h.tpm)
+	if err != nil {
+		return h.tpmErrorResponse(err)
 	}
 
 	return h.encodeResponse(&TPM2CapabilitiesResponse{
-		Algorithms: algorithms,
-		Commands:   commands,
-		ECCCurves:  curves,
+		Algorithms: caps.Algorithms,
+		Commands:   caps.Commands,
+		ECCCurves:  caps.ECCCurves,
 		Timestamp:  time.Now().Unix(),
 	})
 }
@@ -1211,41 +1186,28 @@ func (h *TPM2Handler) handleCreateLDevIDCSR(ctx context.Context, payload []byte)
 
 // handlePlatformAttributes returns platform-level TPM attributes.
 func (h *TPM2Handler) handlePlatformAttributes(ctx context.Context, payload []byte) *quicwire.Response {
-	device := h.tpm.Device()
-
-	isFIPS, fipsErr := h.tpm.IsFIPS140_2()
-	if fipsErr != nil {
-		isFIPS = false
-	}
-
-	pcrExtended, pcrErr := h.tpm.IsPlatformPCRExtended()
-	if pcrErr != nil {
-		pcrExtended = false
-	}
-
-	canSeal := h.tpm.CanSeal()
-
-	cfg := h.tpm.Config()
-	isSimulator := false
-	if cfg != nil {
-		isSimulator = cfg.UseSimulator
-	}
-
-	props, propsErr := h.tpm.FixedProperties()
-	manufacturer := ""
-	if propsErr == nil && props != nil {
-		manufacturer = props.Manufacturer
-	}
-
+	platform := tpmattrs.ReadPlatform(h.tpm)
 	return h.encodeResponse(&TPM2PlatformAttributesResponse{
-		Device:       device,
-		IsFIPS:       isFIPS,
-		PCRExtended:  pcrExtended,
-		CanSeal:      canSeal,
-		IsSimulator:  isSimulator,
-		Manufacturer: manufacturer,
+		Device:       platform.Device,
+		IsFIPS:       platform.IsFIPS,
+		PCRExtended:  platform.PCRExtended,
+		CanSeal:      platform.CanSeal,
+		IsSimulator:  platform.IsSimulator,
+		Manufacturer: platform.Manufacturer,
+		EK:           tpm2KeyRef(platform.EK),
+		SRK:          tpm2KeyRef(platform.SRK),
+		IAK:          tpm2KeyRef(platform.IAK),
 		Timestamp:    time.Now().Unix(),
 	})
+}
+
+// tpm2KeyRef converts a provisioned key reference; an absent key stays
+// absent.
+func tpm2KeyRef(ref *tpmattrs.KeyRef) *TPM2KeyRef {
+	if ref == nil {
+		return nil
+	}
+	return &TPM2KeyRef{Handle: ref.Handle, Algorithm: ref.Algorithm}
 }
 
 // handleGetIDevID retrieves the IDevID public key.

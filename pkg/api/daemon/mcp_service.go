@@ -35,7 +35,10 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -63,7 +66,7 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
-	// DeviceTemplateService backs device_template_create and
+	// DeviceTemplateService backs the device_template_* tools and
 	// profile_create_from_template; nil answers that no template service
 	// is configured.
 	DeviceTemplateService device.DeviceTemplateService
@@ -82,16 +85,21 @@ type MCPServiceProviderConfig struct {
 	// AttestationServer serves the device verdict feed for
 	// attestation_device_verdicts_poll (#709); nil answers that no feed is
 	// configured.
-	AttestationServer     *AttestationServiceServer
-	DNSService            dns.DNSService
-	SDNService            *SDNService
-	HealthService         *Service
-	IAMClient             quicbaassdk.IAMClient
-	PEPClient             quicbaassdk.IAMPEPClient
-	IAMTokens             *IAMTokenService // iam_*_token tools; nil refuses verification
-	KMSService            baasservice.KMSService
-	CryptoService         baasservice.CryptoService
-	SecretsService        baasservice.SecretsService
+	AttestationServer *AttestationServiceServer
+	DNSService        dns.DNSService
+	SDNService        *SDNService
+	HealthService     *Service
+	IAMClient         quicbaassdk.IAMClient
+	PEPClient         quicbaassdk.IAMPEPClient
+	IAMTokens         *IAMTokenService // iam_*_token tools; nil refuses verification
+	PlatformTenantID  string           // the system tenant, the only one admitted to create and list IAM tenants
+	KMSService        baasservice.KMSService
+	CryptoService     baasservice.CryptoService
+	SecretsService    baasservice.SecretsService
+	// DEKService backs the dek_* tools; nil answers that the DEK service is
+	// not available.
+	DEKService            DEKServiceInterface
+	KMSBackend            *PlatformKMSBackend
 	TPM2Service           xkmssdk.TrustedPlatformModule
 	Logger                *slog.Logger
 	ComputeOrchestrator   compute.Orchestrator
@@ -105,8 +113,10 @@ type MCPServiceProviderConfig struct {
 	// backs the proxy_* MCP tools (same instance as gRPC/REST/QUIC).
 	ProxyService *grpcapi.ProxyGRPCService
 
-	// GatewayLB serves gateway load balancer VIP tools (gateway_lb_*).
-	GatewayLB GatewayLoadBalancerInterface
+	// GatewayBackends is the shared gateway service the load balancer
+	// (gateway_lb_*), NAT64 and perf (gateway_perf_*) tools read their
+	// backend from (#660).
+	GatewayBackends GatewayBackendSource
 
 	// GatewaySnapshots serves the gateway telemetry snapshot tools
 	// (gateway_snapshot, gateway_snapshots); nil answers that no gateway
@@ -122,10 +132,6 @@ type MCPServiceProviderConfig struct {
 	// gRPC, REST and QUIC overlay services use; nil answers that the
 	// overlay service is not available.
 	Overlay OverlayControllerInterface
-
-	// GatewayPerf serves gateway performance verification tools
-	// (gateway_perf_*).
-	GatewayPerf GatewayPerfInterface
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -149,6 +155,8 @@ type MCPServiceProvider struct {
 	kmsService            baasservice.KMSService
 	cryptoService         baasservice.CryptoService
 	secretsService        baasservice.SecretsService
+	dekService            DEKServiceInterface // the gRPC DEKManagement adapter, shared with QUIC
+	kmsBackend            *PlatformKMSBackend // shared with gRPC KeyManagementService, QUIC and REST
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
 	bmcServer             platformv1.BMCServiceServer
@@ -163,9 +171,9 @@ type MCPServiceProvider struct {
 	zoneService           gateway.ZoneService
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
-	gatewayLB             GatewayLoadBalancerInterface
-	gatewayNAT64          GatewayNAT64Interface
-	gatewayPerf           GatewayPerfInterface
+	// gatewayBackends is the shared gateway service the gateway_lb_*,
+	// gateway_nat64_* and gateway_perf_* tools read their backend from.
+	gatewayBackends GatewayBackendSource
 	// gatewaySnapshotTools serves the telemetry snapshot tools.
 	gatewaySnapshotTools
 	// gatewayStatusTools serves the gateway status and mode tools (#65).
@@ -192,6 +200,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		logger = slog.Default()
 	}
 
+	iam := NewIAMGRPCService(logger, config.IAMClient, config.PEPClient)
+	iam.SetSystemTenant(config.PlatformTenantID)
+
 	return &MCPServiceProvider{
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
@@ -206,11 +217,13 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		healthService:         config.HealthService,
-		iam:                   NewIAMGRPCService(logger, config.IAMClient, config.PEPClient),
+		iam:                   iam,
 		iamTokens:             config.IAMTokens,
 		kmsService:            config.KMSService,
 		cryptoService:         config.CryptoService,
 		secretsService:        config.SecretsService,
+		dekService:            config.DEKService,
+		kmsBackend:            config.KMSBackend,
 		tpm2Service:           config.TPM2Service,
 		computeOrchestrator:   config.ComputeOrchestrator,
 		registryService:       config.RegistryService,
@@ -220,8 +233,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		gatewayIPAMTools:      gatewayIPAMTools{ipam: config.IPAMService},
 		configDeliveryService: config.ConfigDeliveryService,
 		proxyService:          config.ProxyService,
-		gatewayLB:             config.GatewayLB,
-		gatewayPerf:           config.GatewayPerf,
+		gatewayBackends:       config.GatewayBackends,
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
 		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
 		gatewayBGPTools:       gatewayBGPTools{controller: config.GatewayBGP},
@@ -2839,7 +2851,9 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 	}
 
 	result := map[string]interface{}{
-		"info": info,
+		"info":      info,
+		"version":   tpmattrs.Version,
+		"pcr_banks": tpmattrs.ActivePCRBanks(p.tpm2Service),
 	}
 	for key, value := range tpmsrk.InfoProperties(p.tpm2Service) {
 		result[key] = value
@@ -2855,6 +2869,8 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 		result["vendor_id"] = props.VendorID
 		result["fips_mode"] = props.Fips1402
 		result["max_nvram_size"] = props.NVBufferMax
+		result["lockout_counter"] = props.LockoutCounter
+		result["max_auth_fail"] = props.MaxAuthFail
 	}
 
 	cfg := p.tpm2Service.Config()
@@ -2902,7 +2918,7 @@ func (p *MCPServiceProvider) TPMClear(ctx context.Context, ownerPassword string)
 		lockoutAuth = []byte(ownerPassword)
 	}
 
-	if err := p.tpm2Service.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(p.tpm2Service, lockoutAuth); err != nil {
 		return nil, mapTPMError(err)
 	}
 
@@ -2972,12 +2988,8 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	ekAttrs, err := tpmek.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateEK(ekAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 
@@ -3187,7 +3199,7 @@ func (p *MCPServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, has
 
 	return map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("PCR %d extended", pcrIndex),
+		"message": tpmpcr.ExtendedMessage(pcrIndex),
 	}, nil
 }
 
@@ -3221,26 +3233,16 @@ func (p *MCPServiceProvider) TPMCapabilities(ctx context.Context) (interface{}, 
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	props, err := p.tpm2Service.FixedProperties()
+	caps, err := tpmattrs.ReadCapabilities(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
-	result := map[string]interface{}{
-		"manufacturer":    props.Manufacturer,
-		"model":           props.Model,
-		"family":          props.Family,
-		"revision":        props.Revision,
-		"vendor_id":       props.VendorID,
-		"fw_major":        props.FwMajor,
-		"fw_minor":        props.FwMinor,
-		"fips_mode":       props.Fips1402,
-		"lockout_counter": props.LockoutCounter,
-		"max_auth_fail":   props.MaxAuthFail,
-		"max_nvram_size":  props.NVBufferMax,
-	}
-
-	return result, nil
+	return map[string]interface{}{
+		"algorithms": caps.Algorithms,
+		"commands":   caps.Commands,
+		"ecc_curves": caps.ECCCurves,
+	}, nil
 }
 
 // TPMRandom generates random bytes from the TPM.
@@ -3407,38 +3409,30 @@ func (p *MCPServiceProvider) TPMPlatform(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	cfg := p.tpm2Service.Config()
+	platform := tpmattrs.ReadPlatform(p.tpm2Service)
 	result := map[string]interface{}{
-		"available": true,
+		"available":    true,
+		"device":       platform.Device,
+		"is_fips":      platform.IsFIPS,
+		"pcr_extended": platform.PCRExtended,
+		"can_seal":     platform.CanSeal,
+		"is_simulator": platform.IsSimulator,
+		"manufacturer": platform.Manufacturer,
 	}
-
-	if cfg != nil {
-		result["is_simulator"] = cfg.UseSimulator
-		result["device"] = cfg.Device
-	}
-
-	// Include EK info if available
-	ekAttrs, err := p.tpm2Service.EKAttributes()
-	if err == nil {
-		result["ek_handle"] = uint32(ekAttrs.TPMAttributes.Handle)
-		result["ek_algorithm"] = ekAttrs.KeyAlgorithm.String()
-	}
-
-	// Include SRK info if available
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
-	if err == nil {
-		result["srk_handle"] = uint32(srkAttrs.TPMAttributes.Handle)
-		result["srk_algorithm"] = srkAttrs.KeyAlgorithm.String()
-	}
-
-	// Include IAK info if available
-	iakAttrs, err := p.tpm2Service.IAKAttributes()
-	if err == nil {
-		result["iak_handle"] = uint32(iakAttrs.TPMAttributes.Handle)
-		result["iak_algorithm"] = iakAttrs.KeyAlgorithm.String()
-	}
-
+	addKeyRef(result, "ek", platform.EK)
+	addKeyRef(result, "srk", platform.SRK)
+	addKeyRef(result, "iak", platform.IAK)
 	return result, nil
+}
+
+// addKeyRef adds a provisioned key's <name>_handle and <name>_algorithm
+// to an MCP result; an absent key adds neither.
+func addKeyRef(result map[string]interface{}, name string, ref *tpmattrs.KeyRef) {
+	if ref == nil {
+		return
+	}
+	result[name+"_handle"] = ref.Handle
+	result[name+"_algorithm"] = ref.Algorithm
 }
 
 // TPMMakeCredential creates a TPM2_MakeCredential challenge, delegating to

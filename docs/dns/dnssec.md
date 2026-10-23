@@ -5,7 +5,7 @@
 
 ## Overview
 
-DNSSEC (Domain Name System Security Extensions) provides cryptographic authentication for DNS data, protecting against cache poisoning, man-in-the-middle attacks, and DNS spoofing. The Trusted Platform signs zones in `pkg/dns`; the private keys are generated and held by the go-quicbaas KMS (`dns.NewQuicBaaSKMSKeyStore`, wired at `pkg/app/app.go:1203`).
+DNSSEC (Domain Name System Security Extensions) provides cryptographic authentication for DNS data, protecting against cache poisoning, man-in-the-middle attacks, and DNS spoofing. The Trusted Platform signs zones in `pkg/dns`; the private keys are generated and held by the go-quicbaas KMS (`dns.NewQuicBaaSKMSKeyStore`, wired at `pkg/app/app.go:1179`).
 
 ### Why DNSSEC Matters
 
@@ -19,7 +19,7 @@ DNSSEC (Domain Name System Security Extensions) provides cryptographic authentic
 ### Key Custody
 
 - **Generation and storage** - the KSK and ZSK are generated through the go-quicbaas SDK KMS on the first signing of a zone, then loaded from it
-- **Store** - the SDK keystore creates DNSSEC keys in the software store (`xkmssdk.StoreSoftware`, `pkg/dns/dnssec_keystore_sdk.go:201`); `pkg/dns` does not read the `store:` field of a key configuration
+- **Store** - the SDK keystore creates DNSSEC keys in the software store (`xkmssdk.StoreSoftware`, `pkg/dns/dnssec_keystore_sdk.go:202`); `pkg/dns` does not read the `store:` field of a key configuration
 - **Tenant scope** - every key ID carries the zone's tenant (see [Tenant-Scoped Key IDs](#tenant-scoped-key-ids))
 
 ## Key Types
@@ -32,7 +32,7 @@ The Key Signing Key signs the DNSKEY RRset and establishes the chain of trust.
 |----------|-------|
 | **Purpose** | Signs the DNSKEY RRset |
 | **Flags** | 257 (SEP bit set) |
-| **Lifetime** | `ksk.lifetime` is parsed but not read: there is no automatic rollover |
+| **Lifetime** | `ksk.lifetime` must be a positive duration (`365d`, `720h`), else startup fails with `ErrInvalidKeyLifetime`; nothing acts on it: there is no automatic rollover |
 | **Key Usage** | Critical - requires parent DS record update on rollover |
 
 The KSK is published to the parent zone as a DS (Delegation Signer) record.
@@ -45,7 +45,7 @@ The Zone Signing Key signs all resource records in the zone.
 |----------|-------|
 | **Purpose** | Signs all other RRsets |
 | **Flags** | 256 |
-| **Lifetime** | `zsk.lifetime` is parsed but not read: there is no automatic rollover |
+| **Lifetime** | `zsk.lifetime` must be a positive duration (`365d`, `720h`), else startup fails with `ErrInvalidKeyLifetime`; nothing acts on it: there is no automatic rollover |
 | **Key Usage** | Frequent rotation - transparent to parent zone |
 
 The ZSK can be rotated frequently without updating the parent zone.
@@ -117,7 +117,7 @@ the `dnssec:` configuration.
 
 ### Tenant-Scoped Key IDs
 
-DNSSEC keys are stored under tenant-scoped IDs within the KMS to provide multi-tenant isolation (`pkg/dns/dnssec_keystore.go:107`):
+DNSSEC keys are stored under tenant-scoped IDs within the KMS to provide multi-tenant isolation (`pkg/dns/dnssec_keystore.go:108`):
 
 ```
 dnssec_{tenant_id}_{zone_name}_{key_type}

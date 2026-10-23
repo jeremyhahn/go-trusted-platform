@@ -112,6 +112,11 @@ func newVPNTestServer(t *testing.T) (*VPNGRPCService, *quicbaas.MockStorage) {
 				RejectedPeers: []gwstate.VPNRejectedPeer{
 					{TenantID: "acme", DeviceID: "laptop-9", Reason: `zone "storage" is not reachable`},
 				},
+				Revocations:       map[string]uint64{"expired": 5},
+				PostureViolations: map[string]uint64{"secure-boot": 2},
+				Reattest: &gwstate.DurationHistogram{Count: 2, SumSeconds: 0.3, Buckets: []gwstate.HistogramBucket{
+					{UpperBoundSeconds: 0.25, Count: 1},
+				}},
 			},
 		},
 		"gw-2": {GatewayID: "gw-2", ReportedAt: reported},
@@ -227,10 +232,20 @@ func TestVPNGRPCService_GetStatusReportsGatewayTelemetry(t *testing.T) {
 	assert.Equal(t, "acme", vpnGateway.GetRejectedPeers()[0].GetTenantId())
 	assert.Equal(t, "laptop-9", vpnGateway.GetRejectedPeers()[0].GetDeviceId())
 	assert.Equal(t, `zone "storage" is not reachable`, vpnGateway.GetRejectedPeers()[0].GetReason())
+	assert.Equal(t, map[string]uint64{"expired": 5}, vpnGateway.GetRevocations())
+	assert.Equal(t, map[string]uint64{"secure-boot": 2}, vpnGateway.GetPostureViolations())
+	reattest := vpnGateway.GetReattest()
+	require.NotNil(t, reattest)
+	assert.Equal(t, uint64(2), reattest.GetCount())
+	assert.InDelta(t, 0.3, reattest.GetSumSeconds(), 1e-9)
+	require.Len(t, reattest.GetBuckets(), 1)
+	assert.Equal(t, 0.25, reattest.GetBuckets()[0].GetUpperBoundSeconds())
+	assert.Equal(t, uint64(1), reattest.GetBuckets()[0].GetCount())
 
 	plainGateway := resp.GetGateways()[1]
 	assert.False(t, plainGateway.GetReporting(), "a gateway without a VPN section is not reporting")
 	assert.Empty(t, plainGateway.GetLeases())
+	assert.Nil(t, plainGateway.GetReattest())
 
 	_, err = server.GetStatus(ctx, &platformv1.GetVPNStatusRequest{GatewayId: "gw-missing"})
 	assert.Equal(t, codes.NotFound, status.Code(err))

@@ -58,10 +58,45 @@ func NewEKCertInjector(socketPath string, logger *logging.Logger) *EKCertInjecto
 	}
 }
 
-// SetNVBufferMax sets the maximum NV buffer size for writes.
-// This should match TPM_PT_NV_BUFFER_MAX from the TPM capabilities.
+// SetNVBufferMax bounds the size of each NV_Write and NV_Read the injector
+// issues. The TPM's own TPM_PT_NV_BUFFER_MAX still applies when it is
+// smaller; zero leaves the TPM's value as the only bound.
 func (e *EKCertInjector) SetNVBufferMax(size uint16) {
 	e.nvBufferMax = size
+}
+
+// chunkSize returns the largest NV transfer the injector issues on t:
+// TPM_PT_NV_BUFFER_MAX as the TPM reports it through TPM2_GetCapability
+// (TPM 2.0 Part 2 §6.13), lowered to the injector's own bound when that is
+// smaller. A TPM2_NV_Write or TPM2_NV_Read carrying more than the TPM's
+// buffer maximum fails with TPM_RC_SIZE (TPM 2.0 Part 3 §31.7, §31.13);
+// swtpm reports 1024 bytes, less than an RSA EK certificate can take.
+func (e *EKCertInjector) chunkSize(t transport.TPM) (uint16, error) {
+	rsp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapTPMProperties,
+		Property:      uint32(tpm2.TPMPTNVBufferMax),
+		PropertyCount: 1,
+	}.Execute(t)
+	if err != nil {
+		return 0, ErrNVBufferMaxUnavailable{Cause: err}
+	}
+	props, err := rsp.CapabilityData.Data.TPMProperties()
+	if err != nil {
+		return 0, ErrNVBufferMaxUnavailable{Cause: err}
+	}
+	if len(props.TPMProperty) == 0 || props.TPMProperty[0].Property != tpm2.TPMPTNVBufferMax ||
+		props.TPMProperty[0].Value == 0 {
+		return 0, ErrNVBufferMaxUnavailable{Cause: &MessageError{Msg: "the TPM did not report the property"}}
+	}
+
+	tpmMax := props.TPMProperty[0].Value
+	if e.nvBufferMax != 0 && uint32(e.nvBufferMax) < tpmMax {
+		return e.nvBufferMax, nil
+	}
+	if tpmMax > uint32(^uint16(0)) {
+		return ^uint16(0), nil
+	}
+	return uint16(tpmMax), nil
 }
 
 // startup sends TPM2_Startup command to initialize the TPM.
@@ -94,14 +129,6 @@ func (e *EKCertInjector) InjectCertificate(ctx context.Context, cert *x509.Certi
 		return ErrEKCertInjectionFailed{Cause: &MessageError{Msg: "certificate cannot be nil"}}
 	}
 
-	nvIndex := algorithm.NVIndex()
-	certDER := cert.Raw
-
-	e.logger.Info("Injecting EK certificate to NV RAM",
-		"algorithm", string(algorithm),
-		"nvIndex", fmt.Sprintf("0x%08X", nvIndex),
-		"certSize", len(certDER))
-
 	// Open connection to swtpm socket using go-xkms's transport
 	t, err := linuxudstpm.Open(e.socketPath)
 	if err != nil {
@@ -112,6 +139,30 @@ func (e *EKCertInjector) InjectCertificate(ctx context.Context, cert *x509.Certi
 	// Send TPM2_Startup command to initialize the TPM
 	if err := e.startup(t); err != nil {
 		return err
+	}
+
+	return e.writeCertificate(t, cert, algorithm)
+}
+
+// writeCertificate defines the EK certificate NV index for algorithm on the
+// started TPM behind t and writes cert into it, one TPM2_NV_Write per
+// chunkSize bytes at increasing offsets.
+func (e *EKCertInjector) writeCertificate(t transport.TPM, cert *x509.Certificate, algorithm EKAlgorithm) error {
+	if cert == nil {
+		return ErrEKCertInjectionFailed{Cause: &MessageError{Msg: "certificate cannot be nil"}}
+	}
+
+	nvIndex := algorithm.NVIndex()
+	certDER := cert.Raw
+
+	e.logger.Info("Injecting EK certificate to NV RAM",
+		"algorithm", string(algorithm),
+		"nvIndex", fmt.Sprintf("0x%08X", nvIndex),
+		"certSize", len(certDER))
+
+	chunkSize, err := e.chunkSize(t)
+	if err != nil {
+		return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: err}
 	}
 
 	// Define the NV space
@@ -126,7 +177,7 @@ func (e *EKCertInjector) InjectCertificate(ctx context.Context, cert *x509.Certi
 	}
 
 	// Write the certificate data
-	if err := e.writeNVData(t, nvIndex, nvName, certDER); err != nil {
+	if err := e.writeNVData(t, nvIndex, nvName, certDER, chunkSize); err != nil {
 		return err
 	}
 
@@ -287,19 +338,19 @@ func (n nvNamedHandle) KnownName() *tpm2.TPM2BName {
 }
 
 // writeNVData writes data to the NV space in chunks.
-func (e *EKCertInjector) writeNVData(t transport.TPM, nvIndex uint32, nvName tpm2.TPM2BName, data []byte) error {
+func (e *EKCertInjector) writeNVData(t transport.TPM, nvIndex uint32, nvName tpm2.TPM2BName, data []byte, maxChunk uint16) error {
 	// Create a named handle for authorization
 	nvHandle := nvNamedHandle{
 		handle: tpm2.TPMHandle(nvIndex),
 		name:   nvName,
 	}
 
-	// Write data in chunks respecting nvBufferMax
+	// Write data in chunks of at most maxChunk bytes
 	offset := uint16(0)
 	remaining := len(data)
 
 	for remaining > 0 {
-		chunkSize := int(e.nvBufferMax)
+		chunkSize := int(maxChunk)
 		if remaining < chunkSize {
 			chunkSize = remaining
 		}
@@ -351,6 +402,12 @@ func (e *EKCertInjector) ReadCertificate(ctx context.Context, algorithm EKAlgori
 		return nil, err
 	}
 
+	return e.readCertificate(t, nvIndex)
+}
+
+// readCertificate reads the certificate stored at nvIndex on the started TPM
+// behind t, one TPM2_NV_Read per chunkSize bytes.
+func (e *EKCertInjector) readCertificate(t transport.TPM, nvIndex uint32) (*x509.Certificate, error) {
 	// First, read the NV public to get the size and Name
 	nvHandle := tpm2.TPMHandle(nvIndex)
 
@@ -373,12 +430,17 @@ func (e *EKCertInjector) ReadCertificate(ctx context.Context, algorithm EKAlgori
 		name:   nvReadPublicResp.NVName,
 	}
 
+	maxChunk, err := e.chunkSize(t)
+	if err != nil {
+		return nil, ErrEKCertInjectionFailed{Cause: err}
+	}
+
 	// Read the data in chunks
 	data := make([]byte, 0, dataSize)
 	offset := uint16(0)
 
 	for offset < dataSize {
-		chunkSize := e.nvBufferMax
+		chunkSize := maxChunk
 		if dataSize-offset < chunkSize {
 			chunkSize = dataSize - offset
 		}
@@ -491,12 +553,17 @@ func (e *EKCertInjector) CheckEKCertificateExists(ctx context.Context, algorithm
 		name:   nvReadPublicResp.NVName,
 	}
 
+	maxChunk, err := e.chunkSize(t)
+	if err != nil {
+		return false, nil, ErrEKCertInjectionFailed{Cause: err}
+	}
+
 	// Read the data in chunks
 	data := make([]byte, 0, dataSize)
 	offset := uint16(0)
 
 	for offset < dataSize {
-		chunkSize := e.nvBufferMax
+		chunkSize := maxChunk
 		if dataSize-offset < chunkSize {
 			chunkSize = dataSize - offset
 		}

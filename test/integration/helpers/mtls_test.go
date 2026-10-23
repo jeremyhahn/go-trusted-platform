@@ -146,3 +146,25 @@ func TestMCPEndpointURLKeepsAnExplicitScheme(t *testing.T) {
 		}
 	}
 }
+
+// TestRESTBaseURLKeepsAnExplicitScheme pins the run-55577 KMS and secrets
+// failure: the adapters prefixed http:// onto https://localhost:8443 and
+// dialled host "https".
+func TestRESTBaseURLKeepsAnExplicitScheme(t *testing.T) {
+	cases := map[string]string{
+		"https://localhost:8443":  "https://localhost:8443",
+		"https://localhost:8443/": "https://localhost:8443",
+		"http://localhost:8080":   "http://localhost:8080",
+	}
+	for endpoint, want := range cases {
+		if got := RESTBaseURL(endpoint); got != want {
+			t.Errorf("RESTBaseURL(%q) = %q, want %q (scheme kept, never doubled)", endpoint, got, want)
+		}
+	}
+}
+
+func TestRESTBaseURLAddsHTTPSToABareHostPort(t *testing.T) {
+	if got, want := RESTBaseURL("localhost:8443"), "https://localhost:8443"; got != want {
+		t.Errorf("RESTBaseURL(host:port) = %q, want %q", got, want)
+	}
+}

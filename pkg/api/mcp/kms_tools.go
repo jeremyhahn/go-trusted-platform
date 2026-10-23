@@ -88,6 +88,58 @@ var ErrKMSCiphertextRequired = &KMSError{
 	Message: "ciphertext is required",
 }
 
+// ErrKMSDataRequired indicates the data to hash is required.
+var ErrKMSDataRequired = &KMSError{
+	Code:    "KMS_DATA_REQUIRED",
+	Message: "data is required",
+}
+
+// ErrKMSHMACRequired indicates the HMAC to verify is required.
+var ErrKMSHMACRequired = &KMSError{
+	Code:    "KMS_HMAC_REQUIRED",
+	Message: "hmac is required",
+}
+
+// ErrKMSVersionNegative indicates a key version argument below zero.
+var ErrKMSVersionNegative = &KMSError{
+	Code:    "KMS_VERSION_INVALID",
+	Message: "key versions are zero or positive",
+}
+
+// ErrKMSKeyMaterialRequired indicates the key material to import is required.
+var ErrKMSKeyMaterialRequired = &KMSError{
+	Code:    "KMS_KEY_MATERIAL_REQUIRED",
+	Message: "key_material is required",
+}
+
+// ErrKMSKeySpecRequired indicates the key_spec of an imported key is required.
+var ErrKMSKeySpecRequired = &KMSError{
+	Code:    "KMS_KEY_SPEC_REQUIRED",
+	Message: "key_spec is required",
+}
+
+// ErrKMSBatchItemsRequired indicates a batch request without items.
+var ErrKMSBatchItemsRequired = &KMSError{
+	Code:    "KMS_BATCH_ITEMS_REQUIRED",
+	Message: "items is required",
+}
+
+// ErrKMSBatchTooLarge indicates a batch request over kmsMaxBatchItems items.
+var ErrKMSBatchTooLarge = &KMSError{
+	Code:    "KMS_BATCH_SIZE_INVALID",
+	Message: fmt.Sprintf("a batch carries at most %d items", kmsMaxBatchItems),
+}
+
+// ErrKMSBatchItemInvalid indicates a batch item that is not an object.
+var ErrKMSBatchItemInvalid = &KMSError{
+	Code:    "KMS_BATCH_ITEM_INVALID",
+	Message: "every batch item is an object",
+}
+
+// kmsMaxBatchItems is the batch size limit gRPC BatchEncrypt and BatchDecrypt
+// enforce.
+const kmsMaxBatchItems = 100
+
 // ErrKMSKeyUsageRequired indicates at least one key usage is required.
 var ErrKMSKeyUsageRequired = &KMSError{
 	Code:    "KMS_KEY_USAGE_REQUIRED",
@@ -392,6 +444,272 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 				"key_version": map[string]interface{}{
 					"type":        "integer",
 					"description": "Specific key version for decryption",
+				},
+			},
+			"required": []string{"key_id", "ciphertext"},
+		},
+	})
+}
+
+// kmsHashAlgorithmSchema is the hash_algorithm property shared by the hash
+// and HMAC tools: a platform.v1 HashAlgorithm value, as on gRPC.
+func kmsHashAlgorithmSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "integer",
+		"description": "platform.v1 HashAlgorithm: 0 or 2 = SHA-256, 3 = SHA-384, 4 = SHA-512",
+		"default":     0,
+	}
+}
+
+// registerKMSKeyAdminTools registers the key import, key status and key
+// version tools. Their arguments follow the platform.v1 ImportKeyRequest,
+// UpdateKeyStatusRequest and GetKeyVersionsRequest fields, so the SDK MCP
+// transport adapter can forward the gRPC requests unchanged.
+func (r *ToolRegistry) registerKMSKeyAdminTools() {
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_import_key",
+		Description: "Import existing key material into the KMS",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_material": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded key material, wrapped under wrapping_key_id when set",
+				},
+				"wrapping_key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID that wraps key_material (empty = plaintext material)",
+				},
+				"key_spec": map[string]interface{}{
+					"type":        "object",
+					"description": "platform.v1 KMSKeySpec: algorithm (KMSKeyAlgorithm number), usage (KeyUsage numbers), key_size, exportable, deletion_protection",
+					"properties": map[string]interface{}{
+						"algorithm":           map[string]interface{}{"type": "integer"},
+						"usage":               map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}},
+						"key_size":            map[string]interface{}{"type": "integer"},
+						"exportable":          map[string]interface{}{"type": "boolean"},
+						"deletion_protection": map[string]interface{}{"type": "boolean"},
+					},
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Key name",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "Key description",
+				},
+				"tags": map[string]interface{}{
+					"type":                 "object",
+					"description":          "Key tags",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+				},
+			},
+			"required": []string{"key_material", "key_spec"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_update_key_status",
+		Description: "Enable, disable or schedule deletion of a key or one key version",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID",
+				},
+				"version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Key version (0 = the key itself)",
+				},
+				"status": map[string]interface{}{
+					"type":        "integer",
+					"description": "platform.v1 KeyStatus: 1 = enabled, 2 = disabled, 3 = pending deletion, 4 = destroyed",
+				},
+			},
+			"required": []string{"key_id", "status"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_list_key_versions",
+		Description: "List the versions of a KMS key",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID",
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum versions to return (0 = all)",
+				},
+				"cursor": map[string]interface{}{
+					"type":        "string",
+					"description": "next_cursor of a previous call",
+				},
+			},
+			"required": []string{"key_id"},
+		},
+	})
+}
+
+// registerKMSBatchTools registers the batch encrypt and decrypt tools. Their
+// arguments follow the platform.v1 BatchEncryptRequest and BatchDecryptRequest
+// fields.
+func (r *ToolRegistry) registerKMSBatchTools() {
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_batch_encrypt",
+		Description: fmt.Sprintf("Encrypt up to %d plaintexts under one KMS key", kmsMaxBatchItems),
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Encryption key ID",
+				},
+				"items": map[string]interface{}{
+					"type":     "array",
+					"maxItems": kmsMaxBatchItems,
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"item_id":   map[string]interface{}{"type": "string", "description": "Caller correlation ID"},
+							"plaintext": map[string]interface{}{"type": "string", "description": "Base64-encoded plaintext"},
+							"context":   map[string]interface{}{"type": "string", "description": "Base64-encoded additional authenticated data"},
+							"nonce":     map[string]interface{}{"type": "string", "description": "Base64-encoded nonce"},
+						},
+					},
+				},
+			},
+			"required": []string{"key_id", "items"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_batch_decrypt",
+		Description: fmt.Sprintf("Decrypt up to %d ciphertexts under one KMS key", kmsMaxBatchItems),
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Decryption key ID",
+				},
+				"items": map[string]interface{}{
+					"type":     "array",
+					"maxItems": kmsMaxBatchItems,
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"item_id":     map[string]interface{}{"type": "string", "description": "Caller correlation ID"},
+							"ciphertext":  map[string]interface{}{"type": "string", "description": "Base64-encoded ciphertext"},
+							"context":     map[string]interface{}{"type": "string", "description": "Base64-encoded additional authenticated data"},
+							"nonce":       map[string]interface{}{"type": "string", "description": "Base64-encoded nonce"},
+							"key_version": map[string]interface{}{"type": "integer", "description": "Key version the item was encrypted under (0 = current)"},
+						},
+					},
+				},
+			},
+			"required": []string{"key_id", "items"},
+		},
+	})
+}
+
+// registerKMSDigestTools registers the hash, HMAC and rewrap tools. Each
+// calls the backend gRPC KeyManagementService calls.
+func (r *ToolRegistry) registerKMSDigestTools() {
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_hash",
+		Description: "Hash data with the KMS; no key material is used",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"data": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded data to hash",
+				},
+				"algorithm": kmsHashAlgorithmSchema(),
+			},
+			"required": []string{"data"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_hmac",
+		Description: "Compute an HMAC over a message with a KMS key",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "HMAC key ID",
+				},
+				"message": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded message",
+				},
+				"hash_algorithm": kmsHashAlgorithmSchema(),
+			},
+			"required": []string{"key_id", "message"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_verify_hmac",
+		Description: "Verify an HMAC over a message with a KMS key",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "HMAC key ID",
+				},
+				"message": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded message",
+				},
+				"hmac": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded HMAC to verify",
+				},
+				"hash_algorithm": kmsHashAlgorithmSchema(),
+				"key_version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Key version the HMAC was computed under (0 = current)",
+				},
+			},
+			"required": []string{"key_id", "message", "hmac"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "kms_rewrap",
+		Description: "Re-encrypt a ciphertext under the key's current version without exposing the plaintext",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID the ciphertext was encrypted under",
+				},
+				"ciphertext": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded ciphertext",
+				},
+				"context": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded additional authenticated data",
+				},
+				"nonce": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded nonce",
+				},
+				"source_version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Must be omitted or 0: the SDK rewrap request has no source version, so a non-zero value is refused",
 				},
 			},
 			"required": []string{"key_id", "ciphertext"},
@@ -732,6 +1050,106 @@ func (r *ToolRegistry) registerSecretsTools() {
 			"required": []string{"secret_id"},
 		},
 	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "secret_get_version",
+		Description: "Get one version of a secret, including its data (base64)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Version number",
+				},
+			},
+			"required": []string{"secret_id", "version"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "secret_list_versions",
+		Description: "List the versions of a secret without their data",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of versions to return",
+				},
+			},
+			"required": []string{"secret_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "secret_rotate",
+		Description: "Store new data (base64) as the secret's next version",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"new_data": map[string]interface{}{
+					"type":        "string",
+					"description": "New secret data (base64)",
+				},
+				"metadata": map[string]interface{}{
+					"type":        "object",
+					"description": "Version metadata",
+				},
+			},
+			"required": []string{"secret_id", "new_data"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "secret_rollback",
+		Description: "Make an earlier version's data the secret's newest version",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"target_version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Version to roll back to",
+				},
+			},
+			"required": []string{"secret_id", "target_version"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "secret_update_status",
+		Description: "Enable, disable or soft-delete a secret",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"status": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"enabled", "disabled", "deleted"},
+					"description": "New secret status",
+				},
+			},
+			"required": []string{"secret_id", "status"},
+		},
+	})
 }
 
 // ErrSecretIDRequired indicates a secret ID is required.
@@ -744,4 +1162,16 @@ var ErrSecretIDRequired = &KMSError{
 var ErrSecretDataRequired = &KMSError{
 	Code:    "SECRET_DATA_REQUIRED",
 	Message: "secret data is required",
+}
+
+// ErrSecretVersionRequired indicates a secret version number is required.
+var ErrSecretVersionRequired = &KMSError{
+	Code:    "SECRET_VERSION_REQUIRED",
+	Message: "secret version is required",
+}
+
+// ErrSecretStatusRequired indicates a secret status is required.
+var ErrSecretStatusRequired = &KMSError{
+	Code:    "SECRET_STATUS_REQUIRED",
+	Message: "secret status is required",
 }

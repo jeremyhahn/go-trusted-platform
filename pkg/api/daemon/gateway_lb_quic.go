@@ -55,19 +55,13 @@ func (a *zoneGatewayAdapter) LBStatus(_ context.Context) (*quic.LBStatusInfo, er
 // fullGatewayQUICAdapter — backed by the gateway load balancer when wired
 // =============================================================================
 
-// SetLoadBalancer wires the gateway load balancer backend into the QUIC
-// gateway adapter. A nil backend leaves every VIP operation returning
-// errGatewayFeatureNotConfigured (StatusUnavailable on the wire).
-func (a *fullGatewayQUICAdapter) SetLoadBalancer(lb GatewayLoadBalancerInterface) {
-	a.lb = lb
-}
-
-// requireLB resolves the load balancer backend or reports not-configured.
+// requireLB resolves the shared service's load balancer backend, or
+// reports errGatewayFeatureNotConfigured (StatusUnavailable on the wire).
 func (a *fullGatewayQUICAdapter) requireLB() (GatewayLoadBalancerInterface, error) {
-	if a.lb == nil {
+	if a.backends == nil || a.backends.LoadBalancer() == nil {
 		return nil, errGatewayFeatureNotConfigured
 	}
-	return a.lb, nil
+	return a.backends.LoadBalancer(), nil
 }
 
 // mapLBToQUICError translates load balancer errors to the sentinel errors

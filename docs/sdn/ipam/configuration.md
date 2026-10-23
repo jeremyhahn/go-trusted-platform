@@ -109,7 +109,7 @@ changed environment means a fresh backend.
 | Backend | Persistence | Consistency | Use |
 |---------|-------------|-------------|-----|
 | `memory` (default) | none | strong, single instance | development, tests |
-| `quicbaas` | Raft log and snapshots (via the quicbaas SDK) | strong storage, but `Allocate` has no compare-and-swap: concurrent allocators can collide ([README](README.md#quicbaas-backend)) | production |
+| `quicbaas` | Raft log and snapshots (via the quicbaas SDK) | each write replicated; allocation has no compare-and-swap, so concurrent allocators race and the last writer wins ([README](README.md#quicbaas-backend)) | production |
 | `dht` | DHT, replicated | eventual, claim-based | P2P (`platform_p2p` build tag) |
 
 `quicbaas` needs the top-level `quicbaas:` client (`sdn.ErrIPAMBackendUnconfigured`
@@ -119,6 +119,11 @@ still fails until something calls `app.RegisterDHTIPAMBackend` (nothing does
 today). Any other name is `sdn.ErrIPAMBackendUnknown`. All three backends apply the same window
 rules: `memory` and `quicbaas` hand out the lowest free address of the window,
 `dht` draws random addresses inside it.
+
+`quicbaas` writes with no condition, so two allocators racing on one pool can
+both get the same address. A failed pool write returns `ErrPoolOperationFailed`.
+Known limitation: atomic allocation waits on a conditional put in the
+go-quicbaas SDK ([architecture.md](architecture.md#quicbaas-concurrency)).
 
 ## Pool Size
 
@@ -130,6 +135,10 @@ addresses and the dynamic window together: a zone pool whose window
 `ErrPoolExhausted` while `available` still counts the static addresses
 `.2`–`.49` that `AllocateSpecific` can take. Very large IPv6 pools saturate at
 the maximum `uint64`.
+
+The `memory` backend keeps one bit per usable address, so it refuses a pool of
+more than 2^24 addresses (an IPv4 `/8`, an IPv6 `/104`) with
+`*ipam.ErrPoolTooLarge`. An IPv6 `/64` pool needs the `quicbaas` backend.
 
 ## Zone-Filtered Queries
 

@@ -25,7 +25,13 @@ type StartStopper interface {
 // protocol surface reboots through it so they all behave the same. The
 // returned error keeps the orchestrator's sentinel for errors.Is.
 func Reboot(ctx context.Context, o StartStopper, instanceID string) error {
-	if err := o.Stop(ctx, instanceID); err != nil {
+	return RebootWithOptions(ctx, o, instanceID, StopOptions{})
+}
+
+// RebootWithOptions is Reboot with the stop half run under opts, so a forced
+// reboot kills the instance instead of waiting for the guest to power down.
+func RebootWithOptions(ctx context.Context, o StartStopper, instanceID string, opts StopOptions) error {
+	if err := StopWithOptions(ctx, o, instanceID, opts); err != nil {
 		return &WrappedError{Msg: "failed to stop instance for reboot", Err: err}
 	}
 	if err := o.Start(ctx, instanceID); err != nil {

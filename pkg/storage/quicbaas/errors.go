@@ -17,7 +17,19 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
+
+// IsNotFound reports whether err is the refusal a go-quicbaas KV read
+// returns for a missing entity. A KV Get never answers a miss with
+// Found=false: remote transports return an SDK error with CodeNotFound, and
+// the embedded transport returns the go-qrdb DatabaseError with ErrNotFound,
+// which the SDK's errors.IsNotFound does not recognise.
+func IsNotFound(err error) bool {
+	return baaserrors.IsNotFound(err) || quicbaas.IsDatabaseErrorCode(err, quicbaas.ErrNotFound)
+}
 
 // ErrNotFound is returned when an entity is not found in the database.
 type ErrNotFound struct {
@@ -48,6 +60,18 @@ type ErrInvalidConfig struct {
 
 func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("invalid configuration: %s: %s", e.Field, e.Reason)
+}
+
+// ErrVectorUnavailable is returned by every Vector call when the embedded
+// server serves no vector service, instead of the transport's bare
+// "unimplemented". Reason says whether the build lacks the service or the
+// configuration leaves it disabled.
+type ErrVectorUnavailable struct {
+	Reason string
+}
+
+func (e ErrVectorUnavailable) Error() string {
+	return fmt.Sprintf("vector service unavailable: %s", e.Reason)
 }
 
 // ErrInvalidTransport is returned when an invalid transport string is provided.

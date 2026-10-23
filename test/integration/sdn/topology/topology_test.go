@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && topology
 
 // Copyright (c) 2025 Jeremy Hahn
 // Copyright (c) 2025 Automate The Things, LLC
@@ -29,15 +29,18 @@ import (
 // Test Environment Setup
 // =============================================================================
 
-// skipIfNoDockerCompose skips the test if docker-compose is not available in PATH.
-// These tests start the multi-node topology with docker-compose, which the
-// devcontainer does not install (build/docker/devcontainer/Dockerfile) and
-// cannot run without a Docker daemon inside it, so they skip there; they run
-// only on a host with docker-compose.
-func skipIfNoDockerCompose(t *testing.T) {
+// requireDockerCompose fails the test with ErrDockerComposeMissing when
+// docker-compose is not in PATH. These tests start the multi-node topology
+// with docker-compose, which the devcontainer does not install
+// (build/docker/devcontainer/Dockerfile) and cannot run without a Docker
+// daemon inside it. The topology build tag keeps them out of the runner's
+// ./test/integration/sdn/... sweep; `make integration-test-sdn-topology`
+// runs them on a host with docker-compose, and they fail anywhere else
+// rather than report a pass they never earned.
+func requireDockerCompose(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker-compose"); err != nil {
-		t.Skip("Skipping: docker-compose not available")
+		t.Fatalf("missing prerequisite: %v", ErrDockerComposeMissing{Err: err})
 	}
 }
 
@@ -759,6 +762,11 @@ func TestErrorTypes(t *testing.T) {
 			err:      ErrBGPConvergenceFailed{Reason: "timeout"},
 			expected: "BGP convergence failed: timeout",
 		},
+		{
+			name:     "ErrDockerComposeMissing",
+			err:      ErrDockerComposeMissing{Err: exec.ErrNotFound},
+			expected: "docker-compose is not in PATH, so no topology can be started (run on a host with docker-compose and a Docker daemon): executable file not found in $PATH",
+		},
 	}
 
 	for _, tt := range tests {
@@ -836,7 +844,7 @@ func TestManager_IsRunning_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestManager_StartAndDestroy_Integration(t *testing.T) {
-	skipIfNoDockerCompose(t)
+	requireDockerCompose(t)
 
 	config := DefaultManagerConfig()
 	config.WorkDir = testWorkDir(t)
@@ -899,7 +907,7 @@ func TestManager_StartAndDestroy_Integration(t *testing.T) {
 }
 
 func TestManager_WaitHealthy_Integration(t *testing.T) {
-	skipIfNoDockerCompose(t)
+	requireDockerCompose(t)
 
 	config := DefaultManagerConfig()
 	config.WorkDir = testWorkDir(t)
@@ -929,7 +937,7 @@ func TestManager_WaitHealthy_Integration(t *testing.T) {
 }
 
 func TestManager_CaptureLogs_Integration(t *testing.T) {
-	skipIfNoDockerCompose(t)
+	requireDockerCompose(t)
 
 	config := DefaultManagerConfig()
 	config.WorkDir = testWorkDir(t)

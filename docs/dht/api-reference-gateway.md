@@ -1,5 +1,7 @@
 # DHT Gateway API Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Gateway API provides browser-friendly access to the DHT network for:

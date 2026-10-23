@@ -47,7 +47,6 @@ import (
 // mockBackend implements xkmssdk.KeyProvider for testing
 type mockBackend struct {
 	privateKey *rsa.PrivateKey
-	cert       *x509.Certificate
 }
 
 func (m *mockBackend) Type() xkmssdk.BackendType {
@@ -129,7 +128,6 @@ func (m *mockECDSASigner) Sign(r io.Reader, digest []byte, opts crypto.SignerOpt
 // mockECDSABackend implements xkmssdk.KeyProvider for ECDSA testing
 type mockECDSABackend struct {
 	privateKey *ecdsa.PrivateKey
-	cert       *x509.Certificate
 }
 
 func (m *mockECDSABackend) Type() xkmssdk.BackendType {
@@ -380,7 +378,7 @@ func TestNewSigner(t *testing.T) {
 		{
 			name: "valid options",
 			opts: &SignerOptions{
-				KeyStore:      &mockBackend{privateKey: key, cert: cert},
+				KeyStore:      &mockBackend{privateKey: key},
 				KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 				Certificate:   cert,
 				Logger:        logger,
@@ -400,7 +398,7 @@ func TestNewSigner(t *testing.T) {
 		{
 			name: "missing key attributes",
 			opts: &SignerOptions{
-				KeyStore:    &mockBackend{privateKey: key, cert: cert},
+				KeyStore:    &mockBackend{privateKey: key},
 				Certificate: cert,
 				Logger:      logger,
 			},
@@ -410,7 +408,7 @@ func TestNewSigner(t *testing.T) {
 		{
 			name: "missing certificate",
 			opts: &SignerOptions{
-				KeyStore:      &mockBackend{privateKey: key, cert: cert},
+				KeyStore:      &mockBackend{privateKey: key},
 				KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 				Logger:        logger,
 			},
@@ -420,7 +418,7 @@ func TestNewSigner(t *testing.T) {
 		{
 			name: "missing logger",
 			opts: &SignerOptions{
-				KeyStore:      &mockBackend{privateKey: key, cert: cert},
+				KeyStore:      &mockBackend{privateKey: key},
 				KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 				Certificate:   cert,
 			},
@@ -464,7 +462,7 @@ func TestSign(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -509,7 +507,7 @@ func TestSignFile(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -546,7 +544,7 @@ func TestSignInvalidPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -706,7 +704,7 @@ func TestComputeAuthenticodeDigestWithExistingSignature(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1171,7 +1169,7 @@ func TestVerify(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1199,7 +1197,7 @@ func TestVerifyFile(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1229,7 +1227,7 @@ func TestVerifyUnsignedPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1250,7 +1248,7 @@ func TestExtractCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1283,7 +1281,7 @@ func TestExtractCertificateFile(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1315,7 +1313,7 @@ func TestExtractCertificateUnsigned(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1337,7 +1335,7 @@ func TestSigningTime(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1375,31 +1373,6 @@ func TestSigningTimeUnsigned(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, signingTime.IsZero())
 	require.Contains(t, err.Error(), "not signed")
-}
-
-func TestSignWithTimestamp(t *testing.T) {
-	// This test verifies the timestamp URL path
-	// We don't actually call a real timestamp server
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		TimestampURL:  "http://timestamp.example.com", // Fake URL - will fail but tests code path
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	// Sign will succeed even if timestamp fails (timestamp is optional)
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-	require.Greater(t, output.Len(), len(peData))
 }
 
 func TestSignWithCertChain(t *testing.T) {
@@ -1453,7 +1426,7 @@ func TestSignWithCertChain(t *testing.T) {
 	// Create signer with certificate chain
 	logger := logging.DefaultLogger()
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: leafKey, cert: leafCert},
+		KeyStore:      &mockBackend{privateKey: leafKey},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   leafCert,
 		CertChain:     []*x509.Certificate{intermediateCert, rootCert},
@@ -1476,7 +1449,7 @@ func TestVerifyInvalidPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1496,7 +1469,7 @@ func TestVerifyFileNotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1513,7 +1486,7 @@ func TestSignFileInputNotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1533,7 +1506,7 @@ func TestExtractCertificateFileNotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1558,7 +1531,7 @@ func TestReSigning(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1601,7 +1574,7 @@ func TestSignTwice(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1673,7 +1646,7 @@ func TestSignedPEStructure(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1710,7 +1683,7 @@ func TestSignAndVerifyWithECDSA(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockECDSABackend{privateKey: key, cert: cert},
+		KeyStore:      &mockECDSABackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -1998,7 +1971,7 @@ func TestSignFileOutputCreateError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2026,7 +1999,7 @@ func TestSignPE32(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2097,7 +2070,7 @@ func TestSignReadError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2117,7 +2090,7 @@ func TestVerifyReadError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2136,7 +2109,7 @@ func TestExtractCertificateReadError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2230,7 +2203,7 @@ func TestExtractCertificateFromPKCS7LongFormCertLength(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2265,7 +2238,7 @@ func TestVerifyDigestMismatch(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2317,28 +2290,12 @@ func TestEncodeAuthenticatedAttributesForVerification(t *testing.T) {
 	require.Equal(t, byte(0x31), encoded[0])
 }
 
-func TestAddTimestamp(t *testing.T) {
-	_, cert := generateTestKey(t)
-	s := &Signer{cert: cert}
-
-	// addTimestamp returns ErrRFC3161NotImplemented since RFC3161 is deferred
-	signature := []byte{0x01, 0x02, 0x03}
-	digest := []byte{0x04, 0x05, 0x06}
-
-	result, err := s.addTimestamp(signature, digest)
-	require.Error(t, err)
-	require.Nil(t, result)
-
-	var notImplErr ErrRFC3161NotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-}
-
 func TestEmbedSignatureWithExistingSignature(t *testing.T) {
 	key, cert := generateTestKey(t)
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2455,7 +2412,7 @@ func TestExtractCertificateFromPKCS7ShortFormLength(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2613,7 +2570,7 @@ func TestSignWithMultipleCerts(t *testing.T) {
 
 	logger := logging.DefaultLogger()
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: signingKey, cert: signingCert},
+		KeyStore:      &mockBackend{privateKey: signingKey},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   signingCert,
 		CertChain:     []*x509.Certificate{rootCert},
@@ -2641,7 +2598,7 @@ func TestComputeAuthenticodeDigestAlreadySigned(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2692,7 +2649,7 @@ func TestSignAndVerifyLargeFile(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2808,7 +2765,7 @@ func TestSignAndExtractCertificateChain(t *testing.T) {
 	// Create signer with full chain
 	logger := logging.DefaultLogger()
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: signingKey, cert: signingCert},
+		KeyStore:      &mockBackend{privateKey: signingKey},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   signingCert,
 		CertChain:     []*x509.Certificate{intermediateCert, rootCert},
@@ -2839,7 +2796,7 @@ func TestVerifyTamperedSignature(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2914,7 +2871,7 @@ func TestSignFileTempError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -2959,7 +2916,6 @@ func TestParsePEDataTooSmallAfterHeaders(t *testing.T) {
 // mockFailingSignerBackend returns a signer that fails
 type mockFailingSignerBackend struct {
 	privateKey *rsa.PrivateKey
-	cert       *x509.Certificate
 }
 
 func (m *mockFailingSignerBackend) Type() xkmssdk.BackendType {
@@ -3021,7 +2977,7 @@ func TestSignFailedSigning(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockFailingSignerBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockFailingSignerBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3051,7 +3007,7 @@ func TestSignFailedWrite(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3072,7 +3028,7 @@ func TestVerifyExtractCertError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3114,7 +3070,7 @@ func TestSignFileReadError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3138,7 +3094,7 @@ func TestExtractCertificateParseError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3179,7 +3135,7 @@ func TestSignFileChmodError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3194,7 +3150,7 @@ func TestSignFileChmodError(t *testing.T) {
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
-	// Create a directory at the output path so os.Create fails with "is a directory"
+	// Create a directory at the output path so the signed file cannot replace it
 	outputPath := filepath.Join(tmpDir, "output.efi")
 	err = os.MkdirAll(outputPath, 0755)
 	require.NoError(t, err)
@@ -3202,7 +3158,13 @@ func TestSignFileChmodError(t *testing.T) {
 	// SignFile should fail because the output path is a directory
 	err = signer.SignFile(inputPath, outputPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is a directory")
+	assert.Contains(t, err.Error(), "failed to replace output file")
+	info, err := os.Stat(outputPath)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	entries, err := os.ReadDir(tmpDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2, "no temporary file is left beside the output")
 }
 
 func TestVerifyInvalidSignatureData(t *testing.T) {
@@ -3210,7 +3172,7 @@ func TestVerifyInvalidSignatureData(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3274,7 +3236,7 @@ func TestVerifyWithWrongCertificate(t *testing.T) {
 
 	// Create signer with first key
 	signer1, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key1, cert: cert1},
+		KeyStore:      &mockBackend{privateKey: key1},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert1,
 		Logger:        logger,
@@ -3291,7 +3253,7 @@ func TestVerifyWithWrongCertificate(t *testing.T) {
 
 	// Create verifier with different certificate
 	signer2, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key2, cert: cert2},
+		KeyStore:      &mockBackend{privateKey: key2},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert2,
 		Logger:        logger,
@@ -3310,7 +3272,7 @@ func TestMultipleReSigning(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3341,7 +3303,7 @@ func TestSignPE32AndVerify(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3406,7 +3368,7 @@ func TestSignFileOutputChmodSuccess(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3437,7 +3399,7 @@ func TestSignWithDifferentPESizes(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3525,7 +3487,7 @@ func TestVerifyModifiedChecksumField(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3573,7 +3535,7 @@ func TestCreatePKCS7SignatureEdgeCases(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3607,7 +3569,7 @@ func TestSignAndVerifyMultipleFilesSequentially(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3644,7 +3606,7 @@ func TestExtractCertificateChainVerification(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3674,7 +3636,7 @@ func TestVerifyPKCS7TrailingDataDetection(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3710,7 +3672,7 @@ func TestExtractSignatureVariousLengthEncodings(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3752,7 +3714,7 @@ func TestSigningTimeExtraction(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3782,7 +3744,7 @@ func TestComputeAuthenticodeDigestConsistency(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	s := &Signer{
-		keystore: &mockBackend{privateKey: key, cert: cert},
+		keystore: &mockBackend{privateKey: key},
 		keyAttrs: &xkmssdk.KeyAttributes{CN: "test"},
 		cert:     cert,
 		logger:   logger,
@@ -3895,7 +3857,7 @@ func TestVerifyCryptographicSignatureRSA(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -3938,7 +3900,7 @@ func TestCreatePKCS7SignatureStructure(t *testing.T) {
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, attrDigest)
 	require.NoError(t, err)
 
-	pkcs7, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime)
+	pkcs7, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, pkcs7)
 
@@ -3955,7 +3917,7 @@ func TestSignFileFullCycle(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4561,31 +4523,6 @@ func TestExtractDigestFromContentInvalid(t *testing.T) {
 	require.Contains(t, err.Error(), "failed to parse SPC content")
 }
 
-// TestSignWithTimestampURL tests signing with a timestamp URL configured
-func TestSignWithTimestampURL(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	// Create signer with timestamp URL
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		TimestampURL:  "http://timestamp.example.com", // Will log but not fail
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	// Sign should succeed even with timestamp URL (addTimestamp returns unchanged signature)
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-	require.Greater(t, output.Len(), len(peData))
-}
-
 // TestSignWithCertificateChainMultiple tests signing with multiple certificates in chain
 func TestSignWithCertificateChainMultiple(t *testing.T) {
 	key, cert := generateTestKey(t)
@@ -4593,7 +4530,7 @@ func TestSignWithCertificateChainMultiple(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		CertChain:     []*x509.Certificate{intermediateCert},
@@ -4635,7 +4572,7 @@ func TestExtractCertificateUnsignedPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4654,7 +4591,7 @@ func TestVerifyUnsignedPEFile(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4690,7 +4627,7 @@ func TestVerifyPKCS7SignatureNoSignerInfoError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4797,7 +4734,7 @@ func TestSignFileInputOpenError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4815,7 +4752,7 @@ func TestSignFileOutputPathError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4839,7 +4776,7 @@ func TestVerifyFileNotFoundPath(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4857,7 +4794,7 @@ func TestExtractCertificateFileNotFoundError(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4892,7 +4829,7 @@ func TestVerifyPKCS7SignatureCorruptedContent(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4932,7 +4869,7 @@ func TestPublicMethod(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4951,7 +4888,7 @@ func TestExtractCertificateInvalidPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -4969,7 +4906,7 @@ func TestComputeAuthenticodeDigestWithAlignedPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	s := &Signer{
-		keystore: &mockBackend{privateKey: key, cert: cert},
+		keystore: &mockBackend{privateKey: key},
 		keyAttrs: &xkmssdk.KeyAttributes{CN: "test"},
 		cert:     cert,
 		logger:   logger,
@@ -4996,7 +4933,7 @@ func TestComputeAuthenticodeDigestSignedPE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -5030,7 +4967,7 @@ func TestSignAndVerifyARM64PE(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,
@@ -5116,7 +5053,7 @@ func TestVerifyARM64PEMachineTampered(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		Logger:        logger,

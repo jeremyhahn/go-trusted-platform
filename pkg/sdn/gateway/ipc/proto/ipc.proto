@@ -7,7 +7,8 @@ syntax = "proto3";
 // contract over a Unix socket the supervisor created. The transport is gRPC
 // over that socket with SO_PEERCRED as the only authentication: the child
 // admits the supervisor (uid 0) on ProcessControlService and the supervisor
-// plus the parser uid on DatapathService.
+// plus the parser uid on DatapathService, and the supervisor plus the
+// platform uids on GatewayServicesService.
 //
 // Structured gateway documents ride as JSON: gwstate.Snapshot and
 // gwstate.DesiredConfig (pkg/sdn/gateway/state) are the one schema the
@@ -30,11 +31,51 @@ service ProcessControlService {
 
 // DatapathService is the narrow surface the kernel-programming process exposes to
 // the supervisor's reconciler: the control plane's desired configuration in,
-// the reconciliation state out.
+// the reconciliation state out. It also carries the VPN DataPlane seam
+// (pkg/sdn/gateway/services/vpn): the datapath child owns the WireGuard and
+// MASQUE planes, and admission installs and removes peers on them here.
 service DatapathService {
   // ApplyDesired brings the datapath services to the desired configuration
   // through the child's Gateway.Apply.
   rpc ApplyDesired(ApplyDesiredRequest) returns (ApplyDesiredResponse);
+  // InstallVPNPeer installs one admitted lease's peer on the data plane it
+  // names. A plane's refusal travels in the response; an RPC error means
+  // the child never answered.
+  rpc InstallVPNPeer(InstallVPNPeerRequest) returns (InstallVPNPeerResponse);
+  // RemoveVPNPeer removes a lease's peer from the data plane it names.
+  rpc RemoveVPNPeer(RemoveVPNPeerRequest) returns (RemoveVPNPeerResponse);
+}
+
+// GatewayServicesService is platformd's live read and control surface on the
+// datapath child's load-balancer, NAT64 and perf services (#660). Every API
+// read and control action platformd serves for those services is one call
+// here; the Snapshot telemetry (#594) is not read for them.
+//
+// Results ride as JSON of the service's own Go types, as the gwstate
+// documents do. A service's refusal travels in the response as a
+// ServiceRefusal, so the caller rebuilds the same typed error; an RPC error
+// means the child never answered.
+service GatewayServicesService {
+  // LBStatus returns the load balancer's loadbalancer.Health.
+  rpc LBStatus(LBStatusRequest) returns (LBStatusResponse);
+  // ListVIPs returns every VIP's loadbalancer.VIPStatus.
+  rpc ListVIPs(ListVIPsRequest) returns (ListVIPsResponse);
+  // GetVIP returns one VIP's loadbalancer.VIPStatus.
+  rpc GetVIP(GetVIPRequest) returns (GetVIPResponse);
+  // AddVIP adds a VIP to the load balancer.
+  rpc AddVIP(AddVIPRequest) returns (AddVIPResponse);
+  // RemoveVIP removes a VIP from the load balancer.
+  rpc RemoveVIP(RemoveVIPRequest) returns (RemoveVIPResponse);
+  // SetVIPBackends replaces a VIP's backend set.
+  rpc SetVIPBackends(SetVIPBackendsRequest) returns (SetVIPBackendsResponse);
+  // NAT64Status returns the translator's nat64.Health.
+  rpc NAT64Status(NAT64StatusRequest) returns (NAT64StatusResponse);
+  // PerfFlows runs the flow-install measurement on a bridge.
+  rpc PerfFlows(PerfFlowsRequest) returns (PerfFlowsResponse);
+  // PerfDatapath reads a bridge's datapath counters.
+  rpc PerfDatapath(PerfDatapathRequest) returns (PerfDatapathResponse);
+  // PerfConntrack reads the conntrack entry counts.
+  rpc PerfConntrack(PerfConntrackRequest) returns (PerfConntrackResponse);
 }
 
 message StatusRequest {}
@@ -85,4 +126,229 @@ message ApplyDesiredResponse {
   // apply_error is the Gateway.Apply error text; the RPC itself succeeds so
   // the state travels with the failure.
   string apply_error = 2;
+}
+
+// VPNPeer is the part of a vpn.Lease a data plane binds a peer with.
+message VPNPeer {
+  string lease_id = 1;
+  // data_plane is the vpn.DataPlaneKind: "wireguard" or "masque".
+  string data_plane = 2;
+  // address is the leased host prefix, e.g. "100.64.0.7/32".
+  string address = 3;
+  // wireguard_public_key is the client's 32-byte Curve25519 key (WireGuard).
+  bytes wireguard_public_key = 4;
+  // client_certificate_sha256 is the admitted client certificate's
+  // fingerprint (MASQUE).
+  bytes client_certificate_sha256 = 5;
+}
+
+message InstallVPNPeerRequest {
+  VPNPeer peer = 1;
+}
+
+message InstallVPNPeerResponse {
+  // refusal is absent when the peer was installed.
+  VPNPeerRefusal refusal = 1;
+}
+
+message RemoveVPNPeerRequest {
+  string data_plane = 1;
+  string lease_id = 2;
+}
+
+message RemoveVPNPeerResponse {
+  // refusal is absent when the peer was removed or was not installed.
+  VPNPeerRefusal refusal = 1;
+}
+
+// VPNPeerRefusalClass names the vpn package error a plane refused with, so
+// the caller rebuilds the same typed error. UNSPECIFIED, or a class this
+// binary does not know, is read as UNAVAILABLE.
+enum VPNPeerRefusalClass {
+  VPN_PEER_REFUSAL_CLASS_UNSPECIFIED = 0;
+  // vpn.ErrInvalidRequest: field and reason.
+  VPN_PEER_REFUSAL_CLASS_INVALID_REQUEST = 1;
+  // vpn.ErrPeerKeyInvalid: reason.
+  VPN_PEER_REFUSAL_CLASS_PEER_KEY_INVALID = 2;
+  // vpn.ErrPeerConflict: existing_lease_id and reason.
+  VPN_PEER_REFUSAL_CLASS_PEER_CONFLICT = 3;
+  // vpn.ErrDataPlaneNotStarted.
+  VPN_PEER_REFUSAL_CLASS_NOT_STARTED = 4;
+  // vpn.ErrLeaseNotFound.
+  VPN_PEER_REFUSAL_CLASS_LEASE_NOT_FOUND = 5;
+  // vpn.ErrDataPlaneUnavailable: reason. Also any untyped plane error.
+  VPN_PEER_REFUSAL_CLASS_UNAVAILABLE = 6;
+}
+
+message VPNPeerRefusal {
+  VPNPeerRefusalClass class = 1;
+  string field = 2;
+  string reason = 3;
+  string existing_lease_id = 4;
+}
+
+// VIPKey names one VIP: its protocol and "address:port".
+message VIPKey {
+  string protocol = 1;
+  string address = 2;
+}
+
+message LBStatusRequest {}
+
+message LBStatusResponse {
+  // health_json is a loadbalancer.Health.
+  bytes health_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+message ListVIPsRequest {}
+
+message ListVIPsResponse {
+  // vips_json is a []loadbalancer.VIPStatus.
+  bytes vips_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+message GetVIPRequest {
+  VIPKey vip = 1;
+}
+
+message GetVIPResponse {
+  // vip_json is a loadbalancer.VIPStatus.
+  bytes vip_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+message AddVIPRequest {
+  // vip_json is a loadbalancer.VIP.
+  bytes vip_json = 1;
+}
+
+message AddVIPResponse {
+  // refusal is absent when the VIP was added.
+  ServiceRefusal refusal = 1;
+}
+
+message RemoveVIPRequest {
+  VIPKey vip = 1;
+}
+
+message RemoveVIPResponse {
+  // refusal is absent when the VIP was removed.
+  ServiceRefusal refusal = 1;
+}
+
+message SetVIPBackendsRequest {
+  VIPKey vip = 1;
+  // backends_json is a []loadbalancer.Backend.
+  bytes backends_json = 2;
+}
+
+message SetVIPBackendsResponse {
+  // refusal is absent when the backend set was replaced.
+  ServiceRefusal refusal = 1;
+}
+
+message NAT64StatusRequest {}
+
+message NAT64StatusResponse {
+  // health_json is a nat64.Health with last_error as its text.
+  bytes health_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+message PerfFlowsRequest {
+  string bridge = 1;
+  int32 count = 2;
+  bool batch = 3;
+}
+
+message PerfFlowsResponse {
+  // result_json is a perf.FlowsResult.
+  bytes result_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+message PerfDatapathRequest {
+  string bridge = 1;
+}
+
+message PerfDatapathResponse {
+  // result_json is a perf.DatapathResult.
+  bytes result_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+message PerfConntrackRequest {
+  int32 zone = 1;
+}
+
+message PerfConntrackResponse {
+  // result_json is a perf.ConntrackResult.
+  bytes result_json = 1;
+  ServiceRefusal refusal = 2;
+}
+
+// ServiceRefusalClass names the service error a GatewayServicesService call
+// refused with, so the caller rebuilds the same typed error and every API
+// transport maps it as it maps the in-process service's error.
+// UNSPECIFIED, or a class this binary does not know, is an untyped failure
+// carrying message.
+enum ServiceRefusalClass {
+  SERVICE_REFUSAL_CLASS_UNSPECIFIED = 0;
+  // gateway.ErrServiceNotActive: service. The child does not host it.
+  SERVICE_REFUSAL_CLASS_SERVICE_NOT_ACTIVE = 1;
+  // loadbalancer.ErrNotStarted.
+  SERVICE_REFUSAL_CLASS_LB_NOT_STARTED = 2;
+  // loadbalancer.ErrVIPNotFound.
+  SERVICE_REFUSAL_CLASS_LB_VIP_NOT_FOUND = 3;
+  // loadbalancer.ErrBackendNotFound.
+  SERVICE_REFUSAL_CLASS_LB_BACKEND_NOT_FOUND = 4;
+  // loadbalancer.ErrVIPExists.
+  SERVICE_REFUSAL_CLASS_LB_VIP_EXISTS = 5;
+  // loadbalancer.ErrAlgorithmUnsupported.
+  SERVICE_REFUSAL_CLASS_LB_ALGORITHM_UNSUPPORTED = 6;
+  // loadbalancer.ErrInvalidVIPAddress.
+  SERVICE_REFUSAL_CLASS_LB_INVALID_VIP_ADDRESS = 7;
+  // loadbalancer.ErrInvalidVIPPort.
+  SERVICE_REFUSAL_CLASS_LB_INVALID_VIP_PORT = 8;
+  // loadbalancer.ErrInvalidProtocol.
+  SERVICE_REFUSAL_CLASS_LB_INVALID_PROTOCOL = 9;
+  // loadbalancer.ErrNoBackends.
+  SERVICE_REFUSAL_CLASS_LB_NO_BACKENDS = 10;
+  // loadbalancer.ErrTooManyBackends.
+  SERVICE_REFUSAL_CLASS_LB_TOO_MANY_BACKENDS = 11;
+  // loadbalancer.ErrInvalidBackend.
+  SERVICE_REFUSAL_CLASS_LB_INVALID_BACKEND = 12;
+  // loadbalancer.ErrDuplicateBackend.
+  SERVICE_REFUSAL_CLASS_LB_DUPLICATE_BACKEND = 13;
+  // nat64.ErrNotStarted.
+  SERVICE_REFUSAL_CLASS_NAT64_NOT_STARTED = 14;
+  // nat64.ErrNAT64ModuleUnavailable: instance and cause.
+  SERVICE_REFUSAL_CLASS_NAT64_MODULE_UNAVAILABLE = 15;
+  // perf.ErrInvalidFlowCount: count and max.
+  SERVICE_REFUSAL_CLASS_PERF_INVALID_FLOW_COUNT = 16;
+  // perf.ErrBridgeUnavailable: bridge and cause.
+  SERVICE_REFUSAL_CLASS_PERF_BRIDGE_UNAVAILABLE = 17;
+  // perf.ErrNoBridgeAvailable.
+  SERVICE_REFUSAL_CLASS_PERF_NO_BRIDGE_AVAILABLE = 18;
+  // perf.ErrAppCtlUnavailable.
+  SERVICE_REFUSAL_CLASS_PERF_APPCTL_UNAVAILABLE = 19;
+}
+
+message ServiceRefusal {
+  ServiceRefusalClass class = 1;
+  // message is the service error's text.
+  string message = 2;
+  // service names the gateway service for SERVICE_NOT_ACTIVE.
+  string service = 3;
+  // instance is the Jool instance for NAT64_MODULE_UNAVAILABLE.
+  string instance = 4;
+  // bridge is the OVS bridge for PERF_BRIDGE_UNAVAILABLE.
+  string bridge = 5;
+  // cause is the wrapped error's text for the classes that carry one.
+  string cause = 6;
+  // count and max are PERF_INVALID_FLOW_COUNT's fields.
+  int32 count = 7;
+  int32 max = 8;
 }

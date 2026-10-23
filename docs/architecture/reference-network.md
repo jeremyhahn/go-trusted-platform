@@ -275,7 +275,7 @@ which never carries the trunk.
 
 | Threat | Control | Status |
 |--------|---------|--------|
-| A rogue host joins the fabric VLAN and injects VXLAN or BGP | VTEP admission requires an attested IDevID; overlay traffic is IPsec-protected between VTEPs | #709 |
+| A rogue host joins the fabric VLAN and injects VXLAN or BGP | VTEP admission requires an attested IDevID; overlay traffic is IPsec-protected between VTEPs | Admission and VTEP-to-VTEP IPsec implemented (platformd and gatewayd); IPsec certificates derived from the IDevID are #709 |
 | A compromised workload sends tagged or spoofed frames into the underlay | Workload ports are on `br-int`, which never carries the trunk | Implemented (#708); per-port tag and source hygiene on `br-int` is #709 |
 | A tenant reaches another tenant with overlapping addresses | Each tenant is its own VRF; only the gateway routes between VRFs | Tenant VRFs follow #709 |
 | A host is used as a router between zones | Forwarding is off and the host firewall drops inter-interface traffic on every non-gateway host | Implemented (#708) |

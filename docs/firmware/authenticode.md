@@ -40,7 +40,7 @@ The signing process:
 | PE32/PE32+ Support | Both 32-bit and 64-bit PE formats |
 | Signature Verification | Verify existing Authenticode signatures |
 | Certificate Extraction | Extract signing certificate from signed binaries |
-| RFC3161 Timestamps | Not implemented: leave `TimestampURL` empty (see SignerOptions) |
+| RFC3161 Timestamps | Optional TSA countersignature, embedded and verified; a failed stamp fails signing |
 
 ## Architecture
 
@@ -128,7 +128,8 @@ type Authenticode interface {
     // Sign signs a PE/COFF file with Authenticode signature
     Sign(input io.Reader, output io.Writer) error
 
-    // SignFile signs a PE/COFF file and writes the signed output
+    // SignFile signs a PE/COFF file and writes the signed output. The output
+    // is replaced atomically, so outputPath may equal inputPath.
     SignFile(inputPath, outputPath string) error
 
     // Verify verifies an Authenticode signature on a PE/COFF file
@@ -171,9 +172,11 @@ type SignerOptions struct {
 
 `xkmssdk` is `github.com/jeremyhahn/go-quicbaas/sdk/go/xkms`.
 
-RFC3161 timestamping is not implemented: a non-empty `TimestampURL` makes the
-timestamp step return `ErrRFC3161NotImplemented`, which `Sign` logs as a
-warning, and the signature it then embeds is empty. Leave `TimestampURL` empty.
+A non-empty `TimestampURL` makes `Sign` request an RFC 3161 countersignature
+over the signature from that time-stamp authority. The token must verify and
+carry the request's nonce; it is embedded as an unauthenticated attribute, and
+`Verify` checks every embedded timestamp. A TSA that cannot stamp returns a
+`*TimestampError` and fails the signing.
 
 ### Constructor
 
@@ -292,7 +295,7 @@ platformctl authenticode sign \
     --key /path/to/DB.key \
     --cert /path/to/DB.crt \
     --input bootx64.efi \
-    --output bootx64-signed.efi
+    --out bootx64-signed.efi
 
 # Verify a signature (--cert is optional)
 platformctl authenticode verify \

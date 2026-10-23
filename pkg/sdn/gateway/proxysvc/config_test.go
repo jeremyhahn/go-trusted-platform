@@ -173,7 +173,6 @@ func TestEngineConfigConversion(t *testing.T) {
 				BackendZone:        "services",
 				RequireAttestation: true,
 				AttestationMaxAge:  time.Minute,
-				RequiredRoles:      []string{"admin"},
 				RequiredScopes:     []string{"read"},
 				OPAPolicy:          "policy.rego",
 				TokenZone:          "edge",
@@ -203,7 +202,7 @@ func TestEngineConfigConversion(t *testing.T) {
 	if route.PoolID != "backend" || !route.Auth.RequireIDevID || route.Auth.AttestationMaxAge != time.Minute {
 		t.Fatalf("route not converted: %+v", route)
 	}
-	if route.Auth.OPAPolicy != "policy.rego" || route.Auth.RequiredRoles[0] != "admin" ||
+	if route.Auth.OPAPolicy != "policy.rego" || route.Auth.RequiredScopes[0] != "read" ||
 		route.Auth.TokenZone != "edge" {
 		t.Fatalf("route auth not converted: %+v", route.Auth)
 	}

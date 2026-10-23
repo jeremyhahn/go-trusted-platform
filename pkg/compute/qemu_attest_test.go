@@ -42,7 +42,6 @@ type fakeVTPMDevice struct {
 	sigAlgErr error
 	closed    bool
 	lastPCRs  []int
-	lastNonce []byte
 }
 
 func newFakeVTPMDevice(t *testing.T) *fakeVTPMDevice {
@@ -94,7 +93,6 @@ func (f *fakeVTPMDevice) GenerateQuote(ctx context.Context, nonce []byte, pcrInd
 	if f.quoteErr != nil {
 		return nil, nil, f.quoteErr
 	}
-	f.lastNonce = nonce
 	f.lastPCRs = append([]int(nil), pcrIndices...)
 
 	quote := f.buildQuote(nonce, pcrIndices)
@@ -190,6 +188,7 @@ func TestQEMUOrchestrator_AttestVM(t *testing.T) {
 	assert.Equal(t, x509.SHA256WithRSAPSS.String(), report.SignatureAlgorithm)
 	require.NoError(t, vm.VerifyQuoteSignatureWithAlgorithm(report.AKPublicKey, report.Quote, report.Signature, report.SignatureAlgorithm))
 	require.NoError(t, vm.VerifyQuoteNonce(report.Quote, nonce))
+	assert.True(t, device.closed, "AttestVM must release the per-call vTPM session")
 }
 
 func TestQEMUOrchestrator_AttestVM_Defaults(t *testing.T) {

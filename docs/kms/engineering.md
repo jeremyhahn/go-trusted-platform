@@ -102,9 +102,10 @@ There is no KMS type exported from this repository. The surface is:
   (`pkg/api/grpc/proto/kms.proto`).
 - **REST** — `/api/v1/kms`, the largest REST route set in the platform after
   IAM.
-- **QUIC** — key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK
-  `0xF0`–`0xF5`, plus a **KMS extended category opcode `0xCD`**.
-- **MCP** — 20 `kms_*` tools and 6 `secret_*` tools.
+- **QUIC** — key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, plus a
+  **KMS extended category opcode `0xCD`** whose subs `0x08`–`0x0D` are the DEK
+  calls. The `OpDEK*` bytes `0xF0`–`0xF5` are reserved and unserved.
+- **MCP** — 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
 - **SDK** — `sdk/go/services/kms`.
 
 ## 4. Invariants

@@ -48,6 +48,29 @@ the tunnel status (`pkg/sdn/gateway/snapshot.go:372`) but drives no timer.
 Liveness is not this package's job: BFD on the BGP neighbor (GoBGP 4.9, #556)
 detects a dead path; vendor GRE keepalives are a non-goal.
 
+A link `EnsureTunnel` finds in the kernel without tracking it, as a killed
+datapath leaves one, is adopted instead of recreated when it is exactly the
+configured tunnel (`Manager.adoptable`). A `gre` link must match its kind,
+endpoints, key, TTL, MTU, up state and exact tunnel addresses. A `wireguard`
+device must match MTU, up state and addresses as well, and its private key and
+listen port, read back from the kernel, must equal the configuration (any port
+when `listen-port` is unset). Its peers are then reconciled by diff: a peer the
+tunnel does not configure is removed, and the configured peer is set in place
+only when its endpoint, keepalive, allowed IPs or preshared key differ, so its
+session survives. An `ipsec` carrier is adopted on the `gre` test, and its SAs
+and policies are then reconciled against the kernel's (`reconcileIPsec`, which a
+fresh install runs too): each is read back by SPI or selector; a matching SA or
+policy is kept, so the live SAs keep their sequence numbers and replay state; a
+differing SA (endpoints, mode, request id, ESN, replay window, algorithm or key,
+the key compared in constant time) is deleted and re-added; a differing policy
+(action, mark, or template endpoints, mode, request id or `optional` flag, since
+an optional template would let unencrypted carrier traffic in) is replaced in place (`XFRM_MSG_UPDPOLICY`); a missing one is added. The kernel
+hands SA keys back to `CAP_NET_ADMIN`, except in lockdown confidentiality mode,
+where they come back zeroed and the SAs are therefore always replaced. An
+adoption that fails part-way removes nothing, so the next attempt finds the live
+SAs still in place; a fresh install that fails unwinds as above. SAs left under SPIs the configuration no longer names are not
+swept. Anything else that differs in a single field is deleted and recreated.
+
 ## Uplinks and policy routing
 
 An `UplinkConfig` names a WAN interface, a routing table id (100–252), the ISP's

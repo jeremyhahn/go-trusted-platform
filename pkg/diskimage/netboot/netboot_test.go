@@ -48,11 +48,9 @@ func writeImage(t *testing.T) string {
 // would.
 type fakeMtools struct {
 	files map[string][]byte
-	calls []string
 }
 
 func (m *fakeMtools) run(_ context.Context, name string, args ...string) ([]byte, error) {
-	m.calls = append(m.calls, name)
 	switch name {
 	case "mdir":
 		var out strings.Builder

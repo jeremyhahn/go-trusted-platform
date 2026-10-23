@@ -14,13 +14,16 @@
 package gateway
 
 import (
+	"bytes"
 	"errors"
+	"maps"
 	"net"
 	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
@@ -38,6 +41,16 @@ func validOverlayServiceConfig() *OverlayServiceConfig {
 		MaxVNIs:           DefaultMaxVNIs,
 		VerdictMaxAge:     time.Minute,
 	}
+}
+
+// withOverlayIRB turns symmetric IRB on in an overlay config: both VNIs
+// routed, the anycast gateway MAC, an L3VNI and the route reflector it needs.
+func withOverlayIRB(c *OverlayServiceConfig) {
+	c.VNIs[0].Subnet = netip.MustParsePrefix("10.40.1.0/24")
+	c.VNIs[1].Subnet = netip.MustParsePrefix("10.40.2.0/24")
+	c.AnycastGatewayMAC = "02:aa:aa:aa:aa:aa"
+	c.L3VNI = 50000
+	c.RRPeers = []bgp.NeighborConfig{{Address: netip.MustParseAddr("10.4.100.10"), ASN: 65000}}
 }
 
 func TestPortState_String(t *testing.T) {
@@ -1170,6 +1183,56 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 		{name: "rejects negative verdict age", edit: func(c *OverlayServiceConfig) { c.VerdictMaxAge = -time.Second }, field: "verdict-max-age"},
 		{name: "rejects negative verdict clock skew", edit: func(c *OverlayServiceConfig) { c.VerdictClockSkew = -time.Second }, field: "verdict-clock-skew"},
 		{name: "rejects negative sweep interval", edit: func(c *OverlayServiceConfig) { c.AdmissionSweepInterval = -time.Second }, field: "admission-sweep-interval"},
+
+		// Symmetric IRB.
+		{name: "accepts symmetric IRB", edit: withOverlayIRB},
+		{name: "accepts routing without an L3VNI", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.L3VNI = 0; c.RRPeers = nil }},
+		{name: "accepts a routed VNI beside a bridged one", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.VNIs[1].Subnet = netip.Prefix{} }},
+		{name: "rejects an IPv6 VNI subnet", edit: func(c *OverlayServiceConfig) {
+			withOverlayIRB(c)
+			c.VNIs[1].Subnet = netip.MustParsePrefix("fd00::/64")
+		}, field: "vnis"},
+		{name: "rejects a VNI subnet with host bits set", edit: func(c *OverlayServiceConfig) {
+			withOverlayIRB(c)
+			c.VNIs[1].Subnet = netip.MustParsePrefix("10.40.2.5/24")
+		}, field: "vnis"},
+		{name: "rejects a VNI subnet with no gateway address", edit: func(c *OverlayServiceConfig) {
+			withOverlayIRB(c)
+			c.VNIs[1].Subnet = netip.MustParsePrefix("10.40.2.0/32")
+		}, field: "vnis"},
+		{name: "rejects overlapping VNI subnets", edit: func(c *OverlayServiceConfig) {
+			withOverlayIRB(c)
+			c.VNIs[1].Subnet = netip.MustParsePrefix("10.40.1.128/25")
+		}, field: "vnis"},
+		{name: "rejects a VNI subnet containing an earlier listed one", edit: func(c *OverlayServiceConfig) {
+			withOverlayIRB(c)
+			c.VNIs[1].Subnet = netip.MustParsePrefix("10.40.0.0/16")
+		}, field: "vnis"},
+		{name: "requires the anycast MAC with a VNI subnet", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.AnycastGatewayMAC = "" }, field: "anycast-gateway-mac"},
+		{name: "rejects the anycast MAC without a VNI subnet", edit: func(c *OverlayServiceConfig) { c.AnycastGatewayMAC = "02:aa:aa:aa:aa:aa" }, field: "anycast-gateway-mac"},
+		{name: "rejects a malformed anycast MAC", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.AnycastGatewayMAC = "02:aa:aa" }, field: "anycast-gateway-mac"},
+		{name: "rejects an 8-byte anycast MAC", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.AnycastGatewayMAC = "02:aa:aa:aa:aa:aa:aa:aa" }, field: "anycast-gateway-mac"},
+		{name: "rejects a multicast anycast MAC", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.AnycastGatewayMAC = "01:00:5e:00:00:01" }, field: "anycast-gateway-mac"},
+		{name: "rejects the zero anycast MAC", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.AnycastGatewayMAC = "00:00:00:00:00:00" }, field: "anycast-gateway-mac"},
+		{name: "rejects an anycast MAC in the router MAC space", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.AnycastGatewayMAC = "02:00:0a:04:64:15" }, field: "anycast-gateway-mac"},
+		{name: "accepts the top 24-bit L3VNI", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.L3VNI = MaxOverlayVNI }},
+		{name: "rejects an L3VNI wider than 24 bits", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.L3VNI = MaxOverlayVNI + 1 }, field: "l3vni"},
+		{name: "rejects an L3VNI that is also an L2VNI", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.L3VNI = c.VNIs[1].VNI }, field: "l3vni"},
+		{name: "rejects an L3VNI without a routed VNI", edit: func(c *OverlayServiceConfig) {
+			withOverlayIRB(c)
+			c.VNIs[0].Subnet, c.VNIs[1].Subnet, c.AnycastGatewayMAC = netip.Prefix{}, netip.Prefix{}, ""
+		}, field: "l3vni"},
+		{name: "rejects an L3VNI without RR peers", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.RRPeers = nil }, field: "l3vni"},
+		{name: "accepts overlay IPsec on the VTEP and underlay", edit: withOverlayIPsec},
+		{name: "ignores a disabled IPsec section", edit: func(c *OverlayServiceConfig) { c.IPsec = &ipsecconfig.Config{LocalAddress: "nonsense"} }},
+		{name: "rejects IPsec on another local address", edit: func(c *OverlayServiceConfig) {
+			withOverlayIPsec(c)
+			c.IPsec.LocalAddress = "10.4.100.21"
+		}, field: "ipsec.local-address"},
+		{name: "rejects IPsec guarding another interface", edit: func(c *OverlayServiceConfig) {
+			withOverlayIPsec(c)
+			c.IPsec.FabricInterface = "eth9"
+		}, field: "ipsec.fabric-interface"},
 	}
 
 	for _, tt := range tests {
@@ -1194,10 +1257,93 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 	}
 }
 
+// withOverlayIPsec turns overlay IPsec on, on the overlay's VTEP address and
+// underlay interface, with the route reflector as a static peer.
+func withOverlayIPsec(c *OverlayServiceConfig) {
+	c.IPsec = &ipsecconfig.Config{
+		Enabled:         true,
+		FabricInterface: c.UnderlayInterface,
+		LocalAddress:    c.LocalVTEP.String(),
+		StaticPeers:     []string{"10.4.100.10"},
+		Token:           ipsecconfig.TokenConfig{Handle: "6970736563"},
+	}
+}
+
+func TestOverlayServiceConfig_ValidateRejectsAnInvalidIPsecSection(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	withOverlayIPsec(cfg)
+	cfg.IPsec.StaticPeers = []string{"not-an-address"}
+
+	err := cfg.Validate()
+
+	var invalid *ErrOverlayIPsecConfigInvalid
+	if !errors.As(err, &invalid) {
+		t.Fatalf("Validate() = %v, want *ErrOverlayIPsecConfigInvalid", err)
+	}
+	var cause *ipsecconfig.ConfigError
+	if !errors.As(err, &cause) {
+		t.Errorf("Validate() = %v, want the ipsec section's *ConfigError underneath", err)
+	}
+}
+
 func TestOverlayServiceConfig_ValidateDisabledSkipsChecks(t *testing.T) {
 	cfg := &OverlayServiceConfig{Enabled: false, OverlayASN: 70000}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() on a disabled overlay = %v, want nil", err)
+	}
+}
+
+func TestOverlayServiceConfig_AnycastGateways(t *testing.T) {
+	t.Run("each routed VNI gets the first host of its subnet", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		cfg.VNIs = append(cfg.VNIs, OverlayVNIConfig{VNI: 40300, VLAN: 300})
+		gateways, mac, err := cfg.anycastGateways()
+		if err != nil {
+			t.Fatalf("anycastGateways() = %v", err)
+		}
+		want := map[uint32]netip.Addr{
+			40100: netip.MustParseAddr("10.40.1.1"),
+			40200: netip.MustParseAddr("10.40.2.1"),
+		}
+		if !maps.Equal(gateways, want) {
+			t.Errorf("gateways = %v, want %v (VNI 40300 has no subnet and stays bridged)", gateways, want)
+		}
+		if mac.String() != "02:aa:aa:aa:aa:aa" {
+			t.Errorf("anycast MAC = %s, want 02:aa:aa:aa:aa:aa", mac)
+		}
+	})
+	t.Run("no subnet and no MAC bridges only", func(t *testing.T) {
+		gateways, mac, err := validOverlayServiceConfig().anycastGateways()
+		if err != nil || gateways != nil || mac != nil {
+			t.Errorf("anycastGateways() = %v, %v, %v; want nil, nil, nil", gateways, mac, err)
+		}
+	})
+	t.Run("a subnet without a gateway address is a typed error", func(t *testing.T) {
+		cfg := validOverlayServiceConfig()
+		withOverlayIRB(cfg)
+		cfg.VNIs[0].Subnet = netip.MustParsePrefix("10.40.1.7/32")
+		var invalid *ErrOverlayConfigInvalid
+		if _, _, err := cfg.anycastGateways(); !errors.As(err, &invalid) || invalid.Field != "vnis" {
+			t.Errorf("anycastGateways() = %v, want *ErrOverlayConfigInvalid naming vnis", err)
+		}
+	})
+}
+
+func TestOverlayServiceConfig_RouterMAC(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	withOverlayIRB(cfg)
+	if got, want := cfg.routerMAC(), (net.HardwareAddr{0x02, 0x00, 10, 4, 100, 20}); !bytes.Equal(got, want) {
+		t.Errorf("routerMAC() = %s, want %s from local-vtep 10.4.100.20", got, want)
+	}
+	cfg.L3VNI = 0
+	if got := cfg.routerMAC(); got != nil {
+		t.Errorf("routerMAC() without an L3VNI = %s, want nil", got)
+	}
+	cfg.L3VNI = 50000
+	cfg.LocalVTEP = netip.MustParseAddr("fd00::20")
+	if got := cfg.routerMAC(); got != nil {
+		t.Errorf("routerMAC() for an IPv6 VTEP = %s, want nil", got)
 	}
 }
 

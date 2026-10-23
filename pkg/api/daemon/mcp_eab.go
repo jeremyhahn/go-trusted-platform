@@ -255,7 +255,7 @@ func (p *MCPServiceProvider) EABListCredentials(
 	if err := sortEABCredentials(filtered, nil); err != nil {
 		return nil, err
 	}
-	pageCreds, _ := paginateEABCredentials(filtered, &platformv1.PaginationRequest{
+	pageCreds, _ := paginatePage(filtered, &platformv1.PaginationRequest{
 		Page:     params.Page,
 		PageSize: params.PageSize,
 	})

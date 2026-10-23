@@ -34,7 +34,9 @@ import (
 // tests hold the three places a tier is written down — the job's `if:`, the
 // gate's `needs`, and the gate's tagged `check` line — to one another.
 // FIPS is the one main-only job (#853): it never runs on a pull_request and
-// must appear in neither the gate's `needs` nor its `check` lines.
+// must appear in neither the gate's `needs` nor its `check` lines. The docs
+// tier (ci-template v1.24) is the PR-tier work a docs-only PR skips: those
+// jobs need the `changes` job and skip when its docs_only output is `true`.
 
 const (
 	ciWorkflowFile = ".github/workflows/ci.yml"
@@ -42,7 +44,21 @@ const (
 	ciGateIf       = "always()"
 
 	tierPR   = "pr"
+	tierDocs = "docs"
 	tierFull = "full"
+
+	// changesJobID is the job whose docs_only output selects the docs tier.
+	changesJobID = "changes"
+
+	// docsOnlyIf is the condition every docs-tier job carries as its own
+	// `if:`, character for character: it runs unless docs_only is `true`.
+	docsOnlyIf = "needs.changes.outputs.docs_only != 'true'"
+
+	// docsOnlyEnv is the gate's rendering of the changes job's output: the
+	// gate lets a docs-tier job's skip through only when it reads exactly
+	// `true` (and FULL_TIER exactly `false`).
+	docsOnlyEnv      = "DOCS_ONLY"
+	docsOnlyEnvValue = "${{ needs.changes.outputs.docs_only }}"
 
 	// tierMain is the full tier's main-only, ungated part (#853): FIPS, which
 	// runs on push to main and on workflow_dispatch, never on a pull_request,
@@ -85,8 +101,19 @@ var labelTypes = []string{"labeled", "unlabeled"}
 // other condition belongs to no tier and is a finding.
 var tierByIf = map[string]string{
 	"":         tierPR,
+	docsOnlyIf: tierDocs,
 	fullTierIf: tierFull,
 	mainOnlyIf: tierMain,
+}
+
+// gatedTiers are the tiers a gate `check` line may carry.
+var gatedTiers = []string{tierPR, tierDocs, tierFull}
+
+// tierLabel names a gated tier in a finding.
+var tierLabel = map[string]string{
+	tierPR:   "PR",
+	tierDocs: "docs",
+	tierFull: "full",
 }
 
 var (
@@ -277,7 +304,7 @@ func parseGateChecks(file string, step ciStep) ([]ciGateCheck, []error) {
 		if m == nil {
 			findings = append(findings, CITierError{
 				File: file, Line: lineNo, Job: ciGateJobID,
-				Reason: "check line is not `check <pr|full> <job> \"$RESULT_X\"`: " + strings.TrimSpace(line),
+				Reason: "check line is not `check <pr|docs|full> <job> \"$RESULT_X\"`: " + strings.TrimSpace(line),
 			})
 			continue
 		}
@@ -293,8 +320,8 @@ func checkLineFindings(file string, c ciGateCheck, jobs map[string]ciJob, env ma
 	fail := func(reason string) {
 		findings = append(findings, CITierError{File: file, Line: c.Line, Job: c.Job, Reason: reason})
 	}
-	if c.Tier != tierPR && c.Tier != tierFull {
-		fail(fmt.Sprintf("tier tag %q is neither %q nor %q", c.Tier, tierPR, tierFull))
+	if !slices.Contains(gatedTiers, c.Tier) {
+		fail(fmt.Sprintf("tier tag %q is none of %q", c.Tier, gatedTiers))
 	}
 	if _, ok := jobs[c.Job]; !ok || c.Job == ciGateJobID {
 		fail("ci-gate checks a job the workflow does not define")
@@ -343,6 +370,10 @@ func gateFindings(wf ciWorkflow, gate ciJob, jobs map[string]ciJob) (map[string]
 			checked[c.Job] = c
 		}
 	}
+	docsTagged := slices.ContainsFunc(checks, func(c ciGateCheck) bool { return c.Tier == tierDocs })
+	if got := step.Env[docsOnlyEnv]; docsTagged && got != docsOnlyEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: a docs-tier skip passes only on the changes job's word", docsOnlyEnv, got, docsOnlyEnvValue))
+	}
 	return checked, findings
 }
 
@@ -370,6 +401,7 @@ func ciTierFindings(wf ciWorkflow) []error {
 	findings = append(findings, gateErrs...)
 
 	tiers := make(map[string]string, len(wf.Jobs))
+	docsTier := false
 	for _, j := range wf.Jobs {
 		if j.ID == ciGateJobID {
 			continue
@@ -378,11 +410,15 @@ func ciTierFindings(wf ciWorkflow) []error {
 		if !known {
 			findings = append(findings, CITierError{
 				File: wf.File, Line: j.Line, Job: j.ID,
-				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has no `if:`, a full-tier job has exactly %q, a main-only job exactly %q", j.If, fullTierIf, mainOnlyIf),
+				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has no `if:`, a docs-tier job has exactly %q, a full-tier job exactly %q, a main-only job exactly %q", j.If, docsOnlyIf, fullTierIf, mainOnlyIf),
 			})
 			continue
 		}
 		tiers[j.ID] = tier
+		docsTier = docsTier || tier == tierDocs
+	}
+	if _, ok := jobs[changesJobID]; !ok && docsTier {
+		findings = append(findings, CITierError{File: wf.File, Job: changesJobID, Reason: "the docs tier has no changes job to read docs_only from"})
 	}
 
 	for _, j := range wf.Jobs {
@@ -411,12 +447,18 @@ func ciTierFindings(wf ciWorkflow) []error {
 		} else if known && c.Tier != tier {
 			fail(c.Line, fmt.Sprintf("tagged %s in ci-gate, but its if: puts it in the %s tier", c.Tier, tier))
 		}
+		if tier == tierDocs && !slices.Contains(j.Needs, changesJobID) {
+			fail(j.Line, "a docs-tier job needs "+changesJobID+": without it, docs_only does not render and the job always runs")
+		}
 		for _, need := range j.Needs {
 			if tiers[need] == tierMain {
 				fail(j.Line, "a gated job needs main-only job "+need+": skipped on every PR, it would skip this job too")
 			}
-			if tier == tierPR && tiers[need] == tierFull {
-				fail(j.Line, "a PR-tier job needs full-tier job "+need+": skipped on every ordinary PR, it would skip this job too")
+			if (tier == tierPR || tier == tierDocs) && tiers[need] == tierFull {
+				fail(j.Line, "a "+tierLabel[tier]+"-tier job needs full-tier job "+need+": skipped on every ordinary PR, it would skip this job too")
+			}
+			if tier == tierPR && tiers[need] == tierDocs {
+				fail(j.Line, "a PR-tier job needs docs-tier job "+need+": skipped on every docs-only PR, it would skip this job too")
 			}
 		}
 	}
@@ -507,9 +549,9 @@ func TestPullRequestWorkflowsCancelSupersededRuns(t *testing.T) {
 	require.True(t, sawPullRequest, "no workflow is triggered by pull_request; the check measured nothing")
 }
 
-// TestCIGateScriptPassesASkipOnlyForAnUnselectedFullTier runs the real gate
+// TestCIGateScriptPassesASkipOnlyForAnUnselectedTier runs the real gate
 // script under bash with the results a runner would hand it.
-func TestCIGateScriptPassesASkipOnlyForAnUnselectedFullTier(t *testing.T) {
+func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	gateIdx := slices.IndexFunc(wf.Jobs, func(j ciJob) bool { return j.ID == ciGateJobID })
 	require.GreaterOrEqual(t, gateIdx, 0, "ci.yml has no ci-gate job")
@@ -518,14 +560,19 @@ func TestCIGateScriptPassesASkipOnlyForAnUnselectedFullTier(t *testing.T) {
 	checks, findings := parseGateChecks(wf.File, step)
 	require.Empty(t, findings)
 
-	prIdx := slices.IndexFunc(checks, func(c ciGateCheck) bool { return c.Tier == tierPR })
-	fullIdx := slices.IndexFunc(checks, func(c ciGateCheck) bool { return c.Tier == tierFull })
-	require.GreaterOrEqual(t, prIdx, 0, "the gate checks no pr-tier job")
-	require.GreaterOrEqual(t, fullIdx, 0, "the gate checks no full-tier job")
-	prVar, fullVar := checks[prIdx].EnvVar, checks[fullIdx].EnvVar
+	varOf := func(tier string) string {
+		idx := slices.IndexFunc(checks, func(c ciGateCheck) bool { return c.Tier == tier })
+		require.GreaterOrEqual(t, idx, 0, "the gate checks no %s-tier job", tier)
+		return checks[idx].EnvVar
+	}
+	prVar, docsVar, fullVar := varOf(tierPR), varOf(tierDocs), varOf(tierFull)
 
 	everyFullSkipped := make(map[string]string)
+	everyDocsAndFullSkipped := make(map[string]string)
 	for _, c := range checks {
+		if c.Tier == tierFull || c.Tier == tierDocs {
+			everyDocsAndFullSkipped[c.EnvVar] = "skipped"
+		}
 		if c.Tier == tierFull {
 			everyFullSkipped[c.EnvVar] = "skipped"
 		}
@@ -537,20 +584,27 @@ func TestCIGateScriptPassesASkipOnlyForAnUnselectedFullTier(t *testing.T) {
 	cases := []struct {
 		name     string
 		fullTier string
+		docsOnly string
 		results  map[string]string
 		wantPass bool
 	}{
-		{"every job succeeded on a full-tier run", "true", nil, true},
-		{"the full tier skipped on an ordinary PR", "false", everyFullSkipped, true},
-		{"a full-tier job skipped although the full tier was selected", "true", map[string]string{fullVar: "skipped"}, false},
-		{"a full-tier job skipped while FULL_TIER did not render", "", map[string]string{fullVar: "skipped"}, false},
-		{"a pr-tier job skipped", "false", map[string]string{prVar: "skipped"}, false},
-		{"a full-tier job failed on an ordinary PR", "false", map[string]string{fullVar: "failure"}, false},
-		{"a result that did not render", "false", map[string]string{prVar: ""}, false},
+		{"every job succeeded on a full-tier run", "true", "false", nil, true},
+		{"the full tier skipped on an ordinary PR", "false", "false", everyFullSkipped, true},
+		{"the docs and full tiers skipped on a docs-only PR", "false", "true", everyDocsAndFullSkipped, true},
+		{"a full-tier job skipped although the full tier was selected", "true", "false", map[string]string{fullVar: "skipped"}, false},
+		{"a full-tier job skipped while FULL_TIER did not render", "", "false", map[string]string{fullVar: "skipped"}, false},
+		{"a pr-tier job skipped", "false", "false", map[string]string{prVar: "skipped"}, false},
+		{"a pr-tier job skipped on a docs-only PR", "false", "true", map[string]string{prVar: "skipped"}, false},
+		{"a docs-tier job skipped on a PR that is not docs-only", "false", "false", map[string]string{docsVar: "skipped"}, false},
+		{"a docs-tier job skipped while DOCS_ONLY did not render", "false", "", map[string]string{docsVar: "skipped"}, false},
+		{"a docs-tier job skipped on a run that selected the full tier", "true", "true", map[string]string{docsVar: "skipped"}, false},
+		{"a docs-tier job failed on a docs-only PR", "false", "true", map[string]string{docsVar: "failure"}, false},
+		{"a full-tier job failed on an ordinary PR", "false", "false", map[string]string{fullVar: "failure"}, false},
+		{"a result that did not render", "false", "false", map[string]string{prVar: ""}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := []string{"PATH=" + os.Getenv("PATH"), fullTierEnv + "=" + tc.fullTier}
+			env := []string{"PATH=" + os.Getenv("PATH"), fullTierEnv + "=" + tc.fullTier, docsOnlyEnv + "=" + tc.docsOnly}
 			for _, c := range checks {
 				result, set := tc.results[c.EnvVar]
 				if !set {
@@ -583,6 +637,11 @@ concurrency:
 jobs:
   lint:
     runs-on: x
+  changes:
+    runs-on: x
+  build:
+    if: ` + docsOnlyIf + `
+    needs: [changes]
   race:
     if: ` + fullTierIf + `
     needs: lint
@@ -590,14 +649,19 @@ jobs:
     if: ` + mainOnlyIf + `
   ci-gate:
     if: always()
-    needs: [lint, race]
+    needs: [lint, changes, build, race]
     steps:
       - env:
           FULL_TIER: ` + fullTierEnvValue + `
+          DOCS_ONLY: ` + docsOnlyEnvValue + `
           RESULT_LINT: ${{ needs.lint.result }}
+          RESULT_CHANGES: ${{ needs.changes.result }}
+          RESULT_BUILD: ${{ needs.build.result }}
           RESULT_RACE: ${{ needs.race.result }}
         run: |
           check pr lint "$RESULT_LINT"
+          check pr changes "$RESULT_CHANGES"
+          check docs build "$RESULT_BUILD"
           check full race "$RESULT_RACE"
 `
 
@@ -624,9 +688,20 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a full-tier job tagged pr", `check full race`, `check pr race`, "race: tagged pr in ci-gate, but its if: puts it in the full tier"},
 		{"a pr-tier job tagged full", `check pr lint`, `check full lint`, "lint: tagged full in ci-gate, but its if: puts it in the pr tier"},
 		{"an untagged check line", `check pr lint "$RESULT_LINT"`, `check lint "$RESULT_LINT"`, "check line is not"},
-		{"an unknown tier tag", `check pr lint`, `check fast lint`, `tier tag "fast" is neither`},
+		{"an unknown tier tag", `check pr lint`, `check fast lint`, `tier tag "fast" is none of`},
 		{"a job with no check line", "          check pr lint \"$RESULT_LINT\"\n", "", "lint: no check line in ci-gate"},
-		{"a job missing from the gate's needs", `needs: [lint, race]`, `needs: [lint]`, "race: not in ci-gate's needs"},
+		{"a job missing from the gate's needs", `needs: [lint, changes, build, race]`, `needs: [lint, changes, build]`, "race: not in ci-gate's needs"},
+		{"a docs-tier job tagged pr", `check docs build`, `check pr build`, "build: tagged pr in ci-gate, but its if: puts it in the docs tier"},
+		{"a pr-tier job tagged docs", `check pr lint`, `check docs lint`, "lint: tagged docs in ci-gate, but its if: puts it in the pr tier"},
+		{"a docs-only if: that drifted", "!= 'true'\n    needs: [changes]", "!= true\n    needs: [changes]", "build: if: "},
+		{"a docs-tier job that does not need changes", "    needs: [changes]\n", "    needs: [lint]\n", "build: a docs-tier job needs changes"},
+		{"a docs tier without a changes job", "  changes:\n    runs-on: x\n", "", "the docs tier has no changes job"},
+		{"a changes job missing from the gate's needs", `needs: [lint, changes, build, race]`, `needs: [lint, build, race]`, "changes: not in ci-gate's needs"},
+		{"a changes job with no check line", "          check pr changes \"$RESULT_CHANGES\"\n", "", "changes: no check line in ci-gate"},
+		{"a DOCS_ONLY that reads another output", `DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}`, `DOCS_ONLY: ${{ needs.changes.outputs.docs }}`, "$DOCS_ONLY is"},
+		{"a DOCS_ONLY that is missing", "          DOCS_ONLY: " + docsOnlyEnvValue + "\n", "", "$DOCS_ONLY is \"\""},
+		{"a pr-tier job needing a docs-tier job", "  lint:\n    runs-on: x\n", "  lint:\n    runs-on: x\n    needs: build\n", "a PR-tier job needs docs-tier job build"},
+		{"a docs-tier job needing a full-tier job", "    needs: [changes]\n", "    needs: [changes, race]\n", "a docs-tier job needs full-tier job race"},
 		{"a full-tier if: that drifted", "'ci:full')\n    needs: lint", "'ci-full')\n    needs: lint", "race: if: "},
 		{"a pr-tier job needing a full-tier job", "  lint:\n    runs-on: x\n", "  lint:\n    runs-on: x\n    needs: race\n", "a PR-tier job needs full-tier job race"},
 		{"a check reading another job's result", `RESULT_RACE: ${{ needs.race.result }}`, `RESULT_RACE: ${{ needs.lint.result }}`, "$RESULT_RACE is"},
@@ -635,7 +710,7 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a gate checking an undefined job", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check pr ghost \"$RESULT_RACE\"", "ghost: ci-gate checks a job the workflow does not define"},
 		{"pull_request with the labeled type", `reopened]`, `reopened, labeled]`, "not on a label event"},
 		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened]"},
-		{"a main-only job in the gate's needs", `needs: [lint, race]`, `needs: [lint, race, fips]`, "fips: a main-only job is ungated: remove it from ci-gate's needs"},
+		{"a main-only job in the gate's needs", `needs: [lint, changes, build, race]`, `needs: [lint, changes, build, race, fips]`, "fips: a main-only job is ungated: remove it from ci-gate's needs"},
 		{"a main-only job with a check line", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check full fips \"$RESULT_RACE\"", "fips: a main-only job is ungated: remove its check line"},
 		{"a main-only job a ci:full PR can select", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + fullTierIf + "\n", "fips: not in ci-gate's needs"},
 		{"a main-only job without workflow_dispatch", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: if: "},

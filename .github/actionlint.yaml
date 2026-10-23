@@ -1,10 +1,23 @@
 # actionlint configuration, read by `make lint`.
 #
-# `batch` is the self-hosted label of the batch runners batch.yml runs on
-# (#860); nothing else uses it.
+# The custom labels of our Gitea runners:
+#
+# - `ci-gate` is the reserved label of the 1-CPU gate runners the CI Gate job
+#   in ci.yml runs on (DS-2273); that job takes no checkout and no `uses:`.
+# - `batch` is the self-hosted label of the batch runners batch.yml runs on
+#   (#860); nothing else uses it.
+# - `bigdisk` is the label of the Dell/omega runners with the large disks; the
+#   Devcontainer image job in ci.yml runs on it (DS-2467).
+# - `codex` and `qwen` are the review runners code-review.yml runs on: Codex
+#   on `codex`, the advisory opencode review on `qwen` (ci-node-2), handbook
+#   code-review template v5.3 (m826).
 self-hosted-runner:
   labels:
+    - ci-gate
     - batch
+    - bigdisk
+    - codex
+    - qwen
 
 # The ignore is deliberate and scoped to one file and one message:
 paths:

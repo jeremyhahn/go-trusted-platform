@@ -55,6 +55,15 @@ var appServiceToolMap = map[string]string{
 	platformv1.MessagingService_GetChannelStats_FullMethodName: "messaging_channel_stats",
 	platformv1.MessagingService_GetStats_FullMethodName:        "messaging_stats",
 	platformv1.MessagingService_GetDedupStats_FullMethodName:   "messaging_dedup_stats",
+
+	platformv1.ObjectStorageService_PutObject_FullMethodName:         "objectstorage_put",
+	platformv1.ObjectStorageService_GetObject_FullMethodName:         "objectstorage_get",
+	platformv1.ObjectStorageService_DeleteObject_FullMethodName:      "objectstorage_delete",
+	platformv1.ObjectStorageService_HeadObject_FullMethodName:        "objectstorage_head",
+	platformv1.ObjectStorageService_ListObjects_FullMethodName:       "objectstorage_list",
+	platformv1.ObjectStorageService_CopyObject_FullMethodName:        "objectstorage_copy",
+	platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName:  "objectstorage_list_by_tag",
+	platformv1.ObjectStorageService_ListTenantObjects_FullMethodName: "objectstorage_list_tenant",
 }
 
 var appArgsJSON = protojson.MarshalOptions{UseProtoNames: true}

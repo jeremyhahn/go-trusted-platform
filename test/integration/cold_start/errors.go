@@ -121,9 +121,20 @@ func (e *ErrFactorListMismatch) Error() string {
 	return fmt.Sprintf("cold_start: factor list mismatch: want %q got %q", e.Want, e.Got)
 }
 
+// ErrAppCAUnreachable names the prerequisite the step 4 cert-chain
+// assertion lacks: the harness does not expose App.CA to the test
+// fixture until #142 threads it through, so the issued certificates
+// cannot be checked against it. The step fails with this error.
+type ErrAppCAUnreachable struct{}
+
+// Error returns a human-readable description.
+func (e *ErrAppCAUnreachable) Error() string {
+	return "cold_start: App.CA is not reachable from the test fixture, so the cert chain cannot be asserted (#142)"
+}
+
 // ErrAuthenticatorStubMissing is returned by FIDO2/PIV stub helpers
 // while the real authenticator harness is pending (#143-b/c). Tests
-// that hit this should call t.Skip rather than fail.
+// that hit this fail with it as their missing prerequisite.
 type ErrAuthenticatorStubMissing struct {
 	Method string
 }

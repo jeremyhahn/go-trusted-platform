@@ -105,8 +105,8 @@ Examples:
 	cmd.Flags().StringVar(&password, "password", "", "authorization password")
 	cmd.Flags().StringSliceVar(&attributes, "attributes", nil, "NV attributes (AUTHWRITE, AUTHREAD, etc.)")
 
-	_ = cmd.MarkFlagRequired("index")
-	_ = cmd.MarkFlagRequired("size")
+	cli.MarkFlagsRequired(cmd, "index")
+	cli.MarkFlagsRequired(cmd, "size")
 
 	return cmd
 }
@@ -157,8 +157,8 @@ Examples:
 	cmd.Flags().StringVar(&password, "password", "", "authorization password")
 	cmd.Flags().Uint32Var(&offset, "offset", 0, "offset to write at")
 
-	_ = cmd.MarkFlagRequired("index")
-	_ = cmd.MarkFlagRequired("data")
+	cli.MarkFlagsRequired(cmd, "index")
+	cli.MarkFlagsRequired(cmd, "data")
 
 	return cmd
 }
@@ -215,7 +215,7 @@ Examples:
 	cmd.Flags().Uint32Var(&size, "size", 0, "number of bytes to read (0 for all)")
 	cmd.Flags().BoolVar(&hexOutput, "hex", false, "output data as hexadecimal")
 
-	_ = cmd.MarkFlagRequired("index")
+	cli.MarkFlagsRequired(cmd, "index")
 
 	return cmd
 }
@@ -256,7 +256,7 @@ Examples:
 	cmd.Flags().Uint32Var(&index, "index", 0, "NV index to delete")
 	cmd.Flags().StringVar(&password, "password", "", "authorization password")
 
-	_ = cmd.MarkFlagRequired("index")
+	cli.MarkFlagsRequired(cmd, "index")
 
 	return cmd
 }

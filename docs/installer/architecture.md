@@ -136,19 +136,32 @@ The node side is partly built; the attach is **Planned**:
   reads it. The live environment's `autoinstall.sh` targets `/dev/nbd0` on this
   model and scans no local disk, and the install leaves the TPM alone: a
   TPM2_Clear would evict the IDevID key the export attaches with.
+- **Built:** the installer enrols, then attaches (#883 Q2). Every node except
+  the first enrols the same way on every architecture and boot model: ACME
+  `enroll-01` or `endorse-01` through the go-quicbaas SDK client that
+  `platformd` runs on a disk node's first boot. There is no second path. A
+  `diskless-nbd` install calls that client through one seam before the TPM
+  clear, before it uses the export and before any disk. A failed enrollment is
+  its own refusal and changes no disk
+  ([installer engineering](engineering.md#enrolling-before-the-attach)).
+- **Planned:** the live environment supplying that enrollment client. It runs
+  inside `platformd`'s first-boot provisioning, whose TPM PINs and datastore
+  belong on the export the node cannot attach until it enrols. Until then a
+  `diskless-nbd` install is refused at enrollment.
 - **Built:** the boot after the install. Once the export's metadata area holds
   the UKI, the node's device script boots that UKI instead of the installer;
   the bootstrap server reads it from the volume file and serves it
   ([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
   The UKI then needs the `platform-initrd` attach below.
-- **Planned:** where the node takes the platform anchor and its IDevID from
-  before the export is attached; the image's CA bundle lives on the root
-  filesystem, which for this model is the export.
+- **Planned:** where the node takes the platform anchor from before the export
+  is attached; the image's CA bundle lives on the root filesystem, which for
+  this model is the export. The IDevID is the one its enrollment put in its
+  TPM.
 - **Planned:** `platform-initrd` attaches the export before the unlock chain
   runs, then unlocks it like a local LUKS root. The live environment needs the
-  same attach before `platformctl install system` runs, from the same code;
-  the installer reads the attachment and never makes it. Until then the
-  installer refuses the install, before anything destructive
+  same attach before `platformctl install system` runs, from the same code,
+  after the node enrols; the installer reads the attachment and never makes
+  it. Until then the installer refuses the install, before anything destructive
   ([installer engineering](engineering.md#attaching-before-the-install)).
 
 ## 3. Rejected alternatives
@@ -282,6 +295,29 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
      secure-wipe installer.luks (only if sealing succeeded)
    ⇒ switch_root
 ```
+
+**First provision, the EK and recovery.** This is the
+contract; the implementation is tracked by #951, and until it lands the code
+still behaves as the superseded text in
+[docs/bootstrap/architecture.md](../bootstrap/architecture.md) (rejected
+designs) and [factory-reset.md](factory-reset.md) (Phase B) describes.
+
+- **First provision.** A fresh TPM with a valid EK and no sealed object on the
+  ESP (no `seal-platform.pub`) is first provision: firstboot provisions the TPM
+  and seals, and only then does the node serve.
+- **EK certificate.** A TPM without an EK certificate is refused unless the
+  admin relaxed the EK requirement. No firstboot setting for that exists today
+  (`RequireEKMatch` in `pkg/provisioning/configdelivery` governs only the
+  control plane's match against a prestaged EK certificate, and is a Go
+  parameter with no YAML key); the setting is to be added under #951.
+- **Recovery** means a seal that existed and broke. A TPM that never held a
+  seal is first provision, never recovery.
+- **SO PIN.** firstboot sets the owner hierarchy auth to the SO PIN with
+  `TPM2_HierarchyChangeAuth` (TPM 2.0 Part 3 §24.8) and hands the PIN to
+  `platformd` over the firstboot tmpfs handoff
+  (`/run/platform/firstboot-handoff/`), at the kms path the config names for it
+  (`platform.so-pin`, [docs/device-templates.md](../device-templates.md)
+  "Platform PINs"). The hierarchy auth is no longer left empty.
 
 A diskless node takes neither path. Its signed command line carries
 `platform_boot_model=diskless` and no `root=` or `rd.luks.*`, so the dracut

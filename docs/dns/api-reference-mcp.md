@@ -32,6 +32,9 @@ The response carries proto field names; gRPC status codes pass through.
 | `dns_record_update` | `UpdateRecord` | `dns:write` | `zone_name`, `old_record`, `new_record` |
 | `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `name` |
 | `dns_lookup` | `Resolve` | `dns:read` | `fqdn` |
+| `dns_zone_sign` | `SignZone` | `dns:write` | `zone_name` |
+| `dns_zone_dnssec_status` | `GetDNSSECStatus` | `dns:read` | `zone_name` |
+| `dns_register` | `Register` | `dns:write` | `fqdn`, `ip` |
 
 An argument the request message does not have is `InvalidArgument`.
 `dns_record_get` has no RPC of its own: it lists the zone's records of `type`
@@ -66,6 +69,13 @@ and returns the one named `name`, or `NotFound`.
 | `dns_resolve` | `dns:read` | `name` (required); `record_type` (default `A`) |
 
 The older tools take a record's FQDN, not a zone and a relative name.
+`record_type` is one of A, AAAA, CNAME, MX, NS, TXT, SRV, CAA and TLSA, in any
+case; any other type is `ErrRecordTypeNotSupported`. The `value` of A, AAAA,
+CNAME, MX (the exchange), NS and TXT is stored as given. SRV, CAA and TLSA take
+the RDATA in zone-file form (`10 5 5060 sip.example.com.`,
+`0 issue "letsencrypt.org"`, `3 1 1 <hex>`). A value that does not parse is
+`ErrInvalidRecordValue`. `dns_resolve` answers in the same forms
+(`Service.AddRecord`, `pkg/dns/record_kinds.go`).
 `dns_add_record` returns `{"success": true}`; `dns_resolve` returns
 `{"results": [...]}`; `dns_list_zones` returns `{"zones": [...]}`.
 

@@ -18,9 +18,11 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,6 +33,10 @@ import (
 // CLIAdapter implements CLICommands using platformctl CLI commands.
 type CLIAdapter struct {
 	binaryPath string
+	// configDir holds the platformctl config whose local context points at
+	// PLATFORM_UNIX_SOCKET; every command reads it through PLATFORMCTL_CONFIG.
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI protocol adapter instance.
@@ -58,6 +64,10 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 	c.binaryPath = binaryPath
 
+	if err := c.writeConfig(); err != nil {
+		return ErrConnectionFailed{Protocol: "CLI", Endpoint: GetServiceEndpoints().PlatformUnix, Err: err}
+	}
+
 	// Verify connectivity by running a simple command
 	_, err = c.runCommand(ctx, "version", "--client", "-o", "json")
 	if err != nil {
@@ -69,12 +79,45 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 // Teardown performs any cleanup needed by the CLI adapter.
 func (c *CLIAdapter) Teardown() error {
+	if c.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(c.configDir)
+	c.configDir = ""
+	c.configPath = ""
+	return err
+}
+
+// writeConfig writes a platformctl config whose current context is a local
+// context on the daemon socket the runner exports as PLATFORM_UNIX_SOCKET.
+// Without it platformctl falls back to /run/platformd.sock.
+func (c *CLIAdapter) writeConfig() error {
+	dir, err := os.MkdirTemp("", "platformctl-cli-*")
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	content := fmt.Sprintf(`current_context: integration-test
+contexts:
+  - name: integration-test
+    type: local
+    local:
+      socket_path: %s
+`, GetServiceEndpoints().PlatformUnix)
+	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+		return errors.Join(err, os.RemoveAll(dir))
+	}
+	c.configDir = dir
+	c.configPath = configPath
 	return nil
 }
 
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	if c.configPath != "" {
+		cmd.Env = append(os.Environ(), "PLATFORMCTL_CONFIG="+c.configPath)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return output, fmt.Errorf("command failed: %s: %w", string(output), err)

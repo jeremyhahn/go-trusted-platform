@@ -551,6 +551,15 @@ asked. With platform tokens off the daemon's `selectGRPCTCPAuth` installs its
 local validator with `iamTokenAuthorizer`, the IAM-PEP checker QUIC uses, and
 refuses the transport without a PEP (#768).
 
+Both `AuthorizationChecker` implementations in `pkg/api/daemon` refuse an
+empty resource or action with `ErrEmptyPermission` before the PEP is asked
+(#926). `iamTokenAuthorizer` sends the token principal to
+`IAMPEPClient.Check`; the shared platform-token validator's `CheckPermission`
+first requires the `resource:action` scope in the token, then asks the same
+PEP for the token's subject and tenant. A PEP error is
+`ErrIAMPermissionCheckFailed`, a missing PEP `ErrPEPClientNotAvailable`; both
+deny.
+
 Under embedded quicbaas that PEP exists but cannot decide: `handleIAMPEPCheck`
 in go-quicbaas `sdk/go/transport/embedded/handlers_iam.go` returns
 `ServiceNotConfigured` for every request (sdk/go v0.12.0-alpha), and

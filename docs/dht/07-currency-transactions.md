@@ -1,5 +1,7 @@
 # Currency and Transactions
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 TrustedCurrency is a blockchainless cryptocurrency for the go-trusted-platform network:

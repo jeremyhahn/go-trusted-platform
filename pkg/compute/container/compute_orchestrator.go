@@ -220,20 +220,32 @@ func (o *ComputeOrchestrator) buildEngine() error {
 		// platform cannot measure a launch, so attestation must not be
 		// enabled: a half-configured attestor would report success on
 		// containers it never measured.
+		//
+		// A host with no docker or podman binary gives the trust stack
+		// nothing to measure launches with. The orchestrator still starts,
+		// so the compute API stays served, but it refuses every launch: a
+		// host with a TPM never starts a workload unmeasured. Any other
+		// trust-stack failure stays fatal.
 		stack, err := NewTrustStack(o.tpmProvider, o.logger.Slog())
-		if err != nil {
+		var noRuntime *orchestration.ContainerRuntimeNotAvailableError
+		switch {
+		case errors.As(err, &noRuntime):
+			refusal := &MeasuredRuntimeUnavailableError{Runtimes: MeasuredRuntimes, Cause: err}
+			o.logger.Warnf("Container launches refused: %v", refusal)
+			engineOpts = append(engineOpts, WithLaunchRefusal(refusal))
+		case err != nil:
 			return &compute.WrappedError{Msg: "failed to build container trust stack", Err: err}
-		}
+		default:
+			attestor, err = NewContainerAttestor(o.tpmProvider, WithAttestingRuntime(stack.Attesting))
+			if err != nil {
+				return &compute.WrappedError{Msg: "failed to create container attestor", Err: err}
+			}
 
-		attestor, err = NewContainerAttestor(o.tpmProvider, WithAttestingRuntime(stack.Attesting))
-		if err != nil {
-			return &compute.WrappedError{Msg: "failed to create container attestor", Err: err}
+			engineOpts = append(engineOpts,
+				WithAttestor(attestor),
+				WithImageDigestResolver(stack.Runtime),
+			)
 		}
-
-		engineOpts = append(engineOpts,
-			WithAttestor(attestor),
-			WithImageDigestResolver(stack.Runtime),
-		)
 	}
 
 	engine, err := NewOrchestrator(OrchestratorConfig{

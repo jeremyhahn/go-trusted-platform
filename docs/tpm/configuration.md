@@ -206,9 +206,7 @@ From `pkg/cli/commands/tpm/`.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--algorithm` | `RSA-2048`, `RSA-3072`, `ECDSA-P256` or `ECDSA-P384` | `RSA-2048` |
-| `--handle` | Persistent handle | EK `0x81010001`, SRK `0x81000001` |
-| `--persistent` | Make the key persistent | `true` |
-| `--password` | Key password | - |
+| `--persistent` | Make the key persistent at the configured `tpm.ek.handle` / `tpm.ssrk.handle` | `true` |
 | `--parent` | (`srk create` only) parent handle | `0x81010001` |
 | `--parent-password` | (`srk create` only) parent password | - |
 

@@ -183,6 +183,40 @@ func (e *ErrEvidence) Error() string {
 
 func (e *ErrEvidence) Unwrap() error { return e.Cause }
 
+// ErrFactorUnsupported is returned by a signer asked for a person factor it
+// does not sign.
+type ErrFactorUnsupported struct {
+	Factor gwvpn.PersonFactorKind
+}
+
+func (e *ErrFactorUnsupported) Error() string {
+	return fmt.Sprintf("no signer for person factor %q on this host", e.Factor)
+}
+
+// ErrAuthenticator is returned when the authenticator could not assert: none
+// is attached, the touch never came, or the device failed.
+type ErrAuthenticator struct {
+	Factor gwvpn.PersonFactorKind
+	Cause  error
+}
+
+func (e *ErrAuthenticator) Error() string {
+	return fmt.Sprintf("%s authenticator: %v", e.Factor, e.Cause)
+}
+
+func (e *ErrAuthenticator) Unwrap() error { return e.Cause }
+
+// ErrInvalidAssertion is returned when the authenticator's answer is not an
+// assertion the gateway could verify.
+type ErrInvalidAssertion struct {
+	Factor gwvpn.PersonFactorKind
+	Reason string
+}
+
+func (e *ErrInvalidAssertion) Error() string {
+	return fmt.Sprintf("%s authenticator: invalid assertion: %s", e.Factor, e.Reason)
+}
+
 // ErrPostureFact is returned when one posture fact could not be read. A
 // fact the host does not have (no efivarfs, no securityfs) is reported as
 // unavailable rather than as this error.

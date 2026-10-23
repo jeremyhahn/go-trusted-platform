@@ -101,14 +101,16 @@ type KeyMetadata struct {
 
 // GenerateKeyParams holds parameters for key generation.
 type GenerateKeyParams struct {
+	// KeyID names the key; the generate request carries it as its name.
 	KeyID              string
 	Algorithm          KeyAlgorithm
 	Usages             []KeyUsage
 	Exportable         bool
 	DeletionProtection bool
-	Name               string
-	Description        string
-	Owner              string
+	// Name is a display name, stored as key metadata, never the key ID.
+	Name        string
+	Description string
+	Owner       string
 }
 
 // GenerateKeyResult holds the result of key generation.

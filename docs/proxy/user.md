@@ -164,7 +164,7 @@ platformctl proxy route add --id metrics \
   sender's private key.
 - **`--required-scope` is token-only.** Putting it on an `mtls` or `public`
   route is rejected at validation, because it could never be enforced there.
-  Certificates carry roles and zones, not OAuth scopes.
+  Certificates carry zones, not OAuth scopes.
 - **`mtls-or-token` prefers the certificate.** If a caller presents both, the
   certificate wins and the bearer token is ignored entirely — and never
   forwarded.
@@ -187,8 +187,10 @@ platformctl proxy route add --id partner \
 
 The policy runs **after** authentication, so it decides what an already-known
 caller may do. It sees the caller's id, zone, device id, whether the machine is
-attested, the auth method and the roles; plus the route and the request method
-and path.
+attested and the auth method; plus the route and the request method and path.
+It is given no roles: the policy answers evidence questions (zone, attestation,
+method), while whether a caller may use the route at all is its
+`--required-scope`.
 
 `proxy_authz` ships with the platform. It denies by default, denies anything
 from the `quarantine` zone, and requires a non-empty client zone — which means
@@ -283,9 +285,6 @@ sync — the zero state denies everything on purpose.
 
 **`zone_requires_mtls`** — a token caller on a zone-enforcing route with no
 `auth.token-zone` assigned.
-
-**`role_required`** — the identity lacks a `--required-role`. On the mTLS path
-roles come from the certificate's `roles` attribute, or failing that its OU.
 
 **`token_missing`** — no `Authorization: Bearer` header.
 

@@ -987,6 +987,24 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.ComputeService/SuspendVM": itemRoute("/api/v1/compute/vms/{id}/suspend", http.MethodPost, "{id}", "id"),
 	"/platform.v1.ComputeService/ResumeVM":  itemRoute("/api/v1/compute/vms/{id}/resume", http.MethodPost, "{id}", "id"),
 
+	// /api/v1/compute/vms/{id}/snapshots[/{snapshotId}[/restore]] -- the VM
+	// and snapshot ids ride the path; create's config stays in the body.
+	"/platform.v1.ComputeService/CreateSnapshot": itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/ListSnapshots":  itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodGet, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/GetSnapshot":    vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodGet),
+	"/platform.v1.ComputeService/DeleteSnapshot": vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodDelete),
+	"/platform.v1.ComputeService/RestoreSnapshot": vmSnapshotRoute(
+		"/api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore", http.MethodPost),
+
+	// POST /api/v1/compute/vms/{id}/attest[/verify] -- the nonce, PCR
+	// selection and evidence stay in the body.
+	"/platform.v1.ComputeService/AttestVM":            itemRoute("/api/v1/compute/vms/{id}/attest", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/VerifyVMAttestation": itemRoute("/api/v1/compute/vms/{id}/attest/verify", http.MethodPost, "{id}", "vm_id"),
+	// FinalizeMigration names the receiver PrepareMigration returned in the
+	// path; commit stays in the body.
+	"/platform.v1.ComputeService/FinalizeMigration": itemRoute(
+		"/api/v1/compute/migrations/{receiverId}/finalize", http.MethodPost, "{receiverId}", "receiver_id"),
+
 	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
 	//
 	// The three routes whose server template carries a :[0-9]+ constraint keep
@@ -1039,6 +1057,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	// id unconstrained; evidence travels in the body.
 	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
 
+	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
+	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/UpdateTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "template.id"),
+	"/platform.v1.DeviceService/DeleteTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	// The template list pages by query parameter; a zero page or size is
+	// omitted, so the server's defaults apply.
+	"/platform.v1.DeviceService/ListTemplates": {
+		path:   "/api/v1/device/templates",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "page", field: "pagination.page"},
+			{name: "page_size", field: "pagination.page_size"},
+		},
+	},
 	// POST /api/v1/device/templates/{id:[0-9]+}/create-profile. The body
 	// keeps {"overrides": {...}}.
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}/create-profile", http.MethodPost, "{id:[0-9]+}", "template_id"),
@@ -1082,6 +1114,21 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.KeyManagementService/Decrypt":   itemRoute("/api/v1/kms/decrypt/{name}", http.MethodPost, "{name}", "key_id"),
 	"/platform.v1.KeyManagementService/Sign":      itemRoute("/api/v1/kms/sign/{name}", http.MethodPost, "{name}", "key_id"),
 	"/platform.v1.KeyManagementService/Verify":    itemRoute("/api/v1/kms/verify/{name}", http.MethodPost, "{name}", "key_id"),
+
+	// GET /api/v1/kms/keys/{id}/export -- the daemon REST server's route
+	// (pkg/api/rest/kms_handlers.go). It reads the wrapping algorithm and the
+	// format as their enum numbers, so they are rendered as numbers here.
+	"/platform.v1.KeyManagementService/ExportKey": {
+		path:       "/api/v1/kms/keys/{id}/export",
+		method:     http.MethodGet,
+		pathParams: []pathParam{{placeholder: "{id}", field: "key_id"}},
+		queryParams: []queryParam{
+			{name: "wrapping_key_id", field: "wrapping_key_id"},
+			{name: "wrapping_algorithm", field: "wrapping_algorithm", encode: encodeEnumNumber},
+			{name: "format", field: "format", encode: encodeEnumNumber},
+			{name: "version", field: "version"},
+		},
+	},
 
 	// GET /api/v1/overlay/vteps/{nodeId}
 	"/platform.v1.OverlayService/GetVTEP": itemRoute("/api/v1/overlay/vteps/{nodeId}", http.MethodGet, "{nodeId}", "node_id"),
@@ -1223,6 +1270,19 @@ func itemRoute(path, method, placeholder, field string) templatedRoute {
 	}
 }
 
+// vmSnapshotRoute is itemRoute for a single VM snapshot: vm_id fills {id}
+// and snapshot_id fills {snapshotId}, and neither may be empty.
+func vmSnapshotRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:   path,
+		method: method,
+		pathParams: []pathParam{
+			{placeholder: "{id}", field: "vm_id"},
+			{placeholder: "{snapshotId}", field: "snapshot_id"},
+		},
+	}
+}
+
 // tenantItemRoute is itemRoute for the IAM tenant-scoped tree,
 // /api/v1/iam/tenants/{tenant}/...: the request's tenant_id fills {tenant},
 // and items fill the identifiers after it (one, or a parent and a child such
@@ -1341,6 +1401,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.KeyManagementService/GenerateRandom":         {"/api/v1/kms/random", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
+	// The batch operations and rewrap are the daemon REST server's routes
+	// (pkg/api/rest/kms_handlers.go); kms_batch.go reshapes their bodies.
+	"/platform.v1.KeyManagementService/BatchEncrypt": {"/api/v1/kms/batch-encrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/BatchDecrypt": {"/api/v1/kms/batch-decrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/Rewrap":       {"/api/v1/kms/rewrap", http.MethodPost},
 
 	// Physical TPM Service — proto: pkg/api/grpc/proto/tpm.proto
 	// Server registrations live in pkg/webservice/v1/rest/tpm/router.go
@@ -1348,28 +1413,33 @@ var grpcMethodToRESTMap = map[string]struct {
 	// the CLI gets 404 on /tpm/info etc. (the bug was: SDK called
 	// POST /platform.v1.TPMService/Info because no map entry existed,
 	// while the server only handles GET /api/v1/tpm/info).
-	"/platform.v1.TPMService/Info":                {"/api/v1/tpm/info", http.MethodGet},
-	"/platform.v1.TPMService/Provision":           {"/api/v1/tpm/provision", http.MethodPost},
-	"/platform.v1.TPMService/Clear":               {"/api/v1/tpm/clear", http.MethodPost},
-	"/platform.v1.TPMService/CreateEK":            {"/api/v1/tpm/ek", http.MethodPost},
-	"/platform.v1.TPMService/GetEK":               {"/api/v1/tpm/ek", http.MethodGet},
-	"/platform.v1.TPMService/DeleteEK":            {"/api/v1/tpm/ek", http.MethodDelete},
-	"/platform.v1.TPMService/GetEKCertificate":    {"/api/v1/tpm/ek/certificate", http.MethodGet},
-	"/platform.v1.TPMService/ImportEKCertificate": {"/api/v1/tpm/ek/certificate", http.MethodPost},
-	"/platform.v1.TPMService/CreateSRK":           {"/api/v1/tpm/srk", http.MethodPost},
-	"/platform.v1.TPMService/DeleteSRK":           {"/api/v1/tpm/srk", http.MethodDelete},
-	"/platform.v1.TPMService/CreateAK":            {"/api/v1/tpm/ak", http.MethodPost},
-	"/platform.v1.TPMService/GetAK":               {"/api/v1/tpm/ak", http.MethodGet},
-	"/platform.v1.TPMService/DeleteAK":            {"/api/v1/tpm/ak", http.MethodDelete},
-	"/platform.v1.TPMService/Seal":                {"/api/v1/tpm/seal", http.MethodPost},
-	"/platform.v1.TPMService/Unseal":              {"/api/v1/tpm/unseal", http.MethodPost},
-	"/platform.v1.TPMService/Quote":               {"/api/v1/tpm/quote", http.MethodPost},
-	"/platform.v1.TPMService/VerifyQuote":         {"/api/v1/tpm/quote/verify", http.MethodPost},
-	"/platform.v1.TPMService/Certify":             {"/api/v1/tpm/certify", http.MethodPost},
-	"/platform.v1.TPMService/GetEventLog":         {"/api/v1/tpm/eventlog", http.MethodGet},
-	"/platform.v1.TPMService/GetPCRs":             {"/api/v1/tpm/pcrs", http.MethodGet},
-	"/platform.v1.TPMService/DefineNVRAM":         {"/api/v1/tpm/nvram", http.MethodPost},
-	"/platform.v1.TPMService/GetRandom":           {"/api/v1/tpm/random", http.MethodPost},
+	"/platform.v1.TPMService/Info":                  {"/api/v1/tpm/info", http.MethodGet},
+	"/platform.v1.TPMService/Provision":             {"/api/v1/tpm/provision", http.MethodPost},
+	"/platform.v1.TPMService/Clear":                 {"/api/v1/tpm/clear", http.MethodPost},
+	"/platform.v1.TPMService/CreateEK":              {"/api/v1/tpm/ek", http.MethodPost},
+	"/platform.v1.TPMService/GetEK":                 {"/api/v1/tpm/ek", http.MethodGet},
+	"/platform.v1.TPMService/DeleteEK":              {"/api/v1/tpm/ek", http.MethodDelete},
+	"/platform.v1.TPMService/GetEKCertificate":      {"/api/v1/tpm/ek/certificate", http.MethodGet},
+	"/platform.v1.TPMService/ImportEKCertificate":   {"/api/v1/tpm/ek/certificate", http.MethodPost},
+	"/platform.v1.TPMService/CreateSRK":             {"/api/v1/tpm/srk", http.MethodPost},
+	"/platform.v1.TPMService/DeleteSRK":             {"/api/v1/tpm/srk", http.MethodDelete},
+	"/platform.v1.TPMService/CreateAK":              {"/api/v1/tpm/ak", http.MethodPost},
+	"/platform.v1.TPMService/GetAK":                 {"/api/v1/tpm/ak", http.MethodGet},
+	"/platform.v1.TPMService/DeleteAK":              {"/api/v1/tpm/ak", http.MethodDelete},
+	"/platform.v1.TPMService/Seal":                  {"/api/v1/tpm/seal", http.MethodPost},
+	"/platform.v1.TPMService/Unseal":                {"/api/v1/tpm/unseal", http.MethodPost},
+	"/platform.v1.TPMService/Quote":                 {"/api/v1/tpm/quote", http.MethodPost},
+	"/platform.v1.TPMService/VerifyQuote":           {"/api/v1/tpm/quote/verify", http.MethodPost},
+	"/platform.v1.TPMService/Certify":               {"/api/v1/tpm/certify", http.MethodPost},
+	"/platform.v1.TPMService/MakeCredential":        {"/api/v1/tpm/make-credential", http.MethodPost},
+	"/platform.v1.TPMService/ActivateCredential":    {"/api/v1/tpm/activate-credential", http.MethodPost},
+	"/platform.v1.TPMService/GetCapabilities":       {"/api/v1/tpm/capabilities", http.MethodGet},
+	"/platform.v1.TPMService/GetPlatformAttributes": {"/api/v1/tpm/platform", http.MethodGet},
+	"/platform.v1.TPMService/ExtendPCR":             {"/api/v1/tpm/pcrs/extend", http.MethodPost},
+	"/platform.v1.TPMService/GetEventLog":           {"/api/v1/tpm/eventlog", http.MethodGet},
+	"/platform.v1.TPMService/GetPCRs":               {"/api/v1/tpm/pcrs", http.MethodGet},
+	"/platform.v1.TPMService/DefineNVRAM":           {"/api/v1/tpm/nvram", http.MethodPost},
+	"/platform.v1.TPMService/GetRandom":             {"/api/v1/tpm/random", http.MethodPost},
 
 	// Device Service. The item, lookup and nested-action routes live in
 	// templatedRouteTable; these are the collection, count and match routes.
@@ -1454,6 +1524,14 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
 	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
 	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	// ListVMs sends its whole request (states, selector, pagination) as the
+	// JSON body, which both REST servers decode on this GET.
+	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},
+	// CreateVM sends its whole request (config and start) as the JSON body.
+	"/platform.v1.ComputeService/CreateVM": {"/api/v1/compute/vms", http.MethodPost},
+	// PrepareMigration sends its whole request (VM name, mode and spec) as
+	// the JSON body; the receiver it stands up has no id until it answers.
+	"/platform.v1.ComputeService/PrepareMigration": {"/api/v1/compute/migrations/prepare", http.MethodPost},
 
 	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
 	// Server registrations live in pkg/api/daemon/ceremony_rest.go.

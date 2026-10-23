@@ -38,22 +38,24 @@ Cloud providers (AWS, Azure, GCP) exist but are compiled out by default.
 ```bash
 platformctl compute create --name web-01 \
     --firmware uefi-secure-boot \
-    --tpm \
-    --network-bridge br-tenant-a \
     --label tenant=tenant-a \
     --start
 ```
 
-Two flags carry the weight:
+Two settings carry the weight:
 
-**`--tpm`.** Off by default. Without a virtual TPM the VM cannot produce a
-quote, so it can never be attested. On this platform that is usually not what
-you want — turn it on at creation, because you cannot retrofit it into a running
-VM's identity.
+**The vTPM.** On by default (`--tpm`). Without a virtual TPM the VM cannot
+produce a quote, so it can never be attested. `--tpm=false` leaves it off, and
+you cannot retrofit it into a running VM's identity.
 
 **`--firmware uefi-secure-boot`.** `--firmware` defaults to `uefi` and
-`--secure-boot` defaults to off. Asking for `--firmware bios --secure-boot` is a
-contradiction; using the combined firmware value avoids stating it two ways.
+`--secure-boot` defaults to off; the combined firmware value states Secure Boot
+once. The daemon refuses `--firmware bios`: VMs boot UEFI firmware.
+
+**A create the daemon cannot honour is refused, not approximated.** A BIOS VM,
+a CD-ROM boot or a bridge other than the orchestrator's fails with
+`code = InvalidArgument` naming the field, and nothing is created. If `--start`
+cannot start the new VM, the daemon deletes it and reports why.
 
 Then confirm it:
 
@@ -160,9 +162,9 @@ platformctl compute migrate web-01 --destination worker-02.example.com:9443 --li
 hostname — migration is daemon-to-daemon.
 
 **`--live` requires shared storage.** Without it the destination has no way to
-reach the disk. For a staged migration with a confirmation point, use the gRPC
-two-phase pair (`PrepareMigration`, `FinalizeMigration`) rather than the one-shot
-CLI verb.
+reach the disk. For a staged migration with a confirmation point, use the
+two-phase pair (`PrepareMigration`, `FinalizeMigration`, on REST, gRPC, QUIC
+and MCP) rather than the one-shot CLI verb.
 
 ---
 
@@ -200,8 +202,8 @@ authentication state machine as a physical device. Check the port state
 (`platformctl sdn port state ...`) before suspecting the VM.
 
 **A VM cannot be attested.**
-Either it was created without `--tpm` — in which case it has no virtual TPM and
-never will — or the host has not attested.
+Either it was created with `--tpm=false` — in which case it has no virtual TPM
+and never will — or the host has not attested.
 
 **A container will not pull its image on one node but will on another.**
 Registry access is attestation-gated. The difference is usually the node's

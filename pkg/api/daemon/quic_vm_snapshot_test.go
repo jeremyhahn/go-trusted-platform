@@ -65,6 +65,12 @@ var quicVMSnapshotOps = []struct {
 		request:  func(vmID string) any { return &platformv1.ListSnapshotsRequest{VmId: vmID} },
 		failWith: func(orch *vmCapableMockOrchestrator, err error) { orch.listErr = err },
 	},
+	{
+		name:     "get",
+		opcode:   quicwire.OpVMSnapshotGet,
+		request:  func(vmID string) any { return &platformv1.GetSnapshotRequest{VmId: vmID, SnapshotId: "nightly"} },
+		failWith: func(orch *vmCapableMockOrchestrator, err error) { orch.listErr = err },
+	},
 }
 
 // newQUICVMSnapshotHandler returns a QUIC handler whose compute service
@@ -106,6 +112,28 @@ func TestQUICVMSnapshot_ListReturnsTheSnapshots(t *testing.T) {
 	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
 	require.Len(t, got.GetSnapshots(), 2)
 	assert.Equal(t, "second", got.GetSnapshots()[1].GetId())
+}
+
+func TestQUICVMSnapshot_GetReturnsTheSnapshot(t *testing.T) {
+	h, orch := newQUICVMSnapshotHandler()
+	orch.snapshots = []*compute.VMSnapshot{{Name: "first", VMID: "vm-1"}, {Name: "second", VMID: "vm-1", Description: "nightly"}}
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMSnapshotGet, encodeVMLifecycle(t, &platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "second"}))
+
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var got platformv1.GetSnapshotResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+	assert.Equal(t, "second", got.GetSnapshot().GetId())
+	assert.Equal(t, "nightly", got.GetSnapshot().GetConfig().GetDescription())
+}
+
+func TestQUICVMSnapshot_GetUnknownSnapshotIsNotFound(t *testing.T) {
+	h, orch := newQUICVMSnapshotHandler()
+	orch.snapshots = []*compute.VMSnapshot{{Name: "first", VMID: "vm-1"}}
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMSnapshotGet, encodeVMLifecycle(t, &platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "second"}))
+
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status, string(resp.Payload))
 }
 
 func TestQUICVMSnapshot_RestoreAndDeleteSucceed(t *testing.T) {

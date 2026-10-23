@@ -33,7 +33,6 @@ func TestProtoConverters_RoundTrip(t *testing.T) {
 			BackendZone:        "internal",
 			RequireAttestation: true,
 			AttestationMaxAge:  5 * time.Minute,
-			RequiredRoles:      []string{"admin"},
 			RequiredScopes:     []string{"proxy:write"},
 			OPAPolicy:          "policies/p.rego",
 			TokenZone:          "edge",

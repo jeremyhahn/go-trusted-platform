@@ -56,6 +56,7 @@ type mockTPM struct {
 	ekAttrs            *xkmssdk.KeyAttributes
 	ekAttrsErr         error
 	createEKErr        error
+	ekPersisted        bool
 	ekCert             *x509.Certificate
 	ekCertErr          error
 	provisionEKCertErr error
@@ -123,6 +124,7 @@ func newMockTPM() *mockTPM {
 			TPMAttributes: &xkmssdk.TPMAttributes{
 				Handle:         0x81010001,
 				PublicKeyBytes: []byte("test-ek-pub"),
+				Template:       tpm2.RSAEKTemplate,
 			},
 		},
 		ssrkAttrs: &xkmssdk.KeyAttributes{
@@ -183,7 +185,15 @@ func (m *mockTPM) ProvisionOwner(auth xkmssdk.Password) (*xkmssdk.KeyAttributes,
 func (m *mockTPM) Clear(lockoutAuth []byte) error                 { return m.clearErr }
 func (m *mockTPM) EKAttributes() (*xkmssdk.KeyAttributes, error)  { return m.ekAttrs, m.ekAttrsErr }
 func (m *mockTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error { return m.createEKErr }
-func (m *mockTPM) Flush(handle tpm2.TPMHandle)                    {}
+
+// ReadHandle reports the EK handle occupied only when ekPersisted is set.
+func (m *mockTPM) ReadHandle(tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
+	if m.ekPersisted {
+		return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, nil
+	}
+	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, tpm2.TPMRCHandle
+}
+func (m *mockTPM) Flush(handle tpm2.TPMHandle) {}
 func (m *mockTPM) EKCertificate() (*x509.Certificate, error) {
 	if m.ekCertErr != nil {
 		return nil, m.ekCertErr
@@ -346,7 +356,9 @@ func TestTPM2Handler_HandleMessage_UnknownSubOpcode(t *testing.T) {
 
 func TestTPM2Handler_HandleInfo_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
+	mock := newMockTPM()
+	mock.readPCRsResult = []xkmssdk.PCRBank{{Algorithm: "SHA1"}, {Algorithm: "SHA256"}}
+	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
 	require.NotNil(t, resp)
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
@@ -355,6 +367,8 @@ func TestTPM2Handler_HandleInfo_Success(t *testing.T) {
 	assert.Equal(t, "mock-tpm-info", infoResp.Info)
 	assert.Equal(t, "TEST-MFR", infoResp.Manufacturer)
 	assert.True(t, infoResp.IsSimulator)
+	assert.Equal(t, "2.0", infoResp.Version)
+	assert.Equal(t, []string{"sha1", "sha256"}, infoResp.PCRBanks)
 }
 
 func TestTPM2Handler_HandleInfo_Error(t *testing.T) {
@@ -370,9 +384,14 @@ func TestTPM2Handler_HandleInfo_NoProperties(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
 	mock.fixedPropsErr = errors.New("n/a")
+	mock.readPCRsResult = []xkmssdk.PCRBank{{Algorithm: "SHA256"}}
+	mock.readPCRsErr = errors.New("n/a")
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Empty(t, infoResp.PCRBanks, "a refused PCR read leaves the banks empty and fails nothing")
 }
 
 func TestTPM2Handler_HandleInfo_NilConfig(t *testing.T) {
@@ -479,7 +498,13 @@ func TestTPM2Handler_HandleCreateEK_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+
+	// The handle and public key match gRPC's CreateEKResponse.
+	key := decodeKeyResponse(t, resp)
+	assert.Equal(t, uint32(0x81010001), key.Handle)
+	assert.Equal(t, []byte("test-ek-pub"), key.PublicKey)
+	assert.Equal(t, "RSA", key.Algorithm)
 }
 
 func TestTPM2Handler_HandleCreateEK_Error(t *testing.T) {
@@ -489,6 +514,28 @@ func TestTPM2Handler_HandleCreateEK_Error(t *testing.T) {
 	h.SetTPM2Service(mock)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
 	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
+}
+
+func TestTPM2Handler_HandleCreateEK_PersistedEKIsAlreadyExists(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.ekPersisted = true
+	mock.createEKErr = errors.New("CreateEK must not run on an occupied handle")
+	h.SetTPM2Service(mock)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
+	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
+}
+
+// Sub-opcode 0x05 used to panic the server: template-less EK attributes
+// reached go-tpm's TPMT_PUBLIC marshaller.
+func TestTPM2Handler_HandleCreateEK_TemplateLessAttributesAreRefused(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.ekAttrs.TPMAttributes.Template = tpm2.TPMTPublic{}
+	mock.createEKErr = errors.New("CreateEK must not run without a template")
+	h.SetTPM2Service(mock)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleDeleteEK(t *testing.T) {
@@ -754,8 +801,15 @@ func TestTPM2Handler_HandleUnseal_MissingCN(t *testing.T) {
 func TestTPM2Handler_HandleCapabilities_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
+
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Capabilities}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2CapabilitiesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, []string{"RSA", "ECDSA", "SHA256"}, out.Algorithms)
+	assert.Equal(t, []string{"TPM2_Create", "TPM2_Sign"}, out.Commands)
+	assert.Equal(t, []string{"P256", "P384"}, out.ECCCurves)
 }
 
 func TestTPM2Handler_HandleCapabilities_Errors(t *testing.T) {
@@ -970,21 +1024,42 @@ func TestTPM2Handler_HandleVerifyQuote_ChannelBinding(t *testing.T) {
 
 func TestTPM2Handler_HandlePlatformAttributes_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
+	mock := newMockTPM()
+	mock.deviceResult = "/dev/tpmrm0"
+	mock.ekAttrs = &xkmssdk.KeyAttributes{KeyAlgorithm: x509.RSA, TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81010001}}
+	mock.ssrkAttrs = &xkmssdk.KeyAttributes{KeyAlgorithm: x509.RSA, TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81000001}}
+	mock.iakAttrs = nil
+	mock.iakAttrsErr = errors.New("IAK not provisioned")
+	h.SetTPM2Service(mock)
+
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2PlatformAttrs}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2PlatformAttributesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, "/dev/tpmrm0", out.Device)
+	assert.Equal(t, &TPM2KeyRef{Handle: 0x81010001, Algorithm: "RSA"}, out.EK)
+	assert.Equal(t, &TPM2KeyRef{Handle: 0x81000001, Algorithm: "RSA"}, out.SRK)
+	assert.Nil(t, out.IAK, "an unprovisioned IAK is absent, not a zero handle")
 }
 
 func TestTPM2Handler_HandlePlatformAttributes_ErrorPaths(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
+	mock.isFIPSResult = true
 	mock.isFIPSErr = errors.New("n/a")
 	mock.isPCRExtErr = errors.New("n/a")
 	mock.config = nil
 	mock.fixedPropsErr = errors.New("n/a")
 	h.SetTPM2Service(mock)
+
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2PlatformAttrs}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2PlatformAttributesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.False(t, out.IsFIPS, "a refused FIPS read reports false")
+	assert.Empty(t, out.Manufacturer)
 }
 
 func TestTPM2Handler_HandleGetIDevID_Success(t *testing.T) {

@@ -40,13 +40,11 @@ type iamTenantOnlyClient struct {
 type mockIAMClientForTenant struct {
 	mu      sync.RWMutex
 	tenants map[string]*sdkiam.Tenant
-	nextID  int
 }
 
 func newMockIAMClientForTenant() *mockIAMClientForTenant {
 	return &mockIAMClientForTenant{
 		tenants: make(map[string]*sdkiam.Tenant),
-		nextID:  1,
 	}
 }
 
@@ -70,7 +68,6 @@ func (m *mockIAMClientForTenant) Create(ctx context.Context, req *sdkiam.CreateT
 	}
 
 	m.tenants[t.ID] = t
-	m.nextID++
 	return t, nil
 }
 

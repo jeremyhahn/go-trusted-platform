@@ -28,11 +28,10 @@ import (
 var errSDK = errors.New("sdk failure")
 
 type fakeCacheClient struct {
-	err         error
-	statsReq    *cache.GetCacheStatsRequest
-	clearReq    *cache.ClearCacheRequest
-	updateReq   *cache.UpdateCacheConfigRequest
-	configCalls int
+	err       error
+	statsReq  *cache.GetCacheStatsRequest
+	clearReq  *cache.ClearCacheRequest
+	updateReq *cache.UpdateCacheConfigRequest
 }
 
 func (f *fakeCacheClient) GetCacheStats(_ context.Context, req *cache.GetCacheStatsRequest) (*cache.GetCacheStatsResponse, error) {
@@ -52,7 +51,6 @@ func (f *fakeCacheClient) ClearCache(_ context.Context, req *cache.ClearCacheReq
 }
 
 func (f *fakeCacheClient) GetCacheConfig(context.Context, *cache.GetCacheConfigRequest) (*cache.GetCacheConfigResponse, error) {
-	f.configCalls++
 	if f.err != nil {
 		return nil, f.err
 	}

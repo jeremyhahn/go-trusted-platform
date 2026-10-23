@@ -532,6 +532,19 @@ func (e *ErrHostFWConfigInvalid) Unwrap() error {
 	return e.Cause
 }
 
+// ErrOverlayIPsecConfigInvalid wraps an overlay ipsec section error.
+type ErrOverlayIPsecConfigInvalid struct {
+	Cause error
+}
+
+func (e *ErrOverlayIPsecConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway overlay ipsec configuration invalid: %v", e.Cause)
+}
+
+func (e *ErrOverlayIPsecConfigInvalid) Unwrap() error {
+	return e.Cause
+}
+
 // ErrServiceUnhealthy reports a supervised service whose owning process is
 // down, failed its restart budget, or reports the service unhealthy (#557).
 // Cause is the supervisor's own typed error.

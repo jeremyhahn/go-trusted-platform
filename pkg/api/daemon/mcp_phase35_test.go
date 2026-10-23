@@ -430,6 +430,9 @@ func TestPhase35Provider_PIVDelegation(t *testing.T) {
 	if _, err := p.PIVSlotInfo(ctx, "yk5", "9a"); err != nil {
 		t.Fatalf("PIVSlotInfo: %v", err)
 	}
+	if pb.lastSlotDev != "yk5" {
+		t.Errorf("SlotInfo: device not passed, got %q", pb.lastSlotDev)
+	}
 	if pb.lastSlotID != "9a" {
 		t.Errorf("SlotInfo: slot not passed, got %q", pb.lastSlotID)
 	}
@@ -511,7 +514,7 @@ func TestPhase35Provider_LUKSDelegation(t *testing.T) {
 		t.Fatalf("LUKSEnrollPassphrase: %v", err)
 	}
 	if _, err := p.LUKSEnrollFIDO2(ctx, map[string]interface{}{
-		"device": "/dev/x", "existing_passphrase": "a", "credential_id": "c", "require_pin": true,
+		"device": "/dev/x", "existing_passphrase": "a", "credential_id": "c", "require_uv": true,
 	}); err != nil {
 		t.Fatalf("LUKSEnrollFIDO2: %v", err)
 	}

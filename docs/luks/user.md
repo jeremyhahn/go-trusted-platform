@@ -56,7 +56,9 @@ platformctl luks enroll-fido2 --device /dev/<device> \
     --existing-passphrase '<existing>' --credential-id '<base64url-id>' --require-uv
 ```
 
-Add `--require-pin` to demand the authenticator PIN at unlock.
+`--require-pin` is refused, and no keyslot is written, until the SDK ships a
+PIN-capable fido2 handler (SDK seam #584): today the slot would be guarded by a
+touch alone. Use `--require-uv` for user verification.
 
 ---
 

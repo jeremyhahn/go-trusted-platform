@@ -65,11 +65,12 @@ func (f *fakeConn) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.
 	return nil, errNoStreams{}
 }
 
-// withFakeConn points the three client factories at conn and captures what
+// withFakeConn points the four client factories at conn and captures what
 // the commands print.
 func withFakeConn(t *testing.T, conn *fakeConn) *any {
 	t.Helper()
-	origCache, origScheduler, origMessaging, origOutput := newCacheClient, newSchedulerClient, newMessagingClient, output
+	origCache, origScheduler, origMessaging, origObjects, origOutput :=
+		newCacheClient, newSchedulerClient, newMessagingClient, newObjectStorageClient, output
 	noClose := func() error { return nil }
 	newCacheClient = func(*cli.CommonFlags) (platformv1.CacheServiceClient, func() error, error) {
 		return platformv1.NewCacheServiceClient(conn), noClose, nil
@@ -80,22 +81,27 @@ func withFakeConn(t *testing.T, conn *fakeConn) *any {
 	newMessagingClient = func(*cli.CommonFlags) (platformv1.MessagingServiceClient, func() error, error) {
 		return platformv1.NewMessagingServiceClient(conn), noClose, nil
 	}
+	newObjectStorageClient = func(*cli.CommonFlags) (platformv1.ObjectStorageServiceClient, func() error, error) {
+		return platformv1.NewObjectStorageServiceClient(conn), noClose, nil
+	}
 	var printed any
 	output = func(_ *cli.CommonFlags, v any) error {
 		printed = v
 		return nil
 	}
 	t.Cleanup(func() {
-		newCacheClient, newSchedulerClient, newMessagingClient, output = origCache, origScheduler, origMessaging, origOutput
+		newCacheClient, newSchedulerClient, newMessagingClient, newObjectStorageClient, output =
+			origCache, origScheduler, origMessaging, origObjects, origOutput
 	})
 	return &printed
 }
 
-// execute runs one platformctl command line against the three groups.
+// execute runs one platformctl command line against the four groups.
 func execute(flags *cli.CommonFlags, args ...string) error {
 	root := &cobra.Command{Use: "platformctl", SilenceUsage: true, SilenceErrors: true}
 	getFlags := func() *cli.CommonFlags { return flags }
-	root.AddCommand(NewCacheCommand(getFlags), NewSchedulerCommand(getFlags), NewMessagingCommand(getFlags))
+	root.AddCommand(NewCacheCommand(getFlags), NewSchedulerCommand(getFlags), NewMessagingCommand(getFlags),
+		NewObjectStorageCommand(getFlags))
 	root.SetArgs(args)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
@@ -181,10 +187,44 @@ func commandCases() []commandCase {
 			platformv1.MessagingService_GetStats_FullMethodName, &platformv1.GetMessagingStatsRequest{}},
 		{[]string{"messaging", "dedup-stats"},
 			platformv1.MessagingService_GetDedupStats_FullMethodName, &platformv1.GetMessagingDedupStatsRequest{}},
+
+		{[]string{"objectstorage", "put", "docs:a.txt", "hello", "--backend", "default", "--content-type", "text/plain",
+			"--tenant", "acme", "--shard", "4", "--tag", "env=prod", "--min-replicas", "3", "--replication-mode", "quorum",
+			"--replica-store", "s3", "--archive-after-days", "30", "--archive-store", "glacier",
+			"--retention-days", "90", "--max-versions", "5"},
+			platformv1.ObjectStorageService_PutObject_FullMethodName, &platformv1.PutObjectRequest{
+				Key: "docs:a.txt", Value: []byte("hello"), ContentType: "text/plain", TenantId: "acme", ShardId: 4,
+				Tags: map[string]string{"env": "prod"}, TargetBackend: "default",
+				ReplicationPolicy: &platformv1.ObjectReplicationPolicy{Enabled: true, MinReplicas: 3, Mode: "quorum", TargetStores: []string{"s3"}},
+				ArchivePolicy:     &platformv1.ObjectArchivePolicy{Enabled: true, ArchiveAfterDays: 30, TargetStore: "glacier"},
+				RetentionPolicy:   &platformv1.ObjectRetentionPolicy{Enabled: true, RetentionDays: 90, MaxVersions: 5},
+			}},
+		{[]string{"objectstorage", "get", "docs:a.txt", "--tenant", "acme", "--metadata"},
+			platformv1.ObjectStorageService_GetObject_FullMethodName, &platformv1.GetObjectRequest{Key: "docs:a.txt", TenantId: "acme", IncludeMetadata: true}},
+		{[]string{"objectstorage", "delete", "docs:a.txt", "--tenant", "acme"},
+			platformv1.ObjectStorageService_DeleteObject_FullMethodName, &platformv1.DeleteObjectRequest{Key: "docs:a.txt", TenantId: "acme"}},
+		{[]string{"objectstorage", "head", "docs:a.txt"},
+			platformv1.ObjectStorageService_HeadObject_FullMethodName, &platformv1.HeadObjectRequest{Key: "docs:a.txt"}},
+		{[]string{"objectstorage", "list", "--prefix", "docs:", "--tenant", "acme", "--limit", "20", "--cursor", "c1", "--tags"},
+			platformv1.ObjectStorageService_ListObjects_FullMethodName, &platformv1.ListObjectsRequest{
+				Prefix: "docs:", TenantId: "acme", Limit: 20, Cursor: "c1", IncludeTags: true,
+			}},
+		{[]string{"objectstorage", "copy", "docs:a.txt", "docs:b.txt", "--backend", "default", "--overwrite"},
+			platformv1.ObjectStorageService_CopyObject_FullMethodName, &platformv1.CopyObjectRequest{
+				SourceKey: "docs:a.txt", DestinationKey: "docs:b.txt", OverwriteExisting: true, TargetBackend: "default",
+			}},
+		{[]string{"objectstorage", "list-by-tag", "env", "prod", "--limit", "5"},
+			platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName, &platformv1.ListObjectsByTagRequest{
+				TagName: "env", TagValue: "prod", Limit: 5,
+			}},
+		{[]string{"objectstorage", "list-tenant", "acme", "--tags", "--cursor", "c2"},
+			platformv1.ObjectStorageService_ListTenantObjects_FullMethodName, &platformv1.ListTenantObjectsRequest{
+				TenantId: "acme", IncludeTags: true, Cursor: "c2",
+			}},
 	}
 }
 
-// Every RPC of the three services has a command, and each command sends the
+// Every RPC of the four services has a command, and each command sends the
 // request its flags and arguments describe.
 func TestCommands_SendTheRequestTheirFlagsDescribe(t *testing.T) {
 	covered := map[string]bool{}
@@ -203,6 +243,7 @@ func TestCommands_SendTheRequestTheirFlagsDescribe(t *testing.T) {
 		platformv1.CacheService_ServiceDesc,
 		platformv1.SchedulerService_ServiceDesc,
 		platformv1.MessagingService_ServiceDesc,
+		platformv1.ObjectStorageService_ServiceDesc,
 	} {
 		for _, m := range desc.Methods {
 			method := "/" + desc.ServiceName + "/" + m.MethodName
@@ -227,10 +268,13 @@ func TestCommands_WrapRPCFailures(t *testing.T) {
 
 func TestCommands_SurfaceFactoryFailures(t *testing.T) {
 	cause := cli.ErrNoContextSet{}
-	origCache, origScheduler, origMessaging := newCacheClient, newSchedulerClient, newMessagingClient
+	origCache, origScheduler, origMessaging, origObjects := newCacheClient, newSchedulerClient, newMessagingClient, newObjectStorageClient
 	t.Cleanup(func() {
-		newCacheClient, newSchedulerClient, newMessagingClient = origCache, origScheduler, origMessaging
+		newCacheClient, newSchedulerClient, newMessagingClient, newObjectStorageClient = origCache, origScheduler, origMessaging, origObjects
 	})
+	newObjectStorageClient = func(*cli.CommonFlags) (platformv1.ObjectStorageServiceClient, func() error, error) {
+		return nil, nil, cause
+	}
 	newCacheClient = func(*cli.CommonFlags) (platformv1.CacheServiceClient, func() error, error) { return nil, nil, cause }
 	newSchedulerClient = func(*cli.CommonFlags) (platformv1.SchedulerServiceClient, func() error, error) {
 		return nil, nil, cause
@@ -310,6 +354,10 @@ func TestCommands_RefuseInvalidFlags(t *testing.T) {
 		{"cache", "clear"},
 		{"cache", "clear", "--all", "--entity-type", "users"},
 		{"messaging", "publish", "events"},
+		{"objectstorage", "put"},
+		{"objectstorage", "copy", "docs:a.txt"},
+		{"objectstorage", "list-by-tag", "env"},
+		{"objectstorage", "list", "docs:"},
 	} {
 		conn := &fakeConn{}
 		withFakeConn(t, conn)
@@ -359,6 +407,7 @@ func TestSDKClient_RefusesFlagsWithoutAContext(t *testing.T) {
 		func(flags *cli.CommonFlags) error { _, _, err := newCacheClient(flags); return err },
 		func(flags *cli.CommonFlags) error { _, _, err := newSchedulerClient(flags); return err },
 		func(flags *cli.CommonFlags) error { _, _, err := newMessagingClient(flags); return err },
+		func(flags *cli.CommonFlags) error { _, _, err := newObjectStorageClient(flags); return err },
 	} {
 		assert.IsType(t, cli.ErrNoContextSet{}, open(&cli.CommonFlags{}))
 	}

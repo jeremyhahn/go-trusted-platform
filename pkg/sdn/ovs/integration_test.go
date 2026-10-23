@@ -22,6 +22,7 @@ package ovs
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -29,13 +30,40 @@ import (
 
 const testSocketPath = "/var/run/openvswitch/db.sock"
 
+// ovsPrerequisiteError is a typed error reported when the host cannot run
+// these tests. Per the platform testing policy they never call t.Skip: a
+// missing prerequisite is a loud failure that names it, not a silent green.
+type ovsPrerequisiteError struct {
+	// Missing names the prerequisite that is absent.
+	Missing string
+
+	// Cause is the underlying error, if any.
+	Cause error
+}
+
+func (e *ovsPrerequisiteError) Error() string {
+	msg := fmt.Sprintf("OVS integration test prerequisite missing: %s; run it in the devcontainer, whose entrypoint starts ovsdb-server and ovs-vswitchd", e.Missing)
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e *ovsPrerequisiteError) Unwrap() error { return e.Cause }
+
+// requireOVSSocket fails the test when no OVSDB socket is listening at
+// testSocketPath.
+func requireOVSSocket(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(testSocketPath); err != nil {
+		t.Fatalf("%v", &ovsPrerequisiteError{Missing: "OVSDB socket at " + testSocketPath, Cause: err})
+	}
+}
+
 // TestOVSIntegration tests the complete OVS client workflow
 // This test requires OVS to be installed and running
 func TestOVSIntegration(t *testing.T) {
-	// Check if OVS socket exists
-	if _, err := os.Stat(testSocketPath); err != nil {
-		t.Skipf("OVS socket not found at %s, skipping integration test", testSocketPath)
-	}
+	requireOVSSocket(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -142,13 +170,9 @@ func TestOVSIntegration(t *testing.T) {
 // This is more comprehensive but requires root/CAP_NET_ADMIN
 func TestOVSWithRealPorts(t *testing.T) {
 	if os.Getuid() != 0 {
-		t.Skip("This test requires root privileges")
+		t.Fatalf("%v", &ovsPrerequisiteError{Missing: "root (CAP_NET_ADMIN) to create OVS internal ports"})
 	}
-
-	// Check if OVS socket exists
-	if _, err := os.Stat(testSocketPath); err != nil {
-		t.Skipf("OVS socket not found at %s, skipping integration test", testSocketPath)
-	}
+	requireOVSSocket(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -147,6 +147,15 @@ func TestErrCIDRMismatch_Error(t *testing.T) {
 	}
 }
 
+func TestErrPoolTooLarge_Error(t *testing.T) {
+	err := &ErrPoolTooLarge{CIDR: netip.MustParsePrefix("2001:db8::/64"), Max: 16}
+
+	want := "pool 2001:db8::/64 is larger than the 16 addresses this backend can track"
+	if got := err.Error(); got != want {
+		t.Errorf("ErrPoolTooLarge.Error() = %v, want %v", got, want)
+	}
+}
+
 func TestErrLeaseExpired_Error(t *testing.T) {
 	err := &ErrLeaseExpired{
 		IP:        netip.MustParseAddr("192.168.1.10"),
@@ -224,6 +233,7 @@ func TestIsValidationError(t *testing.T) {
 		{"device ID required", ErrDeviceIDRequired, true},
 		{"pool ID required", ErrPoolIDRequired, true},
 		{"invalid bitmap data", ErrInvalidBitmapData, true},
+		{"pool too large", &ErrPoolTooLarge{CIDR: netip.MustParsePrefix("2001:db8::/64"), Max: 16}, true},
 		{"unrelated error", ErrPoolNotFound, false},
 	}
 

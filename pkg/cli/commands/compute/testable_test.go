@@ -148,6 +148,10 @@ func (m *MockComputeClient) ListSnapshots(ctx context.Context, in *platformv1.Li
 	return nil, errNotImplemented
 }
 
+func (m *MockComputeClient) GetSnapshot(ctx context.Context, in *platformv1.GetSnapshotRequest, opts ...grpc.CallOption) (*platformv1.GetSnapshotResponse, error) {
+	return nil, errNotImplemented
+}
+
 func (m *MockComputeClient) MigrateVM(ctx context.Context, in *platformv1.MigrateVMRequest, opts ...grpc.CallOption) (*platformv1.MigrateVMResponse, error) {
 	return nil, errNotImplemented
 }

@@ -185,6 +185,24 @@ var dnsTools = map[string]dnsTool{
 		description: "Delete the DNS records of one type and name from a zone",
 		binding:     dnsToolMethod(platformv1.DNSServiceServer.DeleteRecord, "zone_name", "name"),
 	},
+	"dns_zone_sign": {
+		method:      platformv1.DNSService_SignZone_FullMethodName,
+		scope:       "dns:write",
+		description: "Sign a DNS zone with DNSSEC",
+		binding:     dnsToolMethod(platformv1.DNSServiceServer.SignZone, "zone_name"),
+	},
+	"dns_zone_dnssec_status": {
+		method:      platformv1.DNSService_GetDNSSECStatus_FullMethodName,
+		scope:       "dns:read",
+		description: "Get the DNSSEC signing status of a DNS zone",
+		binding:     dnsToolMethod(platformv1.DNSServiceServer.GetDNSSECStatus, "zone_name"),
+	},
+	"dns_register": {
+		method:      platformv1.DNSService_Register_FullMethodName,
+		scope:       "dns:write",
+		description: "Register a host name and address in its managed DNS zone",
+		binding:     dnsToolMethod(platformv1.DNSServiceServer.Register, "fqdn", "ip"),
+	},
 	"dns_lookup": {
 		method:      platformv1.DNSService_Resolve_FullMethodName,
 		scope:       "dns:read",

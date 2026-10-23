@@ -101,7 +101,7 @@ Examples:
 	cmd.Flags().BoolVar(&secureBoot, "secure-boot", true, "enable Secure Boot key generation")
 	cmd.Flags().StringVar(&ekAlgorithm, "ek-algorithm", "RSA", "EK algorithm for clones (RSA or ECC)")
 
-	_ = cmd.MarkFlagRequired("id")
+	cli.MarkFlagsRequired(cmd, "id")
 
 	return cmd
 }

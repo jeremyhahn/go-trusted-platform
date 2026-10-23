@@ -24,12 +24,12 @@ proto; [api.md](api.md) gives each RPC's row on every transport.
 
 | Group | RPCs | [api.md](api.md) |
 |-------|------|------------------|
-| Device and lifecycle | `Info`, `Provision`, `Clear` | §3 |
+| Device and lifecycle | `Info`, `GetCapabilities`, `GetPlatformAttributes`, `Provision`, `Clear` | §3 |
 | Endorsement key | `CreateEK`, `GetEK`, `DeleteEK`, `GetEKCertificate`, `ImportEKCertificate` | §4 |
 | Storage root key | `CreateSRK`, `GetSRK`, `DeleteSRK` | §4 |
 | Attestation key | `CreateAK`, `GetAK`, `DeleteAK` (refused with `FailedPrecondition`: the IAK is not evicted) | §4 |
 | Sealing | `Seal`, `Unseal` | §5 |
-| Attestation and PCRs | `Quote`, `VerifyQuote`, `Certify`, `GetEventLog`, `GetPCRs` | §5 |
+| Attestation and PCRs | `Quote`, `VerifyQuote`, `Certify`, `GetEventLog`, `GetPCRs`, `ExtendPCR` | §5 |
 | Credential activation | `MakeCredential`, `ActivateCredential` | §7 |
 | NVRAM | `DefineNVRAM`, `WriteNVRAM`, `ReadNVRAM`, `UndefineNVRAM` | §6 |
 | Entropy | `GetRandom` | §5 |

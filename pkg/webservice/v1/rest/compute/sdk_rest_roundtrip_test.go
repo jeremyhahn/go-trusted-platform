@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
@@ -44,6 +45,34 @@ type recordingComputeServer struct {
 	started  *platformv1.StartContainerRequest
 	stopped  *platformv1.StopContainerRequest
 	attested *platformv1.AttestContainerRequest
+	listed   *platformv1.ListVMsRequest
+	snapshot *platformv1.GetSnapshotRequest
+	prepared *platformv1.PrepareMigrationRequest
+	finished *platformv1.FinalizeMigrationRequest
+}
+
+// PrepareMigration hands every inbound migration receiver "recv-1".
+func (s *recordingComputeServer) PrepareMigration(_ context.Context, req *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	s.prepared = req
+	return &platformv1.PrepareMigrationResponse{ReceiverId: "recv-1", Port: 49152, TlsHostname: "node-2"}, nil
+}
+
+// FinalizeMigration knows one receiver, "recv-1"; any other id is NotFound.
+func (s *recordingComputeServer) FinalizeMigration(_ context.Context, req *platformv1.FinalizeMigrationRequest) (*platformv1.FinalizeMigrationResponse, error) {
+	s.finished = req
+	if req.GetReceiverId() != "recv-1" {
+		return nil, status.Error(codes.NotFound, "migration receiver not found")
+	}
+	return &platformv1.FinalizeMigrationResponse{Status: &platformv1.Status{Success: true}}, nil
+}
+
+// GetSnapshot knows one snapshot, "nightly"; any other id is NotFound.
+func (s *recordingComputeServer) GetSnapshot(_ context.Context, req *platformv1.GetSnapshotRequest) (*platformv1.GetSnapshotResponse, error) {
+	s.snapshot = req
+	if req.GetSnapshotId() != "nightly" {
+		return nil, status.Error(codes.NotFound, "snapshot not found")
+	}
+	return &platformv1.GetSnapshotResponse{Snapshot: &platformv1.Snapshot{Id: "nightly", VmId: req.GetVmId()}}, nil
 }
 
 func (s *recordingComputeServer) DeleteContainer(_ context.Context, req *platformv1.DeleteContainerRequest) (*platformv1.DeleteContainerResponse, error) {
@@ -59,6 +88,11 @@ func (s *recordingComputeServer) StartContainer(_ context.Context, req *platform
 func (s *recordingComputeServer) StopContainer(_ context.Context, req *platformv1.StopContainerRequest) (*platformv1.StopContainerResponse, error) {
 	s.stopped = req
 	return &platformv1.StopContainerResponse{}, nil
+}
+
+func (s *recordingComputeServer) ListVMs(_ context.Context, req *platformv1.ListVMsRequest) (*platformv1.ListVMsResponse, error) {
+	s.listed = req
+	return &platformv1.ListVMsResponse{}, nil
 }
 
 func (s *recordingComputeServer) AttestContainer(_ context.Context, req *platformv1.AttestContainerRequest) (*platformv1.AttestContainerResponse, error) {
@@ -131,6 +165,64 @@ func TestSDKREST_DeleteContainer(t *testing.T) {
 	assert.True(t, server.deleted.GetDeleteVolumes())
 }
 
+func TestSDKREST_GetSnapshot(t *testing.T) {
+	server := &recordingComputeServer{}
+	client, _ := connectComputeSDK(t, server)
+
+	resp, err := client.GetSnapshot(context.Background(),
+		&platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "nightly"})
+
+	require.NoError(t, err)
+	require.NotNil(t, server.snapshot)
+	assert.Equal(t, "vm-1", server.snapshot.GetVmId())
+	assert.Equal(t, "nightly", server.snapshot.GetSnapshotId())
+	assert.Equal(t, "nightly", resp.GetSnapshot().GetId())
+	assert.Equal(t, "vm-1", resp.GetSnapshot().GetVmId())
+}
+
+func TestSDKREST_GetSnapshotUnknownIsNotFound(t *testing.T) {
+	client, _ := connectComputeSDK(t, &recordingComputeServer{})
+
+	_, err := client.GetSnapshot(context.Background(),
+		&platformv1.GetSnapshotRequest{VmId: "vm-1", SnapshotId: "gone"})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestSDKREST_PrepareAndFinalizeMigration(t *testing.T) {
+	server := &recordingComputeServer{}
+	client, _ := connectComputeSDK(t, server)
+
+	prepared, err := client.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
+		VmName: "web", Mode: "live",
+		Spec: &platformv1.VMMigrationSpec{MemoryMb: 2048, Cpus: 2},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, server.prepared)
+	assert.Equal(t, "web", server.prepared.GetVmName())
+	assert.Equal(t, int32(2048), server.prepared.GetSpec().GetMemoryMb())
+	assert.Equal(t, "recv-1", prepared.GetReceiverId())
+	assert.Equal(t, int32(49152), prepared.GetPort())
+
+	_, err = client.FinalizeMigration(context.Background(),
+		&platformv1.FinalizeMigrationRequest{ReceiverId: prepared.GetReceiverId(), Commit: true})
+	require.NoError(t, err)
+	require.NotNil(t, server.finished)
+	assert.Equal(t, "recv-1", server.finished.GetReceiverId())
+	assert.True(t, server.finished.GetCommit())
+}
+
+func TestSDKREST_FinalizeMigrationUnknownReceiverIsNotFound(t *testing.T) {
+	client, _ := connectComputeSDK(t, &recordingComputeServer{})
+
+	_, err := client.FinalizeMigration(context.Background(),
+		&platformv1.FinalizeMigrationRequest{ReceiverId: "gone", Commit: true})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
 func TestSDKREST_StartContainer(t *testing.T) {
 	server := &recordingComputeServer{}
 	client, _ := connectComputeSDK(t, server)
@@ -153,6 +245,67 @@ func TestSDKREST_StopContainer(t *testing.T) {
 	require.NotNil(t, server.stopped)
 	assert.Equal(t, "c1", server.stopped.GetId())
 	assert.Equal(t, uint32(7), server.stopped.GetTimeoutSeconds())
+}
+
+func TestSDKREST_ListVMsSendsTheWholeFilter(t *testing.T) {
+	server := &recordingComputeServer{}
+	client, _ := connectComputeSDK(t, server)
+	want := &platformv1.ListVMsRequest{
+		States:     []platformv1.VMState{platformv1.VMState_VM_STATE_RUNNING, platformv1.VMState_VM_STATE_PAUSED},
+		Selector:   &platformv1.LabelSelector{MatchLabels: map[string]string{"tier": "web"}},
+		Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 5, SortBy: "name", Ascending: true},
+	}
+
+	_, err := client.ListVMs(context.Background(), want)
+
+	require.NoError(t, err)
+	require.NotNil(t, server.listed)
+	assert.True(t, proto.Equal(want, server.listed), "server read %v, want %v", server.listed, want)
+}
+
+// serveListVMs sends one ListVMs request straight to the router.
+func serveListVMs(t *testing.T, server platformv1.ComputeServiceServer, query, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	parent := mux.NewRouter()
+	NewComputeRouter(logging.NewLogger(slog.LevelError, io.Discard), server, newTestWriter()).
+		RegisterRoutes(parent.PathPrefix("/api/v1").Subrouter())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/compute/vms"+query, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	parent.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestComputeHandlers_ListVMsQueryPagesOverTheBody(t *testing.T) {
+	server := &recordingComputeServer{}
+
+	rec := serveListVMs(t, server, "?page=3&page_size=4",
+		`{"states":["VM_STATE_STOPPED"],"pagination":{"page":1,"page_size":10,"sort_by":"created_at"}}`)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, server.listed)
+	assert.Equal(t, []platformv1.VMState{platformv1.VMState_VM_STATE_STOPPED}, server.listed.GetStates())
+	assert.True(t, proto.Equal(&platformv1.PaginationRequest{Page: 3, PageSize: 4, SortBy: "created_at"},
+		server.listed.GetPagination()), "pagination = %v", server.listed.GetPagination())
+}
+
+func TestComputeHandlers_ListVMsRefusesABadRequest(t *testing.T) {
+	cases := []struct {
+		name, query, body string
+	}{
+		{"body is not JSON", "", `{"states":`},
+		{"page is not a number", "?page=two", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &recordingComputeServer{}
+
+			rec := serveListVMs(t, server, tc.query, tc.body)
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Nil(t, server.listed, "the service must not be called")
+		})
+	}
 }
 
 func TestSDKREST_AttestContainer(t *testing.T) {

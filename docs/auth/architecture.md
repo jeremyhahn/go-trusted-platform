@@ -168,6 +168,18 @@ carries — the same base64url encoding the registration write-through enrolled
 the factor under. No username is collected and no directory is searched, which
 is why an account on a public email domain is not a special case.
 
+**Registration therefore requires a resident key.** A credential the
+authenticator cannot discover would enrol and then never sign in, so the
+platform sets the embedded server's `iam.webauthn.resident_key_requirement` to
+`required` (`pkg/storage/quicbaas/config.go`, `ToQuicBaaSConfig`) instead of
+taking the upstream `preferred` default. The registration options then carry
+`authenticatorSelection.residentKey: "required"`, and an authenticator that
+cannot store a discoverable credential refuses the ceremony in the browser. The
+setting is the embedded server's; a platform on a remote quicbaas transport gets
+whatever that server's own `iam.webauthn` section says. A credential enrolled
+before this rule under `preferred` keeps working only if the authenticator made
+it discoverable anyway; one that did not must be registered again.
+
 `begin` answers with the `PublicKeyCredentialRequestOptions` the browser passes
 to `navigator.credentials.get()`, plus the `session_id` the client echoes back on
 `finish` in the `X-Session-Id` header — the platform persists no ceremony state.
@@ -315,8 +327,17 @@ the principal's own to land. An operator whose only tenant is the operating one
 signs in to that tenant through the admin claim, not the browser login.
 
 Without a tenant user service (no tenant manager wired) the registry does not
-offer the `fido2` factor at all, since the only tenant left for its sessions
-would be the operating one.
+offer the `fido2` factor at all, and declines the WebAuthn routes, registration
+included, since the only tenant left for their sessions would be the operating
+one.
+
+Registration follows the same rule. The session minted at registration finish
+is for the workspace the registration created or the invitation joined, minted
+by `TenantUserService.IssueToken`; there is no unscoped JWT fallback. An
+invitation into the operating tenant is refused `403` at registration begin,
+before a ceremony opens or an account exists, and a registered user who still
+resolves to no tenant or to the operating tenant is refused `403` at finish
+instead of being issued a session.
 
 **Ownership.** `is_tenant_owner` in a login session is always `false`. Ownership
 has to come from the identity the backbone resolves, and the pinned SDK does not
@@ -984,10 +1005,8 @@ refusal directly, and `TestGatewayFacingRoutes_AreNotBehindTheRoleGate` asserts
 the converse: a gateway presenting a valid certificate and no bearer token is
 still served.
 
-Which operator authorization the `/gateway/state` routes should carry was
-previously left open in the code as an owner decision. This answers it with the
-same RBAC role guard §6c establishes for the rest of the API; if the owner
-wants a different answer, this is the paragraph to overrule.
+The `/gateway/state` routes carry the same RBAC role guard §6c establishes for
+the rest of the API.
 
 #### `/api/v1/tenants` carries a within-tenant boundary the role cannot express (#234)
 

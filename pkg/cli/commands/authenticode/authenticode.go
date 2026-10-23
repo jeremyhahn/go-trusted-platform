@@ -41,7 +41,7 @@ Examples:
     --key /path/to/key.pem \
     --cert /path/to/cert.pem \
     --input unsigned.efi \
-    --output signed.efi
+    --out signed.efi
 
   # Verify a signed file
   platformctl authenticode verify --input signed.efi

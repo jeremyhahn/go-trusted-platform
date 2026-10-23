@@ -18,23 +18,32 @@
 package tenant
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
-	tenantpkg "github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
-// =============================================================================
-// Error Types
-// =============================================================================
+// listPageSize is how many tenants one `tenant list` call asks for while
+// looking a tenant ID up.
+const listPageSize = 100
 
-// ErrCLINotFound indicates the CLI tool was not found
+// mbPerGB converts the suite's megabyte memory quota to the CLI's
+// --max-memory-gb flag.
+const mbPerGB = 1024
+
+// ErrCLINotFound is returned when the CLI binary is not found
 type ErrCLINotFound struct {
 	Path string
 }
@@ -43,7 +52,7 @@ func (e ErrCLINotFound) Error() string {
 	return fmt.Sprintf("CLI not found: %s", e.Path)
 }
 
-// ErrCLICommandFailed indicates a CLI command failed
+// ErrCLICommandFailed is returned when a CLI command fails
 type ErrCLICommandFailed struct {
 	Operation string
 	Message   string
@@ -54,15 +63,38 @@ func (e ErrCLICommandFailed) Error() string {
 	return fmt.Sprintf("CLI command failed [%s]: %s (output: %s)", e.Operation, e.Message, e.Output)
 }
 
-// =============================================================================
-// CLI Protocol Adapter
-// =============================================================================
+// ErrTenantIDNotFound is returned when no tenant the CLI lists has the ID.
+// The CLI is name-keyed, so every ID-keyed call resolves the name first.
+type ErrTenantIDNotFound struct {
+	ID string
+}
 
-// CLIAdapter implements TenantCommands using the platformctl CLI
+func (e ErrTenantIDNotFound) Error() string {
+	return fmt.Sprintf("no tenant with ID %s", e.ID)
+}
+
+// ErrCLIUnsupportedValue is returned when a value cannot be expressed in the
+// CLI's flags.
+type ErrCLIUnsupportedValue struct {
+	Field  string
+	Value  int64
+	Reason string
+}
+
+func (e ErrCLIUnsupportedValue) Error() string {
+	return fmt.Sprintf("%s=%d cannot be passed to the CLI: %s", e.Field, e.Value, e.Reason)
+}
+
+// CLIAdapter implements TenantCommands using the platformctl CLI.
+//
+// The CLI takes tenant names where the suite passes IDs, so the adapter
+// remembers the name of every tenant it has seen (id → name) and falls back to
+// paging `tenant list` for an ID it has not.
 type CLIAdapter struct {
 	cliPath    string
 	configDir  string
 	configPath string
+	names      sync.Map
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -72,7 +104,7 @@ func NewCLIAdapter() *CLIAdapter {
 	}
 }
 
-// Setup prepares the adapter for testing
+// Setup prepares the CLI adapter
 func (a *CLIAdapter) Setup(ctx context.Context) error {
 	_, err := exec.LookPath(a.cliPath)
 	if err != nil {
@@ -86,7 +118,7 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 	return nil
 }
 
-// Teardown removes the platformctl config Setup wrote.
+// Teardown cleans up the CLI adapter
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
 	if a.configDir == "" {
 		return nil
@@ -99,458 +131,483 @@ func (a *CLIAdapter) Name() string {
 	return "CLI"
 }
 
-// runCommand executes a CLI command and returns the output
+// runCommand executes a CLI command and returns its stdout. Stderr is kept
+// apart so warnings never corrupt JSON output, and reported on failure.
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
 	if a.configPath != "" {
 		args = append([]string{"--config", a.configPath}, args...)
 	}
 	cmd := exec.CommandContext(ctx, a.cliPath, args...)
-	output, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
 		return nil, ErrCLICommandFailed{
 			Operation: strings.Join(args, " "),
 			Message:   err.Error(),
-			Output:    string(output),
+			Output:    stderr.String() + string(output),
 		}
 	}
 	return output, nil
 }
 
-// =============================================================================
-// Tenant CRUD Operations
-// =============================================================================
-
-// CreateTenant creates a new tenant
-func (a *CLIAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions) (*CreateTenantResult, error) {
-	args := []string{"tenant", "create",
-		"--name", opts.Name,
-		"--output", "json",
-	}
-
-	if opts.DisplayName != "" {
-		args = append(args, "--display-name", opts.DisplayName)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+// runJSON runs a CLI command with --output json and decodes stdout into out.
+func (a *CLIAdapter) runJSON(ctx context.Context, operation string, out any, args ...string) error {
+	output, err := a.runCommand(ctx, append(args, "--output", "json")...)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	var tenant TenantData
-	if err := json.Unmarshal(output, &tenant); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "CreateTenant",
-			Message:   "failed to parse response",
+	if err := json.Unmarshal(output, out); err != nil {
+		return ErrCLICommandFailed{
+			Operation: operation,
+			Message:   "failed to parse response: " + err.Error(),
 			Output:    string(output),
 		}
 	}
+	return nil
+}
 
-	return &CreateTenantResult{Tenant: &tenant}, nil
+// remember records a tenant's name under its ID.
+func (a *CLIAdapter) remember(id, name string) {
+	if id != "" && name != "" {
+		a.names.Store(id, name)
+	}
+}
+
+// nameForID returns the name of the tenant with the given ID, paging through
+// `tenant list` when the adapter has not seen the tenant yet.
+func (a *CLIAdapter) nameForID(ctx context.Context, id string) (string, error) {
+	if name, ok := a.names.Load(id); ok {
+		return name.(string), nil
+	}
+	for offset := 0; ; offset += listPageSize {
+		page, err := a.listPage(ctx, listPageSize, offset)
+		if err != nil {
+			return "", err
+		}
+		for _, item := range page.Tenants {
+			a.remember(item.ID, item.Name)
+			if item.ID == id {
+				return item.Name, nil
+			}
+		}
+		if len(page.Tenants) == 0 || offset+len(page.Tenants) >= page.Total {
+			return "", ErrTenantIDNotFound{ID: id}
+		}
+	}
+}
+
+// cliTenantList mirrors the CLI's `tenant list` JSON.
+type cliTenantList struct {
+	Tenants []struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		CreatedAt string `json:"created_at"`
+	} `json:"tenants"`
+	Total int `json:"total"`
+}
+
+func (a *CLIAdapter) listPage(ctx context.Context, limit, offset int) (*cliTenantList, error) {
+	args := []string{"tenant", "list"}
+	if limit > 0 {
+		args = append(args, "--limit", strconv.Itoa(limit))
+	}
+	if offset > 0 {
+		args = append(args, "--offset", strconv.Itoa(offset))
+	}
+	var page cliTenantList
+	if err := a.runJSON(ctx, "ListTenants", &page, args...); err != nil {
+		return nil, err
+	}
+	return &page, nil
+}
+
+// cliTenantDetail mirrors the CLI's tenant JSON (create, show, update).
+type cliTenantDetail struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	State       string `json:"state"`
+	Quotas      struct {
+		Compute *ComputeQuotaData `json:"compute"`
+		Network *NetworkQuotaData `json:"network"`
+		Storage *StorageQuotaData `json:"storage"`
+	} `json:"quotas"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	CreatedAt   string            `json:"created_at"`
+	UpdatedAt   string            `json:"updated_at"`
+}
+
+func (d *cliTenantDetail) toTenantData() (*TenantData, error) {
+	created, err := parseCLITime("created_at", d.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := parseCLITime("updated_at", d.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &TenantData{
+		ID:           d.ID,
+		Name:         d.Name,
+		DisplayName:  d.DisplayName,
+		State:        pbTenantStateToState(platformv1.TenantState(platformv1.TenantState_value[d.State])),
+		ComputeQuota: d.Quotas.Compute,
+		NetworkQuota: d.Quotas.Network,
+		StorageQuota: d.Quotas.Storage,
+		Labels:       d.Labels,
+		Annotations:  d.Annotations,
+		CreatedAt:    created,
+		UpdatedAt:    updated,
+	}, nil
+}
+
+// parseCLITime reads a CLI timestamp: RFC 3339, or "N/A" for an unset time.
+func parseCLITime(field, value string) (time.Time, error) {
+	if value == "" || value == "N/A" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, ErrCLICommandFailed{
+			Operation: field,
+			Message:   "failed to parse time: " + err.Error(),
+			Output:    value,
+		}
+	}
+	return t, nil
+}
+
+// runTenant runs a CLI verb that prints one tenant and returns it.
+func (a *CLIAdapter) runTenant(ctx context.Context, operation string, args ...string) (*TenantData, error) {
+	var detail cliTenantDetail
+	if err := a.runJSON(ctx, operation, &detail, args...); err != nil {
+		return nil, err
+	}
+	data, err := detail.toTenantData()
+	if err != nil {
+		return nil, err
+	}
+	a.remember(data.ID, data.Name)
+	return data, nil
+}
+
+// joinPairs renders a map as the CLI's k=v,... flag value, sorted by key.
+func joinPairs(m map[string]string) string {
+	pairs := make([]string, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, k+"="+v)
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, ",")
+}
+
+// CreateTenant creates a new tenant. The CLI's create takes no labels or
+// annotations, so they follow in an update.
+func (a *CLIAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions) (*CreateTenantResult, error) {
+	args := []string{"tenant", "create", "--name", opts.Name}
+	if opts.DisplayName != "" {
+		args = append(args, "--display-name", opts.DisplayName)
+	}
+	t, err := a.runTenant(ctx, "CreateTenant", args...)
+	if err != nil {
+		return nil, err
+	}
+	if len(opts.Labels) == 0 && len(opts.Annotations) == 0 {
+		return &CreateTenantResult{Tenant: t}, nil
+	}
+
+	updated, err := a.UpdateTenant(ctx, UpdateTenantOptions{
+		TenantID:    t.ID,
+		Labels:      opts.Labels,
+		Annotations: opts.Annotations,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &CreateTenantResult{Tenant: updated.Tenant}, nil
 }
 
 // GetTenant retrieves a tenant by ID
 func (a *CLIAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*GetTenantResult, error) {
-	args := []string{"tenant", "show",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	var tenant TenantData
-	if err := json.Unmarshal(output, &tenant); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "GetTenant",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	t, err := a.runTenant(ctx, "GetTenant", "tenant", "show", name)
+	if err != nil {
+		return nil, err
 	}
-
-	return &GetTenantResult{Tenant: &tenant}, nil
+	return &GetTenantResult{Tenant: t}, nil
 }
 
 // GetTenantByName retrieves a tenant by name
 func (a *CLIAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameOptions) (*GetTenantByNameResult, error) {
-	args := []string{"tenant", "show",
-		"--name", opts.Name,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	t, err := a.runTenant(ctx, "GetTenantByName", "tenant", "show", opts.Name)
 	if err != nil {
 		return nil, err
 	}
-
-	var tenant TenantData
-	if err := json.Unmarshal(output, &tenant); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "GetTenantByName",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &GetTenantByNameResult{Tenant: &tenant}, nil
+	return &GetTenantByNameResult{Tenant: t}, nil
 }
 
 // UpdateTenant updates an existing tenant
 func (a *CLIAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions) (*UpdateTenantResult, error) {
-	args := []string{"tenant", "update",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	if opts.DisplayName != nil {
-		args = append(args, "--display-name", *opts.DisplayName)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	var tenant TenantData
-	if err := json.Unmarshal(output, &tenant); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "UpdateTenant",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	args := []string{"tenant", "update", name}
+	if opts.DisplayName != nil {
+		args = append(args, "--display-name", *opts.DisplayName)
 	}
-
-	return &UpdateTenantResult{Tenant: &tenant}, nil
+	if len(opts.Labels) > 0 {
+		args = append(args, "--labels", joinPairs(opts.Labels))
+	}
+	if len(opts.Annotations) > 0 {
+		args = append(args, "--annotations", joinPairs(opts.Annotations))
+	}
+	t, err := a.runTenant(ctx, "UpdateTenant", args...)
+	if err != nil {
+		return nil, err
+	}
+	return &UpdateTenantResult{Tenant: t}, nil
 }
 
 // DeleteTenant removes a tenant
 func (a *CLIAdapter) DeleteTenant(ctx context.Context, opts DeleteTenantOptions) (*DeleteTenantResult, error) {
-	args := []string{"tenant", "delete",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	_, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	return &DeleteTenantResult{Success: true, Message: "tenant deleted successfully"}, nil
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := a.runJSON(ctx, "DeleteTenant", &resp, "tenant", "delete", name, "--force"); err != nil {
+		return nil, err
+	}
+	a.names.Delete(opts.TenantID)
+	return &DeleteTenantResult{
+		Success: resp.Success,
+		Message: fmt.Sprintf("tenant %s deleted", name),
+	}, nil
 }
 
-// ListTenants lists all tenants with optional pagination
+// ListTenants lists all tenants with optional pagination. The CLI lists
+// IDs, names and creation times only.
 func (a *CLIAdapter) ListTenants(ctx context.Context, opts ListTenantsOptions) (*ListTenantsResult, error) {
-	args := []string{"tenant", "list",
-		"--output", "json",
-	}
-
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	page, err := a.listPage(ctx, opts.Limit, opts.Offset)
 	if err != nil {
 		return nil, err
 	}
-
-	var result ListTenantsResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		var tenants []*TenantData
-		if err := json.Unmarshal(output, &tenants); err != nil {
-			return nil, ErrCLICommandFailed{
-				Operation: "ListTenants",
-				Message:   "failed to parse response",
-				Output:    string(output),
-			}
+	tenants := make([]*TenantData, 0, len(page.Tenants))
+	for _, item := range page.Tenants {
+		created, err := parseCLITime("created_at", item.CreatedAt)
+		if err != nil {
+			return nil, err
 		}
-		result.Tenants = tenants
-		result.Total = len(tenants)
+		a.remember(item.ID, item.Name)
+		tenants = append(tenants, &TenantData{ID: item.ID, Name: item.Name, CreatedAt: created})
 	}
-
-	return &result, nil
+	return &ListTenantsResult{Tenants: tenants, Total: page.Total}, nil
 }
 
-// =============================================================================
-// Tenant Lifecycle Operations
-// =============================================================================
+// cliStateChange mirrors the CLI's suspend and resume JSON.
+type cliStateChange struct {
+	State   string `json:"state"`
+	Success bool   `json:"success"`
+}
 
 // SuspendTenant suspends a tenant
 func (a *CLIAdapter) SuspendTenant(ctx context.Context, opts SuspendTenantOptions) (*SuspendTenantResult, error) {
-	args := []string{"tenant", "suspend",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	_, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	return &SuspendTenantResult{Success: true, Message: "tenant suspended successfully"}, nil
+	var resp cliStateChange
+	if err := a.runJSON(ctx, "SuspendTenant", &resp, "tenant", "suspend", name); err != nil {
+		return nil, err
+	}
+	return &SuspendTenantResult{
+		Success: resp.Success,
+		Message: fmt.Sprintf("tenant %s is %s", name, resp.State),
+	}, nil
 }
 
 // ResumeTenant resumes a suspended tenant
 func (a *CLIAdapter) ResumeTenant(ctx context.Context, opts ResumeTenantOptions) (*ResumeTenantResult, error) {
-	args := []string{"tenant", "resume",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	_, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	return &ResumeTenantResult{Success: true, Message: "tenant resumed successfully"}, nil
+	var resp cliStateChange
+	if err := a.runJSON(ctx, "ResumeTenant", &resp, "tenant", "resume", name); err != nil {
+		return nil, err
+	}
+	return &ResumeTenantResult{
+		Success: resp.Success,
+		Message: fmt.Sprintf("tenant %s is %s", name, resp.State),
+	}, nil
 }
 
-// =============================================================================
-// Quota Operations
-// =============================================================================
-
-// GetQuotas retrieves tenant quotas
+// GetQuotas retrieves tenant quotas. The CLI's quota JSON has the result's
+// shape.
 func (a *CLIAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*GetQuotasResult, error) {
-	args := []string{"tenant", "quotas", "show",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
 	var result GetQuotasResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "GetQuotas",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	if err := a.runJSON(ctx, "GetQuotas", &result, "tenant", "quotas", "get", name); err != nil {
+		return nil, err
 	}
-
 	return &result, nil
+}
+
+// quotaSetArgs renders the sections given as `quotas set` flags. Every field
+// of a given section is passed, zero included, as the other transports send
+// it. MaxDiskGB is on no wire, so the CLI has no flag for it.
+func quotaSetArgs(opts UpdateQuotasOptions) ([]string, error) {
+	var args []string
+	flag := func(name string, value int64) {
+		args = append(args, "--"+name, strconv.FormatInt(value, 10))
+	}
+	if c := opts.Compute; c != nil {
+		if c.MaxMemoryMB%mbPerGB != 0 {
+			return nil, ErrCLIUnsupportedValue{
+				Field:  "MaxMemoryMB",
+				Value:  c.MaxMemoryMB,
+				Reason: "--max-memory-gb takes whole gigabytes",
+			}
+		}
+		flag("max-vms", c.MaxVMs)
+		flag("max-containers", c.MaxContainers)
+		flag("max-vcpus", c.MaxVCPUs)
+		flag("max-memory-gb", c.MaxMemoryMB/mbPerGB)
+	}
+	if n := opts.Network; n != nil {
+		flag("max-bridges", n.MaxBridges)
+		flag("max-ports", n.MaxPorts)
+		flag("max-bandwidth-mbps", n.MaxBandwidthMbps)
+	}
+	if s := opts.Storage; s != nil {
+		flag("max-volumes-gb", s.MaxVolumesGB)
+		flag("max-snapshots", s.MaxSnapshots)
+	}
+	return args, nil
 }
 
 // UpdateQuotas updates tenant quotas
 func (a *CLIAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions) (*UpdateQuotasResult, error) {
-	args := []string{"tenant", "quotas", "update",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	if opts.Compute != nil {
-		if opts.Compute.MaxVMs > 0 {
-			args = append(args, "--max-vms", fmt.Sprintf("%d", opts.Compute.MaxVMs))
-		}
-		if opts.Compute.MaxContainers > 0 {
-			args = append(args, "--max-containers", fmt.Sprintf("%d", opts.Compute.MaxContainers))
-		}
-		if opts.Compute.MaxVCPUs > 0 {
-			args = append(args, "--max-vcpus", fmt.Sprintf("%d", opts.Compute.MaxVCPUs))
-		}
-		if opts.Compute.MaxMemoryMB > 0 {
-			args = append(args, "--max-memory-mb", fmt.Sprintf("%d", opts.Compute.MaxMemoryMB))
-		}
-		if opts.Compute.MaxDiskGB > 0 {
-			args = append(args, "--max-disk-gb", fmt.Sprintf("%d", opts.Compute.MaxDiskGB))
-		}
-	}
-
-	if opts.Network != nil {
-		if opts.Network.MaxBridges > 0 {
-			args = append(args, "--max-bridges", fmt.Sprintf("%d", opts.Network.MaxBridges))
-		}
-		if opts.Network.MaxPorts > 0 {
-			args = append(args, "--max-ports", fmt.Sprintf("%d", opts.Network.MaxPorts))
-		}
-		if opts.Network.MaxBandwidthMbps > 0 {
-			args = append(args, "--max-bandwidth-mbps", fmt.Sprintf("%d", opts.Network.MaxBandwidthMbps))
-		}
-	}
-
-	if opts.Storage != nil {
-		if opts.Storage.MaxVolumesGB > 0 {
-			args = append(args, "--max-volumes-gb", fmt.Sprintf("%d", opts.Storage.MaxVolumesGB))
-		}
-		if opts.Storage.MaxSnapshots > 0 {
-			args = append(args, "--max-snapshots", fmt.Sprintf("%d", opts.Storage.MaxSnapshots))
-		}
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	flags, err := quotaSetArgs(opts)
 	if err != nil {
 		return nil, err
 	}
-
+	name, err := a.nameForID(ctx, opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
 	var result UpdateQuotasResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "UpdateQuotas",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	args := append([]string{"tenant", "quotas", "set", name}, flags...)
+	if err := a.runJSON(ctx, "UpdateQuotas", &result, args...); err != nil {
+		return nil, err
 	}
-
 	return &result, nil
 }
 
-// GetUsage retrieves tenant resource usage
-func (a *CLIAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUsageResult, error) {
-	args := []string{"tenant", "usage",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
+// cliUsageItem mirrors one resource of the CLI's usage JSON.
+type cliUsageItem struct {
+	Used int64 `json:"used"`
+}
 
-	output, err := a.runCommand(ctx, args...)
+// cliUsage mirrors the CLI's `tenant usage` JSON.
+type cliUsage struct {
+	TenantID string `json:"tenant_id"`
+	Compute  struct {
+		VMs        cliUsageItem `json:"vms"`
+		Containers cliUsageItem `json:"containers"`
+		VCPUs      cliUsageItem `json:"vcpus"`
+		MemoryMB   cliUsageItem `json:"memory_mb"`
+	} `json:"compute"`
+	Network struct {
+		Bridges       cliUsageItem `json:"bridges"`
+		Ports         cliUsageItem `json:"ports"`
+		BandwidthMbps cliUsageItem `json:"bandwidth_mbps"`
+	} `json:"network"`
+	Storage struct {
+		VolumesGB cliUsageItem `json:"volumes_gb"`
+		Snapshots cliUsageItem `json:"snapshots"`
+	} `json:"storage"`
+}
+
+// GetUsage retrieves tenant resource usage. The CLI reports storage in use as
+// disk GB; it does not print the volume count, so Volumes stays zero.
+func (a *CLIAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUsageResult, error) {
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	var result GetUsageResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "GetUsage",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	var usage cliUsage
+	if err := a.runJSON(ctx, "GetUsage", &usage, "tenant", "usage", name); err != nil {
+		return nil, err
 	}
-
-	return &result, nil
+	return &GetUsageResult{
+		TenantID:      usage.TenantID,
+		VMs:           usage.Compute.VMs.Used,
+		Containers:    usage.Compute.Containers.Used,
+		VCPUs:         usage.Compute.VCPUs.Used,
+		MemoryMB:      usage.Compute.MemoryMB.Used,
+		DiskGB:        usage.Storage.VolumesGB.Used,
+		Bridges:       usage.Network.Bridges.Used,
+		Ports:         usage.Network.Ports.Used,
+		BandwidthMbps: usage.Network.BandwidthMbps.Used,
+		Snapshots:     usage.Storage.Snapshots.Used,
+	}, nil
 }
 
-// CheckQuota checks if a resource request can be fulfilled
+// CheckQuota checks if a resource request can be fulfilled. The CLI's check
+// JSON has the result's shape.
 func (a *CLIAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error) {
-	args := []string{"tenant", "quotas", "check",
-		"--id", opts.TenantID,
-		"--resource", opts.Resource,
-		"--amount", fmt.Sprintf("%d", opts.Amount),
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
-		// Check quota may return error when quota is exceeded
-		return &CheckQuotaResult{
-			TenantID: opts.TenantID,
-			Resource: opts.Resource,
-			Amount:   opts.Amount,
-			Allowed:  false,
-			Message:  err.Error(),
-		}, nil
+		return nil, err
 	}
-
 	var result CheckQuotaResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "CheckQuota",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	args := []string{
+		"tenant", "quotas", "check", name,
+		"--resource", opts.Resource,
+		"--amount", strconv.FormatInt(opts.Amount, 10),
 	}
-
+	if err := a.runJSON(ctx, "CheckQuota", &result, args...); err != nil {
+		return nil, err
+	}
 	return &result, nil
 }
-
-// =============================================================================
-// Network Operations
-// =============================================================================
 
 // SyncTenants synchronizes tenant manager state
 func (a *CLIAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
-	args := []string{"tenant", "sync",
-		"--output", "json",
+	var resp struct {
+		Success bool `json:"success"`
 	}
-
-	_, err := a.runCommand(ctx, args...)
-	if err != nil {
+	if err := a.runJSON(ctx, "SyncTenants", &resp, "tenant", "sync"); err != nil {
 		return nil, err
 	}
-
-	return &SyncTenantsResult{Success: true, Message: "tenant manager synchronized successfully"}, nil
+	return &SyncTenantsResult{Success: resp.Success, Message: "tenants synchronized"}, nil
 }
 
 // =============================================================================
-// Helper Functions
+// Per-Tenant Barrier Operations
 // =============================================================================
 
-// tenantDataFromEntity converts a TenantEntity to TenantData
-func tenantDataFromEntity(entity *tenantpkg.TenantEntity) *TenantData {
-	if entity == nil {
-		return nil
-	}
-
-	data := &TenantData{
-		ID:          entity.ID,
-		Name:        entity.Name,
-		DisplayName: entity.DisplayName,
-		State:       entity.State,
-		Labels:      entity.Labels,
-		Annotations: entity.Annotations,
-		CreatedAt:   entity.CreatedAt,
-		UpdatedAt:   entity.UpdatedAt,
-	}
-
-	data.ComputeQuota = &ComputeQuotaData{
-		MaxVMs:        entity.ComputeQuota.MaxVMs,
-		MaxContainers: entity.ComputeQuota.MaxContainers,
-		MaxVCPUs:      entity.ComputeQuota.MaxVCPUs,
-		MaxMemoryMB:   entity.ComputeQuota.MaxMemoryMB,
-		MaxDiskGB:     entity.ComputeQuota.MaxDiskGB,
-	}
-
-	data.NetworkQuota = &NetworkQuotaData{
-		MaxBridges:       entity.NetworkQuota.MaxBridges,
-		MaxPorts:         entity.NetworkQuota.MaxPorts,
-		MaxBandwidthMbps: entity.NetworkQuota.MaxBandwidthMbps,
-	}
-
-	data.StorageQuota = &StorageQuotaData{
-		MaxVolumesGB: entity.StorageQuota.MaxVolumesGB,
-		MaxSnapshots: entity.StorageQuota.MaxSnapshots,
-	}
-
-	return data
-}
-
-// =============================================================================
-// Per-Tenant Barrier Operations (added 2026-04-28)
-// =============================================================================
-//
-// The barrier CLI subcommands accept a tenant-name positional argument (not
-// --id). The TenantCommands interface passes opts.TenantID (a UUID), so we
-// resolve the tenant name first via GetTenant and pass that name to the
-// barrier subcommand.
-
-// resolveTenantNameByID resolves a tenant UUID to its name via the CLI's
-// existing tenant show --id pathway.
-func (a *CLIAdapter) resolveTenantNameByID(ctx context.Context, tenantID string) (string, error) {
-	res, err := a.GetTenant(ctx, GetTenantOptions{TenantID: tenantID})
-	if err != nil {
-		return "", err
-	}
-	if res == nil || res.Tenant == nil {
-		return "", ErrCLICommandFailed{
-			Operation: "ResolveTenantName",
-			Message:   "tenant not found",
-			Output:    tenantID,
-		}
-	}
-	return res.Tenant.Name, nil
-}
-
-// InitTenantBarrier explicitly initializes a per-tenant barrier.
+// InitTenantBarrier initializes a per-tenant barrier via
+// `platformctl tenant barrier init <name>`.
 func (a *CLIAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
-	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
 
-	args := []string{"tenant", "barrier", "init", name, "--output", "json"}
+	args := []string{"tenant", "barrier", "init", name}
 	if opts.Threshold > 0 {
 		args = append(args, "--threshold", fmt.Sprintf("%d", opts.Threshold))
 	}
@@ -558,133 +615,84 @@ func (a *CLIAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarri
 		args = append(args, "--shares", fmt.Sprintf("%d", opts.Shares))
 	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
 	var resp struct {
-		TenantID   string `json:"tenant_id"`
 		TenantName string `json:"tenant_name"`
-		Threshold  int32  `json:"threshold"`
-		Shares     int32  `json:"shares"`
 		Success    bool   `json:"success"`
 	}
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "InitTenantBarrier",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	if err := a.runJSON(ctx, "InitTenantBarrier", &resp, args...); err != nil {
+		return nil, err
 	}
-
 	return &InitTenantBarrierResult{
 		Success: resp.Success,
 		Message: fmt.Sprintf("tenant barrier initialized for %s", resp.TenantName),
 	}, nil
 }
 
-// UnsealTenantBarrier unseals a per-tenant barrier with the supplied key bytes.
-// An empty key falls back to the deterministic init credential.
+// UnsealTenantBarrier unseals a per-tenant barrier via
+// `platformctl tenant barrier unseal <name>`.
 func (a *CLIAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
-	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
 
-	args := []string{"tenant", "barrier", "unseal", name, "--output", "json"}
+	args := []string{"tenant", "barrier", "unseal", name}
 	if len(opts.Key) > 0 {
 		args = append(args, "--key-base64", base64.StdEncoding.EncodeToString(opts.Key))
 	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
 	var resp struct {
-		TenantID   string `json:"tenant_id"`
 		TenantName string `json:"tenant_name"`
 		Success    bool   `json:"success"`
 	}
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "UnsealTenantBarrier",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	if err := a.runJSON(ctx, "UnsealTenantBarrier", &resp, args...); err != nil {
+		return nil, err
 	}
-
 	return &UnsealTenantBarrierResult{
 		Success: resp.Success,
 		Message: fmt.Sprintf("tenant barrier unsealed for %s", resp.TenantName),
 	}, nil
 }
 
-// SealTenantBarrier seals a per-tenant barrier.
+// SealTenantBarrier seals a per-tenant barrier via
+// `platformctl tenant barrier seal <name>`.
 func (a *CLIAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
-	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	args := []string{"tenant", "barrier", "seal", name, "--output", "json"}
-
-	output, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
 
 	var resp struct {
-		TenantID   string `json:"tenant_id"`
 		TenantName string `json:"tenant_name"`
 		Success    bool   `json:"success"`
 	}
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "SealTenantBarrier",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	if err := a.runJSON(ctx, "SealTenantBarrier", &resp, "tenant", "barrier", "seal", name); err != nil {
+		return nil, err
 	}
-
 	return &SealTenantBarrierResult{
 		Success: resp.Success,
 		Message: fmt.Sprintf("tenant barrier sealed for %s", resp.TenantName),
 	}, nil
 }
 
-// TenantBarrierStatus reports the current sealed/initialized state and active
-// strategy metadata of a per-tenant barrier.
+// TenantBarrierStatus reports per-tenant barrier state via
+// `platformctl tenant barrier status <name>`.
 func (a *CLIAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
-	name, err := a.resolveTenantNameByID(ctx, opts.TenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	args := []string{"tenant", "barrier", "status", name, "--output", "json"}
-
-	output, err := a.runCommand(ctx, args...)
+	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
 
 	var resp struct {
 		TenantID       string `json:"tenant_id"`
-		TenantName     string `json:"tenant_name"`
 		Sealed         bool   `json:"sealed"`
 		Initialized    bool   `json:"initialized"`
 		Strategy       string `json:"strategy"`
 		HardwareBacked bool   `json:"hardware_backed"`
 	}
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "TenantBarrierStatus",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	if err := a.runJSON(ctx, "TenantBarrierStatus", &resp, "tenant", "barrier", "status", name); err != nil {
+		return nil, err
 	}
-
 	return &TenantBarrierStatusResult{
 		TenantID:       resp.TenantID,
 		Sealed:         resp.Sealed,
@@ -698,5 +706,4 @@ func (a *CLIAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrier
 // Compile-time Interface Verification
 // =============================================================================
 
-// Verify CLIAdapter implements TenantCommands
 var _ TenantCommands = (*CLIAdapter)(nil)

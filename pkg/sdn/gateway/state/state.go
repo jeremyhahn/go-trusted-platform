@@ -106,6 +106,28 @@ type VPNState struct {
 	// RejectedPeers are the peers of the delivered enrolment set this
 	// gateway refused to enrol; the rest of the set applies.
 	RejectedPeers []VPNRejectedPeer `json:"rejected_peers,omitempty"`
+	// Revocations counts the revoked leases by reason.
+	Revocations map[string]uint64 `json:"revocations,omitempty"`
+	// PostureViolations counts the posture rules that refused an admission
+	// or a renewal, by rule name.
+	PostureViolations map[string]uint64 `json:"posture_violations,omitempty"`
+	// Reattest is how long the renewal re-attestations took to verify.
+	Reattest *DurationHistogram `json:"reattest,omitempty"`
+}
+
+// DurationHistogram is a cumulative histogram of durations.
+type DurationHistogram struct {
+	Count      uint64  `json:"count"`
+	SumSeconds float64 `json:"sum_seconds"`
+	// Buckets are cumulative: each counts the observations at or under its
+	// upper bound. Observations over the last bound count only in Count.
+	Buckets []HistogramBucket `json:"buckets"`
+}
+
+// HistogramBucket is one cumulative histogram bucket.
+type HistogramBucket struct {
+	UpperBoundSeconds float64 `json:"le"`
+	Count             uint64  `json:"count"`
 }
 
 // VPNRejectedPeer is one enrolment a gateway refused, and why.

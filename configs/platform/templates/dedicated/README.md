@@ -475,7 +475,7 @@ The two gateway templates set a top-level `platform-ca-file:`. It is the
 platform CA bundle provisioning delivers to the node, and it is gatewayd's
 platform anchor: every platform service the gateway talks to is verified
 against it. That includes the platform secret store (`secret-store:`), so it
-stands behind every `kms://` and `secret://` reference the gateway
+stands behind every `kms://` reference the gateway
 configuration carries — the BGP neighbour passwords, the TCP-AO master keys,
 the ipsec and wireguard keys — as well as platformd over grpc, the proxy's
 mTLS callers and `trust-class: platform` backends, and the telemetry reporter.
@@ -495,6 +495,14 @@ Without it, a gateway with a `secret-store:` refuses to start
 secret reference fails at service start. The file is read at each
 verification, so a rotated bundle needs no restart; a bundle not yet on disk
 fails the verification naming the path.
+
+The anchor is one side of the store session. The other is the gateway's node
+identity: the session presents the `control-plane:` `cert-file`/`key-file`
+pair (`/etc/gatewayd/client.pem`, `client-key.pem`), the same certificate the
+telemetry reporter presents, so a store that requires a client certificate
+accepts the gateway. `secret-store:` carries no credential of its own; without
+the pair a gateway with a `secret-store:` refuses to start
+(`secrets.ErrClientIdentityRequired`). The pair is read once at start.
 
 ---
 

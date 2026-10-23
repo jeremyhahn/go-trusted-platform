@@ -18,18 +18,28 @@ import (
 	"errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 )
 
 // gatewayPerfRESTService bridges the shared perf backend into the REST
 // gateway perf handler interface.
 type gatewayPerfRESTService struct {
-	perf GatewayPerfInterface
+	backends GatewayBackendSource
 }
 
 // newGatewayPerfRESTService creates the REST perf adapter.
-func newGatewayPerfRESTService(backend GatewayPerfInterface) *gatewayPerfRESTService {
-	return &gatewayPerfRESTService{perf: backend}
+func newGatewayPerfRESTService(backends GatewayBackendSource) *gatewayPerfRESTService {
+	return &gatewayPerfRESTService{backends: backends}
+}
+
+// requirePerf returns the shared service's perf backend, or the typed
+// not-configured error (503) when none is wired.
+func (s *gatewayPerfRESTService) requirePerf() (GatewayPerfInterface, error) {
+	if s.backends == nil || s.backends.Perf() == nil {
+		return nil, rest.ErrPerfNotConfigured{}
+	}
+	return s.backends.Perf(), nil
 }
 
 // Ensure the adapter satisfies the REST perf interface.
@@ -42,7 +52,10 @@ func mapPerfError(err error) error {
 	}
 	var countErr *perf.ErrInvalidFlowCount
 	var bridgeErr *perf.ErrBridgeUnavailable
+	var notActive *gateway.ErrServiceNotActive
 	switch {
+	case errors.As(err, &notActive):
+		return rest.ErrPerfNotConfigured{}
 	case errors.As(err, &countErr):
 		return rest.ErrPerfInvalidRequest{Reason: err.Error()}
 	case errors.As(err, &bridgeErr):
@@ -64,7 +77,11 @@ func (s *gatewayPerfRESTService) GetPerfFlows(ctx context.Context, req *rest.Per
 		count = perf.DefaultFlowCount
 	}
 
-	result, err := s.perf.Flows(ctx, req.Bridge, count, req.Batch)
+	backend, err := s.requirePerf()
+	if err != nil {
+		return nil, err
+	}
+	result, err := backend.Flows(ctx, req.Bridge, count, req.Batch)
 	if err != nil {
 		return nil, mapPerfError(err)
 	}
@@ -79,7 +96,11 @@ func (s *gatewayPerfRESTService) GetPerfFlows(ctx context.Context, req *rest.Per
 
 // GetPerfDatapath reads live datapath counters.
 func (s *gatewayPerfRESTService) GetPerfDatapath(ctx context.Context, bridge string) (*rest.PerfDatapathResponse, error) {
-	result, err := s.perf.Datapath(ctx, bridge)
+	backend, err := s.requirePerf()
+	if err != nil {
+		return nil, err
+	}
+	result, err := backend.Datapath(ctx, bridge)
 	if err != nil {
 		return nil, mapPerfError(err)
 	}
@@ -96,7 +117,11 @@ func (s *gatewayPerfRESTService) GetPerfDatapath(ctx context.Context, bridge str
 
 // GetPerfConntrack summarizes the conntrack table.
 func (s *gatewayPerfRESTService) GetPerfConntrack(ctx context.Context, zone int) (*rest.PerfConntrackResponse, error) {
-	result, err := s.perf.Conntrack(ctx, zone)
+	backend, err := s.requirePerf()
+	if err != nil {
+		return nil, err
+	}
+	result, err := backend.Conntrack(ctx, zone)
 	if err != nil {
 		return nil, mapPerfError(err)
 	}

@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"math"
 
 	"google.golang.org/grpc/codes"
@@ -562,6 +564,44 @@ func (e ErrQUICOperationFailed) Error() string {
 
 func (e ErrQUICOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrQUICAttestationRefused carries a refusal from the shared attestation
+// gRPC servicer to the daemon-native QUIC attestation handler. QUICStatus
+// gives it the status the daemon's quote opcodes (0x70-0x72) give the same
+// gRPC class, so one refusal reads the same on every attestation opcode.
+type ErrQUICAttestationRefused struct {
+	Op    string
+	Cause error
+}
+
+func (e ErrQUICAttestationRefused) Error() string {
+	return fmt.Sprintf("attestation %s refused: %v", e.Op, e.Cause)
+}
+
+func (e ErrQUICAttestationRefused) Unwrap() error {
+	return e.Cause
+}
+
+// QUICStatus is the QUIC status for the refusal's gRPC class.
+func (e ErrQUICAttestationRefused) QUICStatus() byte {
+	return grpcCodeToQUICStatus(e.Cause)
+}
+
+// ErrQUICAttestationNoService refuses a daemon-native QUIC attestation
+// operation that no transport serves (device workload attestation, reports,
+// policies: docs/attestation/api.md §2, docs/13 G7).
+type ErrQUICAttestationNoService struct {
+	Op string
+}
+
+func (e ErrQUICAttestationNoService) Error() string {
+	return fmt.Sprintf("attestation %s is not served by any transport (docs/13 G7)", e.Op)
+}
+
+// QUICStatus is StatusNotImplemented: the opcode is in range, nothing serves it.
+func (e ErrQUICAttestationNoService) QUICStatus() byte {
+	return quicwire.StatusNotImplemented
 }
 
 // ErrQUICServerNotConfigured is returned when QUIC server is not configured
@@ -1922,6 +1962,69 @@ type ErrEABUnsupportedStatusFilter struct {
 // Error implements the error interface.
 func (e ErrEABUnsupportedStatusFilter) Error() string {
 	return "eab: unsupported status filter: " + e.Status
+}
+
+// ErrVMListUnknownState is returned when a ListVMs request filters on a state
+// value the VMState enum does not define.
+type ErrVMListUnknownState struct {
+	State int32
+}
+
+func (e ErrVMListUnknownState) Error() string {
+	return fmt.Sprintf("list VMs: unknown VM state %d", e.State)
+}
+
+// GRPCStatus classifies an unknown state filter as InvalidArgument.
+func (e ErrVMListUnknownState) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMListSelectorExpression is returned when a ListVMs selector carries a
+// match_expressions entry. The API defines no expression syntax, so the
+// service refuses the entry rather than ignore it.
+type ErrVMListSelectorExpression struct {
+	Expression string
+}
+
+func (e ErrVMListSelectorExpression) Error() string {
+	return fmt.Sprintf("list VMs: selector match_expressions are not supported: %q", e.Expression)
+}
+
+// GRPCStatus classifies a selector expression as InvalidArgument.
+func (e ErrVMListSelectorExpression) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMCreateUnsupportedField is returned when a CreateVM config sets a
+// field the compute backend cannot honour. The service refuses the request
+// rather than create a VM that differs from it.
+type ErrVMCreateUnsupportedField struct {
+	Field  string
+	Reason string
+}
+
+func (e ErrVMCreateUnsupportedField) Error() string {
+	return "create VM: config." + e.Field + " is not supported: " + e.Reason
+}
+
+// GRPCStatus classifies an unsupported config field as InvalidArgument.
+func (e ErrVMCreateUnsupportedField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMListUnsupportedSortField is returned when a ListVMs request asks for a
+// sort_by field the service does not support.
+type ErrVMListUnsupportedSortField struct {
+	Field string
+}
+
+func (e ErrVMListUnsupportedSortField) Error() string {
+	return "list VMs: unsupported sort field: " + e.Field
+}
+
+// GRPCStatus classifies an unsupported sort field as InvalidArgument.
+func (e ErrVMListUnsupportedSortField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrProfileConfigInvalid is returned when a device profile create or

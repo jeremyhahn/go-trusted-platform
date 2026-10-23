@@ -72,6 +72,7 @@ func TestRootCommandHasSubcommands(t *testing.T) {
 		"cache",
 		"scheduler",
 		"messaging",
+		"objectstorage",
 	}
 
 	commands := rootCmd.Commands()

@@ -238,6 +238,7 @@ func (h *OverlayModeHandler) ndLosses() uint64 {
 // punts are re-added before their hard timeout expires them.
 func (h *OverlayModeHandler) ndTick(ctx context.Context, now time.Time) {
 	h.retryRebuild(ctx, now)
+	h.sweepPredecessor(ctx, now)
 	h.retryNDMeter(ctx)
 	h.ndReconnect(ctx, now)
 	h.refreshNDMeterDrops(ctx)

@@ -36,9 +36,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
@@ -93,7 +96,7 @@ type ServeConfig struct {
 	ControlPlane *controlplane.Config
 
 	// Secrets is the `secret-store:` section (where the platform secret
-	// store is). It backs every kms:// and secret:// reference the gateway
+	// store is). It backs every kms:// reference the gateway
 	// configuration carries; without it those references fail closed. The
 	// name is not `secrets:` because that key is platformd's resolver
 	// switchboard (pkg/app.SecretsConfig) and the same file carries both.
@@ -136,7 +139,9 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 	}
 	if v.IsSet("proxy") {
 		pc := &proxysvc.Config{}
-		if err := v.UnmarshalKey("proxy", pc, serveDecodeHook); err != nil {
+		// Strict, like sdn below: a removed proxy key (a route's
+		// required-roles, #926) fails the load instead of being ignored.
+		if err := config.CheckViperSection(v, "proxy", pc); err != nil {
 			return nil, &ErrConfigSection{Section: "proxy", Cause: err}
 		}
 		cfg.Proxy = pc
@@ -817,7 +822,18 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 		return err
 	}
 	WireOverlayPlatform(runtime, client)
+	runtime.OverlayIPsec = newOverlayIPsec
 	return nil
+}
+
+// newOverlayIPsec builds the overlay's IPsec: an ipsec.Service that follows
+// the overlay's flood lists, as platformd's follows its static peers.
+func newOverlayIPsec(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
+	svc, err := ipsec.NewEVPNService(cfg, admitter, logger)
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // WireOverlayPlatform points the overlay admission inputs of runtime at
@@ -881,21 +897,23 @@ func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logge
 // service that references a secret fails closed at start rather than
 // running with a reference where a key belongs.
 //
-// The store session is verified against the platform anchor, so the
-// gateway reads a peer the platform CA vouches for; a `secret-store:`
-// section without `platform-ca-file:` is a configuration error. The anchor
-// is the one BuildGateway assembled, shared with every other consumer. The
-// session presents no client certificate of its own (see secrets.TLSFunc
-// and #658).
+// The store session is mutually authenticated (#658). The gateway verifies
+// the store against the platform anchor, so it reads a peer the platform CA
+// vouches for; a `secret-store:` section without `platform-ca-file:` is a
+// configuration error. The anchor is the one BuildGateway assembled, shared
+// with every other consumer. The store authenticates the gateway by its
+// provisioned node identity — the `control-plane:` cert-file/key-file pair
+// the telemetry reporter presents, loaded through the same loadNodeIdentity
+// and, like the reporter's, once at start. There is no second credential: a
+// `secret-store:` section without that pair is a configuration error, never
+// a one-way session.
 func buildSecretResolver(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logger) (bgp.SecretResolver, error) {
 	if cfg.Secrets == nil {
 		return nil, nil
 	}
-	if anchor == nil {
-		return nil, &ErrConfigSection{Section: "secret-store", Cause: &secrets.ErrTrustRequired{}}
-	}
-	tlsFn := func(ctx context.Context, _ string) (*tls.Config, error) {
-		return anchor.TLSConfig(ctx)
+	tlsFn, err := secretStoreTLS(cfg, anchor)
+	if err != nil {
+		return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
 	}
 	store, err := secrets.NewStore(
 		secrets.QuicBaaSDial(*cfg.Secrets, tlsFn),
@@ -906,6 +924,41 @@ func buildSecretResolver(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Lo
 		return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
 	}
 	return store.Resolve, nil
+}
+
+// secretStoreTLS builds the TLS configuration the secret-store session is
+// dialled with: the platform anchor's roots to verify the store, and the
+// node identity to present to it. A missing anchor or identity, or an
+// identity that does not load, fails here, at service start.
+func secretStoreTLS(cfg *ServeConfig, anchor *trust.Anchor) (secrets.TLSFunc, error) {
+	if anchor == nil {
+		return nil, &secrets.ErrTrustRequired{}
+	}
+	cp := cfg.ControlPlane
+	if cp == nil || cp.CertFile == "" || cp.KeyFile == "" {
+		return nil, &secrets.ErrClientIdentityRequired{}
+	}
+	identity, err := loadNodeIdentity(cp)
+	if err != nil {
+		return nil, err
+	}
+	server := func(ctx context.Context, _ string) (*tls.Config, error) {
+		return anchor.TLSConfig(ctx)
+	}
+	return secrets.WithClientIdentity(server, identity), nil
+}
+
+// loadNodeIdentity loads the gateway's provisioned mTLS node identity, the
+// `control-plane:` cert-file/key-file pair (/etc/gatewayd/client.pem and
+// client-key.pem as provisioned). It is the one place the pair is read: the
+// telemetry reporter presents it to the control plane and the secret store
+// session presents it to the store.
+func loadNodeIdentity(cp *controlplane.Config) (tls.Certificate, error) {
+	cert, err := tls.LoadX509KeyPair(cp.CertFile, cp.KeyFile)
+	if err != nil {
+		return tls.Certificate{}, &proxysvc.ErrCertificateLoadFailed{CertFile: cp.CertFile, Cause: err}
+	}
+	return cert, nil
 }
 
 // gatewayTOFUPinDir is where gatewayd keeps its TOFU pin records, relative to

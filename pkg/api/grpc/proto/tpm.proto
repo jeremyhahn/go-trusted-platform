@@ -18,6 +18,12 @@ service TPMService {
   // Clear clears the TPM (requires owner authorization)
   rpc Clear(TPMClearRequest) returns (TPMClearResponse);
 
+  // GetCapabilities returns the algorithms, commands and ECC curves the TPM implements
+  rpc GetCapabilities(TPMCapabilitiesRequest) returns (TPMCapabilitiesResponse);
+
+  // GetPlatformAttributes describes the TPM device and its provisioned identity keys
+  rpc GetPlatformAttributes(TPMPlatformAttributesRequest) returns (TPMPlatformAttributesResponse);
+
   // EK operations
   rpc CreateEK(CreateEKRequest) returns (CreateEKResponse);
   rpc GetEK(GetEKRequest) returns (GetEKResponse);
@@ -45,6 +51,7 @@ service TPMService {
   rpc Certify(CertifyRequest) returns (CertifyResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
+  rpc ExtendPCR(ExtendPCRRequest) returns (ExtendPCRResponse);
 
   // Credential activation (TPM2_MakeCredential / TPM2_ActivateCredential)
   rpc MakeCredential(MakeCredentialRequest) returns (MakeCredentialResponse);
@@ -129,6 +136,38 @@ message NVIndex {
   uint32 size = 3;        // bytes of payload
   bool auth_read = 4;
   bool auth_write = 5;
+}
+
+// Capabilities request/response. The lists are TPM2_GetCapability's
+// algorithm, command and ECC-curve names.
+message TPMCapabilitiesRequest {}
+
+message TPMCapabilitiesResponse {
+  repeated string algorithms = 1;
+  repeated string commands = 2;
+  repeated string ecc_curves = 3;
+}
+
+// TPMKeyRef names a provisioned key by its persistent handle and algorithm.
+message TPMKeyRef {
+  uint32 handle = 1;
+  string algorithm = 2;
+}
+
+// Platform attributes request/response. An attribute the TPM cannot
+// report is false or empty; a key that is not provisioned is absent.
+message TPMPlatformAttributesRequest {}
+
+message TPMPlatformAttributesResponse {
+  string device = 1;
+  bool is_fips = 2;
+  bool pcr_extended = 3;
+  bool can_seal = 4;
+  bool is_simulator = 5;
+  string manufacturer = 6;
+  TPMKeyRef ek = 7;
+  TPMKeyRef srk = 8;
+  TPMKeyRef iak = 9;
 }
 
 // Provision request/response
@@ -446,6 +485,18 @@ message GetPCRsRequest {
 
 message GetPCRsResponse {
   repeated PCRValue pcr_values = 1;
+}
+
+// ExtendPCR extends PCR `index` (0-23) in the `hash_alg` bank
+// (sha256 when empty) with `data`, which must not be empty.
+message ExtendPCRRequest {
+  uint32 index = 1;
+  string hash_alg = 2;
+  bytes data = 3;
+}
+
+message ExtendPCRResponse {
+  Status status = 1;
 }
 
 // NVRAM request/response

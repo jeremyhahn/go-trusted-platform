@@ -56,6 +56,13 @@ const (
 	// come, once the controller has already accounted for the solicitation.
 	ovlNDNoAnswerWait = 2 * time.Second
 
+	// ovlNDHoldDownWait outlasts the controller's first fallback hold-down
+	// (30s) by a poll and a punt refresh, and ovlNDDoubledHoldDownWait the
+	// doubled one that follows a second fallback inside the quiet period
+	// (docs/sdn/overlay/architecture.md, ND suppression).
+	ovlNDHoldDownWait        = 45 * time.Second
+	ovlNDDoubledHoldDownWait = 80 * time.Second
+
 	// ovlNDBurst solicitations far exceed the punt meter's 64 kb burst.
 	ovlNDBurst = 2000
 
@@ -120,7 +127,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 
 	ofClient := bridge.createClient(t)
 	ovsClient := newOVSDBClient(t)
-	handler := startOverlayND(ctx, t, ovsClient, ofClient, ep.HostIf)
+	handler := startOverlay(ctx, t, ovlNDBridge, netip.MustParseAddr("10.70.9.1"), ovsClient, ofClient, ep.HostIf)
 	dumpBridgeOnFailure(t, bridge.name)
 
 	require.NoError(t, handler.AddVNI(ctx, ovlNDVNI, ovlNDVLAN))
@@ -129,6 +136,7 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		punts, _ := ovlNDPunts(ctx, t, ovsClient)
 		return punts == 1
 	})
+	ovlNDSettle(t)
 
 	t.Run("KnownTargetAnsweredOnTheSegmentVLANNotFlooded", func(t *testing.T) {
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
@@ -193,29 +201,34 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		assert.Equal(t, before.Answered, after.Answered)
 	})
 
-	t.Run("CrashedControllerPuntsExpire", func(t *testing.T) {
-		// A dropped connection is what a crash looks like to OVS: nothing
-		// removes the punts, and nothing refreshes them.
+	t.Run("DroppedConnectionFallsBack", func(t *testing.T) {
+		// A dropped connection is what a crash looks like to OVS. The
+		// controller redials, cannot know what the switch kept, and falls
+		// back: the punts go and every solicitation floods for the hold-down.
+		fallbacks := handler.GetStatus().NDSuppression.Fallbacks
 		require.NoError(t, ofClient.Disconnect())
 
-		waitFor(ctx, t, "the punt's hard timeout", 100*time.Millisecond, 20*time.Second, func() bool {
+		waitFor(ctx, t, "the redial to fall back", 100*time.Millisecond, 20*time.Second, func() bool {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
-			return punts == 0
+			return punts == 0 && handler.GetStatus().NDSuppression.Fallbacks > fallbacks
 		})
+		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
 		waitFor(ctx, t, "the solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
 			return ovlNDFloodPackets(ctx, t, ovsClient) > floods
 		})
 		_, answered := readProxyAdvert(t, conn, ovlNDTargetIP, ovlNDNoAnswerWait)
-		assert.False(t, answered, "nothing answers with the controller gone")
+		assert.False(t, answered, "nothing answers during the hold-down")
 
-		// The controller that comes back restores suppression on its own.
+		// The reconnected controller restores suppression on its own once
+		// the hold-down ends.
 		require.NoError(t, ofClient.Connect(ctx))
-		waitFor(ctx, t, "the refresh to restore the punt", 100*time.Millisecond, 15*time.Second, func() bool {
+		waitFor(ctx, t, "the punt to return after the hold-down", 100*time.Millisecond, ovlNDHoldDownWait, func() bool {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 1
 		})
+		ovlNDSettle(t)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
 		_, answered = readProxyAdvert(t, conn, ovlNDTargetIP, 10*time.Second)
 		assert.True(t, answered, "the returned controller answers again")
@@ -240,13 +253,15 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		assert.Greater(t, after.MeterDropped+after.QueueDropped, before.MeterDropped+before.QueueDropped,
 			"the fallback follows a drop")
 
+		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, solicitation)
 		waitFor(ctx, t, "the known target's solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
 			return ovlNDFloodPackets(ctx, t, ovsClient) > floods
 		})
 
-		waitFor(ctx, t, "suppression to resume after the hold-down", 500*time.Millisecond, 60*time.Second, func() bool {
+		// The second fallback inside the quiet period holds down twice as long.
+		waitFor(ctx, t, "suppression to resume after the hold-down", 500*time.Millisecond, ovlNDDoubledHoldDownWait, func() bool {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 1 && handler.GetStatus().NDSuppression.Suppressing
 		})
@@ -262,19 +277,20 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 	})
 }
 
-// startOverlayND starts an overlay without a control plane on the bridge,
-// with accessPort carrying its VLANs, and stops it at cleanup.
-func startOverlayND(ctx context.Context, t *testing.T, ovsClient *ovs.Client,
-	ofClient *openflow.Client, accessPort string) *modes.OverlayModeHandler {
+// startOverlay starts an overlay without a control plane on bridge, with
+// localIP its VTEP and accessPort carrying its VLANs, and stops it at
+// cleanup.
+func startOverlay(ctx context.Context, t *testing.T, bridge string, localIP netip.Addr,
+	ovsClient *ovs.Client, ofClient *openflow.Client, accessPort string) *modes.OverlayModeHandler {
 	t.Helper()
 	cfg := &modes.OverlayModeConfig{
 		VTEPConfig: &vxlan.VTEPConfig{
-			LocalIP:       netip.MustParseAddr("10.70.9.1"),
+			LocalIP:       localIP,
 			UnderlayIface: "eth0",
 			UnderlayMTU:   vxlan.MinimumUnderlayMTU,
 			VXLANPort:     vxlan.DefaultVXLANPort,
 		},
-		BridgeName: ovlNDBridge,
+		BridgeName: bridge,
 		AccessPort: accessPort,
 		Logger:     slog.Default(),
 	}
@@ -301,7 +317,7 @@ func startOverlayND(ctx context.Context, t *testing.T, ovsClient *ovs.Client,
 func ovlNDFloodPackets(ctx context.Context, t *testing.T, client *ovs.Client) int64 {
 	t.Helper()
 	flows, err := client.GetFlowStats(ctx, ovlNDBridge,
-		fmt.Sprintf("table=%d,cookie=0x%x/0xffffffffffffffff", modes.TableEgress, modes.OverlayCookie))
+		fmt.Sprintf("table=%d,cookie=0x%x/0x%x", modes.TableEgress, modes.OverlayCookie, ovs.OwnerCookieMask))
 	require.NoError(t, err, "dump table %d", modes.TableEgress)
 	for _, flow := range flows {
 		if flow.Priority != 0 {
@@ -324,6 +340,17 @@ func ovlNDPunts(ctx context.Context, t *testing.T, client *ovs.Client) (int, int
 		packets += flow.PacketCount
 	}
 	return len(flows), packets
+}
+
+// ovlNDSettle waits for the datapath to follow a punt change the OpenFlow
+// tables already show. OVS revalidates its kernel megaflows asynchronously,
+// so a solicitation sent right after a punt is removed can still ride the
+// old megaflow to the controller, which answers a known target instead of
+// letting it flood; one sent right after a punt is installed can still
+// flood. Every send that follows a punt change waits here first.
+func ovlNDSettle(t *testing.T) {
+	t.Helper()
+	runCmd(t, "ovs-appctl", "revalidator/wait")
 }
 
 // openNDSocket opens a raw IPv6 packet socket on the endpoint's VLAN

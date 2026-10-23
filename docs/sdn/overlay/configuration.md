@@ -1,6 +1,6 @@
 # VXLAN Overlay Configuration Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-16
 > The overlay's configuration and runtime-derived settings.
 
 ## Overview
@@ -75,8 +75,8 @@ sdn:
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity. With the overlay enabled it is also the VTEP address the overlay controller registers and sources VXLAN from, so it must be an address of `fabric-interface` (see [Runtime-Derived Settings](#runtime-derived-settings)) |
 | static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
 | vici-socket | string | `/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user, and served by a process that listened as charon's uid |
-| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd |
-| crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd |
+| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd and gatewayd |
+| crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd and gatewayd |
 | token.module | string | `xkms` | The name of the module under charon's `pkcs11 { modules { } }` in strongswan.conf, sent with `load-token`; letters, digits, `-` and `_`, at most 64. The shipped `pkcs11.conf` defines `xkms`, whose path is the p11-kit client that forwards to the node-local xkms token |
 | token.slot | uint32 | 0 | Token slot holding the IKE key |
 | token.handle | string | — | Required; the key's CKA_ID in hex |
@@ -140,6 +140,57 @@ floor drops.
 Flows are currently programmed one FlowMod per call; there is no flow
 batching configuration. Batched OVS transactions are a planned
 optimization.
+
+## Gateway Configuration (gatewayd)
+
+gatewayd runs the overlay as a VTEP from its own `gateway.overlay` section;
+the full field table is in
+[gateway engineering, In gatewayd](../../gateway/engineering.md#in-gatewayd).
+Three of its keys turn on symmetric IRB:
+
+```yaml
+gateway:
+  overlay:
+    vnis:
+      - vni: 40100
+        vlan: 401
+        subnet: 10.4.192.0/24        # routed; gateway 10.4.192.1
+      - vni: 40200
+        vlan: 402                    # no subnet: bridged only
+    anycast-gateway-mac: "02:aa:aa:00:00:01"
+    l3vni: 40999
+```
+
+| Key | Default | Rule |
+|-----|---------|------|
+| vnis[].subnet | none | IPv4 network with no host bits and room for a host address; no two overlap. The VNI's anycast gateway is the first host address (`netplan.AnycastGateway`) |
+| anycast-gateway-mac | none | Required with any subnet, refused without one; unicast, non-zero, outside `02:00:xx:xx:xx:xx` |
+| l3vni | none | 1-16777215, not one of `vnis`; needs a routed VNI and `rr-peers`. The EVPN router MAC is `02:00` followed by the four octets of `local-vtep` |
+
+With subnets and the MAC but no `l3vni`, the VTEP routes only between the
+hosts behind it. With `l3vni`, gatewayd originates each routed VNI's subnet
+as a Type-5 route in the IP-VRF while the VNI is joined, and withdraws it when
+the VNI is removed or the service stops. With none of the three it bridges each
+VNI. Routing is per VNI: a VNI without a subnet, such as 40200 above, stays
+bridged beside routed ones. Its hosts get no host route, and its frames for
+the gateway MAC are bridged, not routed. A failure is an
+`*gateway.ErrOverlayConfigInvalid` naming the key.
+
+`gateway.overlay.ipsec` is the section above, under the gateway's overlay:
+`local-address` must be `local-vtep` and `fabric-interface` must be
+`underlay-interface`, else `*gateway.ErrOverlayConfigInvalid` names the key; a
+section that fails its own checks is a `*gateway.ErrOverlayIPsecConfigInvalid`
+wrapping the `*config.ConfigError`. gatewayd installs the floor before the
+overlay starts, and its peers are the static peers plus the admitted VTEPs on
+its flood lists ([Overlay IPsec in gatewayd](../../gateway/engineering.md#overlay-ipsec-in-gatewayd)).
+
+The overlay speaker's peer policy rejects every route an allowlist does not
+name. An `rr-peers` entry with an empty `policy.import-route-targets` or
+`policy.export-route-targets` gets, in that direction, the auto-derived route
+target of every VNI in `vnis` and, with `l3vni`, of the L3VNI, the one route
+target a Type-5 route carries. An allowlist the operator wrote is kept as
+written: with `l3vni` it must name the L3VNI's route target
+(`overlay-asn:` type 1, domain 0, the L3VNI) or no Type-5 route crosses it.
 
 ## Go Configuration API
 

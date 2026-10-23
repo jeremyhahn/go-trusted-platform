@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	sdkquicbaas "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -237,7 +238,7 @@ func TestPlatformSDKClient_KVOperations(t *testing.T) {
 		// Verify deleted
 		require.Eventually(t, func() bool {
 			getResp, err := kv.Get(ctx, &quicbaassdk.GetRequest{EntityType: entityType, ID: entityID})
-			return err == nil && !getResp.Found
+			return helpers.KVEntityAbsent(getResp, err)
 		}, 5*time.Second, 100*time.Millisecond)
 	})
 }
@@ -260,12 +261,16 @@ func TestPlatformSDKClient_VectorOperations(t *testing.T) {
 		// Upsert
 		upsertResp, err := vectorClient.Upsert(ctx, &vector.UpsertRequest{
 			Vector: &vector.VectorEntity{
-				ID:        "vec-001",
+				ID:        "1",
 				Namespace: namespace,
 				Vector:    vectorData,
 				Metadata:  map[string]string{"source": "platform-sdk"},
 			},
 		})
+		// Declared gap: go-quicbaas #1404 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedVector.Unserved(t, "Upsert", err) {
+			return
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, upsertResp)
 
@@ -319,15 +324,20 @@ func TestPlatformSDKClient_BatchOperations(t *testing.T) {
 		ops := make([]quicbaassdk.BatchOperation, 5)
 		for i := 0; i < 5; i++ {
 			ops[i] = quicbaassdk.BatchOperation{
-				Type:  quicbaassdk.BatchOpPut,
-				Key:   prefix + "/" + string(rune('a'+i)),
-				Value: []byte(`{"index": ` + string(rune('0'+i)) + `}`),
+				Type:       quicbaassdk.BatchOpPut,
+				EntityType: prefix,
+				Key:        prefix + "/" + string(rune('a'+i)),
+				Value:      []byte(`{"index": ` + string(rune('0'+i)) + `}`),
 			}
 		}
 
 		resp, err := batch.Execute(ctx, &quicbaassdk.BatchRequest{
 			Operations: ops,
 		})
+		// Declared gap: go-quicbaas #1533 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedBatch.Unserved(t, "Execute", err) {
+			return
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
@@ -339,47 +349,56 @@ func TestPlatformSDKClient_TransactionOperations(t *testing.T) {
 	defer tf.Cleanup()
 
 	txn := tf.SDKClient.Transaction()
-	kv := tf.SDKClient.KV()
 	require.NotNil(t, txn)
-	require.NotNil(t, kv)
 
 	ctx, cancel := testContext()
 	defer cancel()
 
 	t.Run("ConditionalUpdate", func(t *testing.T) {
 		entityType := generateTestKey("sdk/txn")
+		key := entityType + "/config"
 		value := []byte(`{"version": 1}`)
-
-		// Create initial value
-		putResp, err := kv.Put(ctx, &quicbaassdk.PutRequest{EntityType: entityType, Data: value})
-		require.NoError(t, err)
-		entityID := putResp.ID
-
-		// Get current version
-		getResp, err := kv.Get(ctx, &quicbaassdk.GetRequest{EntityType: entityType, ID: entityID})
-		require.NoError(t, err)
-
-		// Conditional update using transaction
 		newValue := []byte(`{"version": 2}`)
-		txnResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+
+		// Create the key only if it does not exist: version 0 means absent.
+		createResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
 			Compare: []quicbaassdk.Compare{
-				{
-					Key:      entityType,
-					Target:   quicbaassdk.CompareVersion,
-					Result:   quicbaassdk.CompareEqual,
-					Revision: getResp.Version,
-				},
+				{Key: key, Target: quicbaassdk.CompareVersion, Result: quicbaassdk.CompareEqual, Revision: 0},
 			},
 			Success: []quicbaassdk.TxnOp{
-				{
-					Type:       quicbaassdk.TxnOpPut,
-					EntityType: entityType,
-					Value:      newValue,
-				},
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value},
+			},
+		})
+		// Declared gap: go-quicbaas #1319 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedTransaction.Mistyped(t, "Execute", err) {
+			return
+		}
+		require.NoError(t, err)
+		assert.True(t, createResp.Succeeded)
+
+		// Update only while the stored value is still the one just written.
+		updateResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+			Compare: []quicbaassdk.Compare{
+				{Key: key, Target: quicbaassdk.CompareValue, Result: quicbaassdk.CompareEqual, Value: value},
+			},
+			Success: []quicbaassdk.TxnOp{
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: newValue},
 			},
 		})
 		require.NoError(t, err)
-		assert.True(t, txnResp.Succeeded)
+		assert.True(t, updateResp.Succeeded)
+
+		// The same compare now fails: the value moved on.
+		staleResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+			Compare: []quicbaassdk.Compare{
+				{Key: key, Target: quicbaassdk.CompareValue, Result: quicbaassdk.CompareEqual, Value: value},
+			},
+			Success: []quicbaassdk.TxnOp{
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value},
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, staleResp.Succeeded)
 	})
 }
 
@@ -403,6 +422,10 @@ func TestPlatformSDKClient_ParameterStore(t *testing.T) {
 			Path:  path,
 			Value: value,
 		})
+		// Declared gap: the embedded transport does not route ParameterStore — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedParameterStore.Unserved(t, "SetParameter", err) {
+			return
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, setResp)
 

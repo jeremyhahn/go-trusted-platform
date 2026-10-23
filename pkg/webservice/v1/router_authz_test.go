@@ -1417,7 +1417,8 @@ func TestServiceRegistryEndpoint_SurvivesTheGatedPlatformSubtree(t *testing.T) {
 
 // computeProbes are the compute and curated-image routes chosen for blast
 // radius. `container exec` is arbitrary code execution inside a workload;
-// `vm migrate` moves a workload to another host.
+// `vm migrate` moves a workload to another host, and `migration prepare`
+// and `migration finalize` land one on this host.
 var computeProbes = []struct {
 	name   string
 	method string
@@ -1426,6 +1427,8 @@ var computeProbes = []struct {
 	{"vm create", http.MethodPost, "/api/v1/compute/vms"},
 	{"vm delete", http.MethodDelete, "/api/v1/compute/vms/v1"},
 	{"vm migrate", http.MethodPost, "/api/v1/compute/vms/v1/migrate"},
+	{"migration prepare", http.MethodPost, "/api/v1/compute/migrations/prepare"},
+	{"migration finalize", http.MethodPost, "/api/v1/compute/migrations/r1/finalize"},
 	{"vm snapshot restore", http.MethodPost, "/api/v1/compute/vms/v1/snapshots/s1/restore"},
 	{"vm disk detach", http.MethodDelete, "/api/v1/compute/vms/v1/disks/d1"},
 	{"vm list", http.MethodGet, "/api/v1/compute/vms"},
@@ -1450,6 +1453,7 @@ func TestComputeRoutes_AreRegisteredAndGated(t *testing.T) {
 	for _, want := range []string{
 		"POST /api/v1/compute/vms",
 		"POST /api/v1/compute/vms/{id}/migrate",
+		"POST /api/v1/compute/migrations/prepare",
 		"POST /api/v1/compute/containers/{id}/exec",
 		"POST /api/v1/compute/images",
 		"DELETE /api/v1/compute/images/{repository:.+}",

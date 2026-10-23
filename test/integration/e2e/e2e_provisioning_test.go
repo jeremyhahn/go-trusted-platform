@@ -110,9 +110,11 @@ func TestE2EDeviceProvisioning(t *testing.T) {
 		"production_vlan", config.ProductionNetwork.VLAN)
 
 	// Phase 1: Infrastructure Validation
-	t.Run("Phase1_InfrastructureValidation", func(t *testing.T) {
+	if !t.Run("Phase1_InfrastructureValidation", func(t *testing.T) {
 		testInfrastructureValidation(ctx, t, infra)
-	})
+	}) {
+		t.Fatalf("infrastructure validation failed; provisioning needs the validated VMs")
+	}
 
 	// If no pre-built ISOs, stop here
 	if !fullIntegrationMode {
@@ -181,8 +183,9 @@ func testInfrastructureValidation(ctx context.Context, t *testing.T, infra *Test
 			"vars", ovmfVars)
 	})
 
-	// Setup and verify server VM can be created
-	t.Run("SetupServerVM", func(t *testing.T) {
+	// Setup and verify server VM can be created. Every later step drives the
+	// VMs, so a failed setup ends the phase instead of running on nil VMs.
+	setupServer := t.Run("SetupServerVM", func(t *testing.T) {
 		err := infra.SetupServerVM(ctx, t)
 		require.NoError(t, err, "Failed to setup server VM")
 
@@ -194,9 +197,12 @@ func testInfrastructureValidation(ctx context.Context, t *testing.T, infra *Test
 			"tap", infra.ServerTapName,
 			"disk", infra.Config.ServerDiskPath)
 	})
+	if !setupServer {
+		t.Fatalf("server VM setup failed; the remaining infrastructure steps need it")
+	}
 
 	// Setup and verify client VM can be created
-	t.Run("SetupClientVM", func(t *testing.T) {
+	setupClient := t.Run("SetupClientVM", func(t *testing.T) {
 		err := infra.SetupClientVM(ctx, t)
 		require.NoError(t, err, "Failed to setup client VM")
 
@@ -208,6 +214,9 @@ func testInfrastructureValidation(ctx context.Context, t *testing.T, infra *Test
 			"tap", infra.ClientTapName,
 			"disk", infra.Config.ClientDiskPath)
 	})
+	if !setupClient {
+		t.Fatalf("client VM setup failed; the remaining infrastructure steps need it")
+	}
 
 	// Verify policy engine
 	t.Run("VerifyPolicyEngine", func(t *testing.T) {

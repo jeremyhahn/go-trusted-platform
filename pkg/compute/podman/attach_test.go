@@ -148,12 +148,13 @@ func TestManagerAttach_NotInitialized(t *testing.T) {
 func TestRunOCIExecTTY_ViaSeam(t *testing.T) {
 	// The buffered TTY exec path drains the attach session's output into the
 	// result Stdout and reports the exit code.
+	session := newFakeAttachSession([]AttachChunk{
+		{Stream: "console", Data: []byte("tty-")},
+		{Stream: "console", Data: []byte("out")},
+	}, 3)
 	restore := startPTYExec
 	startPTYExec = func(ctx context.Context, runtime string, args []string) (AttachSession, error) {
-		return newFakeAttachSession([]AttachChunk{
-			{Stream: "console", Data: []byte("tty-")},
-			{Stream: "console", Data: []byte("out")},
-		}, 3), nil
+		return session, nil
 	}
 	t.Cleanup(func() { startPTYExec = restore })
 
@@ -161,4 +162,5 @@ func TestRunOCIExecTTY_ViaSeam(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "tty-out", string(result.Stdout))
 	assert.Equal(t, 3, result.ExitCode)
+	assert.True(t, session.closed, "the buffered exec owns its session and must release the PTY")
 }

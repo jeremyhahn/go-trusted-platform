@@ -162,6 +162,12 @@ type Config struct {
 	// and passes it through to the embedded server's IAM config.
 	SelfServiceRegistration *SelfServiceRegistrationConfig `yaml:"self-service-registration,omitempty" json:"self_service_registration,omitempty" mapstructure:"self-service-registration"`
 
+	// Vector turns the embedded server's vector database on
+	// (vector.enabled). Absent or disabled (the DEFAULT), the SDK's Vector
+	// client fails every call with ErrVectorUnavailable. Enabling it needs
+	// a WITH_VECTOR=1 build; Validate refuses it in any other.
+	Vector *VectorServiceConfig `yaml:"vector,omitempty" json:"vector,omitempty" mapstructure:"vector"`
+
 	// WebAuthnRPID, WebAuthnRPDisplayName and WebAuthnRPOrigins configure
 	// the embedded server's IAM WebAuthn relying party (iam.webauthn.*).
 	// They are populated programmatically from the platform's primary
@@ -185,6 +191,14 @@ type Config struct {
 	BarrierSealStrategy    string `yaml:"-" json:"-" mapstructure:"-"`
 	BarrierShamirThreshold int    `yaml:"-" json:"-" mapstructure:"-"`
 	BarrierShamirShares    int    `yaml:"-" json:"-" mapstructure:"-"`
+
+	// TPMDevice is the TPM the embedded server's hardware probe and TPM2
+	// seal strategy open (seal.tpm2.device). It is populated
+	// programmatically from the platform's tpm.device — it is NOT a platform
+	// YAML key. Left empty, quicbaas opens its default /dev/tpmrm0, which on
+	// a node whose platform TPM is elsewhere (a swtpm socket) is a TPM the
+	// platform never configured.
+	TPMDevice string `yaml:"-" json:"-" mapstructure:"-"`
 
 	// BootstrapAdminCSRPath, BootstrapAdminPIVCertPath, AdminFactors and
 	// PasskeyDevice select how the FIRST administrator is enrolled at first
@@ -445,6 +459,11 @@ func (c *Config) SetTransport(transport Transport) {
 	c.TransportStr = transport.String()
 }
 
+// webAuthnResidentKeyRequired is the iam.webauthn.resident_key_requirement
+// value that makes every passkey registration create a discoverable
+// credential.
+const webAuthnResidentKeyRequired = "required"
+
 // ToQuicBaaSConfig converts our Config to go-quicbaas's native config.Config.
 // This is only applicable for embedded transport mode.
 func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
@@ -504,6 +523,10 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 		cfg.IAM.SelfServiceRegistration.Enabled = c.SelfServiceRegistration.Enabled
 	}
 
+	// Vector database: the embedded server registers the vector service
+	// only when vector.enabled is set (and the build carries it).
+	cfg.Vector.Enabled = c.Vector.Active()
+
 	// Admin enrollment and login factors: passed through verbatim to the
 	// embedded server's auth.* section, which is where first-boot reads
 	// them (pkg/server/iam_init.go for the CSR / PIV paths,
@@ -522,6 +545,12 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
 
+	// Browser login is usernameless: the authenticator must find the
+	// credential on its own, so a credential registered without a resident
+	// key can never sign in. Require one at registration instead of taking
+	// the upstream "preferred" default, which lets such a credential enrol.
+	cfg.IAM.WebAuthn.ResidentKeyRequirement = webAuthnResidentKeyRequired
+
 	// Data-plane barrier: a shamir barrier must be sealed by the Shamir
 	// strategy, or InitializeShamir runs in credential mode and the quorum
 	// is not enforced. Every other strategy keeps the embedded default.
@@ -533,6 +562,13 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 		if c.BarrierShamirShares > 0 {
 			cfg.Seal.TotalShares = c.BarrierShamirShares
 		}
+	}
+
+	// The embedded server probes, and a tpm2 seal strategy seals against,
+	// the platform's own TPM — never a default device the platform did not
+	// configure.
+	if c.TPMDevice != "" {
+		cfg.Seal.TPM2.Device = c.TPMDevice
 	}
 
 	// Enable KMS for key management operations
@@ -756,6 +792,10 @@ func (c *Config) validateEmbeddedConfig() error {
 
 	if c.CacheSize < 0 {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
+	}
+
+	if err := c.validateVector(); err != nil {
+		return err
 	}
 
 	if c.IsClustered() {

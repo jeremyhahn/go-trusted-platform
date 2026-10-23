@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"net/netip"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
@@ -193,7 +194,9 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if !s.consumeNonce(ev.Nonce) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrNonceUnknown{})
 	}
+	started := s.deps.Clock.Now()
 	summary, err := s.attest(ctx, lease.DeviceID, ev.Nonce, ev.Attestation)
+	s.reattest.observe(s.deps.Clock.Now().Sub(started))
 	if err != nil {
 		_ = s.revoke(ctx, lease, RevokeAttestation)
 		return nil, s.refuse(ctx, lease.DeviceID, err)
@@ -296,6 +299,7 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 		}
 	}
 	s.releaseAddress(ctx, lease.Address)
+	s.revocations.inc(string(reason))
 	s.logger.Info("vpn.revoke", slog.String("lease", string(lease.ID)), slog.String("device", lease.DeviceID), slog.String("reason", string(reason)))
 	return errors.Join(storeErr, planeErr)
 }
@@ -311,8 +315,25 @@ func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
 
 func (s *Service) refuse(ctx context.Context, deviceID string, err error) error {
 	s.recordRefusal(err.Error())
-	s.logger.Warn("vpn.refuse", slog.String("device", deviceID), slog.String("reason", err.Error()))
+	s.logger.Warn("vpn.refuse", refusalAttrs(deviceID, err)...)
 	return err
+}
+
+// refusalAttrs are the vpn.refuse log attributes: the refusal class the
+// client is told and the violated posture rules, never the error text of a
+// policy refusal, which can carry the policy's identity list. A refusal the
+// gateway caused (a 5xx class: a store, a plane or the engine is down) keeps
+// its error, which names the failing dependency.
+func refusalAttrs(deviceID string, err error) []any {
+	refusal, status := RefusalOf(err)
+	attrs := []any{slog.String("device", deviceID), slog.String("reason", string(refusal.Reason))}
+	if len(refusal.Rules) > 0 {
+		attrs = append(attrs, slog.Any("rules", refusal.Rules))
+	}
+	if status >= http.StatusInternalServerError {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	return attrs
 }
 
 func (s *Service) validateRequest(req *AdmissionRequest) error {
@@ -385,7 +406,7 @@ func postureInput(report *PostureReport, v *VerdictSummary) (map[string]interfac
 
 func (s *Service) posture(ctx context.Context, tenantID string, report *PostureReport, v *VerdictSummary) error {
 	if report == nil {
-		return &ErrPostureViolation{Violations: []string{"posture-missing"}}
+		return s.postureViolation([]string{"posture-missing"})
 	}
 	input, err := postureInput(report, v)
 	if err != nil {
@@ -413,9 +434,17 @@ func (s *Service) posture(ctx context.Context, tenantID string, report *PostureR
 		if len(names) == 0 {
 			names = append(names, "denied")
 		}
-		return &ErrPostureViolation{Violations: names}
+		return s.postureViolation(names)
 	}
 	return nil
+}
+
+// postureViolation counts each violated rule and returns the refusal.
+func (s *Service) postureViolation(rules []string) error {
+	for _, rule := range rules {
+		s.postureViolations.inc(rule)
+	}
+	return &ErrPostureViolation{Violations: rules}
 }
 
 func (s *Service) personFactor(ctx context.Context, tenantID, deviceID string, nonce []byte, factor *PersonFactor, required bool) error {

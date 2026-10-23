@@ -151,12 +151,12 @@ A re-exported accessor is a route, not a platform service: its calls travel on
 the side-client's own transport (`QuicBaaSTransport`) straight to quicbaasd.
 platformd serves none of them and `platformctl` has no command group for them,
 except where the platform adds its own behaviour (`platformctl auth`,
-`platformctl barrier`, `platformctl kms`) and for Cache, Scheduler and
-Messaging. platformd serves those three itself through the composed SDK on
-REST, gRPC, QUIC, MCP and the Unix socket ([api.md §3.5](api.md#35-cache-scheduler-and-messaging-on-platformd)),
-`platform.Client` reaches them with `Cache()`, `Scheduler()` and `Messaging()`,
-and platformctl has a group for each ([cli.md](cli.md)). Vector, time-series and
-object storage stay side-client routes.
+`platformctl barrier`, `platformctl kms`) and for Cache, Scheduler, Messaging
+and ObjectStorage. platformd serves those four itself through the composed SDK
+on REST, gRPC, QUIC, MCP and the Unix socket ([api.md §3.5](api.md#35-application-services-on-platformd)),
+`platform.Client` reaches them with `Cache()`, `Scheduler()`, `Messaging()` and
+`ObjectStorage()`, and platformctl has a group for each ([cli.md](cli.md)).
+Vector and time-series stay side-client routes.
 
 ## 6. Invariants
 

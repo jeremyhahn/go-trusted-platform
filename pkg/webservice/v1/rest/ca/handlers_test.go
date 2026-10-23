@@ -288,34 +288,29 @@ func (m *mockCertStore) Close() error {
 // =============================================================================
 
 type mockHttpWriter struct {
-	lastStatus  int
-	lastPayload interface{}
-	lastError   error
+	lastStatus int
+	lastError  error
 }
 
 func (m *mockHttpWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
 	m.lastStatus = status
-	m.lastPayload = resp
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockHttpWriter) WriteYaml(w http.ResponseWriter, status int, resp interface{}) {
 	m.lastStatus = status
-	m.lastPayload = resp
 	w.WriteHeader(status)
 }
 
 func (m *mockHttpWriter) WriteJson(w http.ResponseWriter, status int, resp interface{}) {
 	m.lastStatus = status
-	m.lastPayload = resp
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusOK
-	m.lastPayload = payload
 	w.WriteHeader(http.StatusOK)
 	resp := restwire.WebServiceResponse{Code: 200, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
@@ -323,7 +318,6 @@ func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payl
 
 func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusCreated
-	m.lastPayload = payload
 	w.WriteHeader(http.StatusCreated)
 	resp := restwire.WebServiceResponse{Code: 201, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
@@ -331,7 +325,6 @@ func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payl
 
 func (m *mockHttpWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
 	m.lastStatus = http.StatusNotFound
-	m.lastPayload = payload
 	m.lastError = err
 	w.WriteHeader(http.StatusNotFound)
 }
@@ -359,7 +352,6 @@ func (m *mockHttpWriter) Error401(w http.ResponseWriter, r *http.Request, err er
 func (m *mockHttpWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
 	m.lastStatus = http.StatusForbidden
 	m.lastError = err
-	m.lastPayload = payload
 	w.WriteHeader(http.StatusForbidden)
 }
 

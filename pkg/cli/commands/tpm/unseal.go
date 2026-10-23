@@ -68,7 +68,7 @@ Examples:
 	cmd.Flags().IntSliceVar(&pcrIndices, "pcrs", nil, "PCR indices (comma-separated)")
 	cmd.Flags().StringVar(&pcrBank, "pcr-bank", "sha256", "PCR bank algorithm (sha1, sha256, sha384, sha512)")
 
-	_ = cmd.MarkFlagRequired("cn")
+	cli.MarkFlagsRequired(cmd, "cn")
 
 	return cmd
 }

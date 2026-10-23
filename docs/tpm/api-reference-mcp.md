@@ -25,10 +25,10 @@ caller.
 
 Names are `platform_tpm_<tool>`. `unseal` is the one tool stricter than its
 gRPC twin: an unseal tool never takes a read scope on MCP. `nv_list` takes the
-scope of gRPC `Info`, and `pcr_extend`, which has no gRPC twin, takes the scope
-of QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` have no gRPC
-method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
-(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`. `ek_delete` and
+scope of gRPC `Info`, and `pcr_extend` the scope of gRPC `ExtendPCR` and
+QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` take the scope of
+gRPC `GetCapabilities` and `GetPlatformAttributes` and of their QUIC twins
+(`0x99` · `0x17`, `0x99` · `0x1E`). `ek_delete` and
 `srk_delete` flush a persistent handle, which deletes nothing, exactly as gRPC
 `DeleteEK` and `DeleteSRK` do. `iak_delete` takes the scope of its twins, gRPC
 `TPMService/DeleteAK` and QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`), and
@@ -44,8 +44,8 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 | `platform_tpm_info` | Get TPM device information |
 | `platform_tpm_provision` | Provision TPM with owner authorization |
 | `platform_tpm_clear` | Clear TPM and reset owner authorization |
-| `platform_tpm_capabilities` | Get TPM fixed properties |
-| `platform_tpm_platform` | Get platform-level TPM attributes (configuration, simulator, key hierarchy) |
+| `platform_tpm_capabilities` | List the algorithms, commands and ECC curves the TPM implements |
+| `platform_tpm_platform` | Describe the TPM device and its provisioned EK, SRK and IAK |
 
 ### Endorsement Key Tools
 
@@ -158,6 +158,8 @@ Get TPM device information and capabilities.
 ```json
 {
   "info": "...",
+  "version": "2.0",
+  "pcr_banks": ["sha1", "sha256"],
   "manufacturer": "IFX",
   "model": "SLB9670",
   "firmware_version": "7.85",
@@ -171,8 +173,9 @@ Get TPM device information and capabilities.
 ```
 
 `info` is the TPM's text summary. The fixed-property keys are absent when that
-read fails; `is_simulator` comes from the TPM configuration. Values shown are
-examples.
+read fails; `is_simulator` comes from the TPM configuration. `pcr_banks` names
+the banks the TPM allocates and is empty when the PCR read fails. Values shown
+are examples.
 
 ### platform_tpm_provision
 
@@ -478,8 +481,8 @@ Read Platform Configuration Register (PCR) values from the TPM.
 
 Extend a PCR with measurement data (hash is computed by the TPM).
 
-Scope `tpm:write`, the scope of QUIC's `SubOpTPM2ExtendPCR`; there is no gRPC
-twin. The tool calls `pkg/api/tpmpcr`, the code QUIC runs.
+Scope `tpm:write`, the scope of gRPC `ExtendPCR` and QUIC's
+`SubOpTPM2ExtendPCR`. The tool calls `pkg/api/tpmpcr`, the validator both run.
 
 **Input Schema:**
 ```json
@@ -517,9 +520,11 @@ Retrieve the TPM event log (TCG PC Client format).
 
 ### platform_tpm_capabilities
 
-Get the TPM's fixed properties: manufacturer, model, family, revision, vendor
-ID, firmware version, FIPS 140-2 mode, lockout counter, maximum auth failures
-and maximum NV buffer size. Needs `tpm:read`.
+List the algorithm, command and ECC-curve names TPM2_GetCapability reports
+(`algorithms`, `commands`, `ecc_curves`), the lists gRPC `GetCapabilities`
+returns. A list the TPM refuses fails the call. Needs `tpm:read`. The fixed
+properties (manufacturer, model, firmware, FIPS mode, ...) are in
+`platform_tpm_info`.
 
 **Input Schema:**
 ```json

@@ -22,7 +22,7 @@ import (
 // LoadServeConfig): the SDN node services, the authenticating reverse
 // proxy, the trust resolver classes, the platform CA bundle that is
 // gatewayd's platform anchor (`platform-ca-file`, a key rather than a
-// section), the secret store backing `kms://` and `secret://` references,
+// section), the secret store backing `kms://` references,
 // the OVS runtime, and the control-plane reporter. A
 // gateway-role node's /etc/gatewayd/config.yaml is exactly these sections of
 // its platform config and nothing else.

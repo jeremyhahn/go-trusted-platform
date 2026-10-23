@@ -41,6 +41,15 @@ func (e ErrInvalidFlag) Error() string {
 	return "invalid --" + e.Flag + " " + quote(e.Value) + ": want " + e.Want
 }
 
+// ErrObjectData reports an objectstorage put that names its data both as an
+// argument and with --file, or not at all.
+type ErrObjectData struct{}
+
+// Error implements the error interface.
+func (ErrObjectData) Error() string {
+	return "give the object data either as the DATA argument or with --file, not both"
+}
+
 // quote wraps a flag value in double quotes for an error message.
 func quote(value string) string {
 	return "\"" + value + "\""

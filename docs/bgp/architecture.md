@@ -81,10 +81,9 @@ graph LR
 | Speaker | Originates | Evidence |
 |---|---|---|
 | Transit | **Nothing.** | `Speaker.Start` installs policy and does not call `AddPath` (`speaker.go:434-522`). `announce:` is only the default export allowlist (`pkg/sdn/bgp/policy.go:118-121`). The template says "ANNOUNCE NOTHING" (`gatewayd.yaml:157-160`) |
-| Overlay EVPN | Type-3 for each joined VNI; Type-2 for each locally learned MAC/IP | `OverlayModeHandler.AddVNI` → `JoinVNI` (`overlay.go:777`); `LearnMAC` → `AdvertiseMACIP` (`overlay.go:911`) |
+| Overlay EVPN | Type-3 for each joined VNI; Type-2 for each locally learned MAC/IP; with an L3VNI, Type-5 for each routed VNI's subnet | `OverlayModeHandler.AddVNI` → `JoinVNI` (`overlay.go:802`), then `AdvertisePrefix` (`overlay.go:840`); `LearnMAC` → `AdvertiseMACIP` (`overlay.go:984`) |
 
-`EVPNManager.AdvertisePrefix` (Type-5, `evpn.go:976`) exists, but nothing
-outside the package calls it. `TransitManager` can announce transit prefixes
+`TransitManager` can announce transit prefixes
 (`pkg/sdn/bgp/transit.go:198`), but nothing constructs it in production.
 
 **Planned (#553):** the transit speaker announcing the site's public prefixes.
@@ -139,8 +138,8 @@ These are library code with no production caller:
 - the overlay package's `WithBGPSpeaker` / `WithEVPNManager`
   (`pkg/sdn/overlay/options.go:59,66`);
 - the IPsec controller's `HandleEVPNRoute`
-  (`pkg/sdn/ipsec/controller.go:440`). **Planned (#709):** the IPsec control
-  path.
+  (`pkg/sdn/ipsec/controller.go:440`), which gatewayd's overlay feeds each
+  flood-list change as a Type-3 route (`OverlayModeConfig.FloodPeers`).
 
 ## 8. Data flow
 

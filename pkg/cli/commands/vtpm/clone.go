@@ -63,8 +63,8 @@ Examples:
 	cmd.Flags().StringVar(&hostname, "hostname", "", "hostname for the new VM (required)")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "labels in key=value format (can be repeated)")
 
-	_ = cmd.MarkFlagRequired("template")
-	_ = cmd.MarkFlagRequired("hostname")
+	cli.MarkFlagsRequired(cmd, "template")
+	cli.MarkFlagsRequired(cmd, "hostname")
 
 	return cmd
 }

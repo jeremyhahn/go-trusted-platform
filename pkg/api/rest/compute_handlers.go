@@ -110,6 +110,10 @@ func (h *ComputeHandlers) routes() []computeRoute {
 		{http.MethodGet, "/vms/{id}/metrics", scopeVMRead, computeRPC(h, platformv1.ComputeServiceServer.GetVMMetrics)},
 		{http.MethodPost, "/vms/{vmId}/migrate", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.MigrateVM)},
 
+		// Inbound migration (the destination half of MigrateVM)
+		{http.MethodPost, "/migrations/prepare", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.PrepareMigration)},
+		{http.MethodPost, "/migrations/{receiverId}/finalize", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.FinalizeMigration)},
+
 		// Disks
 		{http.MethodPost, "/vms/{vmId}/disks", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.AttachDisk)},
 		{http.MethodDelete, "/vms/{vmId}/disks/{diskId}", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.DetachDisk)},
@@ -118,6 +122,7 @@ func (h *ComputeHandlers) routes() []computeRoute {
 		// Snapshots
 		{http.MethodPost, "/vms/{vmId}/snapshots", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.CreateSnapshot)},
 		{http.MethodGet, "/vms/{vmId}/snapshots", scopeVMRead, computeRPC(h, platformv1.ComputeServiceServer.ListSnapshots)},
+		{http.MethodGet, "/vms/{vmId}/snapshots/{snapshotId}", scopeVMRead, computeRPC(h, platformv1.ComputeServiceServer.GetSnapshot)},
 		{http.MethodDelete, "/vms/{vmId}/snapshots/{snapshotId}", scopeVMDelete, computeRPC(h, platformv1.ComputeServiceServer.DeleteSnapshot)},
 		{http.MethodPost, "/vms/{vmId}/snapshots/{snapshotId}/restore", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.RestoreSnapshot)},
 

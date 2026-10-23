@@ -1,5 +1,7 @@
 # Network Architecture
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 A massively scalable **hierarchical Kademlia DHT** supporting billions of IoT nodes with **publicly routable IPv6** (2001:db8::/36), **distributed gateway architecture**, **multi-path routing**, and **distributed DDoS protection**.

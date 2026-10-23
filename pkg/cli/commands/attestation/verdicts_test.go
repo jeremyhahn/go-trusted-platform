@@ -59,11 +59,9 @@ type verdictClient struct {
 	fakeAttestationClient
 	stream  *verdictStream
 	openErr error
-	opened  int
 }
 
 func (c *verdictClient) StreamDeviceVerdicts(context.Context, *platformv1.StreamDeviceVerdictsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[platformv1.DeviceVerdictEvent], error) {
-	c.opened++
 	if c.openErr != nil {
 		return nil, c.openErr
 	}

@@ -1,8 +1,8 @@
 # Platform Tenancy — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl tenant` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl tenant` · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
-> Read out of `pkg/cli/commands/tenant/` on 2026-08-18.
+> Read out of `pkg/cli/commands/tenant/` on 2026-10-16.
 
 ---
 
@@ -12,7 +12,7 @@
 platformctl tenant    Tenant management operations
 ```
 
-Eighteen verbs across the group, `quotas` and `barrier`.
+Nine verbs on the group itself, three under `quotas` and four under `barrier`.
 
 ### Global flags
 
@@ -41,6 +41,7 @@ Every verb needs a reachable daemon. `--transport embedded` runs in-process.
 | `create` | — | `--name` (required, unique), `--display-name` |
 | `list` | — | — |
 | `show` | `<tenant-name>` | — |
+| `update` | `<tenant-name>` | `--display-name`, `--labels k=v,...`, `--annotations k=v,...` |
 | `suspend` | `<tenant-name>` | — |
 | `resume` | `<tenant-name>` | — |
 | `delete` | `<tenant-name>` | `--force` (skip the confirmation prompt) |
@@ -61,6 +62,7 @@ daemon's MCP tools ([api.md](api.md) §7).
 platformctl tenant create --name tenant-a --display-name "Tenant A"
 platformctl tenant list --output json
 platformctl tenant show tenant-a
+platformctl tenant update tenant-a --display-name "Tenant A" --labels env=prod
 platformctl tenant suspend tenant-a
 platformctl tenant resume tenant-a
 platformctl tenant delete tenant-a --force
@@ -71,6 +73,11 @@ platformctl tenant delete tenant-a --force
 terminal: no transition leaves it, so a deleted tenant is replaced rather than
 restored. `--force` only skips the prompt; it does not make deletion any more
 recoverable.
+
+**`update` replaces maps, not entries.** `--labels` and `--annotations` each
+replace the tenant's whole map; a flag not given leaves its map, and the display
+name, as they are. An `update` with none of the three flags is refused before
+any call. Quotas are not changed here: use `quotas set`.
 
 Re-running `suspend` on a suspended tenant succeeds — same-state transitions are
 allowed so retried calls do not fail.
@@ -83,6 +90,7 @@ allowed so retried calls do not fail.
 |---|---|
 | `get` | `<tenant-name>` |
 | `set` | `<tenant-name>` |
+| `check` | `<tenant-name>` |
 
 **`set` flags** — all `int64`, all default `0`:
 
@@ -114,21 +122,31 @@ field is `MaxMemoryMB` — **megabytes**. And `--max-bridges`, `--max-ports`,
 counterpart field in `ComputeQuota`, which carries only VMs, containers, vCPUs,
 memory and disk. Confirm what a value lands in before setting it.
 
+**`check`** asks whether the tenant could allocate `--amount` (positive) of
+`--resource` (`vms`, `containers`, `vcpus`, `memory`, `disk`, `bridges`,
+`ports`, `bandwidth`, `volumes`, `snapshots`) without going over its quota.
+Nothing is allocated. Over quota is an answer, not an error: the command
+succeeds with `allowed: false` and a `message` naming the limit. The JSON/YAML
+form is `{tenant_id, tenant_name, resource, amount, allowed, message}`.
+
 ```bash
 platformctl tenant quotas get tenant-a
 platformctl tenant quotas set tenant-a --max-vms 20 --max-vcpus 80 --max-memory-gb 256
+platformctl tenant quotas check tenant-a --resource vms --amount 2 -o json
 ```
 
 ---
 
-## 4. Inspection verbs
+## 4. Inspection and maintenance verbs
 
-| Verb | Positional | Shows |
+| Verb | Positional | Does |
 |---|---|---|
-| `usage` | `<tenant-name>` | Resource usage against limits |
+| `usage` | `<tenant-name>` | Shows what the tenant uses beside each limit, as the server's usage tracker reports it; a limit of 0 reads as unlimited. Storage in use is disk GB against the volume quota in GB. JSON/YAML: `{tenant_id, compute, network, storage}`, each resource `{used, max}` |
+| `sync` | — | Recounts every tenant's usage and releases expired quota reservations; safe to repeat. JSON/YAML: `{success}` |
 
 ```bash
 platformctl tenant usage tenant-a
+platformctl tenant sync
 ```
 
 The former `vlan` and `bridge` verbs were removed with the per-tenant VLAN
@@ -174,8 +192,6 @@ not a failure.
 |---|---|
 | Rotate the tenant DEK | REST `POST /api/v1/tenants/{id}/dek/rotate`, gRPC/Unix `RotateTenantDEK`, QUIC `0xEA`, MCP `tenant_rotate_dek` |
 | Tenant DEK status | REST `GET /api/v1/tenants/{id}/dek`, gRPC/Unix `GetTenantDEKStatus`, QUIC `0xEB`, MCP `tenant_get_dek_status` |
-| Check quota for a prospective allocation | REST `POST .../quota-check`, gRPC/Unix `CheckQuota`, QUIC `0xE6`, MCP `tenant_check_quota` |
-| Sync tenants | REST `POST /api/v1/tenants/sync`, gRPC/Unix `Sync`, QUIC `0xE9`, MCP `tenant_sync` |
 | Get tenant by name over the API | gRPC `GetTenantByName`, REST `/by-name/{name}` |
 
 ---

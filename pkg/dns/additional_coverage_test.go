@@ -126,6 +126,5 @@ func TestSignZoneIfEnabled_DNSSECDisabled_Coverage(t *testing.T) {
 func TestProcessZone_EmptyName_Coverage(t *testing.T) {
 	zone := entities.Zone{Name: ""}
 	err := processZone(zone, nil, "internal")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not defined in configuration")
+	assert.ErrorIs(t, err, ErrServerZoneUndefined)
 }

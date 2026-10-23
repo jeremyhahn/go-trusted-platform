@@ -111,12 +111,11 @@ func (c *fakeConn) Close() error { c.once.Do(func() { close(c.closed) }); return
 
 // fakeProgrammer records address changes and signals claims.
 type fakeProgrammer struct {
-	mu        sync.Mutex
-	addrs     map[string]net.HardwareAddr // iface/prefix -> hw
-	announced []netip.Addr
-	claimed   chan string
-	addErr    error
-	delErr    error
+	mu      sync.Mutex
+	addrs   map[string]net.HardwareAddr // iface/prefix -> hw
+	claimed chan string
+	addErr  error
+	delErr  error
 }
 
 func newFakeProgrammer() *fakeProgrammer {
@@ -144,9 +143,6 @@ func (p *fakeProgrammer) DeleteAddress(iface string, prefix netip.Prefix, _ net.
 }
 
 func (p *fakeProgrammer) Announce(iface string, addr netip.Addr, _ net.HardwareAddr) error {
-	p.mu.Lock()
-	p.announced = append(p.announced, addr)
-	p.mu.Unlock()
 	select {
 	case p.claimed <- iface + "/" + addr.String():
 	default:
@@ -331,7 +327,7 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 	sink.await(t, func(ev Event) bool {
 		return ev.Kind == EventTransition && ev.Status.State == StateMaster && ev.Status.Priority == 200
 	})
-	<-progA.claimed
+	assert.Equal(t, "br-int/10.4.200.1", <-progA.claimed)
 	assert.True(t, progA.holds("br-int", "10.4.200.1/24"))
 	// B hears A's advertisement and stays Backup with a fresh timer.
 	ev := sink.await(t, func(ev Event) bool { return ev.Kind == EventAdvertisement && ev.Status.Priority == 100 })
@@ -341,6 +337,20 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateBackup, stB)
 	assert.False(t, progB.holds("br-int", "10.4.200.1/24"))
+
+	// Both sockets are opened on the group's interface, and every
+	// advertisement goes to the VRRP group address (RFC 5798 §5.1.1.2).
+	advertised := 0
+	for _, c := range seg.conns {
+		assert.Equal(t, "br-int", c.iface)
+		c.mu.Lock()
+		for _, dst := range c.sent {
+			assert.Equal(t, MulticastIPv4, dst)
+			advertised++
+		}
+		c.mu.Unlock()
+	}
+	assert.Positive(t, advertised)
 
 	// A keeps advertising every second; B keeps deferring.
 	clock.Advance(time.Second)
@@ -448,6 +458,27 @@ func TestSpeaker_OpenFailureStopsStartedGroups(t *testing.T) {
 	assert.Equal(t, "open", tf.Operation)
 	assert.False(t, s.Active())
 	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the owner group that had claimed was rolled back")
+}
+
+// TestSpeaker_InvalidGroupOpensNoSocket pins that a group is validated before
+// its socket is opened: a source that does not parse must be rejected, not
+// handed to the transport as the zero address. New validates the config, so
+// the group is corrupted afterwards to reach startGroup with it.
+func TestSpeaker_InvalidGroupOpensNoSocket(t *testing.T) {
+	seg := newSegment()
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: newFakeProgrammer(), Logger: quietLogger()})
+	require.NoError(t, err)
+	s.cfg.Groups[0].Source = "not-an-address"
+
+	err = s.Start(context.Background())
+	var invalid *ErrInvalidGroupConfig
+	require.True(t, errors.As(err, &invalid), "got %v", err)
+	assert.Equal(t, "source", invalid.Field)
+	seg.mu.Lock()
+	opened := len(seg.conns)
+	seg.mu.Unlock()
+	assert.Zero(t, opened, "no socket is opened for a group that fails validation")
+	assert.False(t, s.Active())
 }
 
 type failOnSecondOpen struct {

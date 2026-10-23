@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -326,8 +327,18 @@ func vtpmIdentityRequired(profile *entities.DeviceProfile, cfg *InstanceConfig) 
 
 // Create creates a new VM instance from a device profile
 func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceProfile) (*Instance, error) {
+	return o.CreateWithSpec(ctx, profile, VMSpec{})
+}
+
+// CreateWithSpec creates a VM from profile with spec applied over the
+// orchestrator's defaults. A spec it cannot honour is refused with
+// ErrInvalidVMSpec before anything is created.
+func (o *QEMUOrchestrator) CreateWithSpec(ctx context.Context, profile *entities.DeviceProfile, spec VMSpec) (*Instance, error) {
 	if profile == nil {
 		return nil, ErrInvalidProfile
+	}
+	if err := o.checkVMSpec(spec); err != nil {
+		return nil, err
 	}
 
 	o.mu.Lock()
@@ -351,21 +362,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 		return nil, err
 	}
 
-	// Create instance configuration
-	instanceConfig := &InstanceConfig{
-		Memory:      o.config.DefaultMemory,
-		CPUs:        o.config.DefaultCPUs,
-		DiskSize:    o.config.DefaultDiskSize,
-		WorkDir:     filepath.Join(o.config.WorkDir, instanceID),
-		SecureBoot:  false,
-		EnableKVM:   o.config.EnableKVM,
-		TPMEnabled:  true,
-		NetworkMode: "bridge",
-		BootMode:    "boot",
-	}
-
-	// Create disk path
-	instanceConfig.DiskPath = filepath.Join(instanceConfig.WorkDir, "disk.qcow2")
+	instanceConfig := o.instanceConfig(instanceID, spec)
 
 	// Create work directory
 	if err := os.MkdirAll(instanceConfig.WorkDir, 0755); err != nil {
@@ -550,27 +547,15 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
-	// Update instance with PID
-	qemuInst.instance.PID = qemuInst.vm.GetPID()
-
-	// Update state to running
-	if err := o.lifecycle.SetState(instanceID, StateRunning); err != nil {
-		// VM is running but state update failed - try to stop it
-		qemuInst.vm.Stop()
-		if qemuInst.swtpm != nil {
-			qemuInst.swtpm.Stop()
-		}
-		return err
-	}
-	qemuInst.instance.State = StateRunning
-	qemuInst.instance.StartedAt = time.Now()
-	qemuInst.instance.UpdatedAt = time.Now()
-
-	// Start wait goroutine
+	// Watch QEMU from the moment it runs: an exit before its monitor is
+	// ready is a start failure, an exit after it is recorded.
+	exited := make(chan error, 1)
 	qemuInst.waitGroup.Add(1)
 	go func() {
 		defer qemuInst.waitGroup.Done()
-		if err := qemuInst.vm.Wait(); err != nil {
+		err := qemuInst.vm.Wait()
+		exited <- err
+		if err != nil {
 			o.logger.Errorf("VM %s exited with error: %v", instanceID, err)
 		}
 
@@ -587,9 +572,88 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 		o.recordExit(instanceID, qemuInst)
 	}()
 
+	// The instance is running only once its QMP monitor answers, so
+	// suspend, resume and reboot work as soon as Start returns.
+	if err := awaitMonitor(ctx, qemuInst.vm, exited, monitorReadyTimeout); err != nil {
+		if qemuInst.vm.IsRunning() {
+			if stopErr := qemuInst.vm.ForceStop(); stopErr != nil {
+				o.logger.Warnf("Failed to stop VM %s after its monitor was not ready: %v", instanceID, stopErr)
+			}
+		}
+		o.lifecycle.SetState(instanceID, StateError)
+		qemuInst.instance.State = StateError
+		qemuInst.instance.UpdatedAt = time.Now()
+		return &WrappedError{Msg: "failed to start VM", Err: err}
+	}
+
+	// Update instance with PID
+	qemuInst.instance.PID = qemuInst.vm.GetPID()
+
+	// Update state to running
+	if err := o.lifecycle.SetState(instanceID, StateRunning); err != nil {
+		// VM is running but state update failed - try to stop it
+		qemuInst.vm.Stop()
+		return err
+	}
+	qemuInst.instance.State = StateRunning
+	qemuInst.instance.StartedAt = time.Now()
+	qemuInst.instance.UpdatedAt = time.Now()
+
 	o.logger.Infof("Started VM instance: %s (PID: %d)", instanceID, qemuInst.instance.PID)
 
 	return nil
+}
+
+const (
+	// monitorReadyTimeout bounds how long Start waits for a running QEMU
+	// to accept its QMP monitor connection.
+	monitorReadyTimeout = 30 * time.Second
+
+	// monitorRetryInterval is the pause between refused monitor dials.
+	monitorRetryInterval = 100 * time.Millisecond
+)
+
+// monitorConnector connects a VM's QMP monitor (*qemu.VM).
+type monitorConnector interface {
+	ConnectMonitor(ctx context.Context) error
+}
+
+// awaitMonitor connects the VM's QMP monitor, the "wait for QMP socket
+// ready" step of the VM lifecycle (docs/compute/architecture.md). QEMU binds
+// the -qmp socket before it initialises the accelerator, firmware and
+// devices, so a dial can be refused while QEMU is still starting, and QEMU
+// can exit after binding it (no KVM, missing firmware, a refused netdev),
+// leaving a socket nobody listens on. A refused dial is retried until the
+// timeout; QEMU's exit, received on exited with QEMU's reason, ends the wait
+// as ErrVMExitedDuringStart.
+func awaitMonitor(ctx context.Context, vm monitorConnector, exited <-chan error, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	retry := time.NewTicker(monitorRetryInterval)
+	defer retry.Stop()
+
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, monitorRetryInterval)
+		err := vm.ConnectMonitor(attemptCtx)
+		cancel()
+		var connected qemu.ErrMonitorAlreadyConnected
+		if err == nil || errors.As(err, &connected) {
+			return nil
+		}
+
+		select {
+		case exitErr := <-exited:
+			if exitErr == nil {
+				return ErrVMExitedDuringStart
+			}
+			return &SentinelCauseError{Sentinel: ErrVMExitedDuringStart, Cause: exitErr}
+		case <-deadline.C:
+			return &SentinelCauseError{Sentinel: ErrMonitorNotReady, Cause: err}
+		case <-ctx.Done():
+			return &WrappedError{Msg: "canceled waiting for the QMP monitor", Err: ctx.Err()}
+		case <-retry.C:
+		}
+	}
 }
 
 // recordExit records that the QEMU process of instanceID has exited.
@@ -624,8 +688,18 @@ func (o *QEMUOrchestrator) recordExit(instanceID string, qemuInst *qemuInstance)
 	o.logger.Infof("VM %s stopped", instanceID)
 }
 
-// Stop stops a running VM instance
+// Stop stops a running VM instance with the default StopOptions.
 func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
+	return o.StopWithOptions(ctx, instanceID, StopOptions{})
+}
+
+// StopWithOptions stops a running or suspended VM. A forced stop kills the
+// QEMU process; otherwise the guest gets opts.Timeout (or the QEMU default)
+// to answer the ACPI power button before QEMU is terminated.
+func (o *QEMUOrchestrator) StopWithOptions(ctx context.Context, instanceID string, opts StopOptions) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
 	if instanceID == "" {
 		return ErrInvalidInstanceID
 	}
@@ -653,8 +727,9 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	}
 
 	// A suspended guest cannot answer the ACPI power button, so continue it
-	// first. If that fails, the stop below still falls back to SIGTERM.
-	if currentState == StateSuspended {
+	// first. If that fails, the stop below still falls back to SIGTERM. A
+	// forced stop does not ask the guest, so it kills the paused process.
+	if currentState == StateSuspended && !opts.Force {
 		o.continueBeforeStop(ctx, qemuInst)
 	}
 
@@ -667,7 +742,7 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	qemuInst.instance.UpdatedAt = time.Now()
 
 	// Stop VM
-	if err := stopVMProcess(qemuInst); err != nil {
+	if err := stopVMProcess(qemuInst, opts); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()

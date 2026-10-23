@@ -789,6 +789,7 @@ func TestOpcodeToString(t *testing.T) {
 		{OpCacheCategory, "CacheCategory"},
 		{OpSchedulerCategory, "SchedulerCategory"},
 		{OpMessagingCategory, "MessagingCategory"},
+		{OpObjectStorageCategory, "ObjectStorageCategory"},
 
 		// VM Operations
 		{OpVMExtendedCategory, "VMExtendedCategory"},

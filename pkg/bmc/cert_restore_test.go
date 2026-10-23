@@ -27,25 +27,22 @@ import (
 )
 
 // fakeCertBMCWithDelete extends fakeCertBMC to support DELETE on the HTTPS
-// cert resource and optionally track whether a new TLS cert was issued after
-// reset. The httptest server reuses the same TLS certificate for all requests
-// (the Go httptest.TLSServer cert is stable); the test simulates a "changed"
-// cert by swapping the underlying server after reset so the second
-// GetWebCertificate hits a new server with a distinct certificate.
+// cert resource and Manager.Reset. Every httptest server presents the same
+// built-in certificate, so a regenerated factory certificate is simulated on
+// the one server: once reset has run it presents factory instead.
 type fakeCertBMCWithDelete struct {
 	mu sync.Mutex
-	// primary is the server that handles all requests until reset.
+	// primary is the server that handles every request.
 	primary *httptest.Server
-	// replacement replaces primary after a successful reset so that
-	// waitForReady + GetWebCertificate returns a different leaf cert.
-	replacement *httptest.Server
+	// factory, when set, is the certificate presented after reset. Unset,
+	// the BMC keeps its certificate across the reset.
+	factory *tls.Certificate
 
 	// failDelete, when true, causes the DELETE /Certificates/1 to return 405.
 	failDelete bool
 
-	resetCalled    bool
-	deleteCalled   bool
-	activeEndpoint string // URL of the currently-serving server
+	resetCalled  bool
+	deleteCalled bool
 }
 
 func newFakeCertBMCWithDelete(t *testing.T) *fakeCertBMCWithDelete {
@@ -95,36 +92,48 @@ func newFakeCertBMCWithDelete(t *testing.T) *fakeCertBMCWithDelete {
 	primaryMux.HandleFunc("/redfish/v1/Managers/1/Actions/Manager.Reset", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.resetCalled = true
-		// Swap active endpoint to the replacement server BEFORE responding so
-		// waitForReady connects to the new instance.
-		if f.replacement != nil {
-			f.activeEndpoint = f.replacement.URL
-		}
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
-	f.primary = httptest.NewTLSServer(primaryMux)
-	f.activeEndpoint = f.primary.URL
+	f.primary = httptest.NewUnstartedServer(primaryMux)
+	f.primary.TLS = &tls.Config{GetConfigForClient: f.configAfterReset}
+	f.primary.StartTLS()
 	return f
+}
+
+// reissueOnReset makes the BMC present cert once reset has run.
+func (f *fakeCertBMCWithDelete) reissueOnReset(cert tls.Certificate) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.factory = &cert
+}
+
+// configAfterReset presents the factory certificate once reset has run; a
+// nil config keeps the server's own.
+func (f *fakeCertBMCWithDelete) configAfterReset(*tls.ClientHelloInfo) (*tls.Config, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factory == nil || !f.resetCalled {
+		return nil, nil
+	}
+	return &tls.Config{Certificates: []tls.Certificate{*f.factory}, MinVersion: tls.VersionTLS12}, nil
 }
 
 func (f *fakeCertBMCWithDelete) close() {
 	f.primary.Close()
-	if f.replacement != nil {
-		f.replacement.Close()
-	}
 }
 
-// cfg returns a bmc.Config that always points at the "active" endpoint.
-// Because we swap f.activeEndpoint on reset, the cert manager must also
-// be reconfigured — instead we verify the post-reset cert via a separate
-// direct TLS dial in the test rather than relying on the manager's internal
-// activeEndpoint tracking.
+// cfg returns a bmc.Config that points at the primary server.
 func (f *fakeCertBMCWithDelete) cfg() *Config {
 	u, _ := url.Parse(f.primary.URL)
 	port, _ := strconv.Atoi(u.Port())
 	pool := x509.NewCertPool()
 	pool.AddCert(f.primary.Certificate())
+	f.mu.Lock()
+	if f.factory != nil {
+		pool.AddCert(f.factory.Leaf)
+	}
+	f.mu.Unlock()
 	return &Config{
 		Address:  u.Hostname(),
 		Port:     port,
@@ -147,29 +156,37 @@ func (f *fakeCertBMCWithDelete) cfg() *Config {
 func TestRedfishCert_RestoreFactory_HappyPath(t *testing.T) {
 	f := newFakeCertBMCWithDelete(t)
 	defer f.close()
+	factory := selfSignedCert(t, "bmc-factory-default", 2)
+	f.reissueOnReset(factory)
 
-	// Create a replacement server that the cert manager will connect to after
-	// reset (waitForReady succeeds, new cert is fresh from a new httptest instance).
-	// We don't actually swap the target — instead we rely on the single primary
-	// server issuing the same cert throughout. That means the fingerprints will
-	// be EQUAL from httptest, triggering ErrFactoryRestoreUnchanged.
-	//
-	// To exercise the happy path we need two servers. We use a two-server setup:
-	// primary handles everything up through reset; replacement serves the
-	// post-reset requests. We achieve this by creating two separate cert managers
-	// that each point at a different httptest server and making the first server's
-	// "reset" handler redirect subsequent TLS calls to the second server.
-	//
-	// Simpler approach: two independent fakeCertBMC servers. The first handles
-	// all discovery + DELETE + reset. The second (with a distinct TLS cert)
-	// handles waitForReady and post-cert. We direct both at the redfishCertManager
-	// by setting m.cfg.Address after discovery.
-	//
-	// Since this test is about the flow rather than the two-server swap complexity,
-	// we verify all the intermediate steps and accept that fingerprint equality
-	// from httptest means the function surfaces ErrFactoryRestoreUnchanged rather
-	// than success. The "changed" case is covered by faking a server restart
-	// by having two separate cert managers in the next sub-test approach.
+	m := newFastCertManager(t, f.cfg())
+	defer m.Close()
+
+	got, err := m.RestoreFactoryCertificate(context.Background())
+	if err != nil {
+		t.Fatalf("RestoreFactoryCertificate() error = %v", err)
+	}
+	if !got.Equal(factory.Leaf) {
+		t.Errorf("returned certificate %q, want the regenerated factory certificate", got.Subject.CommonName)
+	}
+	f.mu.Lock()
+	deleteCalled := f.deleteCalled
+	resetCalled := f.resetCalled
+	f.mu.Unlock()
+	if !deleteCalled {
+		t.Error("DELETE /Certificates/1 was not called")
+	}
+	if !resetCalled {
+		t.Error("Manager.Reset was not called")
+	}
+}
+
+// TestRedfishCert_RestoreFactory_UnchangedCert pins that a BMC still
+// presenting its old certificate after the reset is reported, not returned
+// as a restored one.
+func TestRedfishCert_RestoreFactory_UnchangedCert(t *testing.T) {
+	f := newFakeCertBMCWithDelete(t)
+	defer f.close()
 
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()

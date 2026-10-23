@@ -102,12 +102,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.start, "start", false, "start container immediately after creation")
 
 	// Mark required flags
-	if err := cmd.MarkFlagRequired("name"); err != nil {
-		return nil
-	}
-	if err := cmd.MarkFlagRequired("image"); err != nil {
-		return nil
-	}
+	cli.MarkFlagsRequired(cmd, "name", "image")
 
 	return cmd
 }

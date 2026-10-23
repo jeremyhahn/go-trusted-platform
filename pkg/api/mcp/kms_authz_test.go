@@ -27,6 +27,7 @@ func kmsSecretToolCases() []kmsSecretToolCase {
 	const msg = "aGVsbG8=" // "hello", base64-encoded
 	keyID := map[string]interface{}{"key_id": "key-1"}
 	secretID := map[string]interface{}{"secret_id": "secret-1"}
+	dekPath := map[string]interface{}{"path": "tenants/a/dek"}
 
 	return []kmsSecretToolCase{
 		{"kms_generate_key", "kms:write",
@@ -163,6 +164,69 @@ func kmsSecretToolCases() []kmsSecretToolCase {
 					return map[string]interface{}{"valid": true}, nil
 				}
 			}},
+		{"kms_hash", "kms:read", map[string]interface{}{"data": msg},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsHashFunc = func(context.Context, *KMSHashRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"hash": "h"}, nil
+				}
+			}},
+		{"kms_hmac", "kms:write", map[string]interface{}{"key_id": "key-1", "message": msg},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsHMACFunc = func(context.Context, *KMSHMACRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"hmac": "m"}, nil
+				}
+			}},
+		{"kms_verify_hmac", "kms:read", map[string]interface{}{"key_id": "key-1", "message": msg, "hmac": msg},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsVerifyHMACFunc = func(context.Context, *KMSVerifyHMACRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"valid": true}, nil
+				}
+			}},
+		{"kms_rewrap", "kms:write", map[string]interface{}{"key_id": "key-1", "ciphertext": msg},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsRewrapFunc = func(context.Context, *KMSRewrapRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"ciphertext": "c"}, nil
+				}
+			}},
+		{"kms_import_key", "kms:write", map[string]interface{}{"key_material": msg, "key_spec": map[string]interface{}{"algorithm": float64(22)}},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsImportKeyFunc = func(context.Context, *KMSImportKeyRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"key_id": "key-1"}, nil
+				}
+			}},
+		{"kms_update_key_status", "kms:write", map[string]interface{}{"key_id": "key-1", "status": float64(2)},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsUpdateKeyStatusFunc = func(context.Context, *KMSUpdateKeyStatusRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"status": 2}, nil
+				}
+			}},
+		{"kms_list_key_versions", "kms:read", map[string]interface{}{"key_id": "key-1"},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsListKeyVersionsFunc = func(context.Context, *KMSListKeyVersionsRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"versions": []interface{}{}}, nil
+				}
+			}},
+		{"kms_batch_encrypt", "kms:write", map[string]interface{}{"key_id": "key-1", "items": []interface{}{map[string]interface{}{"plaintext": msg}}},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsBatchEncryptFunc = func(context.Context, *KMSBatchEncryptRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"success_count": 1}, nil
+				}
+			}},
+		{"kms_batch_decrypt", "kms:read", map[string]interface{}{"key_id": "key-1", "items": []interface{}{map[string]interface{}{"ciphertext": msg}}},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsBatchDecryptFunc = func(context.Context, *KMSBatchDecryptRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"success_count": 1}, nil
+				}
+			}},
 		{"kms_random", "kms:read", map[string]interface{}{"num_bytes": 16},
 			func(s *mockServiceProvider, ran *bool) {
 				s.kmsGenerateRandomFunc = func(context.Context, int) ([]byte, error) {
@@ -210,6 +274,83 @@ func kmsSecretToolCases() []kmsSecretToolCase {
 				s.secretDeleteFunc = func(context.Context, string) error {
 					*ran = true
 					return nil
+				}
+			}},
+		{"secret_get_version", "secrets:read", map[string]interface{}{"secret_id": "secret-1", "version": float64(1)},
+			func(s *mockServiceProvider, ran *bool) {
+				s.secretGetVersionFunc = func(context.Context, string, uint64) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"secret_list_versions", "secrets:list", secretID,
+			func(s *mockServiceProvider, ran *bool) {
+				s.secretListVersionsFunc = func(context.Context, string, int) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"secret_rotate", "secrets:write", map[string]interface{}{"secret_id": "secret-1", "new_data": msg},
+			func(s *mockServiceProvider, ran *bool) {
+				s.secretRotateFunc = func(context.Context, *SecretRotateRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"secret_rollback", "secrets:write", map[string]interface{}{"secret_id": "secret-1", "target_version": float64(1)},
+			func(s *mockServiceProvider, ran *bool) {
+				s.secretRollbackFunc = func(context.Context, string, uint64) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"secret_update_status", "secrets:write", map[string]interface{}{"secret_id": "secret-1", "status": "disabled"},
+			func(s *mockServiceProvider, ran *bool) {
+				s.secretUpdateStatusFunc = func(context.Context, string, string) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"dek_create", "kms:write", dekPath,
+			func(s *mockServiceProvider, ran *bool) {
+				s.dekCreateFunc = func(context.Context, *DEKCreateRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"dek_list", "kms:read", map[string]interface{}{},
+			func(s *mockServiceProvider, ran *bool) {
+				s.dekListFunc = func(context.Context, *DEKListRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"dek_get", "kms:read", dekPath,
+			func(s *mockServiceProvider, ran *bool) {
+				s.dekGetFunc = func(context.Context, string) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"dek_status", "kms:read", dekPath,
+			func(s *mockServiceProvider, ran *bool) {
+				s.dekStatusFunc = func(context.Context, string) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"dek_rotate", "kms:write", dekPath,
+			func(s *mockServiceProvider, ran *bool) {
+				s.dekRotateFunc = func(context.Context, string, bool) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
+				}
+			}},
+		{"dek_delete", "kms:delete", dekPath,
+			func(s *mockServiceProvider, ran *bool) {
+				s.dekDeleteFunc = func(context.Context, *DEKDeleteRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{}, nil
 				}
 			}},
 	}

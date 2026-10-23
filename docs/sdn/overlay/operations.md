@@ -207,7 +207,10 @@ platformctl sdn gateway snapshot -o json
 Overlay state is rebuilt automatically: the local VTEP re-registers when
 platformd starts, and a gateway relearns remote VTEPs and MACs from EVPN.
 The controller keeps its records in memory, so VNIs created through the
-API are not kept across a platformd restart. There is no separate
+API are not kept across a platformd restart. A relaunched gateway
+process keeps the overlay flows on the bridge forwarding while EVPN
+re-learns them, and sweeps the ones nobody re-advertised once the BGP
+graceful-restart time has passed. There is no separate
 backup/restore step for overlay state.
 
 ### Recovery Checklist

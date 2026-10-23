@@ -65,7 +65,6 @@ type fakeOVSClient struct {
 
 	// Bridge-level state the base pipeline reads and writes (#567).
 	failMode        string
-	failModes       []string
 	externalIDs     map[string]string
 	bridgeErr       error
 	failModeErr     error

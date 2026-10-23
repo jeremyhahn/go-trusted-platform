@@ -6,7 +6,7 @@
 #   - 3 Client nodes (application servers)
 #
 # Prerequisites:
-#   docker build -t go-trusted-platform-dev:latest build/docker/devcontainer/
+#   make build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest
 #
 # Usage:
 #   docker compose up -d                    # Start entire cluster

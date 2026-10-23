@@ -711,18 +711,13 @@ func TestPodmanManager_InspectImage_NotInitialized(t *testing.T) {
 }
 
 // testAttestor is a mock attestor for testing
-type testAttestor struct {
-	startCalled bool
-	stopCalled  bool
-}
+type testAttestor struct{}
 
 func (a *testAttestor) OnContainerStart(ctx context.Context, container *Container) error {
-	a.startCalled = true
 	return nil
 }
 
 func (a *testAttestor) OnContainerStop(ctx context.Context, container *Container) error {
-	a.stopCalled = true
 	return nil
 }
 

@@ -86,6 +86,9 @@ type QUICServiceHandler struct {
 	kmsService     KMSServiceInterface
 	cryptoService  CryptoServiceInterface
 	secretsService SecretsServiceInterface
+	// dekService backs the DEK sub-opcodes of OpKMSExtendedCategory with the
+	// DEKServerAdapter the gRPC DEKManagement service serves.
+	dekService DEKServiceInterface
 	// configDeliveryService backs the OpProvisioningCategory handlers with
 	// the same ConfigDeliveryGRPCService as the gRPC transport.
 	configDeliveryService ConfigDeliveryQUICService
@@ -124,13 +127,15 @@ type QUICServiceHandler struct {
 	// vpnService serves the VPN category opcode (quicwire.OpVPNCategory,
 	// 0x52). It is the same VPNGRPCService instance the other transports use.
 	vpnService platformv1.VPNServiceServer
-	// cacheService, schedulerService and messagingService serve the
-	// application service category opcodes (quicwire.OpCacheCategory,
-	// OpSchedulerCategory and OpMessagingCategory). They are the same
-	// instances the other transports use.
-	cacheService     platformv1.CacheServiceServer
-	schedulerService platformv1.SchedulerServiceServer
-	messagingService platformv1.MessagingServiceServer
+	// cacheService, schedulerService, messagingService and
+	// objectStorageService serve the application service category opcodes
+	// (quicwire.OpCacheCategory, OpSchedulerCategory, OpMessagingCategory and
+	// OpObjectStorageCategory). They are the same instances the other
+	// transports use.
+	cacheService         platformv1.CacheServiceServer
+	schedulerService     platformv1.SchedulerServiceServer
+	messagingService     platformv1.MessagingServiceServer
+	objectStorageService platformv1.ObjectStorageServiceServer
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
 	ceremonyQUIC *ceremonyQUICHandlers
 	pivQUIC      *pivQUICHandlers
@@ -606,9 +611,10 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode == quicwire.OpVPNCategory:
 		return h.handleVPNCategory(ctx, req)
 
-	// Application Service Category Opcodes (0x53-0x55) - cache, scheduler
-	// and messaging through the composed go-quicbaas SDK - and the switch
-	// category (0xCC), each served by its gRPC servicer.
+	// Application Service Category Opcodes (0x53-0x55, 0x60) - cache,
+	// scheduler, messaging and object storage through the composed
+	// go-quicbaas SDK - and the switch category (0xCC), each served by its
+	// gRPC servicer.
 	case appQUICCategories[req.Opcode].handlers != nil:
 		return h.handleAppServiceCategory(ctx, req)
 
@@ -632,7 +638,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// sub-opcodes AND the container sub-opcodes (create/start/stop/remove/
 	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
 	// ranges) in payload[0]; handleVMServiceOperation routes each to its
-	// handler. The rest of 0x60-0x6A is unassigned.
+	// handler. 0x60 is the object storage category above; the rest of
+	// 0x61-0x6A is unassigned.
 	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
 

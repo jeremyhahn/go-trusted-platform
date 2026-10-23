@@ -52,11 +52,13 @@ make devcontainer-clean
 
 ### Using Docker Compose
 
-The compose file builds the devcontainer image and derives the build tags
-from `make print-build-tags` (set `BUILD_TAGS` to override):
+The compose file runs the devcontainer image `make build-devcontainer` builds
+and derives the build tags from `make print-build-tags` (set `BUILD_TAGS` to
+override):
 ```bash
+make build-devcontainer
 cd test/integration/sdn
-docker compose up --build
+docker compose up
 docker compose down -v
 ```
 

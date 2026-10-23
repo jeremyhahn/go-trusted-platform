@@ -61,10 +61,12 @@ service means adding a builder (and a `backedService` adapter if the backend's
 lifecycle does not already fit) — never a handler type of its own, and never a
 handler that reports active without a backend.
 
-The builder ordering is `enabledServices()` in `types.go`: firewall, nat,
-load-balancer, hostfw, tunnels, transit, then the refused sections. Tunnels
-start before transit so BGP sessions have their interfaces; a refused section
-fails startup before any datapath service has to be rolled back for it.
+The builder ordering is `EnabledServices()` in `types.go`: firewall, nat,
+load-balancer, nat64, hostfw, tunnels, transit, overlay, the refused sections
+(edge, dhcp, pxe), then management-vpn. Tunnels start before transit so BGP
+sessions have their interfaces. A section that fails to start, refused or not,
+fails startup: the services already started are stopped again
+(`rollbackStartedServices`) and the base pipeline is removed.
 
 The EVPN `overlay` service is required, not optional. Gatewayd now builds it from `ServiceOverlay` when the host runtime
 injects OVS/OpenFlow, IPAM fabric reservations, platform device lookup and the
@@ -100,14 +102,26 @@ One field serves both consumers of key material. `buildSecretResolver`
 tunnel package's `KeyProvider` (`resolverKeyProvider`). One store, one field,
 two consumers.
 
+The `kms://` resolver registered in the SPI registry is the gateway's own, not
+the stack's `LocalKMSResolver`, for three reasons the SDK does not yet cover:
+that resolver is not re-exported under `go-quicbaas/sdk/go/secret`, and a
+remote SDK client (gatewayd dials quicbaasd) gets no registry from
+`Security().SecretResolver()`; its `?enc=` is the generation encoding for
+`?ensure=true`, not decode-on-read; and its `SecretsClient` returns one byte
+string, with no `#<field>` selection. When go-quicbaas exports a remote-capable
+`kms://` resolver with both, `NewStore` registers it in place of `kmsResolver`.
+
 | Invariant | Where |
 |---|---|
-| A reference is `kms://<path>` or `secret://<path>`, optionally `?enc=raw\|base64\|hex` and `#<field>`; both schemes name the same store | `parseRef` |
-| A bare value is not a reference and never resolves (`ErrSchemeUnsupported`); nor does any other scheme, `?ensure=` included — the gateway reads keys, it does not mint them | `parseRef` |
+| References resolve through the stack's canonical secret-resolution SPI (`go-quicbaas/sdk/go/secret`): a `ResolverRegistry` holding one `SecretResolver`, the gateway's `kms://` resolver, which returns a `SecretValue` (`StrategyRemoteKMS`); resolver failures arrive as the SPI's `ResolutionFailedError` and unwrap to the gateway's typed cause | `NewStore`, `Store.Resolve`, `kmsResolver` |
+| A reference is `kms://<path>`, optionally `?enc=raw\|base64\|hex` and `#<field>` | `parseRef` |
+| The `secret` scheme was removed (#659): such a reference is `ErrSchemeRemoved`, which wraps the SPI's `InvalidSecretURIError` and names the `kms://` replacement; it never reaches the store | `Store.Resolve` |
+| A bare value is not a reference and never resolves (`ErrSchemeUnsupported`) — the SPI registry's literal fallback is refused, not returned as key material; nor does any other scheme, `?ensure=` included — the gateway reads keys, it does not mint them | `Store.Resolve`, `parseRef` |
 | A secret with one field needs no `#<field>`; more than one without it is `ErrFieldAmbiguous` | `selectField` |
 | An empty secret, an empty field, or a field that decodes to no bytes is `ErrSecretEmpty` — an empty key is a fail-open in every consumer | `decode` |
 | Errors name the reference, never the material | every error in `secrets/errors.go` |
-| The SDK session is verified against the platform anchor; a `secret-store:` without `platform-ca-file:` is `secrets.ErrTrustRequired` at assembly, not a dial failure later | `buildSecretResolver` |
+| The SDK session is verified against the platform anchor; a `secret-store:` without `platform-ca-file:` is `secrets.ErrTrustRequired` at assembly, not a dial failure later | `buildSecretResolver` → `secretStoreTLS` |
+| The SDK session is mutual (#658): it presents the node mTLS identity, the `control-plane:` `cert-file`/`key-file` pair, loaded by the one `loadNodeIdentity` the telemetry reporter also calls, once at start. There is no second credential under `secret-store:`. A section without the pair is `secrets.ErrClientIdentityRequired` and a pair that does not load is `proxysvc.ErrCertificateLoadFailed`, both at assembly. `secrets.WithClientIdentity` clones the anchor's config and adds the certificate, so `RootCAs` still come from the anchor. `TestGatewaySecretStoreSession` (`test/integration/secrets/`) reads a secret from the real mTLS platformd with the identity, and shows the same store without it is refused | `secretStoreTLS`, `loadNodeIdentity`, `secrets.WithClientIdentity` |
 | One platform anchor and one trust resolver serve the whole daemon. The anchor verifies platform services — the store's session, platformd grpc dials, the proxy's client CAs and `trust-class: platform` backends, the control-plane reporter; the resolver verifies what the platform did not issue (`trust-class: bmc`) | `BuildGateway` → `buildPlatformAnchor`, `buildTrustResolver` |
 | Every grpc dial to platformd — proxy sync, the attestation gate, the overlay's IPAM, device, verdict and verdict-stream reads — presents a client identity, because platformd's gRPC listener refuses unauthenticated callers: `proxy.platformd.cert-file`/`key-file` for an mTLS platformd, `token-file` for a token platformd. Neither is `proxysvc.ErrConfigInvalid` at assembly; an unreadable certificate or an empty token is `proxysvc.ErrPlatformdIdentityLoadFailed`. The files are re-read on every dial | `platformdOptions`, `PlatformdConfig.Validate` |
 | gatewayd runs no CA and holds no IDevID, so its anchor is `trust.FileAnchorSource` over the top-level `platform-ca-file:` — the platform CA bundle provisioning projects onto the node, re-read at every verification | `buildPlatformAnchor` |
@@ -186,7 +200,6 @@ new code uses service sections.
 |---|---|
 | `ErrPipelineBridgeMissing` | the runtime names no bridge |
 | `ErrPipelineOwned{Bridge, Owner}` | another gateway's pipeline holds the bridge; two owners would replace each other's table-0 flow silently |
-| `ErrPipelineTerminalUnavailable{Terminal, Reason}` | `overlay` asked for before the overlay service owns egress (the overlay is required; #709) |
 | `ErrPipelineTerminalUnknown{Terminal}` | not `normal` or `overlay` |
 | `ErrPipelineInstallFailed{Bridge, Step, Cause}` | a failed install step; flows and `fail_mode` are rolled back |
 | `ErrPipelineRemoveFailed{Bridge, Step, Cause}` | a failed removal; the record is kept so a retry can finish |
@@ -300,7 +313,7 @@ Gateway-side, in `pkg/sdn/config.go`:
 | Type | Keys | Notes |
 |---|---|---|
 | `GatewayConfig` | `enabled` | Master switch |
-| `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `vnis`, `default-vni`, `max-vnis`, `verdict-max-age`, `verdict-clock-skew`, `admission-sweep-interval` | EVPN/VXLAN VTEP settings. `overlay-asn` must be a private 2-octet ASN (64512-65534). `vnis` (at least one, at most `max-vnis`) lists each L2VNI (1-16777215) with the access-port VLAN (1-4094) that carries it; no VNI or VLAN may repeat, and `default-vni` must be one of them. Start joins every one before the overlay counts as running, and it is healthy only while it carries all of them. The overlay's EVPN speaker is outbound-only: it dials each `rr-peers` entry from `local-vtep` and opens no listener beside the transit speaker on TCP 179, so a `passive` RR peer is refused. Peer policy is RFC 8212 reject-by-default, so an `rr-peers` entry whose `policy.import-route-targets` or `policy.export-route-targets` is empty gets, in that direction, the auto-derived route target of every configured VNI (`overlay-asn:` type 1, domain 0, VNI; RFC 8365 §5.1.2.1); an allowlist the operator wrote is kept as written. `verdict-max-age` (15m) bounds the age of the signed attestation verdict that admits a remote VTEP, `verdict-clock-skew` (30s) how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) how often installed VTEPs are re-admitted; half of it bounds the platformd reads behind one sweep or one admission decision. Enabling the overlay beside the firewall, NAT or load balancer is refused ([§5a, In gatewayd](#in-gatewayd)). |
+| `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `vnis`, `default-vni`, `max-vnis`, `anycast-gateway-mac`, `l3vni`, `verdict-max-age`, `verdict-clock-skew`, `admission-sweep-interval` | EVPN/VXLAN VTEP settings. `overlay-asn` must be a private 2-octet ASN (64512-65534). `vnis` (at least one, at most `max-vnis`) lists each L2VNI (1-16777215) with the access-port VLAN (1-4094) that carries it; no VNI or VLAN may repeat, and `default-vni` must be one of them. A VNI with a `subnet` is routed through the anycast gateway `anycast-gateway-mac`, and `l3vni` turns on symmetric IRB between VTEPs ([In gatewayd](#in-gatewayd)). Start joins every one before the overlay counts as running, and it is healthy only while it carries all of them. The overlay's EVPN speaker is outbound-only: it dials each `rr-peers` entry from `local-vtep` and opens no listener beside the transit speaker on TCP 179, so a `passive` RR peer is refused. Peer policy is RFC 8212 reject-by-default, so an `rr-peers` entry whose `policy.import-route-targets` or `policy.export-route-targets` is empty gets, in that direction, the auto-derived route target of every configured VNI (`overlay-asn:` type 1, domain 0, VNI; RFC 8365 §5.1.2.1) and, with `l3vni`, of the L3VNI, the only route target a Type-5 route carries; an allowlist the operator wrote is kept as written, so it must name the L3VNI's route target itself for Type-5 routes to cross it. `verdict-max-age` (15m) bounds the age of the signed attestation verdict that admits a remote VTEP, `verdict-clock-skew` (30s) how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) how often installed VTEPs are re-admitted; half of it bounds the platformd reads behind one sweep or one admission decision. Enabling the overlay beside the firewall, NAT or load balancer is refused ([§5a, In gatewayd](#in-gatewayd)). |
 | (transit) | none | Transit is the environment's x00 zone: its VLAN and subnet come from `sdn.environment` like every zone's, and transit point-to-point links take `/31`s from the `tunnel-p2p` IPAM range ([`../architecture/reference-network.md`](../architecture/reference-network.md)). There is no transit section |
 | `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)). IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 
@@ -787,6 +800,7 @@ A tunnel's `uplink:` names an entry of `routing-uplinks:`.
 | `wireguard` is `ErrTransportUnavailable` under the `fips` build tag, at validation and at create/rekey | `wireguard_fips.go` |
 | Uplink tables are 100–252; source rules at `priority` (default 1000), tunnel pins at `priority - 100` (clamped at 1); rules already in the kernel are adopted, not duplicated | `UplinkManager` |
 | A tunnel bound to an uplink is unbound before its interface is removed; a bind failure removes the tunnel just created | `Manager.EnsureTunnel`, `removeTunnelLocked` |
+| A GRE-transport link already in the kernel that matches its config exactly (kind, endpoints, key, TTL, MTU, up, exactly the tunnel addresses) is adopted, not recreated, so a relaunched datapath child does not drop the traffic it carries. A WireGuard device is adopted when it also matches on its private key and listen port, read back from the kernel; its peers are then reconciled by diff (a peer not configured removed, the configured one set in place only where it differs), so the peer's session survives. An IPsec-transport carrier is adopted on the GRE test; its SAs and policies are then reconciled against the kernel's: each is read back, a matching one kept (its sequence numbers and replay state survive), a differing SA deleted and re-added, a differing policy replaced in place, a missing one added. A kernel in lockdown confidentiality mode returns SA keys zeroed, so there its SAs are always replaced. Any other difference is deleted and recreated | `Manager.adoptable`, `linkMatches`, `adoptWireGuard`, `wireGuardPeerDiff`, `adoptIPsec`, `reconcileIPsec` |
 
 The `backedServiceHandler` (#568) builds both managers from these sections and
 hands the tunnel manager the `HostRuntime` secret resolver as its
@@ -847,13 +861,13 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 | Type | What it is |
 |---|---|
-| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
+| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
 | `DefinitionForService`, `DefinitionByName`, `Definitions`, `Processes` | the class table's lookups; `Processes(enabled)` returns only the processes those services need, each carrying only the enabled ones |
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
 | `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists |
-| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, verify every thread |
+| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
 one place a service's class, capabilities and limits are decided. An operator
@@ -905,6 +919,37 @@ steps on one locked OS thread, in the order the kernel requires:
    (`ErrSupervisorExited`) rather than becoming the orphan the signal exists
    to prevent.
 
+**The parent-death signal is `SIGKILL` (`parentDeathSignal`).** A child
+that is sent `SIGTERM` runs its stop path, and the datapath's stop path
+withdraws every flow, route and rule it installed: a supervisor crash would
+take the forwarding plane down with it, which is the opposite of the
+invariant that the datapath survives a control-process restart. A killed
+child runs nothing, so its kernel state stays where it is. The successor
+supervisor's datapath child adopts it: the firewall, NAT, load-balancer,
+NAT64 and overlay flows through the cookie-scoped reconcile (stale
+generations swept, nothing flushed), `hostfw` by replacing its table in one
+netlink transaction, a GRE-transport tunnel by keeping the link when it
+matches its config, and a WireGuard tunnel by keeping the device when its
+link, private key and listen port match and diffing its peers, and an
+IPsec tunnel by keeping the carrier link when it matches and reconciling
+its SAs and policies against the kernel's (matching ones kept, so their
+sequence numbers and replay state survive). A BGP peer sees the session
+drop without a Cease NOTIFICATION, so graceful restart keeps its routes for
+the restart time. It can only keep the families the capability names: the
+speaker marks each enabled family's `MpGracefulRestart` on every peer when
+graceful restart is on, because GoBGP sends one tuple per such family, and a
+capability with no tuples preserves nothing
+(`TestSpeaker_PeerNamesEveryFamilyForGracefulRestart`). A planned stop — `StopService`, `Shutdown`, an OpenRC
+`stop` — still sends `SIGTERM` and gets the orderly withdrawal. The signal is
+asserted at clone time and at the re-arm
+(`TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments`,
+`TestHarden_TheKernelClassStaysRootButKeepsOnlyItsOwnCapabilities`).
+`TestGatewaydSupervisorDeathLeavesTheDatapath` (`make integration-test-proxy`)
+proves it on a real kernel and bridge: it kills the supervisor, waits for
+every child to die with it, finds the bridge's flows, groups and generations
+untouched, then launches a successor and waits for its datapath to adopt
+them under a generation of its own.
+
 A failure at any step is fatal to the child. The syscalls go through the
 unexported `hardenOps` seam so the ordering is a unit test rather than a
 hope — the drop is irreversible, so a test that made the real calls would
@@ -925,14 +970,52 @@ effective set follows. `no_new_privs` survives the exec, so a setuid or
 file-capability image cannot raise anything.
 
 The second stage is recognised by `GATEWAYD_HARDENED_PARENT`, which carries
-the supervisor's pid across the exec. The marker grants nothing: the second
-stage reads `/proc/self/task/*/status` and refuses unless **every** thread has
-`NoNewPrivs` set and `CapPrm`, `CapEff` and `CapBnd` equal to the class mask —
-and, for an unprivileged class, all four uids and gids equal to the service
-account and no supplementary group but its own (`ErrPrivilegeNotHeld`, naming
-the thread and the field). It then re-arms the parent-death signal against the
-pid the first stage saw, so a supervisor that died across the exec is
-`ErrSupervisorExited`, not an orphan.
+the supervisor's pid across the exec. The marker grants nothing. The second
+stage first installs the class's seccomp filter (below), then reads
+`/proc/self/task/*/status` and refuses unless **every** thread has
+`NoNewPrivs` set, `Seccomp` at 2 (filter mode), and `CapPrm`, `CapEff` and
+`CapBnd` equal to the class mask — and, for an unprivileged class, all four
+uids and gids equal to the service account and no supplementary group but its
+own (`ErrPrivilegeNotHeld`, naming the thread and the field). It then re-arms
+the parent-death signal against the pid the first stage saw, so a supervisor
+that died across the exec is `ErrSupervisorExited`, not an orphan.
+
+**Seccomp, where the class allows (`seccomp.go`).** Capabilities bound what a
+child may do with privilege; much kernel surface needs none (a user namespace,
+`io_uring`, `bpf` with unprivileged BPF enabled). Every child therefore runs a
+classic-BPF seccomp filter, installed with `SECCOMP_FILTER_FLAG_TSYNC` so the
+runtime's threads are filtered together — a filter on the calling thread alone
+would repeat #657. The filter is a deny list, not an allow list: it removes
+the kernel interfaces no gateway service uses, so a library update that makes
+a new, harmless call cannot take a service down.
+
+| Verdict | Calls |
+|---|---|
+| process killed | any call from a foreign architecture (`seccomp_data.arch` is not the native one) |
+| `EPERM`, every class | module load and `kexec`, `reboot`, swap, `acct`, `quotactl`, `syslog`; `mount` and the new mount API, `pivot_root`, `chroot`; `unshare`, `setns`; `ptrace`, `process_vm_readv`/`writev`, `kcmp`, `pidfd_getfd`; `bpf`, `perf_event_open`, `userfaultfd`, the keyring calls, `io_uring_*`, `name_to_handle_at`/`open_by_handle_at`, `fanotify_init`; setting the clock, hostname or domain name; on x86-64 also `iopl`, `ioperm`, `modify_ldt`, `uselib` and every x32 call |
+| `EPERM`, parser class only | `execve`, `execveat` — the kernel class keeps them because `nat64` runs `jool` |
+| `EAFNOSUPPORT` | `socket` or `socketpair` in an address family outside the process's `AddressFamilies` |
+| `EPERM` | `clone` with any `CLONE_NEW*` namespace flag |
+| `ENOSYS` | `clone3`, whose flags sit behind a pointer the filter cannot read; Go and libc fall back to `clone`, whose flags it can |
+
+Address families are the one allow list. Each row of the class table carries
+`AddressFamilies`, and the filter compares `socket`'s and `socketpair`'s first
+argument against it: every process today opens `AF_UNIX` (its IPC),
+`AF_INET` and `AF_INET6` (its listeners and peers) and `AF_NETLINK` (the
+datapath's nftables, route, XFRM and WireGuard programming, and every
+process's interface lookups over `NETLINK_ROUTE`), and nothing else. No
+gateway process sends raw frames, so `AF_PACKET` is refused along with
+`AF_ALG`, `AF_VSOCK`, `AF_KEY` and the protocol families no service speaks
+(`TestClassTable_EveryProcessOpensOnlyServiceFamilies`). The refusal is
+`EAFNOSUPPORT`, the answer of a kernel built without the family.
+
+A denied call fails with `EPERM` rather than killing the child, so a library
+probing for a feature degrades instead of crashing the service. The tables
+exist for amd64 and arm64, the architectures gatewayd ships on; on any other
+architecture the child refuses to start (`ErrSeccompUnsupportedArch`) rather
+than run unfiltered. The program's logic is unit-tested in the `x/net/bpf`
+VM; the filter on a real kernel is exercised by every supervised child in
+`make integration-test-proxy`.
 
 The re-exec was chosen over the alternatives #657 listed:
 `syscall.AllThreadsSyscall` returns `ENOTSUP` under cgo and gatewayd is built
@@ -982,6 +1065,40 @@ come back with the restart, nor does a NAT rule or a deleted VIP. Another
 owner's flows are never touched. `Stop` still deletes under the owner mask,
 every generation. For the firewall, NAT and load balancer a failed sweep
 fails `Start` with an `OpError` whose `Op` is `sweep`.
+
+The overlay (`OverlayCookie`, owner `0xF1BE0005`) draws its generation the
+same way but defers the sweep: its remote host and VTEP flows come from EVPN
+routes, which a relaunch re-learns only as its BGP peers re-advertise them.
+So `Start` installs the base pipeline under the new generation, flushing
+nothing, and the predecessor's other flows — remote hosts, VTEP decap
+authorisations — keep forwarding for `overlayStaleFlowHold`, the BGP
+graceful-restart time a peer keeps the killed speaker's routes for. Each
+route the relaunch re-learns re-adds its flow in place under the new
+generation. When the hold passes, the ND poll loop
+(`sweepPredecessor`) reads the cookies under the owner mask and deletes every
+older generation by its exact cookie. A gatewayd upgraded over the flows of
+the release before generations finds them under the exact cookie
+`0xF1BE000000000005` (`legacyOverlayCookie`), whose owner bits are the
+pipeline's, so neither the owner-mask read nor `Stop` would select them: the
+sweep reads and deletes that exact cookie too, and `overlayFlush` (`Stop`, a
+failed install, a rebuild) deletes it beside the owner. A failed read or delete is an
+`ErrFlowOperationFailed` (`read stale generations` / `sweep stale
+generations`), logged and retried on the next tick. A `RevokeVTEP` while the
+sweep is pending sweeps at once, since OpenFlow cannot delete the revoked
+VTEP's flows the predecessor installed by their actions, and a decap
+authorisation must not outlive its revocation; a failure there is returned
+and retried on the next tick. A flow the relaunch re-adds takes its actions
+at once, so a VNI's flood list floods only to the VTEPs the relaunch has
+learned until EVPN re-advertises the rest. The ND punts (`OverlayNDCookie`,
+owner `0xF1BE0006`) carry no generation and are not flushed either: the
+relaunched controller routes the predecessor's punts by that cookie and
+answers or floods them, and each lapses at its 12-second hard timeout unless
+the relaunch refreshes it. A failed `Start`, `Stop`, and a rebuild delete
+under the overlay's owner mask, every generation. Both owners sit outside the
+pipeline's `0xF1BE0000` owner, whose own owner-masked deletes therefore never
+reach them (`TestOverlayRelaunchKeepsForwarding`,
+`TestOverlaySweepsStaleGenerations`,
+`TestOverlay_RelaunchReconcilesByGeneration` on a real bridge).
 
 **A failed `Start` leaves what `Stop` leaves.** The gateway registers a
 service only when `Start` succeeds, so no `Stop` follows a failed one. The
@@ -1186,7 +1303,8 @@ no OVS runtime and dials no OVSDB
 keeps it to re-send to a relaunched child, and records the state the child
 reports. The only way into the datapath child from another process is
 `DatapathService` on its socket, which `SO_PEERCRED` admits for the supervisor
-and the service account the parsers share. No parser process programs the
+and, for the VPN peer methods only, the service account the parsers share;
+`ApplyDesired` is the supervisor's alone. No parser process programs the
 kernel in-process: their backends (the BGP speaker, the proxy, the
 provisioning refusals) use no netlink and no OVS.
 
@@ -1217,8 +1335,34 @@ with `SetStartError` and stays readable over `Status`, so the supervisor
 reports why (`ErrServiceNotActiveInProcess` with the detail) rather than a
 socket that never appeared. The child's IPC policy admits the supervisor's uid
 to the control service; only the kernel-class process also admits the service
-account to `DatapathService`, so one parser cannot reach another's surface
-though they share an account.
+account, and only to `InstallVPNPeer` and `RemoveVPNPeer`, so one parser cannot
+reach another's surface though they share an account, and no parser can send
+the datapath a desired document.
+
+**platformd's live calls (#660).** The kernel-class (`datapath`) child also
+serves `GatewayServicesService` (`pkg/sdn/gateway/ipc/proto/ipc.proto`):
+`LBStatus`, `ListVIPs`, `GetVIP`, `NAT64Status`, `PerfFlows`, `PerfDatapath`
+and `PerfConntrack` are live reads, and `AddVIP`, `RemoveVIP` and
+`SetVIPBackends` are live control actions — each answered by the running
+service, never by the telemetry snapshot. The child builds perf on its own
+OVS runtime client. Besides the supervisor's uid it admits the uids in
+`process.platform-uids` to this service only (`Policy.PlatformUIDs`,
+`pkg/sdn/gateway/ipc/policy.go`), never to the control service.
+
+platformd dials the child's socket directly, not through the supervisor:
+`sdn.gateway.datapath-socket` in platformd's configuration
+(`sdn.Config.GatewayDatapathSocket`) reaches the daemon `Config`, and
+`gatewayBackendOptions` (`pkg/api/daemon/gateway_backends.go`) builds the
+gateway service with one lazy `ipc.Client` as its load balancer, NAT64 and
+perf backend. The method sets match the daemon's backend interfaces, so REST,
+gRPC, Unix, QUIC and MCP all reach gatewayd through the same
+`GatewayBackendSource` getters. A call the child cannot answer returns
+`*ipc.ErrServiceUnreachable`, which reads as `gateway.ErrServiceNotActive`
+and maps to `Unavailable` on every transport. With no socket (single-process
+mode) the load balancer and NAT64 are absent, so they answer `Unavailable`,
+and perf is platformd's local OVS perf service. `Stop` and `ForceStop` close
+the client. `TestNew_ServesGatewayBackendsOverIPC` proves the production
+wiring against a real IPC server.
 
 **Readable as the service account.** The child reads the gatewayd
 configuration — and, for the processes that build them, the `secret-store:`
@@ -1281,6 +1425,16 @@ its limit from outside. It checks the child sits in its own leaf at the class
 - the relaunch rewrites the class limit (`Prepare` runs on every launch);
 - the proxy loses no request.
 
+`TestGatewaydSupervisorDeathLeavesTheDatapath` kills the supervisor instead
+of a child, then asserts the following:
+
+- every child dies with it, through the parent-death signal;
+- the bridge's flows, groups and generations are exactly what the datapath
+  child left, because a killed child runs no stop path;
+- a successor supervisor started on the same configuration brings all three
+  children back, and its datapath adopts the bridge under a generation of its
+  own with nothing flushed.
+
 The devcontainer harness delegates `+memory +cpu` at the container's cgroup
 root before the suite runs (`prepare_gatewayd_supervision`). This works the
 way a systemd host does: the root's processes first move to an `init` leaf,
@@ -1288,8 +1442,23 @@ because a cgroup holding processes cannot enable controllers for its children.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
-choice, not a documented contract. One part of the acceptance is not proven
-here: **BGP graceful restart**, because the suite has no BGP peer. Reconciled
+choice, not a documented contract. The supervisor dials a child's socket
+right after exec, before the child listens. With gRPC's default reconnect
+backoff (1s, growing 1.6x) a child that listened a few seconds late was not
+reached until the next retry at 2.6s, 5.2s or 9.3s, which is how the
+datapath relaunch overran this bound (#955). `ipc.Dial` retries a refused
+local socket within 200ms instead
+(`TestDial_ReachesASocketThatListensAfterARefusedConnect`), and the
+supervisor logs `process answering` with the time each child took to
+answer. **BGP graceful restart** is not proven
+here, because this suite has no BGP peer. It has its own test instead:
+`TestBGPGracefulRestart_UpstreamKeepsTheGatewaysRoutes`
+(`make integration-test-sdn`) runs the platform speaker against a GoBGP
+upstream over loopback. It closes the speaker's session without a
+NOTIFICATION, the way a killed routing child does. It then finds the
+announced prefix still in the upstream's RIB, marked stale, and refreshed by
+the successor's session. With graceful restart off, the control case finds
+the prefix withdrawn. Reconciled
 flows are proven for the load balancer only; the other datapath services need
 zone networks the suite does not configure, and their restart path is the
 same generation sweep (unit-tested in
@@ -1305,27 +1474,37 @@ service owns through `ServiceSnapshot` the same way.
 The contract is `ipc/proto/ipc.proto`, generated into `ipc/gen` with
 `buf generate` from `pkg/sdn/gateway/ipc` (its own `buf.gen.yaml`; the output
 stays beside the contract rather than going to `sdk/go/gen`, because it is
-internal to one binary and no SDK consumer may depend on it).
+internal to one binary and no SDK consumer may depend on it). Where `buf` is
+not installed, `protoc -I . --go_out=../gen --go_opt=paths=source_relative
+--go-grpc_out=../gen --go-grpc_opt=paths=source_relative ipc.proto` from
+`ipc/proto`, with the `protoc-gen-go` and `protoc-gen-go-grpc` versions named
+in the generated headers, produces the same code.
 
 ```
 ProcessControlService   Status(StatusRequest) -> StatusResponse
                         Snapshot(SnapshotRequest) -> SnapshotResponse
 DatapathService         ApplyDesired(ApplyDesiredRequest) -> ApplyDesiredResponse
+                        InstallVPNPeer(InstallVPNPeerRequest) -> InstallVPNPeerResponse
+                        RemoveVPNPeer(RemoveVPNPeerRequest) -> RemoveVPNPeerResponse
 ```
 
 | Type | Purpose |
 |---|---|
-| `Server` | serves both services for one child; `Listen(path, mode, gid)`, `Serve()`, `Stop()`, `SetStartError(err)` |
-| `Client` | `Status`, `Snapshot`, `ApplyDesired`, `Close` |
+| `Server` | serves both services for one child; `Listen(path, mode, gid)`, `Serve()`, `Stop()`, `SetStartError(err)`, `SetVPNPlanes(host)` |
+| `Client` | `Status`, `Snapshot`, `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer`, `Close` |
 | `Node` | what the server drives: `GetState`, `ServiceReports`, `Snapshot`, `Apply`, `DesiredConfigState` — `*gateway.Gateway` satisfies it |
-| `Policy` | `ControlUIDs` / `DatapathUIDs`; empty means uid 0 only |
+| `VPNPlanes` | the VPN data plane host the peer RPCs reach: `InstallVPNPeer`, `RemoveVPNPeer` — `*vpn.PlaneHost` satisfies it |
+| `Policy` | `ControlUIDs` (every method) / `DatapathUIDs` (the VPN peer methods); empty means uid 0 only |
 
 Authentication is `SO_PEERCRED` and nothing else, through
 `pkg/util/peercred` (moved there from `pkg/api/grpc` so both platformd's Unix
 transport and this IPC share one implementation). The transport credentials
 require peer credentials, the required interceptor puts them in the context,
-and `Policy.unaryInterceptor` admits per service; an unknown service is
-`ErrUnknownService`, so the table fails closed.
+and `Policy.unaryInterceptor` admits per method (`methodAdmissions`, keyed by
+the full gRPC method); a method the table does not name is
+`ErrUnknownService`, so the table fails closed, and
+`TestPolicy_EveryContractMethodIsPlaced` fails a method added to `ipc.proto`
+without an entry.
 
 `Listen` removes a **stale socket file** (a crashed child's) and refuses to
 replace anything that is not a socket, then chmods to the requested mode.
@@ -1333,6 +1512,15 @@ Documents cross as JSON (`gwstate.Snapshot`, `gwstate.DesiredConfig`,
 `gwstate.DesiredConfigState`) rather than being redeclared in proto.
 `ApplyDesired` always returns the child's state; a child-side apply failure
 comes back as `*ErrRemoteApply` with that state beside it.
+
+`InstallVPNPeer` / `RemoveVPNPeer` carry the VPN `DataPlane` seam. The peer
+is the part of a lease a plane binds (lease id, plane kind, address, WireGuard
+key, client-certificate fingerprint). A plane's refusal rides in the response
+as a `VPNPeerRefusal` whose class names the `vpn` error it came from, so the
+caller rebuilds the same typed error; an unknown class reads as unavailable.
+Until `SetVPNPlanes` is called, both RPCs are refused unavailable ("this
+process hosts no VPN data plane"). They are `DatapathService` methods, so the
+per-method `Policy` admits the parser class to them.
 
 ### The conntrack stage classifies tagged ingress only (open question)
 
@@ -1666,15 +1854,19 @@ underlay MTU below `vxlan.MinimumUnderlayMTU`, the 9000-byte
 | 0 | Ingress | everything → 10 |
 | 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
 | 20–29 | Services | NAT64 (firewall, NAT and load balancer are refused beside the overlay); miss → 30 |
-| 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
+| 30 | MAC | anycast MAC from the access port on a routed VNI, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
 | 40 | ARP / ND | ARP replies in the switch; ND punts to the controller ([ND suppression](#nd-suppression)); miss → 60 |
 | 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
 | 60 | Egress | flood: the access port, then every VTEP on the VNI; miss → drop |
 | 70 | Local delivery | out the access port (`IN_PORT` when it came from there) |
 
-The table constants are in `modes/overlay.go`. Every overlay flow carries
-`OverlayCookie` (`0xF1BE000000000005`); `Start` and `Stop` remove them with
-one cookie-scoped delete.
+The table constants are in `modes/overlay.go`. Every overlay flow carries a
+generation of the `OverlayCookie` owner (`0xF1BE000500000000`): the owner in
+the high 32 bits, a generation drawn on each `Start` in the low 32. A
+relaunch installs its generation over the flows its predecessor left and
+sweeps the older generations later (see [The process
+model](#the-process-model--pkgsdngatewayprocess-557)); `Stop` removes every
+generation with one owner-masked delete.
 
 #### Decap authorisation
 
@@ -1739,9 +1931,11 @@ the fabric, and a local one never back to the access port.
 by a table-40 flow that rewrites the request into the reply and sends it back
 out `IN_PORT`. Unanswered ARP floods like other BUM traffic.
 
-**Symmetric IRB:** with `AnycastGatewayIP`/`AnycastGatewayMAC`, every VTEP is
-the same gateway, and frames from the access port to the anycast MAC go to
-table 50. A tunnelled frame to the anycast MAC is dropped: its ingress VTEP
+**Symmetric IRB:** with `AnycastGateways`/`AnycastGatewayMAC`, every VTEP is
+the same gateway: on each L2VNI with an entry it answers ARP for that VNI's
+gateway IP with the shared anycast MAC, and frames from the access port to the
+anycast MAC on that VNI go to table 50. A VNI without an entry gets neither,
+nor host routes: it is bridged only. A tunnelled frame to the anycast MAC is dropped: its ingress VTEP
 routes it, so it never needs this one's gateway, and routing it here would let
 any VTEP authorised on an L2VNI reach table 50 without the L3VNI's decap
 authorisation.
@@ -1775,7 +1969,7 @@ Table 40 holds three kinds of ND flow:
 | 0 | the table miss | NS for unknown targets floods through table 60 |
 
 The punt flows carry their own cookie, `OverlayNDCookie`
-(`0xF1BE000000000006`). The ND controller owns them apart from the overlay's
+(`0xF1BE000600000000`). The ND controller owns them apart from the overlay's
 flow table: it adds a punt when a target gets exactly one owner on the VNI. It
 strict-deletes the punt when the target is withdrawn, or when a second host
 claims it.
@@ -1833,7 +2027,10 @@ controller can answer it. Three mechanisms guarantee this:
   restarts its timeout. If platformd crashes, or loses its OpenFlow
   connection, OVS expires the punts within 12 s, and solicitations flood
   through the table-40 miss. A controller that returns re-adds them on its
-  next refresh. Start also deletes any punts left by an earlier run.
+  next refresh. Start does not delete the punts a killed earlier run left:
+  the new controller routes them by `OverlayNDCookie` and answers or floods
+  what they punt, and each lapses within 12 s unless the new run refreshes
+  it (`TestOverlayStartKeepsPuntsAKilledRunLeft`).
   - A live platformd that finds its OpenFlow socket closed (OVS restarted)
     redials it on every poll. A restarted switch has lost every flow and
     meter, so on the new connection it rebuilds the overlay pipeline from
@@ -1903,8 +2100,8 @@ Overlay status reports `NDSuppression`:
 
 | Handler call | EVPN action |
 |---|---|
-| `AddVNI(vni, vlan)` | segment flows installed, then `JoinVNI(vni, L3VNI)`: the Type-3 route is originated and the routes already received are replayed. A refused join removes the segment again |
-| `RemoveVNI(vni)` | `LeaveVNI(vni)`, then everything on the VNI is removed — and the Type-5 prefixes with the last VNI |
+| `AddVNI(vni, vlan)` | segment flows installed, then `JoinVNI(vni, L3VNI)`: the Type-3 route is originated and the routes already received are replayed. With an L3VNI, the VNI's subnet is then originated as a Type-5 route (`AdvertisePrefix`). A refused join or origination removes the segment again |
+| `RemoveVNI(vni)` | `WithdrawPrefix` for the VNI's subnet, `LeaveVNI(vni)`, then everything on the VNI is removed — and the Type-5 prefixes with the last VNI |
 | `LearnMAC(vni, mac, ip)` | local delivery flows installed, then `AdvertiseMACIP`. A failed advertisement leaves the flows; learning again retries it |
 | `ForgetMAC(vni, mac)` | local flows removed, then `WithdrawMACIP` for each binding. A withdrawal BGP refuses fails the call and is remembered; forgetting the MAC again retries it until BGP takes it, and `RemoveVNI` or `Stop` withdraws it with the VNI. Learning the binding again drops it |
 | imported route change | the registered handler installs or removes the flows above |
@@ -1913,11 +2110,12 @@ A switch can apply part of a flow batch and refuse the rest
 (`openflow.ErrBatchPartialFailure`). When it refuses any of a change, the
 handler sends the mods that put every flow the batch touched back to what it
 had committed, so the switch and the handler's state are as they were and the
-operation or route can be applied again. A refused start flushes the overlay
-flows instead. If the switch refuses the put-back too, the error carries an
+operation or route can be applied again. A refused start deletes the overlay
+flows of every generation instead. If the switch refuses the put-back too, the error carries an
 `ErrFlowResyncFailed`: the switch may then hold flows the handler does not
 track. The handler marks its flows drifted, and the next change of any kind
-first flushes the overlay's flows (by cookie) and installs every flow it has
+first flushes the overlay's flows (under the owner mask, every generation)
+and installs every flow it has
 committed, so stale flows such as a decap authorisation do not survive. A
 switch refusing that rebuild fails the change with an `ErrFlowResyncFailed`,
 and the rebuild is tried again on the change after. While ND suppression runs,
@@ -1925,8 +2123,8 @@ its poll also retries a drifted switch's rebuild on its own (see
 [ND suppression](#nd-suppression)), so the overlay does not wait for a change.
 
 OVS applies a batch one mod at a time, not atomically, and the OpenFlow client
-has no bundle support. So the start and the rebuild send the flows after the
-flush in a fail-closed order, the same on every rebuild: the pipeline's last
+has no bundle support. So the start, and the rebuild after its flush, send
+the flows in a fail-closed order, the same on every rebuild: the pipeline's last
 table first, so a goto only ever reaches a table that is already complete and
 the table-0 goto that admits frames comes last; and within a table the highest
 priority first, so the table-10 drop of unauthorised tunnelled frames is in
@@ -1948,7 +2146,7 @@ held rather than deleting the flow.
 | `EVPNConfig` | EVPN manager; nil bridges local hosts only |
 | `BridgeName`, `AccessPort` | the bridge, and the port carrying the VNIs as VLANs |
 | `ARPSuppression` | answer ARP for every known binding |
-| `AnycastGatewayIP`, `AnycastGatewayMAC` | both or neither; turns on routing |
+| `AnycastGateways`, `AnycastGatewayMAC` | both or neither; turns on routing. `AnycastGateways` maps an L2VNI to the IPv4 gateway answered for on that VNI's segment; the MAC is shared by every VNI and every VTEP. Routing is per VNI: only a VNI with an entry gets host routes and has its access frames for the gateway MAC enter routing, so a VNI without one is bridged only, even beside routed VNIs |
 | `L3VNI` | the IP-VRF of symmetric IRB; needs the anycast gateway and `EVPNConfig.RouterMAC` |
 | `Admitter` | vets remote VTEPs; required with `EVPNConfig` (`ErrAdmitterNil`) |
 
@@ -1963,7 +2161,11 @@ of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries.
 
 With RR peers the overlay runs its own outbound-only BGP speaker in the
 overlay ASN, dialling each route reflector from `local-vtep`; an RR peer with
-no route-target allowlist gets the route target of every configured VNI. The
+no route-target allowlist in a direction gets, in that direction, the route
+target of every configured VNI and, with `l3vni`, of the L3VNI, so the Type-5
+routes this VTEP originates and those it receives pass the reject-by-default
+policy. An allowlist the operator wrote is kept as written and must name the
+L3VNI's route target itself. The
 speaker, its policy and why it cannot share the transit speaker are in
 [BGP architecture](../bgp/architecture.md) and
 [BGP engineering](../bgp/engineering.md#5-configuration).
@@ -1977,7 +2179,10 @@ VTEPs. NAT64 hands off through tables 20-29 and may run beside it.
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `overlay-asn` | required | private 2-octet ASN (64512-65534); the auto-derived route targets carry it in a 2-octet field |
-| `vnis` | required | the L2VNIs joined at start: each `vni` (1-16777215) with the access-port `vlan` (1-4094) that carries it. At least one, at most `max-vnis`; no VNI or VLAN repeats |
+| `vnis` | required | the L2VNIs joined at start: each `vni` (1-16777215) with the access-port `vlan` (1-4094) that carries it, and an optional `subnet`. At least one, at most `max-vnis`; no VNI or VLAN repeats |
+| `vnis[].subnet` | none | the VNI's IPv4 network (no host bits, room for a host address); no two subnets overlap. A VNI with one is routed: its anycast gateway is the subnet's first host address (`netplan.AnycastGateway`). A VNI without one is bridged only |
+| `anycast-gateway-mac` | none | the gateway MAC every VTEP answers with on every routed VNI. Required with any `subnet`, refused without one; unicast, non-zero, and outside `02:00:xx:xx:xx:xx` (the router MACs) |
+| `l3vni` | none | the IP-VRF of symmetric IRB (1-16777215), not one of `vnis`. Needs a routed VNI and `rr-peers`. The EVPN router MAC is derived: `02:00` followed by the four octets of `local-vtep` |
 | `default-vni` | none | must be one of `vnis` |
 | `verdict-max-age` | 15m | oldest attestation verdict that still admits a VTEP |
 | `verdict-clock-skew` | 30s | how far past the gateway's clock a verdict's attestation time may lie |
@@ -1992,6 +2197,25 @@ handler and the speaker again and fails the start with the join's error, so
 nothing is left half-running. The service is healthy only while the handler
 runs and carries every configured VNI: a running handler with no VNI forwards
 nothing, and used to report healthy anyway.
+
+Symmetric IRB is configured by `vnis[].subnet`, `anycast-gateway-mac` and
+`l3vni`. Start hands the handler `AnycastGateways` (each routed VNI's
+`netplan.AnycastGateway`), `AnycastGatewayMAC` and `L3VNI`, and the EVPN
+manager the derived router MAC; the status, and so the snapshot, reports
+`AnycastGatewayConfigured` and `L3VNI`. Subnets with a MAC but no `l3vni`
+route between the hosts on this VTEP only; with `l3vni`, routes to hosts and
+prefixes behind other VTEPs come from their Type-2 and Type-5 routes. With
+none of the three the overlay bridges each L2VNI, as before. Routing is per
+VNI: a VNI without a `subnet` stays bridged beside routed ones, with no host
+route to its hosts and no gateway-MAC ingress from its VLAN. With `l3vni`, Start
+also hands the handler `Subnets`, and each routed VNI's `subnet` is originated
+as a Type-5 route in the IP-VRF once the VNI has joined; `RemoveVNI` and Stop
+withdraw it before the VNI leaves. A bridged VNI, or any VNI without `l3vni`,
+originates nothing. An origination EVPN refuses fails the start the way a
+refused join does, as an `*ErrVNIOperationFailed` with operation `originate`,
+with the VNI left again and nothing left running. With `ipsec` enabled the
+overlay also carries its VXLAN in ESP ([Overlay IPsec in
+gatewayd](#overlay-ipsec-in-gatewayd)).
 
 #### VTEP admission
 
@@ -2171,6 +2395,39 @@ VTEP, so a missed failure still withdraws decap, and a missed pass still
 admits the device, within one interval. A gatewayd that starts after a failure
 was recorded reads that failure, not an earlier pass, on its first admission.
 
+#### Overlay IPsec in gatewayd
+
+`gateway.overlay.ipsec` is the `ipsec.Config` platformd's
+`sdn.overlay.ipsec` takes ([configuration](../sdn/overlay/configuration.md#ipsec)),
+and with `enabled: true` gatewayd runs the same `pkg/sdn/ipsec` service
+(`ipsec.NewEVPNService`, built through `GatewayRuntime.OverlayIPsec`): every
+packet between this VTEP and another rides a transport-mode ESP SA, behind the
+fail-closed floor on the fabric interface. Validation requires
+`local-address` to be the overlay's `local-vtep` and `fabric-interface` its
+`underlay-interface`, so the floor guards the interface the VXLAN leaves by;
+`crl-files` are required. The floor admits only IKE, ESP and SA-protected
+traffic, so `static-peers` must list the route reflectors, or the EVPN
+sessions never come up.
+
+The peers are the static peers plus each VTEP on one of the overlay's flood
+lists. The handler tells `OverlayModeConfig.FloodPeers` every flood-list change
+as the Type-3 route that made it, once the flows hold it, and the VTEPs of a
+VNI it leaves as withdrawals; a VTEP is a peer while one admitted route names
+it. Before the IPsec controller brings up an SA to a VTEP it asks again whether
+the overlay's `VTEPAdmitter` holds a fresh admission for it, from memory and
+without a platformd read. A revocation withdraws the VTEP's routes first, then
+evicts it from IPsec: its SAs end and its packets are dropped until a replay
+readmits it. A VTEP newly placed on a flood list is readmitted before its SA is
+asked for, so an address reassigned to an attested device is not held off by
+an old eviction.
+
+Start installs the floor before the handler starts; a failed start closes the
+service and Stop closes it after the speaker. Neither removes the floor, so a
+node whose IPsec has stopped carries no plaintext VTEP traffic. The IPsec
+identity is the same file identity platformd uses (`token`,
+`certificate-file`); a certificate derived from the node's IDevID is not yet
+wired.
+
 #### Trust assumptions
 
 - **IPAM writers.** Admission trusts the fabric IPAM allocation to bind a VTEP
@@ -2204,7 +2461,8 @@ was recorded reads that failure, not an earlier pass, on its first admission.
 - **Underlay source addresses.** Decap authorisation matches the outer source
   IP. On an underlay without source validation, a host can send VXLAN under an
   admitted VTEP's address. The control for that is the authenticated underlay
-  (the IPsec underlay), not admission.
+  ([overlay IPsec](#overlay-ipsec-in-gatewayd)), not admission; without
+  `ipsec` the overlay relies on the underlay alone.
 
 ## 6. Persistence
 
@@ -2235,7 +2493,7 @@ model.
 | Unit (nat64) | `pkg/sdn/gateway/services/nat64/*_test.go`, `pkg/sdn/gateway/nat64_test.go` | Config validation, the Jool command lines and pool4 convergence against a runner scripted with jool 4.1.14's real output, the flow set, start/stop/rollback/adoption and the reconcile loop over fakes |
 | Unit (pipeline) | `pkg/sdn/gateway/pipeline_test.go` | Every table a gate or `goto` routes into has an empty-match miss, each datapath service started alone; exactly one table-20 miss and it is the pipeline's; `fail_mode` is set before the pipeline is installed |
 | Integration (nat64) | `test/integration/nat64/` (harness) running `test/integration/sdn/nat64_*_test.go` (`nat64vm` tag) | `make integration-test-nat64`: an Alpine VM under QEMU/KVM in the devcontainer, with linux-lts and jool-modules-lts from one repository snapshot (`build/docker/nat64-vm`). The Jool driver against the real module (range tiling, idempotent converge, pool change, prefix change, refusal) and the datapath end to end: an IPv6-only client pings an IPv4-only server through a real gateway running `nat64:` alone, untagged and in a tagged client zone, with ARP/IPv4 and neighbour discovery crossing the same bridge. Fails, never skips, when KVM, the module or a guest test is missing |
-| Integration (nat64 surface) | `test/integration/sdn/nat64_surface_test.go` | `GetNAT64Status` against the integration platformd over the CLI, gRPC, Unix, REST, QUIC and MCP: each answers with its "not configured" mapping (the translator is gatewayd-resident and its control-plane wiring is #660), never an unknown method, a 404 or an unmapped opcode |
+| Integration (nat64 surface) | `test/integration/sdn/nat64_surface_test.go` | `GetNAT64Status` against the integration platformd over the CLI, gRPC, Unix, REST, QUIC and MCP: each answers with its "not configured" mapping (the integration platformd sets no `datapath-socket`, so the gatewayd-resident translator is not reachable; the live IPC path is `TestNew_ServesGatewayBackendsOverIPC`), never an unknown method, a 404 or an unmapped opcode |
 | Integration | `test/integration/proxy/`, `test/integration/network/` | Real listeners, real backends |
 | Spike (not a test) | `test/spike/nat64/main.go` (`//go:build spike`) | The #595 NAT64 throughput measurement: two TUNs in an unprivileged user namespace, one goroutine per direction over a lock-guarded binding table, UDP blast. Run by hand with `unshare -rn go run -tags spike ./test/spike/nat64`; excluded from every `make` target by its tag |
 | **Architecture** | `pkg/arch/gatewayguard_test.go` | `gatewayd`'s import closure |
@@ -2261,8 +2519,9 @@ the auth chain in the proxy rather than in each backend. `metrics.go` provides
 `MetricsSnapshot` and per-route `RouteMetrics`.
 
 Gateway-side: `GetPerfFlows`, `GetPerfDatapath` and `GetPerfConntrack`, surfaced
-as `platformctl sdn gateway perf flows|datapath|conntrack`. When the perf backend is not
-wired, these return `StatusUnavailable` rather than zeroes — an important
+as `platformctl sdn gateway perf flows|datapath|conntrack`, measured live by
+gatewayd's `datapath` child over IPC (§ "platformd's live calls"). When the
+perf backend is not wired or not reachable, these return `StatusUnavailable` rather than zeroes — an important
 distinction when you are trying to work out whether the datapath is idle or the
 instrumentation is off.
 
@@ -2291,6 +2550,7 @@ the service it drives says so — extends to telemetry:
 | `nat` | `firewall.NAT.Health()` — SNAT/DNAT and the per-uplink pools (#586) |
 | `overlay` | overlay backend `Status()` plus `ListAdmittedVTEPs()` — local VTEP, table ids, admitted VTEPs and ND counters (punted, answered, meter-dropped, queue-dropped, fell-through) |
 | `pipeline` | `GatewayRuntime.PipelineStatus()` — owner, terminal and the held fail mode (#567) |
+| `vpn` | `vpn.Service.Health()` and `Leases` — admissions, refusals, revocations by reason, posture violations by rule, the renewal re-attestation histogram, leases per data plane and every lease (#584; [docs/vpn/engineering.md](../vpn/engineering.md) §8) |
 
 Two invariants make the document readable:
 
@@ -2316,8 +2576,9 @@ carry the `gateway` label; the sections above map to `service_active`,
 `bfd_failure_transitions_total`, `tunnel_up`, `tunnel_bytes_total`,
 `tunnel_packets_total`, `tunnel_last_rekey_timestamp_seconds`,
 `uplink_policy_rules`, `uplink_bound_tunnels`, `hostfw_installed`,
-`hostfw_rules`, `firewall_flows`, `nat_dnat_rules`, `nat_pool_addresses` and
-`pipeline_installed`. An absent section emits **no series** for the same
+`hostfw_rules`, `firewall_flows`, `nat_dnat_rules`, `nat_pool_addresses`,
+`pipeline_installed`, and the `vpn_*` series of the remote-access VPN
+([docs/vpn/engineering.md](../vpn/engineering.md) §8). An absent section emits **no series** for the same
 reason it is absent from the document.
 
 The endpoint is the gatewayd `metrics:` section (`enabled`, `listen`,

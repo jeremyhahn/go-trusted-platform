@@ -101,6 +101,18 @@ ARP suppression and symmetric IRB are specified in
     both resolve, no overlay flow or punt goes on the switch. A meter the
     switch refuses is retried every poll, and the punts stay off (every NS
     floods) until it is accepted;
+- a relaunched overlay does not flush the flows its predecessor left. Each
+  start draws a new flow generation under the overlay's cookie owner and
+  installs over them in place, so forwarding EVPN still wants carries on.
+  The predecessor's punts are answered by the new controller and lapse at
+  their hard timeout. Once the BGP graceful-restart time has passed, or at
+  once on a VTEP revocation, every older generation is deleted by its exact
+  cookie, which takes whatever no peer re-advertised, and so are the flows
+  of the release before generations, under their exact cookie
+  `0xF1BE000000000005`. Other owners' flows
+  are never touched (the details are in
+  [docs/gateway/engineering.md](../../gateway/engineering.md), "The process
+  model");
 - routed traffic crosses the L3VNI router MAC to router MAC.
 
 ## Overlay Controller
@@ -334,9 +346,12 @@ open.
 
 platformd has no EVPN route source, so its controller admits no VTEP a
 route names (`ErrNoVTEPAdmission`): its peers are the static peers.
-gatewayd hosts the overlay data plane (`ServiceOverlay`) but runs no IPsec:
-nothing in `pkg/sdn/gateway` builds an `ipsec` service.
-
+gatewayd hosts the overlay's EVPN data plane (its `overlay` service, with
+attestation-verdict VTEP admission) and, with `gateway.overlay.ipsec`, runs
+this service through `ipsec.NewEVPNService`: its peers are the static peers
+plus each VTEP on one of its flood lists, which its controller admits only
+while the overlay holds a fresh admission for it, and a revoked VTEP is
+evicted ([gateway engineering](../../gateway/engineering.md#overlay-ipsec-in-gatewayd)).
 
 ### Status
 
@@ -542,7 +557,7 @@ has been renewed at the same mark.
 | `ErrVTEPOperationFailed` | `modes` | a route's VTEP was refused admission or is not a usable IPv4 VTEP |
 | `ErrFlowOperationFailed` | `modes` | the switch refused a flow change; the flows the batch touched are put back, so the switch and handler state are unchanged |
 | `ErrBindingConflict` | `modes` | a Type-2 route claimed the anycast gateway's MAC or IP; refused whole and counted in `RefusedBindings`. A route claiming a local host's IP is not an error: its MAC is bridged and its IP held back until the local host goes |
-| `ErrFlowResyncFailed` | `modes` | the switch refused the put-back too, or the rebuild after one; the next change flushes the overlay flows and reinstalls the committed ones before applying anything |
+| `ErrFlowResyncFailed` | `modes` | the switch refused the put-back too, or the rebuild after one; the next change flushes the overlay flows of every generation and reinstalls the committed ones before applying anything |
 | `ErrSwitchNotRestored` | `modes` | an overlay change while the switch has reconnected but the ports' OpenFlow numbers have not been read again; the ND poll retries them, and the change can be made once they resolve |
 | `ErrOverlayPortUnresolved` | `modes` | OVS gave no usable OpenFlow number for the VXLAN or access port, at start or after a reconnect |
 | `ErrOFPortUnassigned` | `vxlan` | OVS reports the VXLAN port with ofport -1, an interface it could not attach |

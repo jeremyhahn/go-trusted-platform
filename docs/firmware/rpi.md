@@ -1,6 +1,6 @@
 # Raspberry Pi Secure Boot Implementation
 
-> **Status: NORMATIVE** · Scope: planned Raspberry Pi signed boot chain; the shipped SD-card image is [docs/factory-image/](../factory-image/)
+> **Status: NORMATIVE** · Scope: planned Raspberry Pi signed boot chain; the shipped SD-card image is [docs/factory-image/](../factory-image/) · Last verified: 2026-10-18
 > Conflicts with this document are defects. Fix them here first.
 >
 > What is implemented today is the factory image in [docs/factory-image/](../factory-image/):
@@ -121,7 +121,7 @@ Rows 53-65: Reserved
 
 **⚠️ WARNING**: OTP is **one-time programmable**. Once written, values CANNOT be changed.
 
-**Location**: `pkg/firmware/rpi/otp/`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/otp/`
 
 ```go
 package otp
@@ -178,7 +178,7 @@ func (o *OTPProgrammer) ReadOTP() (*OTPConfig, error) {
 
 **Phase 1: Wrapper Approach** (MVP - Fast to Market)
 
-**Location**: `pkg/firmware/rpi/rpiboot/wrapper.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/rpiboot/wrapper.go`
 
 ```go
 package rpiboot
@@ -234,7 +234,7 @@ func (r *RPiBootWrapper) RecoveryBoot(firmware *SignedFirmware) error {
 
 **Phase 2+: Native Go Implementation** (Future Enhancement)
 
-**Location**: `pkg/firmware/rpi/rpiboot/native.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/rpiboot/native.go`
 
 ```go
 // Future: Native Go implementation of rpiboot protocol
@@ -250,7 +250,7 @@ type NativeRPiBoot struct {
 
 **Interface Abstraction**:
 
-**Location**: `pkg/firmware/rpi/rpiboot/interface.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/rpiboot/interface.go`
 
 ```go
 package rpiboot
@@ -278,7 +278,7 @@ func NewRPIBoot() (RPiBoot, error) {
 
 **Purpose**: Recover devices with corrupted bootloader or SD card
 
-**Location**: `pkg/firmware/rpi/rpiboot/recovery.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/rpiboot/recovery.go`
 
 ```go
 type RecoveryMode struct {
@@ -321,7 +321,7 @@ platformctl firmware rpi recovery-flash-bootloader --bootloader bootcode.bin
 
 ### Signed Boot Chain
 
-**Location**: `pkg/firmware/rpi/bootchain/builder.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/bootchain/builder.go`
 
 ```go
 package bootchain
@@ -455,7 +455,7 @@ active_partition=%s
 
 ### OTA Update with A/B
 
-**Location**: `pkg/ota/rpi.go`
+**Proposed location** (does not exist yet): `pkg/ota/rpi.go`
 
 ```go
 package ota
@@ -557,7 +557,7 @@ func (u *RPiOTAUpdater) verifyBootChain(partition string) error {
 
 ### Dedicated RPi Installer
 
-**Location**: `pkg/installer/alpine_rpi.go`
+**Proposed location** (does not exist yet): `pkg/installer/alpine_rpi.go`
 
 **Purpose**: Keep RPi-specific Alpine code separate from existing alpine.go
 
@@ -690,7 +690,7 @@ WantedBy=multi-user.target
 
 ### Optional TPM Support
 
-**Location**: `pkg/firmware/rpi/attestation/tpm.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/attestation/tpm.go`
 
 ```go
 package attestation
@@ -762,7 +762,7 @@ func (t *TPMAttestor) readPCRs(selection tpm2.PCRSelection) [][]byte {
 
 ### Software Attestation Fallback
 
-**Location**: `pkg/firmware/rpi/attestation/software.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/attestation/software.go`
 
 ```go
 // If no TPM available, use software attestation
@@ -796,7 +796,7 @@ func (s *SoftwareAttestor) Attest(nonce []byte) (*Attestation, error) {
 
 ### TPM NV Counter
 
-**Location**: `pkg/firmware/rpi/rollback/tpm_counter.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/rollback/tpm_counter.go`
 
 ```go
 package rollback
@@ -862,7 +862,7 @@ func (t *TPMCounter) VerifyVersion(version uint64) error {
 
 ### Writing Boot Images
 
-**Location**: `pkg/firmware/rpi/flasher/sdcard.go`
+**Proposed location** (does not exist yet): `pkg/firmware/rpi/flasher/sdcard.go`
 
 ```go
 package flasher
@@ -919,7 +919,7 @@ func (f *SDCardFlasher) Flash(device string, bootChain *BootChain) error {
 
 ### QEMU Integration
 
-**Location**: `pkg/firmware/testing/qemu.go`
+**Proposed location** (does not exist yet): `pkg/firmware/testing/qemu.go`
 
 ```go
 type QEMURPi struct {
@@ -1012,6 +1012,11 @@ platformctl firmware attest --device-id rpi-001 --protocol tpm
 ```
 
 ## Implementation Files
+
+> **PROPOSED** - none of the `pkg/firmware/rpi/` packages, `pkg/ota/` or
+> `pkg/installer/alpine_rpi.go` exists. `pkg/installer/alpine.go` does; the
+> shipped Pi image is built by `pkg/diskimage/rpi`
+> ([docs/factory-image/](../factory-image/)).
 
 ### Core RPi Files
 

@@ -14,8 +14,8 @@ commands that build or install a system, plus three `make` controls.
 | Control | Effect | Where |
 |---|---|---|
 | `WITH_FIPS=1` | Adds the `fips` build tag to every `make` build and test target | `Makefile:94`, `:293-295` |
-| `make -s print-build-tags [WITH_FIPS=1]` | Prints the assembled tag list; use it for any `go` command that `make` does not wrap | `Makefile:649-655` |
-| `make test-fips` | Builds `./...`, then runs `make test`, both tagged `fips` under `GOFIPS140=latest GODEBUG=fips140=only` | `Makefile:1351-1368` |
+| `make -s print-build-tags [WITH_FIPS=1]` | Prints the assembled tag list; use it for any `go` command that `make` does not wrap | `Makefile:673-680` |
+| `make test-fips` | Builds `./...`, then runs `make test`, both tagged `fips` under `GOFIPS140=latest GODEBUG=fips140=only` | `Makefile:1365-1382` |
 
 ```sh
 make build WITH_FIPS=1

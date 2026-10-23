@@ -53,7 +53,6 @@ type mockOVSPortController struct {
 	installErr    error
 	setTrunkCalls [][]uint16
 	setVLANCalls  []int64
-	setStateCalls []ovs.PortState
 }
 
 func (m *mockOVSPortController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
@@ -92,8 +91,7 @@ func (m *mockOVSPortController) SetPortTrunk(ctx context.Context, portName strin
 	return nil
 }
 
-func (m *mockOVSPortController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
-	m.setStateCalls = append(m.setStateCalls, state)
+func (m *mockOVSPortController) SetPortState(context.Context, string, ovs.PortState) error {
 	return nil
 }
 

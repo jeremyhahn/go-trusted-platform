@@ -324,6 +324,90 @@ func (e ErrProfileMatchFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrAttestEvidenceRequired is returned when device attest is run without
+// --evidence-file.
+type ErrAttestEvidenceRequired struct{}
+
+func (e ErrAttestEvidenceRequired) Error() string {
+	return "device attest: --evidence-file is required"
+}
+
+// ErrAttestEvidenceReadFailed is returned when the evidence file cannot be
+// read.
+type ErrAttestEvidenceReadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrAttestEvidenceReadFailed) Error() string {
+	return fmt.Sprintf("device attest: failed to read evidence file %s: %v", e.Path, e.Cause)
+}
+
+func (e ErrAttestEvidenceReadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAttestEvidenceEmpty is returned when the evidence file has no content.
+type ErrAttestEvidenceEmpty struct {
+	Path string
+}
+
+func (e ErrAttestEvidenceEmpty) Error() string {
+	return fmt.Sprintf("device attest: evidence file %s is empty", e.Path)
+}
+
+// ErrAttestFailed is returned when the evidence could not be evaluated. A
+// negative verdict is not an error.
+type ErrAttestFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrAttestFailed) Error() string {
+	return fmt.Sprintf("device attest: failed to attest device %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrAttestFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileConfigIdentityRequired is returned when find-config is given no
+// device identity to look up.
+type ErrProfileConfigIdentityRequired struct{}
+
+func (e ErrProfileConfigIdentityRequired) Error() string {
+	return "device profile: at least one of --ek-serial or --mac is required"
+}
+
+// ErrNoConfigForDevice is returned when no profile is stored for the device
+// identity. It matches the SDK's common.ErrNotFound under errors.Is.
+type ErrNoConfigForDevice struct {
+	EKSerial   string
+	MACAddress string
+}
+
+func (e ErrNoConfigForDevice) Error() string {
+	return fmt.Sprintf("device profile: no profile for ek serial %q, mac %q", e.EKSerial, e.MACAddress)
+}
+
+func (e ErrNoConfigForDevice) Is(target error) bool {
+	return target == common.ErrNotFound
+}
+
+// ErrProfileFindConfigFailed is returned when the config lookup fails for a
+// reason other than no profile being stored for the identity.
+type ErrProfileFindConfigFailed struct {
+	Cause error
+}
+
+func (e ErrProfileFindConfigFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to find config: %v", e.Cause)
+}
+
+func (e ErrProfileFindConfigFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrProfileUpdateFailed is returned when updating a profile fails
 type ErrProfileUpdateFailed struct {
 	ID    uint64
@@ -466,4 +550,81 @@ type ErrBootDeliveryFailed struct {
 
 func (e ErrBootDeliveryFailed) Error() string {
 	return fmt.Sprintf("boot delivery not returned: %s", e.Reason)
+}
+
+// ErrDeviceUpdateNoChanges is returned when `device update` is given no
+// field to change, before any connection is attempted.
+type ErrDeviceUpdateNoChanges struct {
+	ID uint64
+}
+
+func (e ErrDeviceUpdateNoChanges) Error() string {
+	return fmt.Sprintf("device update: nothing to change on device %d: give at least one of --model, --ek-cert, --attest-pub, --attest-cert, --signing-pub, --hash-algo", e.ID)
+}
+
+// ErrDeviceUpdateFailed is returned when the control plane refuses a
+// device update.
+type ErrDeviceUpdateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrDeviceUpdateFailed) Error() string {
+	return fmt.Sprintf("device update: failed to update device %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrDeviceUpdateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrInvalidTemplateID is returned when a template id is not a decimal
+// uint64.
+type ErrInvalidTemplateID struct {
+	ID string
+}
+
+func (e ErrInvalidTemplateID) Error() string {
+	return fmt.Sprintf("device template: invalid template ID %q: must be a decimal number", e.ID)
+}
+
+// ErrTemplateNameRequired is returned when `device template create` is
+// given no --name.
+type ErrTemplateNameRequired struct{}
+
+func (e ErrTemplateNameRequired) Error() string {
+	return "device template: --name is required"
+}
+
+// ErrTemplateNotFound is returned when the control plane has no template
+// with the id. It matches the SDK's common.ErrNotFound under errors.Is.
+type ErrTemplateNotFound struct {
+	ID uint64
+}
+
+func (e ErrTemplateNotFound) Error() string {
+	return fmt.Sprintf("device template: template %d not found", e.ID)
+}
+
+func (e ErrTemplateNotFound) Is(target error) bool {
+	return target == common.ErrNotFound
+}
+
+// ErrTemplateOperationFailed is returned when the control plane refuses a
+// template operation. Operation is the verb (create, get, list, update,
+// delete, create-profile); ID is zero for create and list.
+type ErrTemplateOperationFailed struct {
+	Operation string
+	ID        uint64
+	Cause     error
+}
+
+func (e ErrTemplateOperationFailed) Error() string {
+	if e.ID == 0 {
+		return fmt.Sprintf("device template: %s failed: %v", e.Operation, e.Cause)
+	}
+	return fmt.Sprintf("device template: %s of template %d failed: %v", e.Operation, e.ID, e.Cause)
+}
+
+func (e ErrTemplateOperationFailed) Unwrap() error {
+	return e.Cause
 }

@@ -227,14 +227,14 @@ func TestStartIAMUserReconcile_NotStartedWithoutDependencies(t *testing.T) {
 	assert.Nil(t, noUserStore.startIAMUserReconcile(mirror))
 }
 
-// TestWebAuthnRestService_NoTenantManager_LeavesServiceUnwired proves
-// the dependency-missing case stays exactly as before: the handler is
-// still built (registration works tenant-less) and nothing is wired.
-func TestWebAuthnRestService_NoTenantManager_LeavesServiceUnwired(t *testing.T) {
+// TestWebAuthnRestService_NoTenantManager_DeclinesRoutes pins #662:
+// without a tenant user service a registration has no workspace to land
+// in, so the WebAuthn routes are declined rather than minting a session
+// in the operating tenant, and nothing is wired.
+func TestWebAuthnRestService_NoTenantManager_DeclinesRoutes(t *testing.T) {
 	registry, svcReg := newWiringRegistry(t, nil, &jwt.Service{})
 
-	handler := registry.WebAuthnRestService()
-	require.NotNil(t, handler)
+	assert.Nil(t, registry.WebAuthnRestService())
 	assert.Nil(t, svcReg.TenantUserService())
 }
 

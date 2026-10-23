@@ -27,6 +27,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
 // serviceSocketMode lets the socket's group — the service account — connect;
@@ -148,7 +150,12 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	}
 	defer closeGatewayRuntime(gw, logger)
 
-	server := ipc.NewServer(gw, servicePolicy(def, opts))
+	services, err := datapathServices(def, gw)
+	if err != nil {
+		return err
+	}
+	server := ipc.NewServer(gw, servicePolicy(def, opts, cfg.Process))
+	server.SetServices(services)
 	// Hardened already, so the kernel-class child holds no CAP_CHOWN and is
 	// not in the socket group: its socket takes the group from the
 	// supervisor's setgid runtime directory, and Listen only verifies it.
@@ -197,12 +204,40 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 // datapath process also admits the service account, through which the
 // parser processes reach the kernel state they may not program themselves;
 // a parser process admits no other parser.
-func servicePolicy(def process.Definition, opts serviceOptions) ipc.Policy {
+func servicePolicy(def process.Definition, opts serviceOptions, settings *process.Settings) ipc.Policy {
 	policy := ipc.Policy{ControlUIDs: []uint32{opts.supervisorUID}}
 	if def.Class == process.ClassKernel {
 		policy.DatapathUIDs = []uint32{opts.uid}
+		if settings != nil {
+			policy.PlatformUIDs = settings.PlatformUIDs
+		}
 	}
 	return policy
+}
+
+// datapathServices is what the datapath child serves platformd live on
+// GatewayServicesService (#660): the gateway's load balancer and NAT64, and
+// a perf service on the runtime's OVS client. Every other process serves
+// none, so those calls refuse with ErrServiceNotActive.
+func datapathServices(def process.Definition, gw *gateway.Gateway) (ipc.Services, error) {
+	if def.Class != process.ClassKernel {
+		return ipc.Services{}, nil
+	}
+	services := ipc.Services{LoadBalancer: gw, NAT64: gw}
+	rt := gw.GetConfig().Runtime
+	if rt == nil || rt.OVS == nil {
+		return services, nil
+	}
+	deps := perf.Deps{OVS: rt.OVS, Bridge: rt.Bridge}
+	if runner, ok := rt.OVS.(ovs.AppCtlRunner); ok {
+		deps.AppCtl = runner
+	}
+	perfService, err := perf.New(deps)
+	if err != nil {
+		return ipc.Services{}, err
+	}
+	services.Perf = perfService
+	return services, nil
 }
 
 // closeGatewayRuntime releases the OVS runtime a gateway holds, if any.

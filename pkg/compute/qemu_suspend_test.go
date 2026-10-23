@@ -60,7 +60,16 @@ func installRunControlSeam(t *testing.T, rc *fakeRunControl, connectErr error) {
 // record the exit exactly as the real one does.
 func installStopSeam(t *testing.T, orch *QEMUOrchestrator, qi *qemuInstance, stopErr error) *int {
 	t.Helper()
+	calls, _ := installStopSeamWithOptions(t, orch, qi, stopErr)
+	return calls
+}
+
+// installStopSeamWithOptions is installStopSeam that also records the
+// StopOptions each process stop received.
+func installStopSeamWithOptions(t *testing.T, orch *QEMUOrchestrator, qi *qemuInstance, stopErr error) (*int, *[]StopOptions) {
+	t.Helper()
 	calls := new(int)
+	seen := new([]StopOptions)
 	exited := make(chan struct{})
 	qi.waitGroup.Add(1)
 	go func() {
@@ -72,8 +81,9 @@ func installStopSeam(t *testing.T, orch *QEMUOrchestrator, qi *qemuInstance, sto
 	}()
 
 	orig := stopVMProcess
-	stopVMProcess = func(inst *qemuInstance) error {
+	stopVMProcess = func(inst *qemuInstance, opts StopOptions) error {
 		*calls++
+		*seen = append(*seen, opts)
 		if stopErr != nil {
 			return stopErr
 		}
@@ -89,7 +99,7 @@ func installStopSeam(t *testing.T, orch *QEMUOrchestrator, qi *qemuInstance, sto
 			exited <- struct{}{}
 		}
 	})
-	return calls
+	return calls, seen
 }
 
 // insertSuspendedVM inserts a running instance and moves it to suspended.

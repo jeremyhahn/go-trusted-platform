@@ -161,6 +161,18 @@ func (e ErrUnknownTenantState) Error() string {
 	return fmt.Sprintf("tenant tool result names an unknown tenant state %q", e.State)
 }
 
+// ErrUnknownRegistryEnum indicates a registry tool result naming an enum
+// value the adapter cannot map onto its platformv1 enum.
+type ErrUnknownRegistryEnum struct {
+	Field string
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownRegistryEnum) Error() string {
+	return fmt.Sprintf("registry tool result names an unknown %s %q", e.Field, e.Value)
+}
+
 // ErrFieldNotSupported indicates a request field the MCP tool has no
 // argument for. The adapter refuses it rather than dropping it.
 type ErrFieldNotSupported struct {

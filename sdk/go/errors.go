@@ -212,3 +212,14 @@ func (e ErrQuicBaaSInitFailed) Error() string {
 func (e ErrQuicBaaSInitFailed) Unwrap() error {
 	return e.Err
 }
+
+// ErrQuicBaaSTLSNotConfigured is the cause ErrQuicBaaSInitFailed wraps
+// when the platform SDK client was given a QuicBaaSAddr without
+// WithQuicBaaSTLSConfig. The go-quicbaas SDK refuses every connection
+// without TLS, the Unix transport included, and has no insecure mode.
+type ErrQuicBaaSTLSNotConfigured struct{}
+
+// Error implements the error interface.
+func (ErrQuicBaaSTLSNotConfigured) Error() string {
+	return "QuicBaaS connection has no TLS configuration: set platform.WithQuicBaaSTLSConfig, or the context's TLS files (local: quicbaas_ca_cert, quicbaas_client_cert, quicbaas_client_key; remote: ca_cert, client_cert, client_key)"
+}

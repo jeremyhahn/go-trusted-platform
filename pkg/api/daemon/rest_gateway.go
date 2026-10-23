@@ -42,10 +42,11 @@ type gatewayRESTService struct {
 	ipam   ipam.Allocator
 	status GatewayStatusController
 	bgp    GatewayBGPController
-	lb     GatewayLoadBalancerInterface
-	nat64  GatewayNAT64Interface
-	reader GatewaySnapshotReader
-	logger *slog.Logger
+	// backends is the shared gateway service the LB and NAT64 verbs read
+	// their backend from (#660); nil leaves them not configured.
+	backends GatewayBackendSource
+	reader   GatewaySnapshotReader
+	logger   *slog.Logger
 }
 
 // Compile-time check: gatewayRESTService implements rest.GatewayServiceInterface.

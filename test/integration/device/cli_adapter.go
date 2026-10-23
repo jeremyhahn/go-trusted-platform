@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -192,6 +193,10 @@ type cliProfile struct {
 	EKCert        string `json:"ek_cert"`
 	TLSServerName string `json:"tls_server_name"`
 	Assigned      bool   `json:"assigned"`
+
+	// MatchRules is the match_rules object; its keys are the entity's own
+	// JSON tags (mac_prefix, serial_prefix, model, ...).
+	MatchRules *entities.ProfileMatchRules `json:"match_rules"`
 }
 
 func (p cliProfile) entity(operation string) (*entities.DeviceProfile, error) {
@@ -214,6 +219,7 @@ func (p cliProfile) entity(operation string) (*entities.DeviceProfile, error) {
 		EKCert:        p.EKCert,
 		TLSServerName: p.TLSServerName,
 		Assigned:      p.Assigned,
+		MatchRules:    p.MatchRules,
 	}, nil
 }
 
@@ -235,6 +241,48 @@ type cliAttestCertRecord struct {
 	Subject           string `json:"subject"`
 	CertificateSerial string `json:"certificate_serial"`
 	AttestCert        string `json:"attest_cert"`
+}
+
+// cliDeleted is the result `device profile delete` and `device template
+// delete` print.
+type cliDeleted struct {
+	ID      string `json:"id"`
+	Deleted bool   `json:"deleted"`
+}
+
+// cliTemplate is the template object the `device template` verbs print
+// (buildTemplateOutput). The CLI renders the config only as its length
+// (config_bytes), so the entity's Config stays empty.
+type cliTemplate struct {
+	ID          string                      `json:"id"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	Role        string                      `json:"role"`
+	MatchRules  *entities.ProfileMatchRules `json:"match_rules"`
+}
+
+func (t cliTemplate) entity(operation string) (*entities.DeviceTemplate, error) {
+	id, err := strconv.ParseUint(t.ID, 10, 64)
+	if err != nil {
+		return nil, &CLIAdapterError{
+			Operation: operation,
+			Message:   "template id is not a decimal uint64: " + err.Error(),
+			Output:    t.ID,
+		}
+	}
+	return &entities.DeviceTemplate{
+		ID:          id,
+		Name:        t.Name,
+		Description: t.Description,
+		Role:        entities.DeviceRole(t.Role),
+		MatchRules:  t.MatchRules,
+	}, nil
+}
+
+// cliTemplateList is the page `device template list` prints.
+type cliTemplateList struct {
+	Total     int           `json:"total"`
+	Templates []cliTemplate `json:"templates"`
 }
 
 // pageArgs maps the suite's limit/offset window onto the CLI's 1-based
@@ -287,10 +335,25 @@ func (a *CLIAdapter) GetDevice(ctx context.Context, opts GetDeviceOptions) (*Get
 	return &GetDeviceResult{Device: device.entity()}, nil
 }
 
-// UpdateDevice reports that platformctl has no device update verb
-// (docs/device/cli.md lists the verbs; device update is not one).
+// UpdateDevice changes a device via `platformctl device update <id>`, which
+// sets only the flagged fields (docs/device/cli.md §2.7a). A zero HashAlgoId
+// means "unchanged" here, so --hash-algo is passed only when it is set.
 func (a *CLIAdapter) UpdateDevice(ctx context.Context, opts UpdateDeviceOptions) (*UpdateDeviceResult, error) {
-	return nil, ErrCLINoVerb{Operation: "UpdateDevice", Reason: "there is no `device update` command"}
+	args := []string{"device", "update", opts.DeviceID}
+	args = appendFlag(args, "--model", opts.Model)
+	args = appendFlag(args, "--ek-cert", opts.EKCert)
+	args = appendFlag(args, "--attest-pub", opts.AttestPub)
+	args = appendFlag(args, "--attest-cert", opts.AttestCert)
+	args = appendFlag(args, "--signing-pub", opts.SigningPub)
+	if opts.HashAlgoId > 0 {
+		args = append(args, "--hash-algo", strconv.FormatUint(uint64(opts.HashAlgoId), 10))
+	}
+
+	var device deviceJSON
+	if err := a.runJSON(ctx, "UpdateDevice", &device, args...); err != nil {
+		return nil, err
+	}
+	return &UpdateDeviceResult{Device: device.entity()}, nil
 }
 
 // DeleteDevice removes a device via `platformctl device delete <id>`.
@@ -341,22 +404,44 @@ func (a *CLIAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions)
 // Profile CRUD Operations
 // ============================================================================
 
-// profileMatchArgsUnsupported reports the profile options the CLI has no
-// flag for: prefix match rules are not part of `device profile create` or
-// `update`, which identify a device by exact EK serial or MAC only.
-func profileMatchArgsUnsupported(macPrefix, serialPrefix string, rules *entities.ProfileMatchRules) bool {
-	return macPrefix != "" || serialPrefix != "" || rules != nil
+// matchRuleArgs maps the suite's match rules onto the --match-mac-prefix,
+// --match-serial-prefix and --match-model flags (docs/device/cli.md §3.1).
+// A rule set in MatchRules wins over the bare prefix option, as on the RPC
+// adapters. Those three are the only rules the CLI sets, so any other rule
+// is refused rather than silently dropped.
+func matchRuleArgs(operation, macPrefix, serialPrefix string, rules *entities.ProfileMatchRules) ([]string, error) {
+	model := ""
+	if rules != nil {
+		if rules.ModelPattern != "" || rules.SerialPattern != "" || rules.ManufacturerMatch != "" ||
+			rules.TPMVendor != "" || len(rules.CustomAttributes) > 0 {
+			return nil, ErrCLINoVerb{Operation: operation, Reason: "the match-rule flags set only a MAC prefix, a serial prefix and a model"}
+		}
+		if rules.MACPrefix != "" {
+			macPrefix = rules.MACPrefix
+		}
+		if rules.SerialPrefix != "" {
+			serialPrefix = rules.SerialPrefix
+		}
+		model = rules.Model
+	}
+	var args []string
+	args = appendFlag(args, "--match-mac-prefix", macPrefix)
+	args = appendFlag(args, "--match-serial-prefix", serialPrefix)
+	args = appendFlag(args, "--match-model", model)
+	return args, nil
 }
 
 // CreateProfile creates a profile via `platformctl device profile create`.
 func (a *CLIAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptions) (*CreateProfileResult, error) {
-	if profileMatchArgsUnsupported(opts.MACPrefix, opts.SerialPrefix, opts.MatchRules) {
-		return nil, ErrCLINoVerb{Operation: "CreateProfile", Reason: "`device profile create` has no match-rule or prefix flags"}
+	matchArgs, err := matchRuleArgs("CreateProfile", opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
+	if err != nil {
+		return nil, err
 	}
 	args := []string{"device", "profile", "create"}
 	args = appendFlag(args, "--name", opts.Name)
 	args = appendFlag(args, "--model", opts.Model)
 	args = appendFlag(args, "--role", string(opts.Role))
+	args = append(args, matchArgs...)
 
 	profile, err := a.runProfile(ctx, "CreateProfile", args...)
 	if err != nil {
@@ -376,13 +461,15 @@ func (a *CLIAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*G
 
 // UpdateProfile updates a profile via `platformctl device profile update <id>`.
 func (a *CLIAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptions) (*UpdateProfileResult, error) {
-	if profileMatchArgsUnsupported(opts.MACPrefix, opts.SerialPrefix, opts.MatchRules) {
-		return nil, ErrCLINoVerb{Operation: "UpdateProfile", Reason: "`device profile update` has no match-rule or prefix flags"}
+	matchArgs, err := matchRuleArgs("UpdateProfile", opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
+	if err != nil {
+		return nil, err
 	}
 	args := []string{"device", "profile", "update", opts.ProfileID}
 	args = appendFlag(args, "--name", opts.Name)
 	args = appendFlag(args, "--model", opts.Model)
 	args = appendFlag(args, "--role", string(opts.Role))
+	args = append(args, matchArgs...)
 
 	profile, err := a.runProfile(ctx, "UpdateProfile", args...)
 	if err != nil {
@@ -391,9 +478,13 @@ func (a *CLIAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOption
 	return &UpdateProfileResult{Profile: profile}, nil
 }
 
-// DeleteProfile reports that platformctl has no profile delete verb.
+// DeleteProfile removes a profile via `platformctl device profile delete <id>`.
 func (a *CLIAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOptions) (*DeleteProfileResult, error) {
-	return nil, ErrCLINoVerb{Operation: "DeleteProfile", Reason: "there is no `device profile delete` command"}
+	var result cliDeleted
+	if err := a.runJSON(ctx, "DeleteProfile", &result, "device", "profile", "delete", opts.ProfileID); err != nil {
+		return nil, err
+	}
+	return &DeleteProfileResult{Success: result.Deleted}, nil
 }
 
 // ListProfiles lists profiles via `platformctl device profile list`. There
@@ -432,19 +523,43 @@ func (a *CLIAdapter) runProfile(ctx context.Context, operation string, args ...s
 // Profile Lookups
 // ============================================================================
 
-// FindProfileByMACAddress reports that platformctl has no profile lookup by MAC.
+// FindProfileByMACAddress finds a profile whose MAC prefix rule fits the
+// address via `platformctl device profile match --mac`. The CLI has no
+// separate by-MAC verb; `match` covers it (docs/device/cli.md §3.0a, §6).
 func (a *CLIAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProfileByMACAddressOptions) (*FindProfileByMACAddressResult, error) {
-	return nil, ErrCLINoVerb{Operation: "FindProfileByMACAddress", Reason: "there is no profile lookup by MAC command"}
+	profile, err := a.matchProfile(ctx, "FindProfileByMACAddress", FindMatchingProfileOptions{MACAddress: opts.MACAddress})
+	if err != nil {
+		return nil, err
+	}
+	return &FindProfileByMACAddressResult{Profile: profile}, nil
 }
 
-// FindProfileBySerial reports that platformctl has no profile lookup by serial.
+// FindProfileBySerial finds a profile whose serial prefix rule fits the
+// serial via `platformctl device profile match --serial`.
 func (a *CLIAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileBySerialOptions) (*FindProfileBySerialResult, error) {
-	return nil, ErrCLINoVerb{Operation: "FindProfileBySerial", Reason: "there is no profile lookup by serial command"}
+	profile, err := a.matchProfile(ctx, "FindProfileBySerial", FindMatchingProfileOptions{Serial: opts.Serial})
+	if err != nil {
+		return nil, err
+	}
+	return &FindProfileBySerialResult{Profile: profile}, nil
 }
 
-// FindMatchingProfile reports that platformctl has no profile match command.
+// FindMatchingProfile finds a profile via `platformctl device profile match`.
 func (a *CLIAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	return nil, ErrCLINoVerb{Operation: "FindMatchingProfile", Reason: "there is no profile match command"}
+	profile, err := a.matchProfile(ctx, "FindMatchingProfile", opts)
+	if err != nil {
+		return nil, err
+	}
+	return &FindMatchingProfileResult{Profile: profile}, nil
+}
+
+// matchProfile runs `device profile match` with the attributes opts sets.
+func (a *CLIAdapter) matchProfile(ctx context.Context, operation string, opts FindMatchingProfileOptions) (*entities.DeviceProfile, error) {
+	args := []string{"device", "profile", "match"}
+	args = appendFlag(args, "--mac", opts.MACAddress)
+	args = appendFlag(args, "--serial", opts.Serial)
+	args = appendFlag(args, "--model", opts.Model)
+	return a.runProfile(ctx, operation, args...)
 }
 
 // ============================================================================
@@ -490,52 +605,191 @@ func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 //
 // The error is returned rather than faked so the gap stays visible.
 func (a *CLIAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	return nil, ErrAttestationTransportUnavailable{
-		Transport: "CLI",
-		Reason:    "platformctl has no `device attest` command",
+	file, err := os.CreateTemp(a.configDir, "attest-evidence-*.json")
+	if err != nil {
+		return nil, err
 	}
+	path := file.Name()
+	defer func() { _ = os.Remove(path) }()
+	_, writeErr := file.Write(opts.Evidence)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return nil, errors.Join(writeErr, closeErr)
+	}
+
+	var record cliAttestRecord
+	if err := a.runJSON(ctx, "AttestDevice", &record, "device", "attest", opts.DeviceID, "--evidence-file", path); err != nil {
+		return nil, err
+	}
+	return &AttestDeviceResult{
+		DeviceID:              strconv.FormatUint(record.DeviceID, 10),
+		Serial:                record.Serial,
+		Verified:              record.Verified,
+		SignatureValid:        record.SignatureValid,
+		NonceValid:            record.NonceValid,
+		PCRsValid:             record.PCRsValid,
+		AKCertificateVerified: record.AKCertificateVerified,
+		AttestationStatus:     record.AttestationStatus,
+		Message:               record.Message,
+	}, nil
+}
+
+// cliAttestRecord is the JSON `device attest` prints (docs/device/cli.md).
+type cliAttestRecord struct {
+	DeviceID              uint64 `json:"device_id"`
+	Serial                string `json:"serial"`
+	Verified              bool   `json:"verified"`
+	SignatureValid        bool   `json:"signature_valid"`
+	NonceValid            bool   `json:"nonce_valid"`
+	PCRsValid             bool   `json:"pcrs_valid"`
+	AKCertificateVerified bool   `json:"ak_certificate_verified"`
+	AttestationStatus     string `json:"attestation_status"`
+	Message               string `json:"message"`
 }
 
 // ============================================================================
 // Template Operations
 // ============================================================================
 
-// templateReason is why every template operation fails over the CLI.
-const templateReason = "there is no `device template` command"
+// templateArgs builds the flags `device template create` and `update` share
+// (docs/device/cli.md §2.8). A config is written to a file in the adapter's
+// config directory for --config-file; the returned cleanup removes it.
+func (a *CLIAdapter) templateArgs(operation, name, description string, role entities.DeviceRole, config []byte, rules *entities.ProfileMatchRules) ([]string, func(), error) {
+	matchArgs, err := matchRuleArgs(operation, "", "", rules)
+	if err != nil {
+		return nil, nil, err
+	}
+	var args []string
+	args = appendFlag(args, "--name", name)
+	args = appendFlag(args, "--description", description)
+	args = appendFlag(args, "--role", string(role))
+	args = append(args, matchArgs...)
 
-// CreateTemplate reports that platformctl has no template verbs.
+	cleanup := func() {}
+	if len(config) > 0 {
+		file, err := os.CreateTemp(a.configDir, "template-config-*.json")
+		if err != nil {
+			return nil, nil, err
+		}
+		path := file.Name()
+		cleanup = func() { _ = os.Remove(path) }
+		_, writeErr := file.Write(config)
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			cleanup()
+			return nil, nil, errors.Join(writeErr, closeErr)
+		}
+		args = append(args, "--config-file", path)
+	}
+	return args, cleanup, nil
+}
+
+// runTemplate runs a `device template` verb that prints one template.
+func (a *CLIAdapter) runTemplate(ctx context.Context, operation string, args ...string) (*entities.DeviceTemplate, error) {
+	var template cliTemplate
+	if err := a.runJSON(ctx, operation, &template, args...); err != nil {
+		return nil, err
+	}
+	return template.entity(operation)
+}
+
+// CreateTemplate creates a template via `platformctl device template create`.
 func (a *CLIAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, ErrCLINoVerb{Operation: "CreateTemplate", Reason: templateReason}
+	flags, cleanup, err := a.templateArgs("CreateTemplate", opts.Name, opts.Description, opts.Role, opts.Config, opts.MatchRules)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	template, err := a.runTemplate(ctx, "CreateTemplate", append([]string{"device", "template", "create"}, flags...)...)
+	if err != nil {
+		return nil, err
+	}
+	return &CreateTemplateResult{Template: template}, nil
 }
 
-// GetTemplate reports that platformctl has no template verbs.
+// GetTemplate retrieves a template via `platformctl device template get <id>`.
 func (a *CLIAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, ErrCLINoVerb{Operation: "GetTemplate", Reason: templateReason}
+	template, err := a.runTemplate(ctx, "GetTemplate", "device", "template", "get", opts.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	return &GetTemplateResult{Template: template}, nil
 }
 
-// UpdateTemplate reports that platformctl has no template verbs.
+// UpdateTemplate changes a template via `platformctl device template update
+// <id>`, which sets only the flagged fields and keeps the rest.
 func (a *CLIAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, ErrCLINoVerb{Operation: "UpdateTemplate", Reason: templateReason}
+	flags, cleanup, err := a.templateArgs("UpdateTemplate", opts.Name, opts.Description, opts.Role, opts.Config, opts.MatchRules)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	template, err := a.runTemplate(ctx, "UpdateTemplate", append([]string{"device", "template", "update", opts.TemplateID}, flags...)...)
+	if err != nil {
+		return nil, err
+	}
+	return &UpdateTemplateResult{Template: template}, nil
 }
 
-// DeleteTemplate reports that platformctl has no template verbs.
+// DeleteTemplate removes a template via `platformctl device template delete <id>`.
 func (a *CLIAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, ErrCLINoVerb{Operation: "DeleteTemplate", Reason: templateReason}
+	var result cliDeleted
+	if err := a.runJSON(ctx, "DeleteTemplate", &result, "device", "template", "delete", opts.TemplateID); err != nil {
+		return nil, err
+	}
+	return &DeleteTemplateResult{Success: result.Deleted}, nil
 }
 
-// ListTemplates reports that platformctl has no template verbs.
+// ListTemplates lists templates via `platformctl device template list`. The
+// CLI filters by nothing but the page window, so a role filter is refused.
 func (a *CLIAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, ErrCLINoVerb{Operation: "ListTemplates", Reason: templateReason}
+	if opts.Role != "" {
+		return nil, ErrCLINoVerb{Operation: "ListTemplates", Reason: "`device template list` has no role filter"}
+	}
+	args := append([]string{"device", "template", "list"}, pageArgs(opts.Limit, opts.Offset)...)
+
+	var page cliTemplateList
+	if err := a.runJSON(ctx, "ListTemplates", &page, args...); err != nil {
+		return nil, err
+	}
+	templates := make([]*entities.DeviceTemplate, 0, len(page.Templates))
+	for _, t := range page.Templates {
+		template, err := t.entity("ListTemplates")
+		if err != nil {
+			return nil, err
+		}
+		templates = append(templates, template)
+	}
+	return &ListTemplatesResult{Templates: templates, Total: page.Total}, nil
 }
 
-// CreateProfileFromTemplate reports that platformctl has no template verbs.
+// CreateProfileFromTemplate builds a profile via `platformctl device template
+// create-profile <template-id>`; the name, EK serial and MAC bind it.
 func (a *CLIAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	return nil, ErrCLINoVerb{Operation: "CreateProfileFromTemplate", Reason: templateReason}
+	args := []string{"device", "template", "create-profile", opts.TemplateID}
+	args = appendFlag(args, "--name", opts.Name)
+	args = appendFlag(args, "--ek-serial", opts.EKSerial)
+	args = appendFlag(args, "--mac", opts.MACAddress)
+
+	profile, err := a.runProfile(ctx, "CreateProfileFromTemplate", args...)
+	if err != nil {
+		return nil, err
+	}
+	return &CreateProfileResult{Profile: profile}, nil
 }
 
 // FindConfigForDevice reports that platformctl has no find-config verb.
 func (a *CLIAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrCLINoVerb{Operation: "FindConfigForDevice", Reason: "there is no `device profile find-config` command"}
+	args := []string{"device", "profile", "find-config"}
+	args = appendFlag(args, "--ek-serial", opts.EKSerial)
+	args = appendFlag(args, "--mac", opts.MACAddress)
+	profile, err := a.runProfile(ctx, "FindConfigForDevice", args...)
+	if err != nil {
+		return nil, err
+	}
+	return &FindConfigForDeviceResult{Profile: profile}, nil
 }
 
 // AssignProfileToDevice binds a profile to a device identity via

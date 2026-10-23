@@ -16,6 +16,7 @@ package vtpm
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -39,6 +40,8 @@ type mockVTPMService struct {
 	stopErr     error
 	listErr     error
 	storagePath string
+	// ekCertDER, when set, is written to each new bundle's tpm/ek.crt.
+	ekCertDER []byte
 }
 
 func newMockVTPMService() *mockVTPMService {
@@ -60,6 +63,16 @@ func (m *mockVTPMService) CreateBundle(ctx context.Context, opts *CreateBundleOp
 	id := opts.Hostname + "-" + time.Now().Format("20060102150405")
 	if opts.Hostname == "" {
 		id = "vtpm-" + time.Now().Format("20060102150405")
+	}
+
+	if len(m.ekCertDER) > 0 {
+		tpmDir := filepath.Join(m.storagePath, id, "tpm")
+		if err := os.MkdirAll(tpmDir, 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(tpmDir, "ek.crt"), m.ekCertDER, 0o600); err != nil {
+			return nil, err
+		}
 	}
 
 	bundle := &Bundle{
@@ -610,6 +623,36 @@ func TestGenerateForProfile_AssignsEKSerial(t *testing.T) {
 
 		if assigner.assignedMAC != "" {
 			t.Errorf("expected empty MAC, got %s", assigner.assignedMAC)
+		}
+
+		if assigner.assignedEKCert != "" {
+			t.Errorf("expected no EK certificate when the bundle has none, got %q", assigner.assignedEKCert)
+		}
+	})
+
+	t.Run("prestages the bundle EK certificate as PEM", func(t *testing.T) {
+		ekCert, err := newSelfSignedTestCert()
+		if err != nil {
+			t.Fatalf("newSelfSignedTestCert failed: %v", err)
+		}
+		mockService := newMockVTPMService()
+		mockService.storagePath = t.TempDir()
+		mockService.ekCertDER = ekCert.Raw
+		gen, err := NewGenerator(&VTPMConfig{StoragePath: mockService.storagePath}, mockService, nil)
+		if err != nil {
+			t.Fatalf("NewGenerator failed: %v", err)
+		}
+		assigner := &mockProfileAssigner{}
+		gen.SetProfileAssigner(assigner)
+
+		profile := &entities.DeviceProfile{ID: 501, Name: "ek-cert-test"}
+		if _, err := gen.GenerateForProfile(context.Background(), profile, &GenerateOptions{Hostname: "ek-cert-vm"}); err != nil {
+			t.Fatalf("GenerateForProfile failed: %v", err)
+		}
+
+		want := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ekCert.Raw}))
+		if assigner.assignedEKCert != want {
+			t.Errorf("expected the bundle EK certificate as PEM, got %q", assigner.assignedEKCert)
 		}
 	})
 }

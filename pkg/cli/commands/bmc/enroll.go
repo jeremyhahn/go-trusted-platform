@@ -157,7 +157,9 @@ Examples:
 	cmd.Flags().BoolVar(&flags.dnsRegister, "dns-register", false, "override profile: register hostname in platform DNS")
 	cmd.Flags().BoolVar(&flags.danePublish, "dane-publish", false, "override profile: publish DANE TLSA record")
 
-	_ = v.BindPFlag("backups_dir", cmd.Flags().Lookup("backups-dir"))
+	if err := v.BindPFlag("backups_dir", cmd.Flags().Lookup("backups-dir")); err != nil {
+		panic(cli.ErrFlagSetup{Command: cmd.Name(), Flag: "backups-dir", Err: err})
+	}
 
 	return cmd
 }

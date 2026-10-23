@@ -57,26 +57,33 @@ type GroupConfig struct {
 
 // Validate checks one group and reports the first defect.
 func (g GroupConfig) Validate() error {
+	_, err := g.validate()
+	return err
+}
+
+// validate checks one group and returns its parsed source address, so a
+// caller that needs the address never parses it a second time.
+func (g GroupConfig) validate() (netip.Addr, error) {
 	if g.VRID == 0 {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "vrid", Reason: "must be 1-255"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "vrid", Reason: "must be 1-255"}
 	}
 	if strings.TrimSpace(g.Interface) == "" {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "interface", Reason: "is required"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "interface", Reason: "is required"}
 	}
 	if g.AdvertIntervalCentiseconds > MaxAdvertIntervalCentiseconds {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "advert-interval-cs", Reason: "exceeds 4095"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "advert-interval-cs", Reason: "exceeds 4095"}
 	}
 	if len(g.Addresses) == 0 {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "at least one is required"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "at least one is required"}
 	}
 	var fam Family
 	for _, raw := range g.Addresses {
 		pfx, err := netip.ParsePrefix(raw)
 		if err != nil {
-			return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "entry " + raw + " is not an address/prefix"}
+			return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "entry " + raw + " is not an address/prefix"}
 		}
 		if pfx.Addr().IsUnspecified() || pfx.Addr().IsMulticast() || pfx.Addr().IsLoopback() {
-			return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "entry " + raw + " is not a usable unicast address"}
+			return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "entry " + raw + " is not a usable unicast address"}
 		}
 		f := FamilyIPv4
 		if pfx.Addr().Is6() {
@@ -85,20 +92,20 @@ func (g GroupConfig) Validate() error {
 		if fam == 0 {
 			fam = f
 		} else if fam != f {
-			return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "mixes IPv4 and IPv6; use one group per family"}
+			return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "addresses", Reason: "mixes IPv4 and IPv6; use one group per family"}
 		}
 	}
 	if strings.TrimSpace(g.Source) == "" {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "source", Reason: "is required"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "source", Reason: "is required"}
 	}
 	src, err := netip.ParseAddr(g.Source)
 	if err != nil {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "source", Reason: "is not an IP address"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "source", Reason: "is not an IP address"}
 	}
 	if (fam == FamilyIPv6) != src.Is6() {
-		return &ErrInvalidGroupConfig{VRID: g.VRID, Field: "source", Reason: "is not in the group's address family"}
+		return netip.Addr{}, &ErrInvalidGroupConfig{VRID: g.VRID, Field: "source", Reason: "is not in the group's address family"}
 	}
-	return nil
+	return src, nil
 }
 
 // Validate checks the section: every group valid and no VRID configured

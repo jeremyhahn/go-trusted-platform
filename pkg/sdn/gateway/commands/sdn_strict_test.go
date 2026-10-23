@@ -57,3 +57,31 @@ func TestLoadServeConfig_SDNStaleKeysRefused(t *testing.T) {
 		t.Fatalf("want two unknown keys, got %v", err)
 	}
 }
+
+// TestLoadServeConfig_ProxyRequiredRolesRefused refuses a proxy route that
+// still names the removed required-roles (#926), and names the field.
+func TestLoadServeConfig_ProxyRequiredRolesRefused(t *testing.T) {
+	doc := "proxy:\n  enabled: true\n  routes:\n    - id: web\n      path-prefix: /\n      pool: web\n      auth: {mode: token, required-roles: [admin]}\n"
+	_, err := LoadServeConfig(strictServeViper(t, doc))
+	var section *ErrConfigSection
+	if !errors.As(err, &section) || section.Section != "proxy" {
+		t.Fatalf("want ErrConfigSection for proxy, got %v", err)
+	}
+	var unknown *config.ErrUnknownConfigKeys
+	if !errors.As(err, &unknown) || len(unknown.Keys) != 1 || unknown.Keys[0].Path != "proxy.routes[0].auth.required-roles" {
+		t.Fatalf("want the one unknown key proxy.routes[0].auth.required-roles, got %v", err)
+	}
+}
+
+// TestLoadServeConfig_ProxyStrict decodes a current proxy route, with its
+// required scopes, through the strict path.
+func TestLoadServeConfig_ProxyStrict(t *testing.T) {
+	doc := "proxy:\n  enabled: true\n  routes:\n    - id: web\n      path-prefix: /\n      pool: web\n      auth: {mode: token, required-scopes: [\"proxy:read\"], attestation-max-age: 5m}\n"
+	cfg, err := LoadServeConfig(strictServeViper(t, doc))
+	if err != nil {
+		t.Fatalf("LoadServeConfig: %v", err)
+	}
+	if cfg.Proxy == nil || len(cfg.Proxy.Routes) != 1 || cfg.Proxy.Routes[0].Auth.RequiredScopes[0] != "proxy:read" {
+		t.Fatalf("proxy section not decoded: %+v", cfg.Proxy)
+	}
+}

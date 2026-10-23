@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/coredns/caddy"
@@ -54,6 +55,10 @@ var (
 	ErrDNSNotRunning                = errors.New("DNS server is not running")
 	ErrMissingTenantContext         = errors.New("missing tenant context")
 	ErrUnauthorizedZoneAccess       = errors.New("unauthorized: caller tenant does not own this zone")
+	ErrInvalidRecordValue           = errors.New("dns: invalid record value")
+	ErrRecordNotFound               = errors.New("dns: record not found")
+	ErrInvalidTTL                   = errors.New("dns: TTL must be 0 to 2147483647 (RFC 2181 §8)")
+	ErrCNOutsideZones               = errors.New("dns: CN does not match any configured zone")
 
 	// caddyInstance holds the running Caddy/CoreDNS instance for shutdown
 	caddyInstance *caddy.Instance
@@ -313,11 +318,21 @@ func (s *Service) Zone(ctx context.Context, zoneName string) (*entities.Zone, er
 	return zone, nil
 }
 
+// InternalDomain returns the internal server's zone name, or "" when no
+// internal server is configured.
 func (s *Service) InternalDomain() string {
+	if s.params.Config.InternalServer == nil {
+		return ""
+	}
 	return s.params.Config.InternalServer.Zone.Name
 }
 
+// PublicDomain returns the public server's zone name, or "" when no public
+// server is configured.
 func (s *Service) PublicDomain() string {
+	if s.params.Config.PublicServer == nil {
+		return ""
+	}
 	return s.params.Config.PublicServer.Zone.Name
 }
 
@@ -471,7 +486,7 @@ func (s *Service) register(
 		zone.AddARecord(&entities.ARecord{
 			Name:  hostname,
 			Value: ip,
-			TTL:   3600})
+			TTL:   s.params.Config.RecordTTL()})
 
 	} else {
 
@@ -486,7 +501,7 @@ func (s *Service) register(
 			ID:          id,
 			Name:        zoneName,
 			TenantID:    s.params.TenantID,
-			TTL:         3600,
+			TTL:         s.params.Config.RecordTTL(),
 			Internal:    true,
 			Description: fmt.Sprintf("Registered device %s.%s", hostname, zoneName),
 			RecordSet: entities.RecordSet{
@@ -499,30 +514,30 @@ func (s *Service) register(
 					Retry:      7200,
 					Expire:     86400,
 					MinimumTTL: 3600,
-					TTL:        3600,
+					TTL:        s.params.Config.RecordTTL(),
 				},
 				ARecords: []*entities.ARecord{
 					{
 						Name:  "@",
 						Value: ip,
-						TTL:   3600,
+						TTL:   s.params.Config.RecordTTL(),
 					},
 					{
 						Name:  "ns1",
 						Value: ip,
-						TTL:   3600,
+						TTL:   s.params.Config.RecordTTL(),
 					},
 					{
 						Name:  hostname,
 						Value: ip,
-						TTL:   3600,
+						TTL:   s.params.Config.RecordTTL(),
 					},
 				},
 				NSRecords: []*entities.NSRecord{
 					{
 						Name:  "ns1",
 						Value: fmt.Sprintf("ns1.%s", zoneName),
-						TTL:   3600,
+						TTL:   s.params.Config.RecordTTL(),
 					},
 				},
 			},
@@ -571,9 +586,12 @@ func (s *Service) RegisterWithNetworkZone(
 	id := util.NewID([]byte(subZoneName))
 
 	subZone, err := s.zoneDAO.Get(ctx, id)
-	if err != nil {
+	if isNotFoundError(err) {
 		// Sub-zone not pre-created: skip best-effort.
 		return nil
+	}
+	if err != nil {
+		return &ZoneError{Op: "get", Zone: subZoneName, Err: err}
 	}
 
 	// Ensure TenantID so Save does not reject the zone.
@@ -591,11 +609,11 @@ func (s *Service) RegisterWithNetworkZone(
 	subZone.AddARecord(&entities.ARecord{
 		Name:  host,
 		Value: ip,
-		TTL:   3600,
+		TTL:   s.params.Config.RecordTTL(),
 	})
 
 	if err := s.zoneDAO.Save(ctx, subZone); err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("dns: failed to save zone-qualified A record %s in %s", host, subZoneName), Err: err}
+		return &RecordError{Op: "save", Type: "A", Name: host + "." + subZoneName, Err: err}
 	}
 
 	return nil
@@ -609,15 +627,10 @@ func Run(
 	// Refuse a configuration this process cannot honour BEFORE anything is
 	// started or registered. Under FIPS activation NSEC3 cannot be produced at
 	// all, and a daemon that comes up with zones it will silently fail to sign
-	// is the outcome this prevents (#249).
-	if err := config.DNSSEC.Validate(); err != nil {
-		return err
-	}
-
-	// Likewise for DNS64: a prefix no RFC 6052 translator can reverse
-	// synthesises addresses that route to nothing, which presents as a
-	// network fault rather than a configuration one. Refuse it here.
-	if err := config.DNS64.Validate(config); err != nil {
+	// is the outcome this prevents (#249). Likewise a DNS64 prefix no RFC 6052
+	// translator can reverse synthesises addresses that route to nothing, and
+	// a resolver section with no usable server leaves every lookup failing.
+	if err := config.Validate(); err != nil {
 		return err
 	}
 
@@ -934,19 +947,19 @@ func (s *Service) AddTLSARecord(ctx context.Context, zoneName string, record *en
 
 	zone, err := s.zoneDAO.Get(ctx, id)
 	if err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to get zone %s", zoneName), Err: err}
+		return &ZoneError{Op: "get", Zone: zoneName, Err: err}
 	}
 
 	// Ensure zone has a tenant ID — zones created during initial DNS startup
 	// may have empty tenant IDs that need to be claimed by the platform tenant.
 	if err := s.ensureZoneTenantID(zone); err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to set zone tenant for %s", zoneName), Err: err}
+		return &ZoneError{Op: "set the tenant of", Zone: zoneName, Err: err}
 	}
 
 	zone.AddTLSARecord(record)
 
 	if err := s.SaveAndSign(ctx, zone); err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to save zone %s with TLSA record", zoneName), Err: err}
+		return &RecordError{Op: "save", Type: "TLSA", Name: record.Name, Err: err}
 	}
 
 	return nil
@@ -1065,7 +1078,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 		}
 		ip = configuredOrDetected(s.params.Config.PublicIPv4, s.params.PublicIPv4)
 	default:
-		return &MessageError{Msg: fmt.Sprintf("CN %s does not match any configured zone (internal: %s, public: %s)", cn, internalZoneName, publicZoneName)}
+		return &DetailError{Err: ErrCNOutsideZones, Detail: ": " + cn + " (internal: " + internalZoneName + ", public: " + publicZoneName + ")"}
 	}
 
 	if ip == "" {
@@ -1087,7 +1100,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 	zone.AddARecord(&entities.ARecord{
 		Name:  hostname,
 		Value: ip,
-		TTL:   3600,
+		TTL:   s.params.Config.RecordTTL(),
 	})
 
 	// Save the zone
@@ -1134,7 +1147,7 @@ func (s *Service) CreateZone(ctx context.Context, zoneName string) error {
 	zone := &entities.Zone{
 		Name:     zoneName,
 		TenantID: s.params.TenantID,
-		TTL:      3600,
+		TTL:      s.params.Config.RecordTTL(),
 	}
 	return s.Save(ctx, zone)
 }
@@ -1148,150 +1161,97 @@ func (s *Service) DeleteZone(ctx context.Context, zoneName string) error {
 	return s.Delete(ctx, zone)
 }
 
-// AddRecord adds a DNS record to the appropriate zone.
+// AddRecord adds a DNS record to the longest stored zone that holds name. The
+// types and the form of each value are recordKinds'; any other type is
+// ErrRecordTypeNotSupported, and a value that does not parse is
+// ErrInvalidRecordValue. A ttl of 0 means the record has none and takes the
+// configured default-ttl; a ttl outside RFC 2181 §8's range is ErrInvalidTTL.
 func (s *Service) AddRecord(ctx context.Context, name string, recordType string, value string, ttl int) error {
-	// Extract zone name from the record name
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
+	kind, err := lookupRecordKind(recordType)
 	if err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
+		return err
 	}
 
-	ttl32 := uint32(ttl)
+	recordTTL, err := s.addRecordTTL(ttl)
+	if err != nil {
+		return &RecordError{Op: "add", Type: recordType, Name: name, Err: err}
+	}
 
-	// Add the record based on type
-	switch recordType {
-	case "A":
-		zone.AddARecord(&entities.ARecord{Name: name, Value: value, TTL: ttl32})
-	case "AAAA":
-		zone.AddAAAARecord(&entities.AAAARecord{Name: name, Value: value, TTL: ttl32})
-	case "CNAME":
-		zone.AddCNAMERecord(&entities.CNAMERecord{Name: name, Value: value, TTL: ttl32})
-	case "TXT":
-		zone.AddTXTRecord(&entities.TXTRecord{Name: name, Value: value, TTL: ttl32})
-	case "MX":
-		zone.AddMXRecord(&entities.MXRecord{Name: name, Value: value, TTL: ttl32})
-	case "NS":
-		zone.AddNSRecord(&entities.NSRecord{Name: name, Value: value, TTL: ttl32})
-	default:
-		return &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
+	zone, err := s.zoneForName(ctx, name)
+	if err != nil {
+		return &RecordError{Op: "find the zone of", Type: recordType, Name: name, Err: err}
+	}
+
+	if err := kind.add(zone, name, value, recordTTL); err != nil {
+		return &RecordError{Op: "add", Type: recordType, Name: name, Err: err}
 	}
 
 	return s.Save(ctx, zone)
 }
 
+// addRecordTTL returns the TTL AddRecord stores: ttl itself, or the
+// configured default-ttl when ttl is 0. A negative ttl, or one above 2^31-1
+// (RFC 2181 §8), is ErrInvalidTTL.
+func (s *Service) addRecordTTL(ttl int) (uint32, error) {
+	if ttl < 0 || ttl > maxTTL {
+		return 0, &DetailError{Err: ErrInvalidTTL, Detail: ": ttl " + strconv.Itoa(ttl)}
+	}
+	if ttl == 0 {
+		return s.params.Config.RecordTTL(), nil
+	}
+	return uint32(ttl), nil
+}
+
 // DeleteRecord deletes a DNS record from the appropriate zone.
 func (s *Service) DeleteRecord(ctx context.Context, name string, recordType string) error {
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
+	kind, err := lookupRecordKind(recordType)
 	if err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
+		return err
 	}
 
-	// Delete the record based on type
-	switch recordType {
-	case "A":
-		zone.RemoveARecord(name)
-	case "AAAA":
-		zone.RemoveAAAARecord(name)
-	case "CNAME":
-		zone.RemoveCNAMERecord(name)
-	case "TXT":
-		zone.RemoveTXTRecord(name)
-	case "MX":
-		zone.RemoveMXRecord(name)
-	case "NS":
-		zone.RemoveNSRecord(name)
-	default:
-		return &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
+	zone, err := s.zoneForName(ctx, name)
+	if err != nil {
+		return &RecordError{Op: "find the zone of", Type: recordType, Name: name, Err: err}
 	}
+
+	kind.remove(zone, name)
 
 	return s.Save(ctx, zone)
 }
 
 // GetRecord retrieves a DNS record by name and type.
 func (s *Service) GetRecord(ctx context.Context, name string, recordType string) (interface{}, error) {
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
+	kind, err := lookupRecordKind(recordType)
 	if err != nil {
-		return nil, &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
+		return nil, err
 	}
 
-	// Get the record based on type
-	switch recordType {
-	case "A":
-		for _, rec := range zone.RecordSet.ARecords {
-			if rec.Name == name {
-				return rec, nil
-			}
-		}
-	case "AAAA":
-		for _, rec := range zone.RecordSet.AAAARecords {
-			if rec.Name == name {
-				return rec, nil
-			}
-		}
-	case "CNAME":
-		for _, rec := range zone.RecordSet.CNAMERecords {
-			if rec.Name == name {
-				return rec, nil
-			}
-		}
-	case "TXT":
-		for _, rec := range zone.RecordSet.TXTRecords {
-			if rec.Name == name {
-				return rec, nil
-			}
-		}
-	case "MX":
-		for _, rec := range zone.RecordSet.MXRecords {
-			if rec.Name == name {
-				return rec, nil
-			}
-		}
-	case "NS":
-		for _, rec := range zone.RecordSet.NSRecords {
-			if rec.Name == name {
-				return rec, nil
-			}
-		}
-	default:
-		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
+	zone, err := s.zoneForName(ctx, name)
+	if err != nil {
+		return nil, &RecordError{Op: "find the zone of", Type: recordType, Name: name, Err: err}
 	}
 
-	return nil, &MessageError{Msg: fmt.Sprintf("record not found: %s %s", name, recordType)}
+	for _, rec := range kind.records(&zone.RecordSet) {
+		if rec.name == name {
+			return rec.record, nil
+		}
+	}
+
+	return nil, &RecordError{Op: "find", Type: recordType, Name: name, Err: ErrRecordNotFound}
 }
 
 // ListRecords lists all records in a zone.
 func (s *Service) ListRecords(ctx context.Context, zoneName string) ([]interface{}, error) {
 	zone, err := s.Zone(ctx, zoneName)
 	if err != nil {
-		return nil, &WrappedError{Msg: fmt.Sprintf("failed to get zone %s", zoneName), Err: err}
+		return nil, &ZoneError{Op: "get", Zone: zoneName, Err: err}
 	}
 
 	var records []interface{}
-
-	// Collect all record types
-	for _, rec := range zone.RecordSet.ARecords {
-		records = append(records, rec)
-	}
-	for _, rec := range zone.RecordSet.AAAARecords {
-		records = append(records, rec)
-	}
-	for _, rec := range zone.RecordSet.CNAMERecords {
-		records = append(records, rec)
-	}
-	for _, rec := range zone.RecordSet.TXTRecords {
-		records = append(records, rec)
-	}
-	for _, rec := range zone.RecordSet.MXRecords {
-		records = append(records, rec)
-	}
-	for _, rec := range zone.RecordSet.NSRecords {
-		records = append(records, rec)
+	for _, recordType := range recordKindOrder {
+		for _, rec := range recordKinds[recordType].records(&zone.RecordSet) {
+			records = append(records, rec.record)
+		}
 	}
 
 	return records, nil
@@ -1299,9 +1259,9 @@ func (s *Service) ListRecords(ctx context.Context, zoneName string) ([]interface
 
 // Resolve resolves a DNS name to its values using the local zone data.
 func (s *Service) Resolve(ctx context.Context, name string, recordType string) ([]string, error) {
-	values, ok := resolvedValues[recordType]
+	values, ok := resolvedValues[strings.ToUpper(recordType)]
 	if !ok {
-		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
+		return nil, &DetailError{Err: ErrRecordTypeNotSupported, Detail: ": " + recordType}
 	}
 
 	resolution, err := ResolveName(ctx, s, name, recordType)
@@ -1311,19 +1271,27 @@ func (s *Service) Resolve(ctx context.Context, name string, recordType string) (
 
 	results := values(&resolution.Records)
 	if len(results) == 0 {
-		return nil, &MessageError{Msg: fmt.Sprintf("no records found for %s %s", name, recordType)}
+		return nil, &RecordError{Op: "resolve", Type: recordType, Name: name, Err: ErrRecordNotFound}
 	}
 
 	return results, nil
 }
 
-// extractZoneName extracts the zone name from a fully qualified domain name.
-// For example, "www.example.com" returns "example.com".
-func extractZoneName(name string) string {
-	parts := strings.Split(name, ".")
-	if len(parts) >= 2 {
-		// Return the last two parts as the zone name
-		return strings.Join(parts[len(parts)-2:], ".")
+// zoneForName returns the stored zone that holds name: the longest zone name
+// that is a suffix of it, so www.internal.example.com. is filed under
+// internal.example.com. when that zone exists and under example.com.
+// otherwise. A lookup that fails for any reason other than "not found" is
+// returned rather than skipped.
+func (s *Service) zoneForName(ctx context.Context, name string) (*entities.Zone, error) {
+	labels := dns.SplitDomainName(name)
+	for i := range labels {
+		zone, err := s.Zone(ctx, strings.Join(labels[i:], "."))
+		if err == nil {
+			return zone, nil
+		}
+		if !isNotFoundError(err) {
+			return nil, err
+		}
 	}
-	return name
+	return nil, &DetailError{Err: ErrZoneNotFound, Detail: ": no zone contains " + name}
 }

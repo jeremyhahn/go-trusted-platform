@@ -16,142 +16,93 @@
 package compute_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"sync/atomic"
-	"time"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-)
 
-// mcpToolsSource is where the daemon's VM tool arguments are defined; a
-// declared gap names it so the skip says which tool lacks the option.
-const mcpToolsSource = "pkg/api/mcp/vm_lifecycle_tools.go"
+	// Registers the MCP transport that platform.Connect dials.
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
+)
 
 // =============================================================================
 // Error Types
 // =============================================================================
 
-// ErrMCPRequestFailed indicates an MCP JSON-RPC request failure.
-type ErrMCPRequestFailed struct {
-	Operation string
-	Code      int
-	Message   string
-}
-
-func (e ErrMCPRequestFailed) Error() string {
-	return fmt.Sprintf("compute: MCP error [%s]: %s (code: %d)",
-		e.Operation, e.Message, e.Code)
-}
-
-// ErrMCPSetupFailed indicates the MCP endpoint is unreachable.
-type ErrMCPSetupFailed struct {
+// ErrMCPConnectFailed indicates the SDK client could not connect over MCP.
+type ErrMCPConnectFailed struct {
 	Endpoint string
-	Message  string
+	Err      error
 }
 
-func (e ErrMCPSetupFailed) Error() string {
-	return fmt.Sprintf("compute: MCP setup failed for %s: %s", e.Endpoint, e.Message)
+func (e ErrMCPConnectFailed) Error() string {
+	return fmt.Sprintf("compute: MCP connect to %s failed: %v", e.Endpoint, e.Err)
 }
 
-// =============================================================================
-// JSON-RPC Types
-// =============================================================================
-
-// mcpRequest represents a JSON-RPC 2.0 request.
-type mcpRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-	ID      int64       `json:"id"`
+func (e ErrMCPConnectFailed) Unwrap() error {
+	return e.Err
 }
 
-// mcpResponse represents a JSON-RPC 2.0 response.
-type mcpResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *mcpError       `json:"error,omitempty"`
-	ID      int64           `json:"id"`
+// ErrMCPCallFailed indicates an SDK call over MCP failed. The SDK MCP
+// transport reports a tool's JSON-RPC error as the gRPC status of its class,
+// so the wrapped error carries the same code as over gRPC.
+type ErrMCPCallFailed struct {
+	Method string
+	Err    error
 }
 
-// mcpError represents a JSON-RPC 2.0 error.
-type mcpError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    string `json:"data,omitempty"`
+func (e ErrMCPCallFailed) Error() string {
+	return fmt.Sprintf("compute: MCP call %s failed: %v", e.Method, e.Err)
 }
 
-// mcpToolCallParams represents MCP tool call parameters.
-type mcpToolCallParams struct {
-	Name      string      `json:"name"`
-	Arguments interface{} `json:"arguments"`
-}
-
-// mcpStatusResponse is the reply of a VM lifecycle tool, each of which
-// carries a Status.
-type mcpStatusResponse interface {
-	proto.Message
-	GetStatus() *pb.Status
+func (e ErrMCPCallFailed) Unwrap() error {
+	return e.Err
 }
 
 // =============================================================================
 // MCP Adapter
 // =============================================================================
 
-// MCPAdapter implements ComputeCommands using the MCP protocol (JSON-RPC 2.0).
+// MCPAdapter implements ComputeCommands using the compute SDK client over
+// MCP. Each VM call is its vm_* tool, which takes the full gRPC request
+// (pkg/api/mcp/vm_lifecycle_tools.go), so every option reaches the daemon.
 type MCPAdapter struct {
-	endpoint  string
-	client    *http.Client
-	requestID int64
+	endpoint string
+	client   platform.Client
+	compute  *computesvc.Client
 }
 
 // NewMCPAdapter creates a new MCP adapter.
 func NewMCPAdapter() *MCPAdapter {
 	return &MCPAdapter{
-		endpoint: helpers.MCPEndpointURL(GetMCPEndpoint()),
-		client:   helpers.NewHTTPClient(30 * time.Second),
+		endpoint: GetMCPEndpoint(),
 	}
 }
 
-// Setup verifies the MCP endpoint is reachable by sending an initialize request.
+// Setup connects the SDK client over MCP only.
 func (a *MCPAdapter) Setup(ctx context.Context) error {
-	req := mcpRequest{
-		JSONRPC: "2.0",
-		Method:  "initialize",
-		Params: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]interface{}{},
-			"clientInfo": map[string]string{
-				"name":    "compute-integration-test",
-				"version": "1.0.0",
-			},
-		},
-		ID: atomic.AddInt64(&a.requestID, 1),
-	}
-
-	_, err := a.doRequest(ctx, req)
+	client, err := platform.Connect(ctx, platform.NewOptions(
+		platform.WithOnlyProtocol(platform.ProtocolMCP),
+		platform.WithMCPAddr(a.endpoint),
+		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
+	))
 	if err != nil {
-		return ErrMCPSetupFailed{
-			Endpoint: a.endpoint,
-			Message:  "failed to initialize: " + err.Error(),
-		}
+		return ErrMCPConnectFailed{Endpoint: a.endpoint, Err: err}
 	}
-
+	a.client = client
+	a.compute = computesvc.NewClientFromGRPC(client.Compute())
 	return nil
 }
 
-// Teardown cleans up after testing.
+// Teardown closes the SDK client.
 func (a *MCPAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.client == nil {
+		return nil
+	}
+	return a.client.Close()
 }
 
 // Name returns the adapter name.
@@ -159,234 +110,229 @@ func (a *MCPAdapter) Name() string {
 	return "MCP"
 }
 
-// doRequest performs a JSON-RPC request and returns the result payload.
-func (a *MCPAdapter) doRequest(ctx context.Context, req mcpRequest) (json.RawMessage, error) {
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: req.Method,
-			Message:   "failed to marshal request: " + err.Error(),
-		}
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, bytes.NewReader(reqData))
-	if err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: req.Method,
-			Message:   "failed to create request: " + err.Error(),
-		}
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: req.Method,
-			Message:   "request failed: " + err.Error(),
-		}
-	}
-	defer resp.Body.Close()
-
-	respData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: req.Method,
-			Message:   "failed to read response: " + err.Error(),
-		}
-	}
-
-	var rpcResp mcpResponse
-	if err := json.Unmarshal(respData, &rpcResp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: req.Method,
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	if rpcResp.Error != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: req.Method,
-			Code:      rpcResp.Error.Code,
-			Message:   rpcResp.Error.Message,
-		}
-	}
-
-	return rpcResp.Result, nil
-}
-
-// callTool invokes an MCP tool and returns the result payload.
-func (a *MCPAdapter) callTool(ctx context.Context, toolName string, args interface{}) (json.RawMessage, error) {
-	req := mcpRequest{
-		JSONRPC: "2.0",
-		Method:  "tools/call",
-		Params: mcpToolCallParams{
-			Name:      toolName,
-			Arguments: args,
-		},
-		ID: atomic.AddInt64(&a.requestID, 1),
-	}
-
-	return a.doRequest(ctx, req)
-}
-
-// callProtoTool invokes an MCP tool and decodes its result, the protojson
-// form of the ComputeService response, into out.
-func (a *MCPAdapter) callProtoTool(ctx context.Context, toolName string, args map[string]interface{}, out proto.Message) error {
-	result, err := a.callTool(ctx, toolName, args)
-	if err != nil {
-		return err
-	}
-	if err := protojson.Unmarshal(result, out); err != nil {
-		return ErrMCPRequestFailed{
-			Operation: toolName,
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
-	}
-	return nil
-}
-
-// callVerb invokes a VM lifecycle tool that takes only the VM id and returns
-// the status of its reply.
-func (a *MCPAdapter) callVerb(ctx context.Context, toolName, vmID string, out mcpStatusResponse) (*pb.Status, error) {
-	if err := a.callProtoTool(ctx, toolName, map[string]interface{}{"id": vmID}, out); err != nil {
-		return nil, err
-	}
-	return out.GetStatus(), nil
-}
-
-// mcpNoSurface declares an option the daemon's MCP tool cannot carry, so the
-// case skips as a declared gap instead of running without the option.
-func mcpNoSurface(operation, reason string) error {
-	return surface.ErrNoSurface{
-		Transport: "MCP",
-		Operation: operation,
-		Reason:    reason + " (" + mcpToolsSource + ")",
-	}
-}
-
 // =============================================================================
 // ComputeCommands Implementation
 // =============================================================================
 
-// CreateVM creates a virtual machine via the vm_create tool.
+// CreateVM creates a virtual machine through the vm_create tool.
 func (a *MCPAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*CreateVMResult, error) {
-	if opts.DiskSizeGB > 0 || opts.Firmware != "" || opts.Start || len(opts.Labels) > 0 {
-		return nil, mcpNoSurface("CreateVM", "vm_create carries only name, cpus, memory, tpm_enabled and secure_boot")
+	vm, err := a.compute.CreateVMDomain(ctx, createVMParamsFromOptions(opts))
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "CreateVM", Err: err}
 	}
-
-	args := map[string]interface{}{
-		"name":        opts.Name,
-		"tpm_enabled": opts.TPM,
-		"secure_boot": opts.SecureBoot,
-	}
-	if opts.CPUs > 0 {
-		args["cpus"] = opts.CPUs
-	}
-	if opts.MemoryMB > 0 {
-		args["memory"] = opts.MemoryMB
-	}
-
-	resp := &pb.CreateVMResponse{}
-	if err := a.callProtoTool(ctx, "vm_create", args, resp); err != nil {
-		return nil, err
-	}
-	return createVMResultFromDomain(computesvc.VMFromProto(resp.GetVm())), nil
+	return createVMResultFromDomain(vm), nil
 }
 
-// StartVM starts a virtual machine via the vm_start tool.
+// StartVM starts a virtual machine through the vm_start tool.
 func (a *MCPAdapter) StartVM(ctx context.Context, opts StartVMOptions) (*StartVMResult, error) {
-	status, err := a.callVerb(ctx, "vm_start", opts.VMID, &pb.StartVMResponse{})
+	status, err := a.compute.StartVMDomain(ctx, opts.VMID)
 	if err != nil {
-		return nil, err
-	}
-	return &StartVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
-}
-
-// StopVM stops a virtual machine via the vm_stop tool.
-func (a *MCPAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
-	if opts.Force || opts.TimeoutSeconds > 0 {
-		return nil, mcpNoSurface("StopVM", "vm_stop carries only id, not force or timeout_seconds")
+		return nil, ErrMCPCallFailed{Method: "StartVM", Err: err}
 	}
 
-	status, err := a.callVerb(ctx, "vm_stop", opts.VMID, &pb.StopVMResponse{})
-	if err != nil {
-		return nil, err
+	result := &StartVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
 	}
-	return &StopVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
-}
-
-// RebootVM restarts a running virtual machine via the vm_reboot tool.
-func (a *MCPAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
-	if opts.Force {
-		return nil, mcpNoSurface("RebootVM", "vm_reboot carries only id, not force")
-	}
-
-	status, err := a.callVerb(ctx, "vm_reboot", opts.VMID, &pb.RebootVMResponse{})
-	if err != nil {
-		return nil, err
-	}
-	return &RebootVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
-}
-
-// SuspendVM pauses a running virtual machine via the vm_suspend tool.
-func (a *MCPAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
-	status, err := a.callVerb(ctx, "vm_suspend", opts.VMID, &pb.SuspendVMResponse{})
-	if err != nil {
-		return nil, err
-	}
-	return &SuspendVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
-}
-
-// ResumeVM continues a suspended virtual machine via the vm_resume tool.
-func (a *MCPAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
-	status, err := a.callVerb(ctx, "vm_resume", opts.VMID, &pb.ResumeVMResponse{})
-	if err != nil {
-		return nil, err
-	}
-	return &ResumeVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
-}
-
-// DeleteVM deletes a virtual machine via the vm_delete tool.
-func (a *MCPAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
-	if opts.DeleteDisks {
-		return nil, mcpNoSurface("DeleteVM", "vm_delete carries only id, not delete_disks")
-	}
-
-	status, err := a.callVerb(ctx, "vm_delete", opts.VMID, &pb.DeleteVMResponse{})
-	if err != nil {
-		return nil, err
-	}
-	return &DeleteVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
-}
-
-// GetVM retrieves a virtual machine via the vm_get tool.
-func (a *MCPAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
-	resp := &pb.GetVMResponse{}
-	if err := a.callProtoTool(ctx, "vm_get", map[string]interface{}{"id": opts.VMID}, resp); err != nil {
-		return nil, err
-	}
-	if resp.GetVm() == nil {
-		return nil, ErrMCPRequestFailed{Operation: "vm_get", Message: "tool result carries no vm"}
-	}
-	return getVMResultFromDomain(computesvc.VMFromProto(resp.GetVm())), nil
-}
-
-// ListVMs lists virtual machines via the vm_list tool.
-func (a *MCPAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
-	if opts.StateFilter != "" || opts.PageSize > 0 || len(opts.Labels) > 0 {
-		return nil, mcpNoSurface("ListVMs", "vm_list takes no state, page size or label filter")
-	}
-
-	resp := &pb.ListVMsResponse{}
-	if err := a.callProtoTool(ctx, "vm_list", map[string]interface{}{}, resp); err != nil {
-		return nil, err
-	}
-
-	vms := make([]*computesvc.VM, len(resp.GetVms()))
-	for i, vm := range resp.GetVms() {
-		vms[i] = computesvc.VMFromProto(vm)
-	}
-	result := listVMsResultFromDomain(&computesvc.ListVMsResult{VMs: vms})
-	result.TotalItems = resp.GetPagination().GetTotalItems()
 	return result, nil
+}
+
+// StopVM stops a virtual machine through the vm_stop tool.
+func (a *MCPAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
+	status, err := a.compute.StopVMDomain(ctx, &computesvc.StopVMParams{
+		ID:             opts.VMID,
+		Force:          opts.Force,
+		TimeoutSeconds: opts.TimeoutSeconds,
+	})
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "StopVM", Err: err}
+	}
+
+	result := &StopVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// RebootVM restarts a running virtual machine through the vm_reboot tool.
+func (a *MCPAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
+	status, err := a.compute.RebootVMDomain(ctx, opts.VMID, opts.Force)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "RebootVM", Err: err}
+	}
+
+	result := &RebootVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// SuspendVM pauses a running virtual machine through the vm_suspend tool.
+func (a *MCPAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.compute.SuspendVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "SuspendVM", Err: err}
+	}
+
+	result := &SuspendVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// ResumeVM continues a suspended virtual machine through the vm_resume tool.
+func (a *MCPAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.compute.ResumeVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "ResumeVM", Err: err}
+	}
+
+	result := &ResumeVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// DeleteVM deletes a virtual machine through the vm_delete tool.
+func (a *MCPAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
+	status, err := a.compute.DeleteVMDomain(ctx, &computesvc.DeleteVMParams{
+		ID:          opts.VMID,
+		DeleteDisks: opts.DeleteDisks,
+	})
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "DeleteVM", Err: err}
+	}
+
+	result := &DeleteVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// GetVM retrieves a virtual machine through the vm_get tool.
+func (a *MCPAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
+	vm, err := a.compute.GetVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "GetVM", Err: err}
+	}
+
+	if vm == nil {
+		return nil, ErrMCPCallFailed{
+			Method: "GetVM",
+			Err:    ErrVMNotFound(opts),
+		}
+	}
+
+	return getVMResultFromDomain(vm), nil
+}
+
+// ListVMs lists virtual machines through the vm_list tool.
+func (a *MCPAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
+	domainResult, err := a.compute.ListVMsDomain(ctx, listVMsParamsFromOptions(opts))
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "ListVMs", Err: err}
+	}
+
+	return listVMsResultFromDomain(domainResult), nil
+}
+
+// =============================================================================
+// SnapshotCommands and AttestCommands Implementation
+// =============================================================================
+
+// CreateSnapshot snapshots a running VM through the vm_snapshot_create tool.
+func (a *MCPAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.compute.CreateSnapshot(ctx, opts.VMID, fullSnapshotConfig(opts))
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "CreateSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// RestoreSnapshot restores a VM from a snapshot through the
+// vm_snapshot_restore tool.
+func (a *MCPAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	if err := a.compute.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {
+		return ErrMCPCallFailed{Method: "RestoreSnapshot", Err: err}
+	}
+	return nil
+}
+
+// GetSnapshot returns one VM snapshot through the vm_snapshot_get tool.
+func (a *MCPAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.compute.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "GetSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver through the vm_migration_prepare tool.
+func (a *MCPAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.compute.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "PrepareMigration", Err: err}
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver through the
+// vm_migration_finalize tool.
+func (a *MCPAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	if err := a.compute.FinalizeMigration(ctx, receiverID, commit); err != nil {
+		return ErrMCPCallFailed{Method: "FinalizeMigration", Err: err}
+	}
+	return nil
+}
+
+// DeleteSnapshot deletes a VM snapshot through the vm_snapshot_delete tool.
+func (a *MCPAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	if err := a.compute.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {
+		return ErrMCPCallFailed{Method: "DeleteSnapshot", Err: err}
+	}
+	return nil
+}
+
+// ListSnapshots lists a VM's snapshots through the vm_snapshot_list tool.
+func (a *MCPAdapter) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error) {
+	snapshots, err := a.compute.ListSnapshots(ctx, vmID)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "ListSnapshots", Err: err}
+	}
+	return snapshotSummaries(snapshots), nil
+}
+
+// AttestVM generates a VM's vTPM quote through the vm_attest tool, which
+// quotes the SHA-256 bank.
+func (a *MCPAdapter) AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error) {
+	resp, err := a.compute.AttestVM(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, pb.PCRBank_PCR_BANK_SHA256)
+	if err != nil {
+		return nil, ErrMCPCallFailed{Method: "AttestVM", Err: err}
+	}
+	return vmQuote(resp), nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence through the
+// vm_attest_verify tool.
+func (a *MCPAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error) {
+	resp, err := a.compute.VerifyVMAttestation(ctx, verifyVMAttestationRequest(opts))
+	if err != nil {
+		return false, ErrMCPCallFailed{Method: "VerifyVMAttestation", Err: err}
+	}
+	return resp.GetVerified(), nil
 }

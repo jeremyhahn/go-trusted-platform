@@ -253,11 +253,9 @@ func TestService_DumpEntityType(t *testing.T) {
 // mockDumpEntityTypeStream implements the DumpEntityType stream for testing
 type mockDumpEntityTypeStream struct {
 	platformv1.PlatformDaemon_DumpEntityTypeServer
-	responses []*platformv1.DumpEntityTypeResponse
 }
 
-func (m *mockDumpEntityTypeStream) Send(resp *platformv1.DumpEntityTypeResponse) error {
-	m.responses = append(m.responses, resp)
+func (m *mockDumpEntityTypeStream) Send(_ *platformv1.DumpEntityTypeResponse) error {
 	return nil
 }
 

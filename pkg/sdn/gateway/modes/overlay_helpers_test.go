@@ -46,6 +46,7 @@ var (
 	ovlRouterMAC  = net.HardwareAddr{0x02, 0, 0, 0, 0, 0x0a}
 	ovlRouterMACB = net.HardwareAddr{0x02, 0, 0, 0, 0, 0x0b}
 	ovlAnycastIP  = netip.MustParseAddr("10.1.0.1")
+	ovlSubnet     = netip.MustParsePrefix("10.1.0.0/24")
 	ovlAnycastMAC = net.HardwareAddr{0x02, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
 	ovlHostMAC    = net.HardwareAddr{0x02, 0, 0, 0, 0x01, 0x10}
 	ovlHostIP     = netip.MustParseAddr("10.1.0.10")
@@ -202,8 +203,10 @@ type fakeSwitch struct {
 	flows      map[string]*switchFlow
 	packetIns  []*openflow.PacketInSubscription
 	packetOuts []*openflow.PacketOut
-	// packetOutErr is what SendPacketOut fails with.
+	// packetOutErr is what SendPacketOut fails with; statsErr is what
+	// QueryFlowStats fails with.
 	packetOutErr error
+	statsErr     error
 	meters       map[uint32]struct{}
 	// meterErr is what SetMeter fails with; meterDrops is the packets the
 	// installed meter reports dropped.
@@ -343,6 +346,38 @@ func (s *fakeSwitch) SendPacketOut(_ context.Context, packet *openflow.PacketOut
 	}
 	s.packetOuts = append(s.packetOuts, packet)
 	return nil
+}
+
+// QueryFlowStats returns the table, priority and cookie of every flow the
+// filter's table and cookie under its mask select, as OVS does.
+func (s *fakeSwitch) QueryFlowStats(_ context.Context, filter openflow.FlowStatsFilter) ([]openflow.FlowStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lost {
+		return nil, openflow.ErrNotConnected
+	}
+	if s.statsErr != nil {
+		return nil, s.statsErr
+	}
+	var stats []openflow.FlowStats
+	for _, f := range s.flows {
+		inTable := filter.TableID == openflow.OFPTTAll || filter.TableID == f.table
+		if inTable && f.cookie&filter.CookieMask == filter.Cookie&filter.CookieMask {
+			stats = append(stats, openflow.FlowStats{TableID: f.table, Priority: f.priority, Cookie: f.cookie})
+		}
+	}
+	return stats, nil
+}
+
+// cookies counts the flows the switch holds by cookie.
+func (s *fakeSwitch) cookies() map[uint64]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := make(map[uint64]int)
+	for _, f := range s.flows {
+		counts[f.cookie]++
+	}
+	return counts
 }
 
 func (s *fakeSwitch) SetMeter(_ context.Context, meterID uint32, _ uint32, _ uint32) error {
@@ -772,6 +807,10 @@ type fakeSpeaker struct {
 	addErr    error
 	deleteErr error
 	watchErr  error
+
+	// refusedType is the route type refusedErr fails adds and deletes of.
+	refusedType bgp.EVPNRouteType
+	refusedErr  error
 }
 
 func newFakeSpeaker() *fakeSpeaker {
@@ -784,6 +823,9 @@ func (s *fakeSpeaker) AddPath(_ context.Context, path *bgp.Path) error {
 	if s.addErr != nil {
 		return s.addErr
 	}
+	if err := s.refused(path); err != nil {
+		return err
+	}
 	s.added = append(s.added, path)
 	return nil
 }
@@ -794,8 +836,28 @@ func (s *fakeSpeaker) DeletePath(_ context.Context, path *bgp.Path) error {
 	if s.deleteErr != nil {
 		return s.deleteErr
 	}
+	if err := s.refused(path); err != nil {
+		return err
+	}
 	s.deleted = append(s.deleted, path)
 	return nil
+}
+
+// refused is the error a path of the refused route type fails with.
+// Caller holds mu.
+func (s *fakeSpeaker) refused(path *bgp.Path) error {
+	if s.refusedErr != nil && path.EVPN != nil && path.EVPN.Type == s.refusedType {
+		return s.refusedErr
+	}
+	return nil
+}
+
+// refuseRoutes fails every add and delete of one route type with err; a
+// nil err accepts them again.
+func (s *fakeSpeaker) refuseRoutes(routeType bgp.EVPNRouteType, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refusedType, s.refusedErr = routeType, err
 }
 
 func (s *fakeSpeaker) WatchEvent(_ context.Context, _ ...bgp.WatchOption) (<-chan *bgp.Event, error) {
@@ -850,6 +912,30 @@ func routeTypes(paths []*bgp.Path) []bgp.EVPNRouteType {
 	for _, p := range paths {
 		if p.EVPN != nil {
 			out = append(out, p.EVPN.Type)
+		}
+	}
+	return out
+}
+
+// addedPrefixes are the Type-5 prefixes advertised, each with its L3VNI.
+func (s *fakeSpeaker) addedPrefixes() []bgp.PrefixRoute {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return prefixRoutes(s.added)
+}
+
+// deletedPrefixes are the Type-5 prefixes withdrawn, each with its L3VNI.
+func (s *fakeSpeaker) deletedPrefixes() []bgp.PrefixRoute {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return prefixRoutes(s.deleted)
+}
+
+func prefixRoutes(paths []*bgp.Path) []bgp.PrefixRoute {
+	var out []bgp.PrefixRoute
+	for _, p := range paths {
+		if p.EVPN != nil && p.EVPN.PrefixData != nil {
+			out = append(out, bgp.PrefixRoute{Prefix: p.EVPN.PrefixData.Prefix, VNI: p.EVPN.PrefixData.VNI})
 		}
 	}
 	return out
@@ -933,7 +1019,8 @@ func overlayConfig(speaker bgp.EVPNSpeaker) *OverlayModeConfig {
 			RouterMAC:  ovlRouterMAC,
 		},
 		ARPSuppression:    true,
-		AnycastGatewayIP:  ovlAnycastIP,
+		AnycastGateways:   map[uint32]netip.Addr{ovlL2VNI: ovlAnycastIP},
+		Subnets:           map[uint32]netip.Prefix{ovlL2VNI: ovlSubnet},
 		AnycastGatewayMAC: ovlAnycastMAC,
 		L3VNI:             ovlL3VNI,
 		BridgeName:        "br-int",

@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -28,20 +29,22 @@ import (
 // registryStubProvider is a minimal RegistryProvider that records the
 // last invoked method so tests can assert dispatch.
 type registryStubProvider struct {
-	lastCall string
-	failWith error
+	lastCall      string
+	lastListQuery RegistryListQuery
+	failWith      error
 }
 
-func (s *registryStubProvider) RegistryList(_ context.Context, repository string, artifactType int32, limit, offset int32) (interface{}, error) {
+func (s *registryStubProvider) RegistryList(_ context.Context, query RegistryListQuery) (interface{}, error) {
 	s.lastCall = "list"
+	s.lastListQuery = query
 	if s.failWith != nil {
 		return nil, s.failWith
 	}
 	return map[string]interface{}{
-		"repository":    repository,
-		"artifact_type": artifactType,
-		"limit":         limit,
-		"offset":        offset,
+		"repository":    query.Repository,
+		"artifact_type": query.ArtifactType,
+		"limit":         query.Limit,
+		"offset":        query.Offset,
 		"artifacts":     []map[string]interface{}{},
 	}, nil
 }
@@ -173,6 +176,48 @@ func TestToolRegistry_ExecuteTool_Registry_RoutesToProvider(t *testing.T) {
 				t.Errorf("%s: lastCall = %q, want %q", tc.name, stub.lastCall, tc.wantCall)
 			}
 		})
+	}
+}
+
+// TestToolRegistry_ExecuteTool_RegistryList_ForwardsEveryArgument verifies
+// platform_registry_list hands every schema argument — including the
+// cursor, sort and label-selector fields the SDK List carries — to the
+// provider unchanged.
+func TestToolRegistry_ExecuteTool_RegistryList_ForwardsEveryArgument(t *testing.T) {
+	stub := &registryStubProvider{}
+	svc := &registryCombinedProvider{
+		mockServiceProvider:  newMockServiceProvider(),
+		registryStubProvider: stub,
+	}
+	registry := NewToolRegistry(svc, logging.DefaultLogger())
+
+	args := map[string]interface{}{
+		"repository":        "platform/gateway",
+		"artifact_type":     float64(1),
+		"limit":             float64(25),
+		"offset":            float64(50),
+		"cursor":            "cursor-a",
+		"sort_by":           "created_at",
+		"ascending":         true,
+		"match_labels":      map[string]interface{}{"env": "prod"},
+		"match_expressions": []interface{}{"tier in (edge)"},
+	}
+	if _, err := registry.ExecuteTool(context.Background(), "platform_registry_list", args); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := RegistryListQuery{
+		Repository:       "platform/gateway",
+		ArtifactType:     1,
+		Limit:            25,
+		Offset:           50,
+		Cursor:           "cursor-a",
+		SortBy:           "created_at",
+		Ascending:        true,
+		MatchLabels:      map[string]string{"env": "prod"},
+		MatchExpressions: []string{"tier in (edge)"},
+	}
+	if !reflect.DeepEqual(stub.lastListQuery, want) {
+		t.Errorf("query = %+v, want %+v", stub.lastListQuery, want)
 	}
 }
 

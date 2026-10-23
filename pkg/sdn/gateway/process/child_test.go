@@ -17,6 +17,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,7 +44,12 @@ type fakeStages struct {
 	executable    string
 	execErr       error
 	executableErr error
+	syscallsErr   error
 }
+
+// testSeccompTable stands in for the native table, so the stage tests do
+// not depend on the architecture they run on.
+var testSeccompTable = seccompTable{arch: 1, denied: []uint32{2}, exec: []uint32{3}, clone: 4, clone3: 5, socket: 6, socketpair: 7}
 
 func newFakeStages() *fakeStages {
 	return &fakeStages{
@@ -70,6 +76,9 @@ func (f *fakeStages) ops(environ []string) childOps {
 			f.statusReads++
 			return f.statuses, f.statusErr
 		},
+		syscalls: func() (seccompTable, error) {
+			return testSeccompTable, f.syscallsErr
+		},
 	}
 }
 
@@ -81,6 +90,7 @@ func procStatus(noNewPrivs, caps, uid, gid string) string {
 		"Gid:\t" + gid + "\t" + gid + "\t" + gid + "\t" + gid + "\n" +
 		"Groups:\t" + gid + " \n" +
 		"NoNewPrivs:\t" + noNewPrivs + "\n" +
+		"Seccomp:\t2\n" +
 		"CapInh:\t" + caps + "\n" +
 		"CapPrm:\t" + caps + "\n" +
 		"CapEff:\t" + caps + "\n" +
@@ -165,8 +175,43 @@ func TestEnterHardened_SecondStageVerifiesEveryThreadAndRearms(t *testing.T) {
 	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"pdeathsig"}, child.harden.calls, "the second stage drops nothing; it only re-arms")
+	assert.Equal(t, []string{"seccomp", "pdeathsig"}, child.harden.calls,
+		"the second stage drops no credential; it confines syscalls, then re-arms")
+	want, err := seccompFilter(testSeccompTable, routing(t))
+	require.NoError(t, err)
+	assert.Equal(t, want, child.harden.filter, "the routing process's filter is the one installed")
 	assert.Zero(t, child.execs)
+}
+
+func TestEnterHardened_SecondStageRefusesWithoutASyscallTable(t *testing.T) {
+	child := newFakeStages()
+	child.syscallsErr = &ErrSeccompUnsupportedArch{Arch: "riscv64"}
+	child.statuses = map[string]string{"100": procStatus("1", routingCaps, "1000", "1000")}
+
+	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+
+	var hardening *ErrHardening
+	require.ErrorAs(t, err, &hardening)
+	assert.Equal(t, "build the seccomp filter", hardening.Step)
+	var unsupported *ErrSeccompUnsupportedArch
+	require.ErrorAs(t, err, &unsupported)
+	assert.Empty(t, child.harden.calls, "a child with no filter neither installs one nor re-arms")
+	assert.Zero(t, child.statusReads)
+}
+
+func TestEnterHardened_SecondStageStopsWhenTheFilterIsRefused(t *testing.T) {
+	child := newFakeStages()
+	child.harden.failAt, child.harden.failWith = "seccomp", unix.EACCES
+	child.statuses = map[string]string{"100": procStatus("1", routingCaps, "1000", "1000")}
+
+	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+
+	var hardening *ErrHardening
+	require.ErrorAs(t, err, &hardening)
+	assert.Equal(t, "install the seccomp filter", hardening.Step)
+	require.ErrorIs(t, err, unix.EACCES)
+	assert.Equal(t, []string{"seccomp"}, child.harden.calls, "nothing is re-armed for an unconfined process")
+	assert.Zero(t, child.statusReads)
 }
 
 func TestEnterHardened_SecondStageAcceptsARootKernelClass(t *testing.T) {
@@ -219,7 +264,7 @@ func TestEnterHardened_SecondStageRefusesWithoutThreadCredentials(t *testing.T) 
 			var hardening *ErrHardening
 			require.ErrorAs(t, err, &hardening)
 			assert.Equal(t, "read the thread credentials", hardening.Step)
-			assert.Empty(t, child.harden.calls, "nothing is re-armed for an unverified process")
+			assert.Equal(t, []string{"seccomp"}, child.harden.calls, "nothing is re-armed for an unverified process")
 		})
 	}
 }
@@ -233,7 +278,11 @@ func TestEnterHardened_SecondStageRejectsAThreadOutsideTheClass(t *testing.T) {
 		"extra capability":    {procStatus("1", "0000000000001400", "1000", "1000"), "CapPrm"},
 		"still root":          {procStatus("1", routingCaps, "0", "1000"), "Uid"},
 		"root group":          {procStatus("1", routingCaps, "1000", "0"), "Gid"},
-		"no capability field": {"Name:\tgatewayd\nNoNewPrivs:\t1\n", "CapPrm"},
+		"no capability field": {"Name:\tgatewayd\nNoNewPrivs:\t1\nSeccomp:\t2\n", "CapPrm"},
+		"no seccomp filter": {
+			strings.Replace(procStatus("1", routingCaps, "1000", "1000"), "Seccomp:\t2", "Seccomp:\t0", 1),
+			"Seccomp",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -250,7 +299,7 @@ func TestEnterHardened_SecondStageRejectsAThreadOutsideTheClass(t *testing.T) {
 			require.ErrorAs(t, err, &notHeld)
 			assert.Equal(t, "200", notHeld.Task)
 			assert.Equal(t, tc.field, notHeld.Field)
-			assert.Empty(t, child.harden.calls)
+			assert.Equal(t, []string{"seccomp"}, child.harden.calls, "nothing is re-armed for a thread outside the class")
 		})
 	}
 }

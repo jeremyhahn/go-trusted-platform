@@ -16,11 +16,6 @@ package dns
 import (
 	"context"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
@@ -81,6 +76,19 @@ func NewQuicBaaSKMSKeyStore(client quicbaas.Client) (*QuicBaaSKMSKeyStore, error
 	}, nil
 }
 
+// abandonKey deletes the KMS key a failed generation step left behind and
+// returns cause. A failed delete is joined to cause as a CleanupError, so an
+// orphaned KMS key is reported to the caller rather than silently kept.
+func (s *QuicBaaSKMSKeyStore) abandonKey(ctx context.Context, keyID string, cause error) error {
+	if err := s.client.Security().KMS().DeleteKey(ctx, keyID); err != nil {
+		return &CleanupError{
+			Err:     cause,
+			Cleanup: &WrappedError{Msg: "failed to delete KMS key " + keyID, Err: err},
+		}
+	}
+	return cause
+}
+
 // =============================================================================
 // QuicBaaSKMSKeyStore Implementation
 // =============================================================================
@@ -97,200 +105,105 @@ func (s *QuicBaaSKMSKeyStore) GenerateZSK(ctx context.Context, tenantID, zoneNam
 
 // generateKey generates a DNSSEC key with the specified parameters using QuicBaaS KMS.
 func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneName string, keyType KeyType, algorithm uint8, flags uint16) (*dns.DNSKEY, error) {
+	const op = "GenerateKey"
 	keyID := makeKeyID(tenantID, zoneName, keyType)
 
-	// Map DNSSEC algorithm to QuicBaaS KMS algorithm
-	keyAlg, err := dnssecAlgorithmToQuicBaaSAlgorithm(algorithm)
+	genResp, err := s.generateKMSKey(ctx, keyID, algorithm)
 	if err != nil {
-		return nil, &DNSSECError{
-			Op:   "GenerateKey",
-			Zone: zoneName,
-			Err:  err,
-		}
+		return nil, &DNSSECError{Op: op, Zone: zoneName, Err: err}
 	}
 
-	// Create the key generation request
-	req := &kms.GenerateKeyRequest{
-		Name:      keyID,
-		Algorithm: keyAlg,
-		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
-	}
-
-	genResp, err := s.client.Security().KMS().GenerateKey(ctx, req)
+	// The DNSKEY must carry the public half of the key the KMS signs with.
+	pubKey, err := s.kmsPublicKey(ctx, keyID)
 	if err != nil {
-		return nil, &DNSSECError{
-			Op:   "GenerateKey",
-			Zone: zoneName,
-			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: &DetailError{Err: err, Detail: fmt.Sprintf(" (algorithm: %s)", keyAlg.String())}},
-		}
+		return nil, &DNSSECError{Op: op, Zone: zoneName, Err: s.abandonKey(ctx, keyID, err)}
 	}
 
-	// Generate a local key pair of the same type to use for the public key.
-	// This is a temporary solution until the QuicBaaS SDK exposes public key retrieval.
-	// In production, the QuicBaaS KMS should be extended to return the public key
-	// as part of the GenerateKey response.
-	pubKey, pubKeyPEM, err := generateLocalPublicKey(keyAlg)
+	dnskey, err := s.publishKey(ctx, keyID, newKeyMetadata(genResp, tenantID, zoneName, keyType, algorithm, flags), pubKey)
 	if err != nil {
-		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
-		return nil, &DNSSECError{
-			Op:   "GenerateKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to generate local public key placeholder", Err: err},
-		}
+		return nil, &DNSSECError{Op: op, Zone: zoneName, Err: s.abandonKey(ctx, keyID, err)}
 	}
-
-	// Store the metadata in KV store for later retrieval
-	metadata := &dnssecKeyMetadata{
-		KeyID:        genResp.KeyID,
-		Algorithm:    keyAlg,
-		DNSSECAlg:    algorithm,
-		Flags:        flags,
-		PublicKeyPEM: pubKeyPEM,
-		ZoneName:     zoneName,
-		TenantID:     tenantID,
-		KeyType:      keyType,
-	}
-
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
-		return nil, &DNSSECError{
-			Op:   "GenerateKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to marshal metadata", Err: err},
-		}
-	}
-
-	// Store metadata in KV using entity-based storage
-	entityID := keyIDToEntityID(keyID)
-	_, err = s.client.KV().Put(ctx, &service.PutRequest{
-		EntityType: dnssecKeyMetadataEntityType,
-		ID:         entityID,
-		Data:       metadataJSON,
-	})
-	if err != nil {
-		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
-		return nil, &DNSSECError{
-			Op:   "GenerateKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to store key metadata", Err: err},
-		}
-	}
-
-	// Build the DNSKEY record
-	dnskey, err := buildDNSKEY(zoneName, pubKey, algorithm, flags)
-	if err != nil {
-		return nil, &DNSSECError{
-			Op:   "GenerateKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to build DNSKEY", Err: err},
-		}
-	}
-
 	return dnskey, nil
 }
 
-// GenerateKSKWithPublicKey generates a KSK and stores the provided public key.
-// This method should be used when the public key is available externally.
-func (s *QuicBaaSKMSKeyStore) GenerateKSKWithPublicKey(ctx context.Context, tenantID, zoneName string, algorithm uint8, pubKey crypto.PublicKey) (*dns.DNSKEY, error) {
-	return s.generateKeyWithPublicKey(ctx, tenantID, zoneName, KeyTypeKSK, algorithm, 257, pubKey)
-}
-
-// GenerateZSKWithPublicKey generates a ZSK and stores the provided public key.
-// This method should be used when the public key is available externally.
-func (s *QuicBaaSKMSKeyStore) GenerateZSKWithPublicKey(ctx context.Context, tenantID, zoneName string, algorithm uint8, pubKey crypto.PublicKey) (*dns.DNSKEY, error) {
-	return s.generateKeyWithPublicKey(ctx, tenantID, zoneName, KeyTypeZSK, algorithm, 256, pubKey)
-}
-
-// generateKeyWithPublicKey generates a DNSSEC key and stores the provided public key.
-func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tenantID, zoneName string, keyType KeyType, algorithm uint8, flags uint16, pubKey crypto.PublicKey) (*dns.DNSKEY, error) {
-	keyID := makeKeyID(tenantID, zoneName, keyType)
-
-	// Map DNSSEC algorithm to QuicBaaS KMS algorithm
+// generateKMSKey asks the KMS for a signing key named keyID of the algorithm
+// that matches the DNSSEC algorithm.
+func (s *QuicBaaSKMSKeyStore) generateKMSKey(ctx context.Context, keyID string, algorithm uint8) (*kms.GenerateKeyResponse, error) {
 	keyAlg, err := dnssecAlgorithmToQuicBaaSAlgorithm(algorithm)
 	if err != nil {
-		return nil, &DNSSECError{
-			Op:   "GenerateKeyWithPublicKey",
-			Zone: zoneName,
-			Err:  err,
-		}
+		return nil, err
 	}
 
-	// Create the key generation request
-	req := &kms.GenerateKeyRequest{
+	genResp, err := s.client.Security().KMS().GenerateKey(ctx, &kms.GenerateKeyRequest{
 		Name:      keyID,
 		Algorithm: keyAlg,
 		Usage:     []kms.KeyUsage{kms.KeyUsageSign, kms.KeyUsageVerify},
-	}
-
-	genResp, err := s.client.Security().KMS().GenerateKey(ctx, req)
+	})
 	if err != nil {
-		return nil, &DNSSECError{
-			Op:   "GenerateKeyWithPublicKey",
-			Zone: zoneName,
-			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: &DetailError{Err: err, Detail: fmt.Sprintf(" (algorithm: %s)", keyAlg.String())}},
-		}
+		return nil, &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: &DetailError{Err: err, Detail: " (algorithm: " + keyAlg.String() + ")"}}
 	}
+	return genResp, nil
+}
 
-	// Encode the provided public key to PEM
-	pubKeyPEM, err := encodePublicKeyToPEM(pubKey)
+// kmsPublicKey returns the public half of the KMS key keyID, which the KMS
+// returns DER-encoded (RFC 5280 SubjectPublicKeyInfo).
+func (s *QuicBaaSKMSKeyStore) kmsPublicKey(ctx context.Context, keyID string) (crypto.PublicKey, error) {
+	resp, err := s.client.Security().KMS().GetPublicKey(ctx, keyID)
 	if err != nil {
-		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
-		return nil, &DNSSECError{
-			Op:   "GenerateKeyWithPublicKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to encode public key", Err: err},
-		}
+		return nil, &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err}
+	}
+	if resp == nil || len(resp.PublicKey) == 0 {
+		return nil, &DetailError{Err: ErrKMSKeyNotFound, Detail: ": no public key for " + keyID}
 	}
 
-	// Store the metadata in KV store for later retrieval
-	metadata := &dnssecKeyMetadata{
-		KeyID:        genResp.KeyID,
-		Algorithm:    keyAlg,
-		DNSSECAlg:    algorithm,
-		Flags:        flags,
-		PublicKeyPEM: pubKeyPEM,
-		ZoneName:     zoneName,
-		TenantID:     tenantID,
-		KeyType:      keyType,
+	pubKey, err := x509.ParsePKIXPublicKey(resp.PublicKey)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to parse the KMS public key of " + keyID, Err: err}
+	}
+	return pubKey, nil
+}
+
+// newKeyMetadata describes a key the KMS has just generated; publishKey adds
+// its public key.
+func newKeyMetadata(genResp *kms.GenerateKeyResponse, tenantID, zoneName string, keyType KeyType, algorithm uint8, flags uint16) *dnssecKeyMetadata {
+	return &dnssecKeyMetadata{
+		KeyID:     genResp.KeyID,
+		Algorithm: genResp.Algorithm,
+		DNSSECAlg: algorithm,
+		Flags:     flags,
+		ZoneName:  zoneName,
+		TenantID:  tenantID,
+		KeyType:   keyType,
+	}
+}
+
+// publishKey builds the DNSKEY for pubKey and then stores the key's metadata.
+// The DNSKEY is built first, so no step can fail after the metadata is
+// written: on an error nothing is stored and the caller deletes the KMS key.
+func (s *QuicBaaSKMSKeyStore) publishKey(ctx context.Context, keyID string, metadata *dnssecKeyMetadata, pubKey crypto.PublicKey) (*dns.DNSKEY, error) {
+	dnskey, err := buildDNSKEY(metadata.ZoneName, pubKey, metadata.DNSSECAlg, metadata.Flags)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to build DNSKEY", Err: err}
+	}
+
+	metadata.PublicKeyPEM, err = encodePublicKeyToPEM(pubKey)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to encode public key", Err: err}
 	}
 
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
-		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
-		return nil, &DNSSECError{
-			Op:   "GenerateKeyWithPublicKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to marshal metadata", Err: err},
-		}
+		return nil, &WrappedError{Msg: "failed to marshal metadata", Err: err}
 	}
 
-	// Store metadata in KV using entity-based storage
-	entityID := keyIDToEntityID(keyID)
 	_, err = s.client.KV().Put(ctx, &service.PutRequest{
 		EntityType: dnssecKeyMetadataEntityType,
-		ID:         entityID,
+		ID:         keyIDToEntityID(keyID),
 		Data:       metadataJSON,
 	})
 	if err != nil {
-		_ = s.client.Security().KMS().DeleteKey(ctx, keyID)
-		return nil, &DNSSECError{
-			Op:   "GenerateKeyWithPublicKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to store key metadata", Err: err},
-		}
+		return nil, &WrappedError{Msg: "failed to store key metadata", Err: err}
 	}
-
-	// Build the DNSKEY record
-	dnskey, err := buildDNSKEY(zoneName, pubKey, algorithm, flags)
-	if err != nil {
-		return nil, &DNSSECError{
-			Op:   "GenerateKeyWithPublicKey",
-			Zone: zoneName,
-			Err:  &WrappedError{Msg: "failed to build DNSKEY", Err: err},
-		}
-	}
-
 	return dnskey, nil
 }
 
@@ -556,54 +469,6 @@ func quicbaasAlgorithmToString(algorithm kms.KeyAlgorithm) string {
 // generateLocalPublicKey generates a local key pair and returns the public key.
 // This is a temporary solution for testing and development.
 // In production, the QuicBaaS KMS SDK should be extended to return the public key.
-func generateLocalPublicKey(algorithm kms.KeyAlgorithm) (crypto.PublicKey, string, error) {
-	var pubKey crypto.PublicKey
-
-	switch algorithm {
-	case kms.AlgorithmRSA2048:
-		key, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			return nil, "", &WrappedError{Msg: "failed to generate RSA-2048 key", Err: err}
-		}
-		pubKey = &key.PublicKey
-	case kms.AlgorithmRSA4096:
-		key, err := rsa.GenerateKey(rand.Reader, 4096)
-		if err != nil {
-			return nil, "", &WrappedError{Msg: "failed to generate RSA-4096 key", Err: err}
-		}
-		pubKey = &key.PublicKey
-	case kms.AlgorithmECDSAP256:
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, "", &WrappedError{Msg: "failed to generate ECDSA P-256 key", Err: err}
-		}
-		pubKey = &key.PublicKey
-	case kms.AlgorithmECDSAP384:
-		key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-		if err != nil {
-			return nil, "", &WrappedError{Msg: "failed to generate ECDSA P-384 key", Err: err}
-		}
-		pubKey = &key.PublicKey
-	case kms.AlgorithmED25519:
-		pub, _, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, "", &WrappedError{Msg: "failed to generate Ed25519 key", Err: err}
-		}
-		pubKey = pub
-	default:
-		return nil, "", ErrUnsupportedAlgorithm
-	}
-
-	// Note: This generates a local placeholder key pair.
-	// The actual public key should come from the QuicBaaS KMS.
-	pubKeyPEM, err := encodePublicKeyToPEM(pubKey)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return pubKey, pubKeyPEM, nil
-}
-
 // encodePublicKeyToPEM encodes a public key to PEM format.
 func encodePublicKeyToPEM(pubKey crypto.PublicKey) (string, error) {
 	pubKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)

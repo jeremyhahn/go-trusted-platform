@@ -618,42 +618,17 @@ func (s *Signer) verifyPKCS7Signature(pe *peFile, signature []byte) error {
 		return &WrappedError{Msg: "cryptographic signature verification failed", Err: err}
 	}
 
+	if err := s.verifyEmbeddedTimestamps(&signerInfo); err != nil {
+		return &WrappedError{Msg: "timestamp verification failed", Err: err}
+	}
+
 	return nil
 }
 
 // verifyCryptographicSignature verifies the RSA/ECDSA signature over the authenticated attributes
 func (s *Signer) verifyCryptographicSignature(cert *x509.Certificate, signerInfo *signerInfo, content []byte) error {
-	// The signature is computed over the DER-encoded authenticated attributes
-	// with the IMPLICIT [0] tag replaced with SET tag (0x31)
-	if len(signerInfo.AuthenticatedAttributes) == 0 {
-		return &MessageError{Msg: "no authenticated attributes to verify"}
-	}
-
-	// Re-encode authenticated attributes with SET tag for verification
-	// The attributes are stored with IMPLICIT [0] tag, but signature is over SET encoding
-	attrsData, err := s.encodeAuthenticatedAttributesForVerification(signerInfo.AuthenticatedAttributes)
-	if err != nil {
-		return &WrappedError{Msg: "failed to encode attributes for verification", Err: err}
-	}
-
-	// Hash the attributes
-	attrHash := sha256.Sum256(attrsData)
-
-	// Verify the signature based on key type
-	switch pubKey := cert.PublicKey.(type) {
-	case *rsa.PublicKey:
-		// RSA PKCS#1 v1.5 signature verification
-		err = rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, attrHash[:], signerInfo.EncryptedDigest)
-		if err != nil {
-			return &WrappedError{Msg: "RSA signature verification failed", Err: err}
-		}
-	case *ecdsa.PublicKey:
-		// ECDSA signature verification
-		if !ecdsa.VerifyASN1(pubKey, attrHash[:], signerInfo.EncryptedDigest) {
-			return &MessageError{Msg: "ECDSA signature verification failed"}
-		}
-	default:
-		return &MessageError{Msg: fmt.Sprintf("unsupported public key type: %T", pubKey)}
+	if err := s.verifySignedAttributes(cert, signerInfo, crypto.SHA256); err != nil {
+		return err
 	}
 
 	// Verify the messageDigest attribute matches the content digest
@@ -678,6 +653,44 @@ func (s *Signer) verifyCryptographicSignature(cert *x509.Certificate, signerInfo
 }
 
 // encodeAuthenticatedAttributesForVerification encodes attributes with SET tag for signature verification
+// verifySignedAttributes checks signerInfo's signature over its authenticated
+// attributes, hashed with hash, against cert's public key.
+func (s *Signer) verifySignedAttributes(cert *x509.Certificate, signerInfo *signerInfo, hash crypto.Hash) error {
+	// The signature is computed over the DER-encoded authenticated attributes
+	// with the IMPLICIT [0] tag replaced with SET tag (0x31)
+	if len(signerInfo.AuthenticatedAttributes) == 0 {
+		return &MessageError{Msg: "no authenticated attributes to verify"}
+	}
+
+	// Re-encode authenticated attributes with SET tag for verification
+	// The attributes are stored with IMPLICIT [0] tag, but signature is over SET encoding
+	attrsData, err := s.encodeAuthenticatedAttributesForVerification(signerInfo.AuthenticatedAttributes)
+	if err != nil {
+		return &WrappedError{Msg: "failed to encode attributes for verification", Err: err}
+	}
+
+	// Hash the attributes
+	attrHash := digest(hash, attrsData)
+
+	// Verify the signature based on key type
+	switch pubKey := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		// RSA PKCS#1 v1.5 signature verification
+		err = rsa.VerifyPKCS1v15(pubKey, hash, attrHash, signerInfo.EncryptedDigest)
+		if err != nil {
+			return &WrappedError{Msg: "RSA signature verification failed", Err: err}
+		}
+	case *ecdsa.PublicKey:
+		// ECDSA signature verification
+		if !ecdsa.VerifyASN1(pubKey, attrHash, signerInfo.EncryptedDigest) {
+			return &MessageError{Msg: "ECDSA signature verification failed"}
+		}
+	default:
+		return &MessageError{Msg: fmt.Sprintf("unsupported public key type: %T", pubKey)}
+	}
+	return nil
+}
+
 func (s *Signer) encodeAuthenticatedAttributesForVerification(attrs []attribute) ([]byte, error) {
 	// Re-marshal each attribute and wrap in SET
 	var attrBytes []byte
@@ -802,13 +815,6 @@ parseCerts:
 	}
 
 	return certs[0], nil
-}
-
-// addTimestamp adds an RFC3161 timestamp to the signature.
-// DEFERRED: RFC3161 timestamp request/response not yet implemented.
-// Blocked by: requires RFC3161 TSA client implementation (ASN.1 TimeStampReq/TimeStampResp).
-func (s *Signer) addTimestamp(signature, digest []byte) ([]byte, error) {
-	return nil, ErrRFC3161NotImplemented{URL: s.timestampURL}
 }
 
 // extractSigningTime extracts the signing time from PKCS#7 signature

@@ -491,9 +491,10 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
 // All transports therefore share state — certificates issued via gRPC are
 // visible via REST and vice-versa.
 //
-// tokens authorizes POST /api/v1/ca/sign-csr, which needs a platform token
-// granting ca:sign-csr; when it is nil, sign-csr refuses every request.
-func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens *platformTokenValidator) {
+// guard authorizes POST /api/v1/ca/sign-csr, which needs a platform token
+// granting ca:sign-csr (a client certificate alone is refused); when it is
+// nil, sign-csr refuses every request.
+func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) {
 	if ca == nil {
 		return
 	}
@@ -509,11 +510,7 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens 
 			caObjStorage = s.config.App.Storage
 		}
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS)
-	// A nil *platformTokenValidator must not become a non-nil interface.
-	if tokens != nil {
-		handlers.WithTokenAuthorizer(tokens)
-	}
+	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 
@@ -528,19 +525,14 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
 // route runs on tpm, the daemon's TPM service, with the protobuf JSON request
 // and response the SDK speaks, so a REST call is the one gRPC, QUIC, MCP and
-// Unix serve. Every route requires a platform bearer token granting tpm:read,
-// tpm:write or tpm:delete; with no validator every route refuses. A nil TPM
-// service mounts nothing.
-func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, tokens *platformTokenValidator) {
+// Unix serve. Every route requires tpm:read, tpm:write or tpm:delete, checked
+// by guard (a platform token, else the verified client certificate); with no
+// guard every route refuses. A nil TPM service mounts nothing.
+func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, guard *restapi.ScopeGuard) {
 	if tpm == nil {
 		return
 	}
-	handlers := restapi.NewTPMHandlers(s.logger).WithTPMService(tpm)
-	// A nil *platformTokenValidator must not become a non-nil interface.
-	if tokens != nil {
-		handlers.WithTokenAuthorizer(tokens)
-	}
-	handlers.RegisterRoutes(s.router)
+	restapi.NewTPMHandlers(s.logger).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(s.router)
 }
 
 // applyMiddleware wraps the router with middleware handlers

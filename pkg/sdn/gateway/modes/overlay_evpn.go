@@ -199,6 +199,19 @@ func (h *OverlayModeHandler) handleIMETRoute(ctx context.Context, route *bgp.EVP
 		return &ErrVTEPOperationFailed{VTEPIP: entry.VTEPIP, Operation: "flood list", Cause: err}
 	}
 	h.segments[entry.VNI] = next
+	return h.tellFloodPeers(ctx, route)
+}
+
+// tellFloodPeers hands a flood-list change to FloodPeers, if set. Its
+// failure does not undo the change: the flows already hold it. Caller holds
+// mu.
+func (h *OverlayModeHandler) tellFloodPeers(ctx context.Context, route *bgp.EVPNRouteData) error {
+	if h.config.FloodPeers == nil {
+		return nil
+	}
+	if err := h.config.FloodPeers(ctx, route); err != nil {
+		return &ErrVTEPOperationFailed{VTEPIP: route.IMET.VTEPIP, Operation: "flood peers", Cause: err}
+	}
 	return nil
 }
 
@@ -283,11 +296,23 @@ func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) er
 		return nil
 	}
 	routes := h.revocationRoutesLocked(vtep)
+	sweepPending := !h.staleSweepAt.IsZero()
 	h.mu.Unlock()
 
 	var errs []error
 	for _, route := range routes {
 		if err := h.handleEVPNRoute(ctx, route); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// A predecessor's flows for the revoked VTEP are not this run's to
+	// withdraw, and its decap authorisation among them must not outlive the
+	// revocation, so the older generations go now rather than at the hold.
+	if sweepPending {
+		if err := h.sweepStaleGenerations(ctx); err != nil {
+			h.mu.Lock()
+			h.staleSweepAt = time.Now()
+			h.mu.Unlock()
 			errs = append(errs, err)
 		}
 	}
@@ -521,8 +546,13 @@ func (h *OverlayModeHandler) conflict(entry *bgp.MACIPEntry) string {
 	if slices.Equal(entry.MAC, h.config.AnycastGatewayMAC) {
 		return "anycast gateway MAC"
 	}
-	if entry.IP.IsValid() && entry.IP == h.config.AnycastGatewayIP {
-		return "anycast gateway IP"
+	if !entry.IP.IsValid() {
+		return ""
+	}
+	for _, gateway := range h.config.AnycastGateways {
+		if entry.IP == gateway {
+			return "anycast gateway IP"
+		}
 	}
 	return ""
 }

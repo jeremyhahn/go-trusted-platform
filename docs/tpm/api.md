@@ -1,6 +1,6 @@
 # Physical TPM 2.0 — API
 
-> **Status: NORMATIVE** · Scope: TPM and device-identity routes on every transport · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: TPM and device-identity routes on every transport · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING — docs/13 G7`, never omitted.
@@ -17,7 +17,7 @@ bytes and the category-opcode rule are in
 
 | Surface | Where |
 |---|---|
-| gRPC | `TPMService`, **28 RPCs** (`pkg/api/grpc/proto/tpm.proto`); `IDevIDService`, **20 RPCs** (`idevid.proto`) |
+| gRPC | `TPMService`, **31 RPCs** (`pkg/api/grpc/proto/tpm.proto`); `IDevIDService`, **20 RPCs** (`idevid.proto`) |
 | Embedded | `ServiceRegistry.TPM` (`platformv1.TPMServiceServer`) and `ServiceRegistry.IDevID` — the embedded adapter dispatches gRPC method strings, so **embedded coverage equals gRPC coverage exactly** |
 | REST | web service: `/api/v1/tpm` (`pkg/webservice/v1/rest/tpm/router.go`) and `/api/v1/idevid` (`pkg/webservice/v1/rest/idevid/router.go`); daemon REST listener: `/api/v1/tpm` (`pkg/api/rest/tpm_handlers.go`, mounted by `RESTServer.SetTPMHandlers`) and `POST /api/v1/idevid/ldevid` (`pkg/api/daemon/rest_idevid_ldevid.go`) |
 | QUIC | category opcode `OpTPM2Category` = **`0x99`**, sub-opcode in `payload[0]` (`pkg/api/quic/tpm_handlers.go`); device identity uses **top-level** opcodes `0x56`–`0x5F`, `0x6B`–`0x6E`, `0x78`–`0x7B` |
@@ -61,9 +61,11 @@ in the body. `POST /tpm/nvram` defines an index. `GET /tpm/pcrs` (parameters) an
 `TPMService.ActivateCredential` (`credentialBlob`, `encryptedSecret` →
 `secret`) under `tpm:write`, its gRPC twin's scope; the IDevID-shaped body it
 used to take (`credential_blob`, `secret` → `decrypted`) is now a `400`.
-`POST /tpm/certify` calls `TPMService.Certify` under `tpm:read`. The routes
-with no `TPMService` RPC behind them — `capabilities`, `platform`,
-`pcrs/extend`, `csr/idevid` and `POST /tpm/iak` — are not served by the daemon
+`POST /tpm/certify` calls `TPMService.Certify` under `tpm:read`.
+`GET /tpm/capabilities` and `GET /tpm/platform` call `GetCapabilities` and
+`GetPlatformAttributes` under `tpm:read`; `POST /tpm/pcrs/extend` calls
+`ExtendPCR` under `tpm:write`. The routes with no `TPMService` RPC behind
+them — `csr/idevid` and `POST /tpm/iak` — are not served by the daemon
 listener. The daemon listener's
 `/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
 routes are its device-identity routes (`pkg/api/daemon/rest_idevid.go`), not
@@ -110,8 +112,22 @@ CA-backed.
 | TPM info | `GET /api/v1/tpm/info` | `Info` | `0x99` · `0x01` | `platform_tpm_info` | ✅ |
 | Provision | `POST /api/v1/tpm/provision` | `Provision` | `0x99` · `0x02` | `platform_tpm_provision` | ✅ |
 | Clear | `POST /api/v1/tpm/clear` | `Clear` | `0x99` · `0x03` | `platform_tpm_clear` | ✅ |
-| Capabilities | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `0x99` · `0x17` | `platform_tpm_capabilities` | `MISSING — docs/13 G7` |
-| Platform attributes | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `0x99` · `0x1E` | `platform_tpm_platform` | `MISSING — docs/13 G7` |
+| Capabilities | `GET /api/v1/tpm/capabilities` | `GetCapabilities` | `0x99` · `0x17` | `platform_tpm_capabilities` | ✅ |
+| Platform attributes | `GET /api/v1/tpm/platform` | `GetPlatformAttributes` | `0x99` · `0x1E` | `platform_tpm_platform` | ✅ |
+
+**Capabilities and platform attributes have one reader (`pkg/api/tpmattrs`).**
+gRPC, Unix, embedded and both REST servers reach it through `TPMService`;
+QUIC `0x17` / `0x1E` and MCP `platform_tpm_capabilities` /
+`platform_tpm_platform` call it directly, so every transport returns the same
+fields. Capabilities are `algorithms`, `commands` and `ecc_curves`
+(`TPM2_GetCapability`); a list the TPM refuses fails the call with
+`FailedPrecondition` naming the list. Platform attributes are `device`,
+`is_fips`, `pcr_extended`, `can_seal`, `is_simulator`, `manufacturer` and the
+`ek`, `srk` and `iak` key references (`handle`, `algorithm`). That call never
+fails on a partly provisioned TPM: an attribute the TPM cannot report is
+false or empty, and a key that is not provisioned is absent (a null message
+on gRPC and REST, a nil field on QUIC, missing `<key>_handle` /
+`<key>_algorithm` keys on MCP).
 
 **`Info` returns two views of the same thing.** `Properties["info"]` is
 go-xkms's verbatim multi-line report; `Manufacturer`, `MaxNvramSize`,
@@ -119,6 +135,16 @@ go-xkms's verbatim multi-line report; `Manufacturer`, `MaxNvramSize`,
 fields. Parse the structured fields. If the underlying `FixedProperties` read
 fails the call still succeeds with the text fallback and empty structured
 fields — check for an empty `Manufacturer` before trusting them.
+
+**`Info` reports the TPM version and the allocated PCR banks on every
+transport.** The version is `TPM_VERSION_2_0` on gRPC/Unix and REST and the
+string `"2.0"` (`tpmattrs.Version`) on QUIC (`version`), MCP (`version`) and
+`platformctl tpm info -o json`. The PCR banks come from one reader,
+`tpmattrs.ActivePCRBanks`, which reads PCR 0 of every bank the TPM allocates:
+`PcrBanks` (`PCR_BANK_SHA1`, `PCR_BANK_SHA256`, ...) on gRPC/Unix and REST, and
+lower-case hash names (`sha1`, `sha256`, ...) in `pcr_banks` on QUIC, MCP and
+the CLI. Like the `FixedProperties` fields this read fails soft: a TPM that
+refuses it returns an empty bank list and the call still succeeds.
 
 **`Info` also publishes the configured SRK handles**, so a client probes the real
 handle instead of assuming the default. Every transport carries the same two
@@ -209,7 +235,7 @@ Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 | Seal | `POST /api/v1/tpm/seal` | `Seal` | `0x99` · `0x15` | `platform_tpm_seal` | ✅ |
 | Unseal | `POST /api/v1/tpm/unseal` | `Unseal` | `0x99` · `0x16` | `platform_tpm_unseal` | ✅ |
 | Read PCRs | `GET /api/v1/tpm/pcrs`, `POST /api/v1/tpm/pcrs` | `GetPCRs` | `0x99` · `0x11` | `platform_tpm_pcrs` | ✅ |
-| **Extend PCR** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `0x99` · `0x12` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Extend PCR | `POST /api/v1/tpm/pcrs/extend` | `ExtendPCR` | `0x99` · `0x12` | `platform_tpm_pcr_extend` | ✅ |
 | Quote (TLS only — bound, see below) | `POST /api/v1/tpm/quote` | `Quote` (refused over Unix) | `0x99` · `0x0F` | `platform_tpm_quote` (refused over stdio) | refused — no TLS |
 | Verify quote | `POST /api/v1/tpm/quote/verify` | `VerifyQuote` | `0x99` · `0x10` | `platform_tpm_verify_quote` | ✅ |
 | Certify | `POST /api/v1/tpm/certify` | `Certify` | `0x99` · `0x22` | `platform_tpm_certify` | ✅ |
@@ -238,16 +264,32 @@ policy. The reply carries `certify_info` (the `TPMS_ATTEST` bytes),
 `nonce`. Every transport returns the same attestation and the same refusals
 (`TestTPMCertifyParity_*`, `pkg/api/daemon/tpm_certify_parity_test.go`).
 
-**PCR extend has one validator (`pkg/api/tpmpcr`).** QUIC `0x12` and MCP
-`platform_tpm_pcr_extend` both call `tpmpcr.Extend`: the index must be 0–23
-and the data non-empty (both `InvalidArgument`), and the bank defaults to
-`sha256`. MCP takes the bank as `hash_alg`, QUIC as
-`TPM2ExtendPCRRequest.hash_alg`.
+**PCR extend has one validator (`pkg/api/tpmpcr`).** gRPC `ExtendPCR` (and
+so Unix, embedded and both REST servers), QUIC `0x12` and MCP
+`platform_tpm_pcr_extend` all call `tpmpcr.Extend`: the index must be 0–23
+and the data non-empty (both `InvalidArgument`, and the TPM is not touched),
+and the bank defaults to `sha256`. The request is `index`, `hash_alg` and
+`data` (`ExtendPCRRequest`; `hashAlg` in the REST body, `hash_alg` in the MCP
+arguments and in `TPM2ExtendPCRRequest` on QUIC); a successful extend
+answers `success: true` with `PCR <index> extended` (`tpmpcr.ExtendedMessage`)
+on every transport — gRPC's `status`, QUIC's `TPM2StatusResponse` and the MCP
+result's `success` / `message`.
+On gRPC a daemon without a TPM is `Unavailable` and a TPM failure is
+`Internal`. Every transport is scoped `tpm:write` (`TestTPMParity_ExtendPCR`,
+`pkg/api/daemon/tpm_attrs_parity_test.go`).
 
-**Extend PCR has no gRPC method behind it.** `TPMService` (`tpm.proto`) has
-no extend RPC, so gRPC, REST and Unix cannot extend a PCR; QUIC `0x12` and
-MCP `platform_tpm_pcr_extend` are the two transports that do. The MCP tool is
-scoped `tpm:write`, the scope of the QUIC sub-op.
+**The SDK reaches `GetCapabilities`, `GetPlatformAttributes` and `ExtendPCR`
+over QUIC and MCP (#704).** The SDK QUIC adapter routes them onto `0x99` ·
+`0x17` / `0x1E` / `0x12` (`sdk/go/transport/quic/tpm_attrs.go`) and shares the
+server's wire bodies through `sdk/go/wire/quicwire/tpm_attrs.go`: the two reads
+send the sub-opcode alone, `ExtendPCR` sends `TPM2ExtendPCRRequest`, and the
+replies decode into the proto messages — `ecc_curves`, the key references and
+an absent key as a nil field included. The SDK MCP adapter routes them onto
+`platform_tpm_capabilities`, `platform_tpm_platform` and
+`platform_tpm_pcr_extend` (`sdk/go/transport/mcp/tpm_attrs.go`): `ExtendPCR`
+sends `pcr_index`, `hash_alg` and base64 `data`, the tool's `success` /
+`message` become the reply's `status`, and the `<key>_handle` /
+`<key>_algorithm` pairs fold back into `ek`, `srk` and `iak`.
 
 **A quote is bound to the connection it is requested over (#482).** The node
 never quotes the nonce as sent: it derives the TLS exporter binding of the
@@ -327,13 +369,18 @@ see [`docs/daemon/api.md`](../daemon/api.md) §4.
 | Read NV index | `GET /api/v1/tpm/nvram/{index}` | `ReadNVRAM` | `0x99` · `0x18` | `platform_tpm_nv_read` | ✅ |
 | Write NV index | `PUT /api/v1/tpm/nvram/{index}` | `WriteNVRAM` | `0x99` · `0x19` | `platform_tpm_nv_write` | ✅ |
 | Undefine NV index | `DELETE /api/v1/tpm/nvram/{index}` | `UndefineNVRAM` | `0x99` · `0x1A` | `platform_tpm_nv_delete` | ✅ |
-| **List NV indexes** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `0x99` · `0x1B` | `platform_tpm_nv_list` | `MISSING — docs/13 G7` |
+| List NV indexes | `GET /api/v1/tpm/info` (`nvIndexes`) | `Info` (`nv_indexes`) | `0x99` · `0x1B` | `platform_tpm_nv_list` | ✅ (`Info`) |
 
 **Neither QUIC nor MCP can define an NV index.** Both can read, write and delete
 one but cannot create it; a QUIC- or MCP-only client must have the index defined
-for it through REST, gRPC or embedded. Conversely **only QUIC and MCP can list**
-the defined indexes — though `Info`'s structured `NVIndex` list gives gRPC/REST
-callers the same information indirectly.
+for it through REST, gRPC or embedded.
+
+**Every transport lists the defined indexes.** QUIC `0x1B`, MCP
+`platform_tpm_nv_list` and the `nv_indexes` field of `Info` all read the TPM's
+`FixedProperties().NVIndexes` and carry the same five fields per index
+(`handle`, `type`, `size`, `auth_read`, `auth_write`). The one difference is
+the failure: QUIC and MCP fail the call when the fixed properties cannot be
+read, while `Info` succeeds with an empty list (§3).
 
 Read, write and undefine share one implementation (`pkg/api/tpmnv`) on gRPC,
 REST (through the gRPC service), QUIC and MCP, so validation and the
@@ -370,18 +417,19 @@ is `400`.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| MakeCredential | `MISSING — docs/13 G7` | `MakeCredential` | `0x99` · `0x20` | `platform_tpm_make_credential` | ✅ |
-| ActivateCredential (TPMService) | `MISSING — docs/13 G7` | `ActivateCredential` | `0x99` · `0x21` | `platform_tpm_activate_credential` | ✅ |
-| ActivateCredential (IDevIDService) | `POST /api/v1/idevid/activate-credential` | `IDevIDService.ActivateCredential` | `0x6E` (`OpActivateCredential`) | `MISSING — docs/13 G7` | ✅ |
+| MakeCredential | `POST /api/v1/tpm/make-credential` | `MakeCredential` | `0x99` · `0x20` | `platform_tpm_make_credential` | ✅ |
+| ActivateCredential (TPMService) | `POST /api/v1/tpm/activate-credential` | `ActivateCredential` | `0x99` · `0x21` | `platform_tpm_activate_credential` | ✅ |
+| ActivateCredential (IDevIDService) | `POST /api/v1/idevid/activate-credential` | `IDevIDService.ActivateCredential` | `0x6E` (`OpActivateCredential`) | `activate_credential` | ✅ |
 
 **The MakeCredential/ActivateCredential pair is the proof-of-possession step in
-device enrollment**. On REST the TPMService pair is served only by the daemon
-listener (`POST /api/v1/tpm/make-credential` and
-`POST /api/v1/tpm/activate-credential`, §1); the web service has neither. The
-IDevID surface carries its own ActivateCredential, the one the web service
-serves. Neither SDK has a REST client path for the TPMService pair: the
-JavaScript SDK reaches only the IDevID one, and the Go SDK's REST adapter maps
-neither RPC.
+device enrollment**. On REST both servers serve the TPMService pair at
+`POST /api/v1/tpm/make-credential` (`akName`, `secret`, `ekCert`, `iakPub` →
+`credentialBlob`, `encryptedSecret`, `secret`) and
+`POST /api/v1/tpm/activate-credential` (`credentialBlob`, `encryptedSecret` →
+`secret`), each calling the RPC of the same name. A missing `credentialBlob`
+or `encryptedSecret` is `400` and the TPM is not called. The Go SDK's REST
+adapter maps both RPCs; the JavaScript SDK reaches only the IDevID
+ActivateCredential, the one under `/api/v1/idevid`.
 
 `TPM2MakeCredentialRequest` (QUIC) takes `ak_name`, `secret`, `ek_cert`,
 `iak_pub`: with `ek_cert` and `iak_pub` present the **verifier** path runs;
@@ -404,7 +452,7 @@ REST base path `/api/v1/idevid`. QUIC uses **top-level** opcodes here, not the
 | Install IDevID certificate | `POST /api/v1/idevid/certificate` | `InstallIDevIDCertificate` | `0x5A` | `idevid_install_cert` | ✅ |
 | Get IDevID certificate | `GET /api/v1/idevid/certificate` | `GetIDevIDCertificate` | `0x5B` | `idevid_get_cert` | ✅ |
 | Delete IDevID certificate | `DELETE /api/v1/idevid/certificate` | `DeleteIDevIDCertificate` | `0x7A` | `idevid_delete_cert` | ✅ |
-| Get IDevID public key | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `0x99` · `0x1F` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Get IDevID public key | `GET /api/v1/idevid/info` (`keyInfo.publicKeyPem`) | `GetIDevIDInfo` | `0x99` · `0x1F`, also `0x57` | `idevid_info` | ✅ |
 | **List expiring IDevIDs** | `GET /api/v1/idevid/expiring` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Generate IAK | `POST /api/v1/idevid/iak/generate` | `GenerateIAK` | `0x5C` | `iak_generate` | ✅ |
 | IAK info | `GET /api/v1/idevid/iak` | `GetIAKInfo` | `0x5D` | `iak_info` | ✅ |
@@ -415,8 +463,14 @@ REST base path `/api/v1/idevid`. QUIC uses **top-level** opcodes here, not the
 | Get IAK certificate | `GET /api/v1/idevid/iak/certificate` | `GetIAKCertificate` | `0x6C` | `iak_get_cert` | ✅ |
 | Delete IAK certificate | `DELETE /api/v1/idevid/iak/certificate` | `DeleteIAKCertificate` | `0x7B` | `iak_delete_cert` | ✅ |
 | Create LDevID | `POST /api/v1/idevid/ldevid` | `CreateLDevID` | `0x99` · `0x1D` | `idevid_create_ldevid` | ✅ |
-| Device attributes | `GET /api/v1/idevid/attributes` | `GetDeviceAttributes` | `0x6D` | `MISSING — docs/13 G7` | ✅ |
+| Device attributes | `GET /api/v1/idevid/attributes` | `GetDeviceAttributes` | `0x6D` | `device_attributes` | ✅ |
 | Flush transient contexts | `POST /api/v1/idevid/flush` | `FlushTransientContexts` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+
+**The IDevID public key is part of `GetIDevIDInfo`.** Its `key_info` carries
+the persistent handle, the algorithm and `public_key_pem` on REST, gRPC/Unix,
+MCP (`idevid_info`), embedded and QUIC `0x57`. QUIC `0x99` · `0x1F` is the
+same key read inside the TPM category: `handle`, `algorithm` and the raw
+`public_key` bytes, `NotFound` when no IDevID exists.
 
 **`GET /api/v1/idevid/expiring` is REST-only and has no gRPC method behind
 it.** It is the only certificate-expiry surface in the feature, and the only
@@ -481,20 +535,20 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 
 | Surface | Coverage |
 |---|---|
-| gRPC `TPMService` | **every RPC scoped** in `pkg/api/grpc/method_permissions.go`: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `ReadNVRAM`, `Unseal` and `MakeCredential`; `tpm:write` for `ActivateCredential`, the `Create*` calls, `DefineNVRAM`, `WriteNVRAM`, `ImportEKCertificate`, `Provision` and `Seal`; `tpm:delete` for `DeleteAK`, `DeleteEK`, `DeleteSRK`, `UndefineNVRAM` and `Clear` |
+| gRPC `TPMService` | **every RPC scoped** in `pkg/api/grpc/method_permissions.go`: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `ReadNVRAM`, `Unseal` and `MakeCredential`; `tpm:write` for `ActivateCredential`, the `Create*` calls, `DefineNVRAM`, `WriteNVRAM`, `ExtendPCR`, `ImportEKCertificate`, `Provision` and `Seal`; `tpm:delete` for `DeleteAK`, `DeleteEK`, `DeleteSRK`, `UndefineNVRAM` and `Clear` |
 | gRPC `IDevIDService` | **every RPC scoped**: `idevid:read` for the `Get*` / `Has*` calls; `idevid:write` for CSR, generate, install, `CreateLDevID`, `ActivateCredential` and `FlushTransientContexts`; `idevid:delete` for the four `Delete*` calls |
 | MCP — `platform_tpm_quote`, `platform_tpm_verify_quote`, `platform_tpm_certify` | **scoped `tpm:read`** in `pkg/api/mcp/authz.go`, the scope of their gRPC twins |
 | MCP — `platform_tpm_nv_*` tools | **scoped** in `pkg/api/mcp/authz.go` on their gRPC twins' tiers: `tpm:read` for `nv_list` (`Info`) and `nv_read`, `tpm:write` for `nv_write`, `tpm:delete` for `nv_delete` |
-| MCP — `platform_tpm_pcr_extend` | **scoped `tpm:write`** in `pkg/api/mcp/authz.go`, the scope of QUIC's `SubOpTPM2ExtendPCR` (it has no gRPC twin) |
+| MCP — `platform_tpm_pcr_extend` | **scoped `tpm:write`** in `pkg/api/mcp/authz.go`, the scope of gRPC `ExtendPCR` and QUIC's `SubOpTPM2ExtendPCR` |
 | MCP — `platform_tpm_*` tools with a gRPC twin | **scoped** in `pkg/api/mcp/authz.go` on the gRPC tiers (#304), except `platform_tpm_unseal`, which needs `tpm:write`; the table is in [api-reference-mcp.md](api-reference-mcp.md) |
-| MCP — `platform_tpm_capabilities`, `platform_tpm_platform` | **scoped** `tpm:read` (#304): each answers a subset of gRPC `Info` (the fixed properties; the config and the EK/SRK/IAK attributes), and their QUIC twins `0x17` and `0x1E` are `tpm:read` |
+| MCP — `platform_tpm_capabilities`, `platform_tpm_platform` | **scoped** `tpm:read` (#304), the scope of their gRPC twins `GetCapabilities` and `GetPlatformAttributes` and of QUIC `0x17` and `0x1E` |
 | MCP — `platform_tpm_{ek,srk,iak}_delete` | **scoped `tpm:delete`** in `pkg/api/mcp/authz.go`, the scope of gRPC `DeleteEK`/`DeleteSRK`/`DeleteAK`. `ek_delete` and `srk_delete` flush a persistent handle, which deletes nothing; `iak_delete` is refused with `FailedPrecondition` (§8) |
 | MCP — `idevid_*` / `iak_*` tools | **scoped** in `pkg/api/mcp/authz.go` with their gRPC twins' scopes, IAK tools included: `idevid:read` for info, exists and get-cert; `idevid:write` for generate, CSR, install-cert and `idevid_create_ldevid`; `idevid:delete` for the deletes. The tools call the shared `IDevIDGRPCService`, so each answers with its gRPC message and error class (#304) |
 | MCP — `device_attributes`, `activate_credential` | **scoped** `idevid:read` and `idevid:write`, the scopes of gRPC `GetDeviceAttributes` and `IDevIDService/ActivateCredential` (#304). They make the same TPM calls as those methods but answer with the MCP provider's errors, not the gRPC status |
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID CSR and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete`. The exception is `LDevIDCSR` (`0x1D`): the daemon serves it with `IDevIDService.CreateLDevID`, so it takes `idevid:write` |
 | QUIC device-identity opcodes | **scoped** with their gRPC `IDevIDService` twins' scopes (#304): `idevid:read` for info, has, get-cert and device attributes; `idevid:write` for generate, CSR, install-cert and activate-credential; `idevid:delete` for the deletes. One `idevid:*` grant covers the same operation on gRPC, QUIC and MCP |
 | REST — web service | route-level middleware only; no per-operation TPM scope (below) |
-| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). The bearer token is checked by the shared platform-token validator: no token is `401` (`ErrTPMTokenRequired`), a token without the scope or no validator configured is `403` (`ErrTPMForbidden`) |
+| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). Each route goes through the listener's shared `ScopeGuard` (`pkg/api/rest/route_scope.go`), as every other daemon REST route does: a bearer platform token must grant the route's scope, and without one a verified operator client certificate (`*:*`) is accepted. No credential or a rejected token is `401` (`ErrRouteUnauthenticated`); a token without the scope, or no guard, is `403` (`ErrRouteForbidden`) |
 | REST — daemon listener, `rest_idevid.go` | no per-operation scope; mTLS only |
 
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
@@ -534,11 +588,11 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x02` | `StatusNotFound` | 404 | `NotFound` | upstream error text matching `not found` / `does not exist` / `no such` |
 | `0x03` | `StatusUnauthorized` | 401 | `Unauthenticated` | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | `Internal` | `ErrTPM2OperationFailed`, `ErrTPM2EncodingFailed`, anything unclassified |
-| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | upstream text matching `already exists` / `duplicate` |
+| `0x06` | `StatusAlreadyExists` | 409 | `AlreadyExists` | `tpmek.ErrEKExists` (Create EK at an occupied EK handle); upstream text matching `already exists` / `duplicate` |
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| — | — | — | `FailedPrecondition` | upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrEKTemplateUnavailable` (Create EK with EK attributes that carry no creation template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line

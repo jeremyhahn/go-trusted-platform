@@ -219,8 +219,9 @@ backend := backends.NewMemoryBackend()
   64-bit words from the window start
 - Thread-safe: one `sync.RWMutex` guards the backend's maps and bitmaps
 - The only backend with batch and reservation support
-- Cannot hold a large IPv6 pool: the bitmap is sized from `CalculatePoolSize`
-  (`pkg/sdn/ipam/backends/memory.go:120`), so a `/64` asks for 2^64 − 1 bits
+- Pools of at most 2^24 addresses (an IPv4 /8, an IPv6 /104); larger ones
+  fail with `ErrPoolTooLarge`, because the bitmap is sized from
+  `CalculatePoolSize`
 
 The memory backend is platformd's default (`sdn.ipam.backend` empty or
 `memory`, `pkg/app/sdn.go:480`).
@@ -233,8 +234,7 @@ QuicBaaS SDK client to it (`pkg/app/sdn_ipam_backends.go:36`):
 
 ```go
 backend, err := backends.NewQuicBaaSBackend(client, &backends.QuicBaaSBackendConfig{
-    MaxRetries: 10, // 0 means 10
-    Logger:     logger,
+    Logger: logger,
 })
 ```
 
@@ -242,9 +242,14 @@ backend, err := backends.NewQuicBaaSBackend(client, &backends.QuicBaaSBackendCon
 - Persistent; replicated by the QuicBaaS store's Raft
 - Name and CIDR lookups go through index entries stored beside the pools
 - Built only without `platform_p2p` (`//go:build !platform_p2p`)
-- **No conflict handling.** `Allocate` lists the pool's allocations, picks a
-  free address and writes it with a plain `Put`; `MaxRetries` is stored but
-  nothing reads it. Two nodes allocating at once can hand out the same address.
+- Allocation is not atomic: `Allocate` reads the pool, picks a free address
+  and writes it with a plain `Put`, so concurrent allocators can pick the
+  same address and the last writer wins
+- A failed pool write returns `ErrPoolOperationFailed`; there is no retry
+  (`MaxRetries` is accepted and has no effect)
+- Known limitation: atomic allocation needs a conditional put in the
+  go-quicbaas SDK, which it does not offer yet (see
+  [architecture.md](architecture.md#quicbaas-concurrency))
 
 ### DHT Backend (P2P)
 
@@ -294,7 +299,7 @@ ipv4Pool := &ipam.Pool{
 ipv6Pool := &ipam.Pool{
     ID:   "v6-pool",
     Name: "IPv6 Network",
-    CIDR: netip.MustParsePrefix("2001:DB8:1234::/64"),  // size 2^64 − 1; not on the memory backend
+    CIDR: netip.MustParsePrefix("2001:DB8:1234::/64"),  // size 2^64 − 1; the memory backend refuses it (ErrPoolTooLarge)
 }
 ```
 

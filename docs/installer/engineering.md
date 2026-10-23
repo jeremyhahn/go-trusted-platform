@@ -408,8 +408,7 @@ strategy tried and failed, and bare `ErrUnlockFailed` when none was eligible;
 returns `[]error{Sentinel, Cause}`, so `errors.Is(err, ErrUnlockFailed)` matches
 either way.
 
-`pkg/cli/commands/iso` errors are typed per failure: `ErrDaemonConnectionRequired`,
-`ErrInvalidArchitecture`, `ErrInvalidPlatformType`, `ErrISONotFound`,
+`pkg/cli/commands/iso` errors are typed per failure: `ErrInvalidArchitecture`, `ErrInvalidPlatformType`, `ErrISONotFound`,
 `ErrDirectoryNotFound`, `ErrDirectoryAlreadyExists`, `ErrDownloadFailed`,
 `ErrExtractionFailed`, `ErrCustomizationFailed`, `ErrBuildFailed`,
 `ErrConfigValidationFailed`, `ErrProfileNotFound`, `ErrConfigParseError`,
@@ -800,8 +799,9 @@ func NewClientConfig(ctx context.Context, server nbd.ServerAddr, anchor *trust.A
 `server` is the address `ServerFromCmdline` read; its host becomes
 `ServerName`, so the boot server's certificate must carry it. `RootCAs` is the
 platform anchor's CA pool. `HandshakeTimeout` is the default. `idevid` is a
-parameter because the IDevID's source on a `diskless-nbd` node is not decided
-(**Planned**, #883 Q2). `anchor` is a parameter too: no early-boot path reads a
+parameter: it is the certificate the node's enrollment put in its TPM, and the
+node enrols before its first attach (#883 Q2,
+[below](#enrolling-before-the-attach)). `anchor` is a parameter too: no early-boot path reads a
 CA bundle today. The image's bundle is on the root filesystem, which for this
 model is the export itself. Nothing calls `NewClientConfig` yet.
 
@@ -818,9 +818,11 @@ model is the export itself. Nothing calls `NewClientConfig` yet.
 returns the model the live command line selects: `""` (disk), `diskless`, or
 `diskless-nbd`, which it accepts only with exactly one well-formed
 `platform_nbd_server` (`nbd.ServerFromCmdline`). Every other value is
-`ErrorTypeBootModel`. For `diskless-nbd`, `Install` then calls `useNBDTarget`
-(`pkg/installer/nbd_target.go`), before step 1, and it refuses with
-`ErrorTypeNBDTarget` wrapping `*NBDTargetError{Device, Reason}`:
+`ErrorTypeBootModel`. For `diskless-nbd`, `Install` then enrols the node
+([below](#enrolling-before-the-attach)) and, once it holds the IDevID, calls
+`useNBDTarget` (`pkg/installer/nbd_target.go`). Both run before step 1.
+`useNBDTarget` refuses with `ErrorTypeNBDTarget` wrapping
+`*NBDTargetError{Device, Reason}`:
 
 | Condition | `Reason` |
 |---|---|
@@ -852,6 +854,48 @@ nothing else. `ukiRootCmdlineParams` returns them as they are, so the UKI
 carries no `root=`, `rd.luks.*` or `rd.lvm.*`; the only live-line parameter
 that reaches it is the debug sink (`hostUKICmdlineParams`).
 
+### Enrolling before the attach
+
+The installer enrols, then attaches (#883 Q2). The export admits a node only
+by its IDevID, so a `diskless-nbd` node holds one before its first attach.
+Every node except the first enrols the same way, on every architecture and
+boot model: ACME `enroll-01` or `endorse-01`, whichever
+`acme.client.enrollment.challenge` selects, through the go-quicbaas SDK's
+`sdk/go/xkms/acme` client. That is the client `platformd` runs on a disk
+node's first boot (`App.CompletePlatformIdentity`, `pkg/app/app.go`). There is
+no second enrollment path, and the installer adds no enrollment code: it calls
+the client through one seam (`pkg/installer/nbd_enrol.go`):
+
+```go
+type IdentityEnroller interface {
+    EnrollIdentity(ctx context.Context) (*x509.Certificate, error)
+}
+
+func WithIdentityEnroller(e IdentityEnroller) InstallerOption
+```
+
+`enrollNBDIdentity` calls it once, before the TPM clear, before
+`useNBDTarget` reads the attachment and before any disk is touched. A refusal
+is `ErrorTypeEnrollment` wrapping `*EnrollmentError{Reason, Err}`, and the
+install stops with no disk changed:
+
+| Condition | `Reason` |
+|---|---|
+| no enroller was supplied | `no enrollment client is configured` |
+| `EnrollIdentity` returned an error (kept as `Err`) | `enrollment failed` |
+| `EnrollIdentity` returned no certificate | `enrollment returned no IDevID certificate` |
+
+A refusal of the export after a successful enrollment stays
+`ErrorTypeNBDTarget`, so the two failures are told apart.
+
+The live environment does not supply an enroller yet (**Planned**), so a
+`diskless-nbd` install is refused at this step. The enrollment client runs
+inside `platformd`'s first-boot provisioning (`InitTPM`,
+`ProvisionPlatform`, `CompletePlatformIdentity`). That provisioning needs the
+TPM's PINs and writes the platform datastore, and on a `diskless-nbd` node
+both belong on the export, which the node can attach only after it enrols.
+Where the live environment keeps them until then is not decided.
+
 ### Attaching before the install
 
 How the live environment reaches the installer on a `diskless-nbd` node:
@@ -875,10 +919,11 @@ The attach itself is **Planned**. It runs in the live environment between
 (the media already carries the `platform-initrd` binary,
 `CopyPlatformInitrdBinary`), and its failure ends the script through `error`
 before `platformctl install system` runs. Until it exists, the installer's own
-check is the refusal: no attached `nbd0` is `ErrorTypeNBDTarget`, before the
-TPM, a partition table or a key is touched, and the failed install stays in
-the installer ([autoinstall](autoinstall.md#8-failure-paths)). Two things hold
-the attach back, and both hold the `platform-initrd` attach back too:
+checks are the refusal: no enrollment is `ErrorTypeEnrollment` and no attached
+`nbd0` is `ErrorTypeNBDTarget`, both before the TPM, a partition table or a
+key is touched, and the failed install stays in the installer
+([autoinstall](autoinstall.md#8-failure-paths)). Two things hold the attach
+back, and both hold the `platform-initrd` attach back too:
 
 1. **The handoff to the kernel.** `nbd.Attach` ends with a `crypto/tls`
    connection. The kernel `nbd` driver takes a socket it reads and writes in
@@ -886,8 +931,8 @@ the attach back, and both hold the `platform-initrd` attach back too:
    cannot hand its session keys to kernel TLS.
 2. **The IDevID before the first install.** A node attaches only after
    enrollment, with the IDevID the bootstrap CA issued through the SDK (#883).
-   Enrollment is `platformd`'s, on an installed root; on a node's first install
-   nothing in the live environment has enrolled it.
+   The installer enrols first ([above](#enrolling-before-the-attach)), but the
+   live environment does not supply its enrollment client yet.
 
 ### The command line under Secure Boot
 

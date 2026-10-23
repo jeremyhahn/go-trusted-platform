@@ -1,15 +1,15 @@
 # Go SDK — CLI
 
-> **Status: NORMATIVE** · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 
-The SDK itself has no CLI surface; platformctl consumes it. The three
+The SDK itself has no CLI surface; platformctl consumes it. The four
 application services platformd serves through the composed go-quicbaas SDK
-([api.md §3.5](api.md#35-cache-scheduler-and-messaging-on-platformd)) each
+([api.md §3.5](api.md#35-application-services-on-platformd)) each
 get a platformctl group, one subcommand per RPC. The groups call the
-`Client` accessors `Cache()`, `Scheduler()` and `Messaging()`, so they run on
-the context's transport (`--transport`): REST, gRPC, QUIC, MCP, the Unix
-socket or embedded.
+`Client` accessors `Cache()`, `Scheduler()`, `Messaging()` and
+`ObjectStorage()`, so they run on the context's transport (`--transport`):
+REST, gRPC, QUIC, MCP, the Unix socket or embedded.
 
 `-o table` prints a FIELD / VALUE table, or one row per item for a list.
 Enums print without their prefix in kebab case (`one-shot`), `_unix_ms`
@@ -59,3 +59,23 @@ any call is made.
 | `messaging dedup-stats` | `GetDedupStats` | |
 
 Subscribing is not offered: the streaming RPCs are not served (api.md §3.5).
+
+## `platformctl objectstorage`
+
+| Command | RPC | Flags |
+|---|---|---|
+| `objectstorage put KEY [DATA]` | `PutObject` | `--backend` (required by the service), `--file` (instead of `DATA`), `--content-type`, `--tenant`, `--shard`, `--tag k=v`, `--min-replicas`, `--replication-mode` (`sync`, `async` or `quorum`), `--replica-store`, `--archive-after-days`, `--archive-store`, `--retention-days`, `--max-versions` |
+| `objectstorage get KEY` | `GetObject` | `--tenant`, `--metadata` |
+| `objectstorage delete KEY` | `DeleteObject` | `--tenant` |
+| `objectstorage head KEY` | `HeadObject` | `--tenant` |
+| `objectstorage list` | `ListObjects` | `--prefix`, `--tenant`, `--tags`, `--limit`, `--cursor` |
+| `objectstorage copy SOURCE DESTINATION` | `CopyObject` | `--backend` (required by the service), `--tenant`, `--overwrite` |
+| `objectstorage list-by-tag TAG VALUE` | `ListObjectsByTag` | `--tenant`, `--limit`, `--cursor` |
+| `objectstorage list-tenant TENANT` | `ListTenantObjects` | `--tags`, `--limit`, `--cursor` |
+
+Keys take the form `namespace:path`. A list prints one row per object (`KEY`,
+`SIZE`, `CONTENT TYPE`, `VERSION`, `STATUS`, `MODIFIED AT`); pass the reply's
+`next_cursor` to `--cursor` for the next page. A put or copy without
+`--backend` fails `INVALID_ARGUMENT`: the pinned go-quicbaas object store has
+no primary backend to choose
+([../objectstorage/api-reference.md](../objectstorage/api-reference.md#limits-of-the-pinned-sdk)).

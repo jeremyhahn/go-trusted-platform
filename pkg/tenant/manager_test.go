@@ -31,7 +31,6 @@ import (
 type mockIAMClient struct {
 	mu      sync.RWMutex
 	tenants map[string]*iam.Tenant
-	nextID  int
 
 	// Error injection
 	createErr error
@@ -55,7 +54,6 @@ func newMockIAMClient() *mockIAMClient {
 	return &mockIAMClient{
 		tenants: make(map[string]*iam.Tenant),
 		roles:   make(map[string][]string),
-		nextID:  1,
 	}
 }
 
@@ -117,7 +115,6 @@ func (m *mockIAMClient) Create(ctx context.Context, req *iam.CreateTenantRequest
 	}
 
 	m.tenants[tenant.ID] = tenant
-	m.nextID++
 
 	return tenant, nil
 }

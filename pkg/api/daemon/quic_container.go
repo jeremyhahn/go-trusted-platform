@@ -222,11 +222,17 @@ func (h *QUICServiceHandler) encodeQUICOK(v interface{}) *quicwire.Response {
 // Unimplemented (which the compute service returns for unsupported
 // orchestrator features) onto StatusNotImplemented.
 func (h *QUICServiceHandler) grpcStatusToQUICResponse(op string, err error) *quicwire.Response {
-	quicStatus := quicwire.StatusInternalError
+	return h.errorResponse(grpcCodeToQUICStatus(err), ErrQUICOperationFailed{Op: op, Cause: err})
+}
+
+// grpcCodeToQUICStatus is the QUIC status for the gRPC class of err;
+// a class with no mapping is StatusInternalError.
+func grpcCodeToQUICStatus(err error) byte {
 	if mapped, ok := deviceGRPCCodeToQUICStatus[status.Code(err)]; ok {
-		quicStatus = mapped
-	} else if status.Code(err) == codes.Unimplemented {
-		quicStatus = quicwire.StatusNotImplemented
+		return mapped
 	}
-	return h.errorResponse(quicStatus, ErrQUICOperationFailed{Op: op, Cause: err})
+	if status.Code(err) == codes.Unimplemented {
+		return quicwire.StatusNotImplemented
+	}
+	return quicwire.StatusInternalError
 }

@@ -247,7 +247,8 @@ type PXEPlugin struct {
 │         │                                                                     │
 │         ▼                                                                     │
 │  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │ Response Transmission (only if result != nil && !stop)                   │ │
+│  │ Response Transmission                                                    │ │
+│  │ - Sent whenever the plugin returns a reply (stop only ends the chain)    │ │
 │  │ - Increment packetsSent                                                  │ │
 │  │ - Record response type stats (OFFER, ACK, NAK)                           │ │
 │  │ - Update active lease count                                              │ │
@@ -261,11 +262,10 @@ type PXEPlugin struct {
 plugin; the PXE plugin is not in this pipeline (see
 [PXE Plugin Chain](#pxe-plugin-chain)).
 
-**Known defect:** the wrapper sends a reply only when
-`result != nil && !stop` (`pkg/sdn/dhcp/coredhcp.go:263`), but the IPAM
-plugin returns `stop = true` with every OFFER, ACK and NAK it builds
-(`pkg/sdn/dhcp/plugin_ipam.go:146,196,239,297`). The server therefore
-allocates and records leases but transmits no reply.
+The IPAM plugin is the last handler, so its `stop` flag only ends the chain:
+the wrapper sends whenever the plugin returns a reply (every OFFER, ACK and
+NAK it builds) and sends nothing when it returns `nil` (RELEASE, DECLINE, a
+failed allocation).
 
 ## Plugin Architecture
 

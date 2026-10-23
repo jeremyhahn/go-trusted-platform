@@ -28,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
@@ -56,6 +57,12 @@ const (
 	TableEgress        uint8 = 60 // BUM ingress replication
 	TableLocalDelivery uint8 = 70 // Out the access port
 )
+
+// overlayStaleFlowHold is how long a relaunched overlay keeps the flows its
+// predecessor installed and it has not re-added: the BGP graceful-restart
+// time, within which EVPN peers re-advertise the remote hosts whose flows
+// those are. Like a peer's stale routes, they are then swept.
+const overlayStaleFlowHold = time.Duration(bgp.DefaultGracefulRestartTime) * time.Second
 
 // MACEntrySource indicates where a MAC entry was learned from.
 type MACEntrySource uint8
@@ -204,6 +211,9 @@ type OverlayOpenFlowClient interface {
 	Connect(ctx context.Context) error
 	// SendFlowMods sends flow mods as one batch, followed by one barrier.
 	SendFlowMods(ctx context.Context, flows []*openflow.FlowMod) error
+	// QueryFlowStats reads the flows the filter selects, which the
+	// generation sweep reads the cookies of.
+	QueryFlowStats(ctx context.Context, filter openflow.FlowStatsFilter) ([]openflow.FlowStats, error)
 	SendPacketOut(ctx context.Context, packet *openflow.PacketOut) error
 	// SetMeter installs a drop meter, or updates the rate of an existing one.
 	SetMeter(ctx context.Context, meterID uint32, rateKbps uint32, burstKbps uint32) error
@@ -234,12 +244,19 @@ type OverlayModeConfig struct {
 	// switch, not only for the anycast gateway.
 	ARPSuppression bool
 
-	// AnycastGatewayIP is the distributed anycast gateway's IPv4 address;
-	// with AnycastGatewayMAC it turns on routing.
-	AnycastGatewayIP netip.Addr
+	// AnycastGateways maps an L2VNI to the IPv4 address of its distributed
+	// anycast gateway, answered for on that VNI's segment; with
+	// AnycastGatewayMAC it turns on routing. A VNI without an entry is
+	// bridged and routed only by hosts that know another gateway.
+	AnycastGateways map[uint32]netip.Addr
 
-	// AnycastGatewayMAC is the distributed anycast gateway MAC.
-	// This MAC is shared across all nodes for seamless L3 routing.
+	// Subnets maps a routed L2VNI to its IPv4 subnet, which holds the
+	// VNI's anycast gateway. With L3VNI, each is originated as a Type-5
+	// route in the IP-VRF while its VNI is joined.
+	Subnets map[uint32]netip.Prefix
+
+	// AnycastGatewayMAC is the distributed anycast gateway MAC, shared by
+	// every VNI's gateway and by every VTEP.
 	AnycastGatewayMAC net.HardwareAddr
 
 	// L3VNI is the IP-VRF of symmetric IRB; zero routes between local
@@ -255,6 +272,12 @@ type OverlayModeConfig struct {
 
 	// Admitter vets the remote VTEPs routes name; EVPN requires it.
 	Admitter VTEPAdmitter
+
+	// FloodPeers, when set, is told each change to a VNI's flood list as
+	// the Type-3 route that made it, once the flows hold it; leaving a VNI
+	// withdraws each VTEP that was on it. gatewayd's overlay IPsec follows
+	// it, so an SA runs to exactly the VTEPs this node exchanges frames with.
+	FloodPeers bgp.EVPNRouteHandler
 
 	// Logger for logging operations.
 	Logger *slog.Logger
@@ -283,9 +306,28 @@ func (c *OverlayModeConfig) Validate() error {
 	if c.EVPNConfig != nil && c.Admitter == nil {
 		return ErrAdmitterNil
 	}
-	anycast := c.AnycastGatewayIP.IsValid() || c.AnycastGatewayMAC != nil
-	if anycast && (!c.AnycastGatewayIP.Is4() || len(c.AnycastGatewayMAC) != 6) {
+	anycast := len(c.AnycastGateways) > 0 || c.AnycastGatewayMAC != nil
+	if anycast && (len(c.AnycastGateways) == 0 || len(c.AnycastGatewayMAC) != 6) {
 		return ErrAnycastGatewayIncomplete
+	}
+	for vni, ip := range c.AnycastGateways {
+		if err := validateOverlayVNI(vni); err != nil {
+			return err
+		}
+		if !ip.Is4() {
+			return ErrAnycastGatewayIncomplete
+		}
+	}
+	seen := make(map[netip.Prefix]struct{}, len(c.Subnets))
+	for vni, subnet := range c.Subnets {
+		gateway, ok := c.AnycastGateways[vni]
+		if !ok || !subnet.Addr().Is4() || subnet != subnet.Masked() || !subnet.Contains(gateway) {
+			return ErrRoutedSubnetInvalid
+		}
+		if _, repeated := seen[subnet]; repeated {
+			return ErrRoutedSubnetInvalid
+		}
+		seen[subnet] = struct{}{}
 	}
 	if c.L3VNI == 0 {
 		return nil
@@ -405,6 +447,13 @@ type OverlayModeHandler struct {
 	startedAt time.Time
 	builder   *flowBuilder
 	flows     *flowTable
+	// cookie is OverlayCookie with the generation Start drew; every flow
+	// this run installs carries it.
+	cookie uint64
+	// staleSweepAt is when the flows of an older generation, which a
+	// killed predecessor left on the switch, are swept; zero once they are
+	// and while stopped.
+	staleSweepAt time.Time
 	// drifted is set when the switch refused a put-back and may hold
 	// flows the table does not; the next change rebuilds the switch, and so
 	// does the ND watch, which retries a refused rebuild with a backoff:
@@ -531,10 +580,18 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 		return ErrAlreadyRunning
 	}
 
+	cookie, err := ovs.NewGenerationCookie(OverlayCookie)
+	if err != nil {
+		return &ErrOverlayStartFailed{Component: "OpenFlow", Cause: err}
+	}
+	h.mu.Lock()
+	h.cookie = cookie
+	h.mu.Unlock()
+
 	if err := h.vtepManager.Start(ctx); err != nil {
 		return &ErrOverlayStartFailed{Component: "VTEPManager", Cause: err}
 	}
-	builder, err := h.newBuilder(ctx)
+	builder, err := h.newBuilder(ctx, cookie)
 	if err != nil {
 		h.abortStart(ctx, false)
 		component := "OpenFlow"
@@ -572,9 +629,12 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 	return nil
 }
 
-// installBase replaces whatever overlay flows the bridge holds, ND punts a
-// crashed run left included, with the base pipeline, in fail-closed order,
-// and marks the handler running. Caller holds mu.
+// installBase installs the base pipeline under this run's generation, in
+// fail-closed order, and marks the handler running. It flushes nothing: an
+// ADD of the same table, priority and match replaces a predecessor's flow in
+// place, so forwarding the relaunch still wants never gaps, and whatever the
+// predecessor installed that this run does not is swept by generation once
+// overlayStaleFlowHold has passed (sweepPredecessor). Caller holds mu.
 func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuilder) error {
 	h.flows.reset()
 	h.drifted, h.remap = false, false
@@ -582,19 +642,86 @@ func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuild
 	if err != nil {
 		return err
 	}
-	if err := h.ofClient.SendFlowMods(ctx, append([]*openflow.FlowMod{overlayFlush(), ndFlush()}, failClosed(plan.mods)...)); err != nil {
-		return h.resync(ctx, err, []*openflow.FlowMod{overlayFlush()})
+	if err := h.ofClient.SendFlowMods(ctx, failClosed(plan.mods)); err != nil {
+		return h.resync(ctx, err, overlayFlush())
 	}
 	plan.commit()
 	h.builder = builder
 	h.running = true
 	h.startedAt = time.Now()
+	h.staleSweepAt = h.startedAt.Add(overlayStaleFlowHold)
+	return nil
+}
+
+// sweepPredecessor deletes the flows of older overlay generations once the
+// hold Start set has passed. A failure is logged and retried on the next
+// tick. Called from the ND poll loop.
+func (h *OverlayModeHandler) sweepPredecessor(ctx context.Context, now time.Time) {
+	h.mu.Lock()
+	due := h.running && !h.staleSweepAt.IsZero() && !now.Before(h.staleSweepAt)
+	h.mu.Unlock()
+	if !due {
+		return
+	}
+	if err := h.sweepStaleGenerations(ctx); err != nil {
+		h.logger.Warn("overlay stale generation sweep failed; retrying", "error", err)
+	}
+}
+
+// sweepStaleGenerations deletes every flow under the overlay's owner cookie
+// whose generation is not this run's, leaving this run's flows and every
+// other owner's untouched. Each stale generation is deleted by its exact
+// cookie, so a flow this run re-added in place, which now carries this run's
+// cookie, survives. The flows an older release left under the exact
+// legacyOverlayCookie are swept the same way.
+func (h *OverlayModeHandler) sweepStaleGenerations(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.running {
+		return nil
+	}
+	stats, err := h.ofClient.QueryFlowStats(ctx, openflow.FlowStatsFilter{
+		TableID:    openflow.OFPTTAll,
+		Cookie:     OverlayCookie,
+		CookieMask: ovs.OwnerCookieMask,
+	})
+	if err != nil {
+		return &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "read stale generations", Cause: err}
+	}
+	legacy, err := h.ofClient.QueryFlowStats(ctx, openflow.FlowStatsFilter{
+		TableID:    openflow.OFPTTAll,
+		Cookie:     legacyOverlayCookie,
+		CookieMask: ^uint64(0),
+	})
+	if err != nil {
+		return &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "read stale generations", Cause: err}
+	}
+	stale := make(map[uint64]struct{})
+	for _, s := range stats {
+		if s.Cookie&ovs.OwnerCookieMask == OverlayCookie && s.Cookie != h.cookie {
+			stale[s.Cookie] = struct{}{}
+		}
+	}
+	if len(legacy) > 0 {
+		stale[legacyOverlayCookie] = struct{}{}
+	}
+	if len(stale) > 0 {
+		mods := make([]*openflow.FlowMod, 0, len(stale))
+		for _, cookie := range slices.Sorted(maps.Keys(stale)) {
+			mods = append(mods, generationDelete(cookie))
+		}
+		if err := h.ofClient.SendFlowMods(ctx, mods); err != nil {
+			return &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "sweep stale generations", Cause: err}
+		}
+		h.logger.Info("overlay flows of older generations swept", "generations", len(stale))
+	}
+	h.staleSweepAt = time.Time{}
 	return nil
 }
 
 // newBuilder builds the overlay's flows on the current OpenFlow numbers of
 // the VXLAN and access ports, read from OVS.
-func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, error) {
+func (h *OverlayModeHandler) newBuilder(ctx context.Context, cookie uint64) (*flowBuilder, error) {
 	vxlanPort, err := h.vtepManager.ResolveOFPort(ctx)
 	if err != nil {
 		return nil, &ErrOverlayPortUnresolved{Port: "VXLANPort", Cause: err}
@@ -606,7 +733,7 @@ func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, erro
 	if err != nil {
 		return nil, &ErrOverlayPortUnresolved{Port: "AccessPort", Cause: err}
 	}
-	return newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)})
+	return newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)}, cookie)
 }
 
 // remapPorts reads the ports' OpenFlow numbers again, which a restarted
@@ -616,7 +743,7 @@ func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, erro
 // last updated, so where two hold one flow differently the later still
 // wins. The switch is not touched. Caller holds mu.
 func (h *OverlayModeHandler) remapPorts(ctx context.Context) error {
-	builder, err := h.newBuilder(ctx)
+	builder, err := h.newBuilder(ctx, h.cookie)
 	if err != nil {
 		return err
 	}
@@ -714,10 +841,11 @@ func (h *OverlayModeHandler) Stop(ctx context.Context) error {
 	}
 
 	h.mu.Lock()
-	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); err != nil {
+	if err := h.ofClient.SendFlowMods(ctx, overlayFlush()); err != nil {
 		errs = append(errs, &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "delete", Cause: err})
 	}
 	h.flows.reset()
+	h.staleSweepAt = time.Time{}
 	clear(h.segments)
 	clear(h.vlans)
 	clear(h.hosts)
@@ -776,13 +904,59 @@ func (h *OverlayModeHandler) AddVNI(ctx context.Context, vni uint32, vlan uint16
 	}
 	if err := h.evpnManager.JoinVNI(ctx, vni, h.config.L3VNI); err != nil {
 		h.mu.Lock()
-		if removeErr := h.removeSegment(ctx, vni); removeErr != nil {
+		if removeErr := h.removeSegmentAndPeers(ctx, vni); removeErr != nil {
 			h.logger.Error("removing a VNI EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", removeErr))
 		}
 		h.mu.Unlock()
 		return &ErrVNIOperationFailed{VNI: vni, Operation: "join", Cause: err}
 	}
+	if err := h.originateSubnet(ctx, vni); err != nil {
+		if leaveErr := h.leaveVNI(ctx, vni); leaveErr != nil {
+			h.logger.Error("leaving a VNI whose subnet EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", leaveErr))
+		}
+		h.mu.Lock()
+		if removeErr := h.removeSegmentAndPeers(ctx, vni); removeErr != nil {
+			h.logger.Error("removing a VNI whose subnet EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", removeErr))
+		}
+		h.mu.Unlock()
+		return &ErrVNIOperationFailed{VNI: vni, Operation: "originate", Cause: err}
+	}
 	return nil
+}
+
+// originatedSubnet is the subnet vni originates as a Type-5 route: only a
+// routed VNI does, and only with an L3VNI.
+func (h *OverlayModeHandler) originatedSubnet(vni uint32) (netip.Prefix, bool) {
+	if h.config.L3VNI == 0 {
+		return netip.Prefix{}, false
+	}
+	subnet, ok := h.config.Subnets[vni]
+	return subnet, ok
+}
+
+// originateSubnet advertises vni's subnet in the IP-VRF of the L3VNI.
+func (h *OverlayModeHandler) originateSubnet(ctx context.Context, vni uint32) error {
+	subnet, ok := h.originatedSubnet(vni)
+	if !ok {
+		return nil
+	}
+	return h.evpnManager.AdvertisePrefix(ctx, h.config.L3VNI, subnet)
+}
+
+// withdrawSubnet withdraws the Type-5 route originateSubnet advertised for
+// vni; a subnet that is not advertised is no error.
+func (h *OverlayModeHandler) withdrawSubnet(ctx context.Context, vni uint32) error {
+	subnet, ok := h.originatedSubnet(vni)
+	if !ok {
+		return nil
+	}
+	err := h.evpnManager.WithdrawPrefix(ctx, h.config.L3VNI, subnet)
+	var notJoined bgp.ErrVNINotJoined
+	var notFound bgp.ErrPrefixNotFound
+	if err == nil || errors.As(err, &notJoined) || errors.As(err, &notFound) {
+		return nil
+	}
+	return &ErrVNIOperationFailed{VNI: vni, Operation: "withdraw", Cause: err}
 }
 
 // RemoveVNI takes this VTEP off an L2VNI and removes everything forwarded
@@ -811,28 +985,31 @@ func (h *OverlayModeHandler) RemoveVNI(ctx context.Context, vni uint32) error {
 	}
 
 	h.mu.Lock()
+	flood := h.segments[vni].flood
 	if err := h.removeSegment(ctx, vni); err != nil {
 		errs = append(errs, &ErrVNIOperationFailed{VNI: vni, Operation: "remove", Cause: err})
-	} else if err := h.releaseHeld(ctx); err != nil {
-		errs = append(errs, err)
+	} else {
+		errs = append(errs, h.releaseHeld(ctx), h.withdrawFloodPeers(ctx, vni, flood))
 	}
 	h.mu.Unlock()
 	return errors.Join(errs...)
 }
 
 // leaveVNI takes this VTEP off a VNI in EVPN, which withdraws the VNI's
-// routes, those whose withdrawal BGP refused before included. A VNI
+// routes, those whose withdrawal BGP refused before included, and first
+// the Type-5 route of its subnet. A VNI
 // already left — by a removal whose flows the switch then refused — is not
 // an error, so the removal can be retried and Stop still completes.
 // Caller holds opMu.
 func (h *OverlayModeHandler) leaveVNI(ctx context.Context, vni uint32) error {
+	withdrawErr := h.withdrawSubnet(ctx, vni)
 	err := h.evpnManager.LeaveVNI(ctx, vni)
 	var notJoined bgp.ErrVNINotJoined
 	if err == nil || errors.As(err, &notJoined) {
 		maps.DeleteFunc(h.unwithdrawn, func(key hostKey, _ map[netip.Addr]struct{}) bool { return key.vni == vni })
-		return nil
+		return withdrawErr
 	}
-	return &ErrVNIOperationFailed{VNI: vni, Operation: "leave", Cause: err}
+	return errors.Join(withdrawErr, &ErrVNIOperationFailed{VNI: vni, Operation: "leave", Cause: err})
 }
 
 // removeSegment removes a VNI's flows and hosts, and the prefixes with
@@ -868,6 +1045,32 @@ func (h *OverlayModeHandler) removeSegment(ctx context.Context, vni uint32) erro
 	delete(h.vlans, segment.vlan)
 	delete(h.segments, vni)
 	return nil
+}
+
+// removeSegmentAndPeers removes a VNI's segment, then withdraws each VTEP
+// on its flood list from FloodPeers. Caller holds mu.
+func (h *OverlayModeHandler) removeSegmentAndPeers(ctx context.Context, vni uint32) error {
+	flood := h.segments[vni].flood
+	if err := h.removeSegment(ctx, vni); err != nil {
+		return err
+	}
+	return h.withdrawFloodPeers(ctx, vni, flood)
+}
+
+// withdrawFloodPeers tells FloodPeers that each VTEP of flood left vni, as
+// the Type-3 withdrawal BGP would have sent. Every VTEP is tried and the
+// failures are joined. Caller holds mu.
+func (h *OverlayModeHandler) withdrawFloodPeers(ctx context.Context, vni uint32, flood []netip.Addr) error {
+	var errs []error
+	for _, vtep := range flood {
+		errs = append(errs, h.tellFloodPeers(ctx, &bgp.EVPNRouteData{
+			Type:       bgp.EVPNTypeInclusiveMulticast,
+			IMET:       &bgp.IMETEntry{VNI: vni, VTEPIP: vtep},
+			NextHop:    vtep,
+			IsWithdraw: true,
+		}))
+	}
+	return errors.Join(errs...)
 }
 
 // LearnMAC records a host on the access port — its MAC alone, or a MAC/IP
@@ -1055,7 +1258,7 @@ func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
 		L3VNI:                    h.config.L3VNI,
 		ARPSuppressionEnabled:    h.config.ARPSuppression,
 		NDSuppression:            h.ndStatus(),
-		AnycastGatewayConfigured: h.config.AnycastGatewayIP.IsValid(),
+		AnycastGatewayConfigured: len(h.config.AnycastGateways) > 0,
 	}
 	vteps := make(map[netip.Addr]struct{})
 	for _, segment := range h.segments {
@@ -1128,27 +1331,40 @@ func (h *OverlayModeHandler) resync(ctx context.Context, cause error, restore []
 func (h *OverlayModeHandler) rebuild(ctx context.Context) error {
 	if h.remap {
 		if err := h.remapPorts(ctx); err != nil {
-			if flushErr := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); flushErr != nil {
+			if flushErr := h.ofClient.SendFlowMods(ctx, overlayFlush()); flushErr != nil {
 				return errors.Join(err, &ErrFlowResyncFailed{Cause: flushErr})
 			}
 			return err
 		}
 	}
-	mods := append([]*openflow.FlowMod{overlayFlush()}, h.flows.installed()...)
+	mods := append(overlayFlush(), h.flows.installed()...)
 	if err := h.ofClient.SendFlowMods(ctx, mods); err != nil {
 		return &ErrFlowResyncFailed{Cause: err}
 	}
 	h.drifted = false
+	h.staleSweepAt = time.Time{}
 	h.logger.Info("overlay flows rebuilt from the committed state")
 	return nil
 }
 
-// overlayFlush deletes every overlay flow in every table.
-func overlayFlush() *openflow.FlowMod {
+// overlayFlush deletes every overlay flow in every table, of every
+// generation, and those an older release left under legacyOverlayCookie.
+func overlayFlush() []*openflow.FlowMod {
 	f := openflow.NewFlowMod(0)
 	f.Command = openflow.OFPFCDelete
 	f.TableID = openflow.OFPTTAll
 	f.Cookie = OverlayCookie
+	f.CookieMask = ovs.OwnerCookieMask
+	return []*openflow.FlowMod{f, generationDelete(legacyOverlayCookie)}
+}
+
+// generationDelete deletes, from every table, the flows of one overlay
+// generation.
+func generationDelete(cookie uint64) *openflow.FlowMod {
+	f := openflow.NewFlowMod(0)
+	f.Command = openflow.OFPFCDelete
+	f.TableID = openflow.OFPTTAll
+	f.Cookie = cookie
 	f.CookieMask = ^uint64(0)
 	return f
 }

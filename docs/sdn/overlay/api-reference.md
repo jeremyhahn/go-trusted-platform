@@ -102,9 +102,10 @@ and dropped.
 `OverlayStatus` carries no ND suppression counters. ND suppression runs in
 the gateway overlay mode, and its counters are on that handler's status
 (`OverlayModeStatus.NDSuppression` and `NDCounters`, see
-[ND suppression](../../gateway/engineering.md#nd-suppression)). They reach
-operators only through the gateway state snapshot
-(`platformctl sdn gateway snapshot`, `gwstate.OverlayState.NDCounters`).
+[ND suppression](../../gateway/engineering.md#nd-suppression)). gatewayd's
+`overlay` service reports `NDCounters` in the overlay section of the gateway
+telemetry snapshot (`nd_counters`), served on every transport
+([gateway API](../../gateway/api.md)) and by `platformctl sdn gateway snapshot`.
 
 ## REST API Quick Reference
 

@@ -113,6 +113,159 @@ func testISOProtocol(t *testing.T, ctx context.Context, cmd ISOCommands) {
 }
 
 // =============================================================================
+// Fixtures
+// =============================================================================
+//
+// Extract, Customize, Build and the VM tests each need the artefact an earlier
+// step produces. The ensure* helpers return that artefact, producing it through
+// the adapter when no earlier subtest has, so any subtest can run on its own
+// (-run selects it) and a step that cannot produce its artefact fails the test
+// that needs it instead of letting it pass unrun.
+
+func alpineISOPath(workDir string) string {
+	return filepath.Join(workDir, fmt.Sprintf("alpine-standard-%s-%s.iso", DefaultAlpineVersion, DefaultArch))
+}
+
+func extractedISODir(workDir string) string {
+	return filepath.Join(workDir, "extracted-iso")
+}
+
+func builtISOPath(workDir string) string {
+	return filepath.Join(workDir, "test-output.iso")
+}
+
+func installedDiskPath(workDir string) string {
+	return filepath.Join(workDir, "test-install.qcow2")
+}
+
+// ensureAlpineISO returns the downloaded Alpine ISO, downloading it first.
+func ensureAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	isoPath := alpineISOPath(workDir)
+	if FileExists(isoPath) {
+		return isoPath
+	}
+
+	result, err := cmd.Download(ctx, DownloadOptions{
+		Version: DefaultAlpineVersion,
+		Mirror:  DefaultMirror,
+		Arch:    DefaultArch,
+		WorkDir: workDir,
+		Verify:  true,
+	})
+	if err != nil {
+		t.Fatalf("missing prerequisite: downloading the Alpine ISO fixture: %v", err)
+	}
+	if result != nil && result.ISOPath != "" {
+		isoPath = result.ISOPath
+	}
+	if !FileExists(isoPath) {
+		t.Fatalf("missing prerequisite: %v", ErrISONotFound{Path: isoPath})
+	}
+	return isoPath
+}
+
+// ensureExtractedISO returns the extracted ISO tree, extracting it first.
+func ensureExtractedISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	isoDir := extractedISODir(workDir)
+	if DirExists(isoDir) {
+		return isoDir
+	}
+
+	isoPath := ensureAlpineISO(t, ctx, cmd, workDir)
+	if _, err := cmd.Extract(ctx, ExtractOptions{ISO: isoPath, OutputDir: isoDir, WorkDir: workDir}); err != nil {
+		t.Fatalf("missing prerequisite: extracting the ISO fixture: %v", err)
+	}
+	if !DirExists(isoDir) {
+		t.Fatalf("missing prerequisite: %v", ErrDirectoryNotFound{Path: isoDir})
+	}
+	return isoDir
+}
+
+// customizeInputs returns the platformd binary and the platform configuration
+// `iso customize` stages into the ISO (docs/installer/cli.md §4). customize
+// also stages platform-initrd and, for the gateway-role template, gatewayd
+// from beside platformd and fails without them; the runner builds all three
+// into the directory of platformctl.
+func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
+	t.Helper()
+	binDir, err := PlatformBinaryDir()
+	if err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
+	for _, name := range []string{"platformd", "platform-initrd", "gatewayd"} {
+		path := filepath.Join(binDir, name)
+		if !FileExists(path) {
+			t.Fatalf("missing prerequisite: %v", ErrBinaryNotFound{Name: name, Path: path})
+		}
+	}
+
+	platformConfig, err = filepath.Abs(PlatformConfigTemplate)
+	if err != nil {
+		t.Fatalf("missing prerequisite: resolving the platform config template %s: %v", PlatformConfigTemplate, err)
+	}
+	if !FileExists(platformConfig) {
+		t.Fatalf("missing prerequisite: platform config template not found: %s", platformConfig)
+	}
+	return filepath.Join(binDir, "platformd"), platformConfig
+}
+
+// ensureBuiltISO returns an ISO rebuilt from the extracted tree, building it first.
+func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	isoPath := builtISOPath(workDir)
+	if FileExists(isoPath) {
+		return isoPath
+	}
+
+	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
+	result, err := cmd.Build(ctx, BuildOptions{SourceDir: isoDir, Output: isoPath, VolumeID: "TEST_ISO"})
+	if err != nil {
+		t.Fatalf("missing prerequisite: building the ISO fixture: %v", err)
+	}
+	if result != nil && result.OutputISO != "" {
+		isoPath = result.OutputISO
+	}
+	if !FileExists(isoPath) {
+		t.Fatalf("missing prerequisite: %v", ErrISONotFound{Path: isoPath})
+	}
+	return isoPath
+}
+
+// installOptions installs isoPath onto the work directory's test disk.
+func installOptions(isoPath, workDir string) TestInstallOptions {
+	return TestInstallOptions{
+		ISO:        isoPath,
+		Disk:       installedDiskPath(workDir),
+		DiskSize:   "10G",
+		Memory:     4096,
+		CPUs:       2,
+		WorkDir:    workDir,
+		SecureBoot: false,
+		Debug:      true,
+	}
+}
+
+// ensureInstalledDisk returns a disk with the built ISO installed, installing it first.
+func ensureInstalledDisk(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
+	t.Helper()
+	diskPath := installedDiskPath(workDir)
+	if FileExists(diskPath) {
+		return diskPath
+	}
+
+	isoPath := ensureBuiltISO(t, ctx, cmd, workDir)
+	if _, err := cmd.TestInstall(ctx, installOptions(isoPath, workDir)); err != nil {
+		t.Fatalf("missing prerequisite: installing the ISO fixture onto %s: %v", diskPath, err)
+	}
+	if !FileExists(diskPath) {
+		t.Fatalf("missing prerequisite: %v", ErrDiskNotFound{Path: diskPath})
+	}
+	return diskPath
+}
+
+// =============================================================================
 // Profile Tests
 // =============================================================================
 
@@ -122,143 +275,82 @@ func testProfileOperations(t *testing.T, ctx context.Context, cmd ISOCommands) {
 
 	t.Run("ProfileList", func(t *testing.T) {
 		result, err := cmd.ProfileList(testCtx)
-		// Profile list may fail with daemon connection required error
-		// This is expected when dual-mode is not yet implemented
-		if err != nil {
-			t.Logf("ProfileList not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		// If implemented, verify we get profiles
-		if result.Success && len(result.Profiles) > 0 {
-			// Check known profiles
-			profileNames := make(map[string]bool)
-			for _, p := range result.Profiles {
-				profileNames[p.Name] = true
-				assert.NotEmpty(t, p.Name, "Profile name should not be empty")
-			}
-			// Check for expected profiles
-			for _, expected := range []string{"dev", "production", "fips"} {
-				if profileNames[expected] {
-					t.Logf("Found expected profile: %s", expected)
-				}
-			}
-		}
-	})
+		require.NoError(t, err)
+		require.True(t, result.Success)
 
-	t.Run("ProfileShowDev", func(t *testing.T) {
-		result, err := cmd.ProfileShow(testCtx, "dev")
-		if err != nil {
-			t.Logf("ProfileShow not available (expected): %v", err)
-			return
+		profiles := make(map[string]ProfileInfo, len(result.Profiles))
+		for _, p := range result.Profiles {
+			profiles[p.Name] = p
 		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success && result.Profile != nil {
-			assert.Equal(t, "dev", result.Profile.Name, "Profile name should match")
+		for _, expected := range []string{"dev", "production", "production-hs", "fips"} {
+			assert.Contains(t, profiles, expected)
 		}
+		assert.False(t, profiles["dev"].SecureBoot, "dev boots without Secure Boot")
+		assert.True(t, profiles["production"].SecureBoot)
+		assert.True(t, profiles["fips"].FIPS)
 	})
 
 	t.Run("ProfileShowProduction", func(t *testing.T) {
 		result, err := cmd.ProfileShow(testCtx, "production")
-		if err != nil {
-			t.Logf("ProfileShow not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success && result.Profile != nil {
-			assert.Equal(t, "production", result.Profile.Name, "Profile name should match")
-			// Production profile should have security enabled
-			assert.True(t, result.Profile.TPMUnseal, "Production should have TPM unseal")
-			assert.True(t, result.Profile.LUKS, "Production should have LUKS")
-		}
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		require.NotNil(t, result.Profile)
+		assert.Equal(t, "production", result.Profile.Name)
+		assert.True(t, result.Profile.TPMUnseal, "production seals LUKS to the TPM")
+		assert.True(t, result.Profile.LUKS)
+		assert.Contains(t, result.YAML, "kms://platform/secureboot/db", "production signs the UKI with the platform DB key")
 	})
 
 	t.Run("ProfileShowFIPS", func(t *testing.T) {
 		result, err := cmd.ProfileShow(testCtx, "fips")
-		if err != nil {
-			t.Logf("ProfileShow not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success && result.Profile != nil {
-			assert.Equal(t, "fips", result.Profile.Name, "Profile name should match")
-			// FIPS profile should have FIPS enabled
-			assert.True(t, result.Profile.FIPS, "FIPS profile should have FIPS enabled")
-		}
+		require.NoError(t, err)
+		require.NotNil(t, result.Profile)
+		assert.Equal(t, "fips", result.Profile.Name)
+		assert.True(t, result.Profile.FIPS)
 	})
 
 	t.Run("ProfileShowNonExistent", func(t *testing.T) {
 		_, err := cmd.ProfileShow(testCtx, "nonexistent-profile-12345")
-		if err == nil {
-			t.Log("ProfileShow of nonexistent profile should fail or return error")
-		}
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nonexistent-profile-12345")
 	})
 
-	t.Run("ProfileValidateValidFile", func(t *testing.T) {
-		// Create a minimal valid config file
-		tempDir, err := os.MkdirTemp("", "profile-validate-")
-		require.NoError(t, err, "Should create temp dir")
-		defer os.RemoveAll(tempDir)
-
-		configPath := filepath.Join(tempDir, "valid-config.yaml")
-		validConfig := `
-device: /dev/sda
-hostname: test-host
-root_password: testpass123
-disk:
-  wipe: false
-`
-		err = os.WriteFile(configPath, []byte(validConfig), 0644)
-		require.NoError(t, err, "Should write config file")
-
-		result, err := cmd.ProfileValidate(testCtx, configPath)
-		if err != nil {
-			t.Logf("ProfileValidate not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-	})
-
-	t.Run("ProfileValidateInvalidFile", func(t *testing.T) {
-		result, err := cmd.ProfileValidate(testCtx, "/nonexistent/path/config.yaml")
-		if err != nil {
-			t.Logf("ProfileValidate not available or returned error (expected): %v", err)
-			return
-		}
-		// If implemented and file doesn't exist, should return invalid
-		if result != nil && !result.Valid {
-			assert.NotEmpty(t, result.Errors, "Should have validation errors for nonexistent file")
-		}
-	})
-
-	t.Run("ProfileGenerate", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "profile-generate-")
-		require.NoError(t, err, "Should create temp dir")
-		defer os.RemoveAll(tempDir)
-
-		outputPath := filepath.Join(tempDir, "generated.yaml")
-
-		opts := ProfileGenerateOptions{
-			ProfileName:    "dev",
+	t.Run("ProfileGenerateThenValidate", func(t *testing.T) {
+		outputPath := filepath.Join(t.TempDir(), "generated.yaml")
+		result, err := cmd.ProfileGenerate(testCtx, ProfileGenerateOptions{
+			ProfileName:    "production",
 			OutputFile:     outputPath,
 			OverrideDevice: "/dev/nvme0n1",
-		}
+		})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		assert.Equal(t, outputPath, result.OutputFile)
+		assert.Contains(t, result.YAML, "/dev/nvme0n1")
 
-		result, err := cmd.ProfileGenerate(testCtx, opts)
-		if err != nil {
-			t.Logf("ProfileGenerate not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success {
-			// Verify file was created
-			if outputPath != "" && result.OutputFile != "" {
-				_, statErr := os.Stat(result.OutputFile)
-				if statErr == nil {
-					assert.True(t, FileExists(result.OutputFile), "Output file should exist")
-				}
-			}
-		}
+		written, err := os.ReadFile(outputPath)
+		require.NoError(t, err)
+		assert.Equal(t, result.YAML, string(written), "the file holds exactly the printed config")
+
+		validated, err := cmd.ProfileValidate(testCtx, outputPath)
+		require.NoError(t, err)
+		assert.True(t, validated.Valid)
+		assert.Empty(t, validated.Errors)
+	})
+
+	t.Run("ProfileValidateInvalidContent", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "invalid.yaml")
+		require.NoError(t, os.WriteFile(configPath, []byte("disk: [not, a, mapping\n"), 0o600))
+
+		result, err := cmd.ProfileValidate(testCtx, configPath)
+		require.Error(t, err, "an invalid config exits non-zero")
+		require.NotNil(t, result)
+		assert.False(t, result.Valid)
+		assert.NotEmpty(t, result.Errors)
+	})
+
+	t.Run("ProfileValidateMissingFile", func(t *testing.T) {
+		_, err := cmd.ProfileValidate(testCtx, "/nonexistent/path/config.yaml")
+		require.Error(t, err)
 	})
 }
 
@@ -271,72 +363,30 @@ func testDownloadOperations(t *testing.T, ctx context.Context, cmd ISOCommands, 
 	defer cancel()
 
 	t.Run("DownloadDefaultVersion", func(t *testing.T) {
-		opts := DownloadOptions{
+		result, err := cmd.Download(testCtx, DownloadOptions{
 			Version: DefaultAlpineVersion,
 			Mirror:  DefaultMirror,
 			Arch:    DefaultArch,
 			WorkDir: workDir,
 			Verify:  true,
-		}
-
-		result, err := cmd.Download(testCtx, opts)
-		if err != nil {
-			t.Logf("Download not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success {
-			assert.NotEmpty(t, result.ISOPath, "ISO path should be set")
-			assert.True(t, result.Verified || result.Message != "", "Should be verified or have message")
-		}
-	})
-
-	t.Run("DownloadWithForce", func(t *testing.T) {
-		opts := DownloadOptions{
-			Version: DefaultAlpineVersion,
-			Mirror:  DefaultMirror,
-			Arch:    DefaultArch,
-			WorkDir: workDir,
-			Force:   true,
-			Verify:  true,
-		}
-
-		result, err := cmd.Download(testCtx, opts)
-		if err != nil {
-			t.Logf("Download not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-	})
-
-	t.Run("DownloadInvalidVersion", func(t *testing.T) {
-		opts := DownloadOptions{
-			Version: "0.0.0-invalid",
-			Mirror:  DefaultMirror,
-			Arch:    DefaultArch,
-			WorkDir: workDir,
-		}
-
-		_, err := cmd.Download(testCtx, opts)
-		// Invalid version should fail
-		if err == nil {
-			t.Log("Download of invalid version may succeed with generic error")
-		}
+		})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		assert.Equal(t, alpineISOPath(workDir), result.ISOPath)
+		assert.True(t, result.Verified)
+		assert.Len(t, result.SHA256, 64)
+		assert.Positive(t, result.SizeBytes)
+		assert.True(t, FileExists(result.ISOPath))
 	})
 
 	t.Run("DownloadInvalidArch", func(t *testing.T) {
-		opts := DownloadOptions{
+		_, err := cmd.Download(testCtx, DownloadOptions{
 			Version: DefaultAlpineVersion,
 			Mirror:  DefaultMirror,
 			Arch:    "invalid-arch",
 			WorkDir: workDir,
-		}
-
-		_, err := cmd.Download(testCtx, opts)
-		// Invalid architecture should fail
-		if err == nil {
-			t.Log("Download of invalid arch may succeed with generic error")
-		}
+		})
+		require.Error(t, err)
 	})
 }
 
@@ -348,73 +398,30 @@ func testExtractOperations(t *testing.T, ctx context.Context, cmd ISOCommands, w
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	// Extract requires an existing ISO
-	isoPath := filepath.Join(workDir, fmt.Sprintf("alpine-standard-%s-%s.iso", DefaultAlpineVersion, DefaultArch))
-
 	t.Run("ExtractNonExistentISO", func(t *testing.T) {
-		opts := ExtractOptions{
+		_, err := cmd.Extract(testCtx, ExtractOptions{
 			ISO:     "/nonexistent/path/alpine.iso",
 			WorkDir: workDir,
-		}
-
-		_, err := cmd.Extract(testCtx, opts)
-		if err != nil {
-			// Expected - either not available or file not found
-			t.Logf("Extract of nonexistent ISO failed as expected: %v", err)
-			return
-		}
+		})
+		require.Error(t, err)
 	})
 
 	t.Run("ExtractValidISO", func(t *testing.T) {
-		// Skip if ISO doesn't exist (requires download first)
-		if !FileExists(isoPath) {
-			t.Skipf("Skipping: ISO not found at %s (run download test first)", isoPath)
-		}
+		isoPath := ensureAlpineISO(t, testCtx, cmd, workDir)
+		outputDir := filepath.Join(workDir, "extracted-iso-verb")
 
-		outputDir := filepath.Join(workDir, "extracted-iso")
-		opts := ExtractOptions{
-			ISO:       isoPath,
-			OutputDir: outputDir,
-			WorkDir:   workDir,
-		}
+		result, err := cmd.Extract(testCtx, ExtractOptions{ISO: isoPath, OutputDir: outputDir})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		assert.Equal(t, outputDir, result.OutputDir)
+		assert.Positive(t, result.FileCount)
 
-		result, err := cmd.Extract(testCtx, opts)
-		if err != nil {
-			t.Logf("Extract not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success {
-			assert.NotEmpty(t, result.OutputDir, "Output dir should be set")
-			// Verify extraction created files
-			if DirExists(result.OutputDir) {
-				count, err := CountFilesInDir(result.OutputDir)
-				if err == nil && count > 0 {
-					t.Logf("Extracted %d files to %s", count, result.OutputDir)
-				}
-			}
-		}
-	})
+		_, err = cmd.Extract(testCtx, ExtractOptions{ISO: isoPath, OutputDir: outputDir})
+		require.Error(t, err, "a populated output directory needs --force")
 
-	t.Run("ExtractWithForce", func(t *testing.T) {
-		if !FileExists(isoPath) {
-			t.Skip("Skipping: ISO not found")
-		}
-
-		outputDir := filepath.Join(workDir, "extracted-iso-force")
-		opts := ExtractOptions{
-			ISO:       isoPath,
-			OutputDir: outputDir,
-			WorkDir:   workDir,
-			Force:     true,
-		}
-
-		result, err := cmd.Extract(testCtx, opts)
-		if err != nil {
-			t.Logf("Extract not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
+		forced, err := cmd.Extract(testCtx, ExtractOptions{ISO: isoPath, OutputDir: outputDir, Force: true})
+		require.NoError(t, err)
+		assert.Equal(t, result.FileCount, forced.FileCount)
 	})
 }
 
@@ -426,84 +433,32 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	isoDir := filepath.Join(workDir, "extracted-iso")
-
 	t.Run("CustomizeNonExistentDir", func(t *testing.T) {
-		opts := CustomizeOptions{
+		_, err := cmd.Customize(testCtx, CustomizeOptions{
 			ISODir:  "/nonexistent/path/iso",
 			WorkDir: workDir,
-		}
-
-		_, err := cmd.Customize(testCtx, opts)
-		if err != nil {
-			t.Logf("Customize of nonexistent dir failed as expected: %v", err)
-			return
-		}
-	})
-
-	t.Run("CustomizeValidDir", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skipf("Skipping: ISO directory not found at %s (run extract test first)", isoDir)
-		}
-
-		opts := CustomizeOptions{
-			ISODir:  isoDir,
-			WorkDir: workDir,
-		}
-
-		result, err := cmd.Customize(testCtx, opts)
-		if err != nil {
-			t.Logf("Customize not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
+		})
+		require.Error(t, err)
 	})
 
 	t.Run("CustomizeWithOverlay", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
 
-		// Create a simple overlay
 		overlayDir := filepath.Join(workDir, "overlay")
-		err := os.MkdirAll(filepath.Join(overlayDir, "etc"), 0755)
-		require.NoError(t, err, "Should create overlay dir")
+		require.NoError(t, os.MkdirAll(filepath.Join(overlayDir, "etc"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(overlayDir, "etc", "test-overlay"), []byte("test content\n"), 0o644))
 
-		testFile := filepath.Join(overlayDir, "etc", "test-overlay")
-		err = os.WriteFile(testFile, []byte("test content\n"), 0644)
-		require.NoError(t, err, "Should write overlay file")
-
-		opts := CustomizeOptions{
-			ISODir:  isoDir,
-			Overlay: overlayDir,
-			WorkDir: workDir,
-		}
-
-		result, err := cmd.Customize(testCtx, opts)
-		if err != nil {
-			t.Logf("Customize with overlay not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-	})
-
-	t.Run("CustomizeWithAutoinstall", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
-
-		opts := CustomizeOptions{
-			ISODir:      isoDir,
-			Autoinstall: true,
-			WorkDir:     workDir,
-		}
-
-		result, err := cmd.Customize(testCtx, opts)
-		if err != nil {
-			t.Logf("Customize with autoinstall not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
+		platformdPath, platformConfig := customizeInputs(t)
+		result, err := cmd.Customize(testCtx, CustomizeOptions{
+			ISODir:         isoDir,
+			Overlay:        overlayDir,
+			PlatformdPath:  platformdPath,
+			PlatformConfig: platformConfig,
+			WorkDir:        workDir,
+		})
+		require.NoError(t, err)
+		assert.True(t, result.Success)
+		assert.Equal(t, isoDir, result.ISODir)
 	})
 }
 
@@ -515,92 +470,43 @@ func testBuildOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wor
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 
-	isoDir := filepath.Join(workDir, "extracted-iso")
-	outputISO := filepath.Join(workDir, "test-output.iso")
-
 	t.Run("BuildNonExistentDir", func(t *testing.T) {
-		opts := BuildOptions{
+		_, err := cmd.Build(testCtx, BuildOptions{
 			SourceDir: "/nonexistent/path/iso",
-			Output:    outputISO,
-			WorkDir:   workDir,
-		}
-
-		_, err := cmd.Build(testCtx, opts)
-		if err != nil {
-			t.Logf("Build from nonexistent dir failed as expected: %v", err)
-			return
-		}
+			Output:    filepath.Join(workDir, "missing-source.iso"),
+		})
+		require.Error(t, err)
 	})
 
 	t.Run("BuildValidDir", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skipf("Skipping: ISO directory not found at %s", isoDir)
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
+		outputISO := filepath.Join(workDir, "custom-label.iso")
 
-		opts := BuildOptions{
+		result, err := cmd.Build(testCtx, BuildOptions{
 			SourceDir:   isoDir,
 			Output:      outputISO,
-			VolumeID:    "TEST_ISO",
-			GenerateSum: true,
-			WorkDir:     workDir,
-		}
-
-		result, err := cmd.Build(testCtx, opts)
-		if err != nil {
-			t.Logf("Build not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
-		if result.Success {
-			assert.NotEmpty(t, result.OutputISO, "Output ISO path should be set")
-			// Verify ISO was created
-			if result.OutputISO != "" && FileExists(result.OutputISO) {
-				size, _ := GetFileSize(result.OutputISO)
-				t.Logf("Built ISO: %s (%d bytes)", result.OutputISO, size)
-				assert.Greater(t, size, int64(0), "ISO should have content")
-			}
-		}
-	})
-
-	t.Run("BuildWithCustomLabel", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
-
-		customOutputISO := filepath.Join(workDir, "custom-label.iso")
-		opts := BuildOptions{
-			SourceDir:   isoDir,
-			Output:      customOutputISO,
 			VolumeID:    "CUSTOM_LABEL_123",
-			GenerateSum: false,
-			WorkDir:     workDir,
-		}
-
-		result, err := cmd.Build(testCtx, opts)
-		if err != nil {
-			t.Logf("Build with custom label not available (expected): %v", err)
-			return
-		}
-		require.NotNil(t, result, "Result should not be nil")
+			GenerateSum: true,
+		})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		assert.Equal(t, outputISO, result.OutputISO)
+		assert.Positive(t, result.SizeBytes)
+		assert.Equal(t, outputISO+".sha256", result.ChecksumFile)
+		assert.True(t, FileExists(result.ChecksumFile))
 	})
 
 	t.Run("BuildLabelTooLong", func(t *testing.T) {
-		if !DirExists(isoDir) {
-			t.Skip("Skipping: ISO directory not found")
-		}
+		isoDir := ensureExtractedISO(t, testCtx, cmd, workDir)
+		outputISO := filepath.Join(workDir, "long-label.iso")
 
-		opts := BuildOptions{
+		_, err := cmd.Build(testCtx, BuildOptions{
 			SourceDir: isoDir,
-			Output:    filepath.Join(workDir, "long-label.iso"),
+			Output:    outputISO,
 			VolumeID:  "THIS_LABEL_IS_WAY_TOO_LONG_FOR_AN_ISO_VOLUME_ID_WHICH_HAS_32_CHAR_MAX",
-			WorkDir:   workDir,
-		}
-
-		_, err := cmd.Build(testCtx, opts)
-		// Long label should fail or be truncated
-		if err != nil {
-			t.Logf("Build with long label failed as expected: %v", err)
-		}
+		})
+		require.Error(t, err)
+		assert.False(t, FileExists(outputISO))
 	})
 }
 
@@ -768,67 +674,42 @@ func TestISOVMTests(t *testing.T) {
 	workDir := CreateTestWorkDir(t, "iso-vm-test-")
 	defer CleanupTestWorkDir(t, workDir)
 
-	t.Run("TestInstall", func(t *testing.T) {
+	installed := t.Run("TestInstall", func(t *testing.T) {
 		testVMInstall(t, ctx, adapter, workDir)
 	})
 
 	t.Run("TestBoot", func(t *testing.T) {
+		if !installed {
+			// A cut-off install can leave a partly written disk behind;
+			// booting it, or installing again, would outlast the package's
+			// go test timeout and only report the install failure again.
+			t.Fatalf("missing prerequisite: TestInstall did not produce an installed disk")
+		}
 		testVMBoot(t, ctx, adapter, workDir)
 	})
 }
 
 func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
-	// This test requires an ISO to be available
-	// Look for ISO in common locations
-	isoPath := ""
-	possiblePaths := []string{
-		filepath.Join(workDir, "test-output.iso"),
-		"trusted-alpine-dev-x86_64.iso",
-		"trusted-alpine-0.1.0-x86_64.iso",
-	}
-
-	for _, p := range possiblePaths {
-		if FileExists(p) {
-			isoPath = p
-			break
-		}
-	}
-
-	if isoPath == "" {
-		t.Skip("Skipping: No ISO available for installation test")
-	}
-
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
 
-	diskPath := filepath.Join(workDir, "test-install.qcow2")
+	isoPath := ensureBuiltISO(t, testCtx, cmd, workDir)
 
-	opts := TestInstallOptions{
-		ISO:        isoPath,
-		Disk:       diskPath,
-		DiskSize:   "10G",
-		Memory:     4096,
-		CPUs:       2,
-		WorkDir:    workDir,
-		SecureBoot: false,
-		Debug:      true,
-	}
-
+	// Every install error fails the test: a GRUB-menu hang, a used-up
+	// vmInstallTimeout or a failed install. Logging one and passing would
+	// work like a skip (CA m639, CA m683).
+	opts := installOptions(isoPath, workDir)
 	result, err := cmd.TestInstall(testCtx, opts)
 	if err != nil {
-		t.Logf("TestInstall failed (may require interactive session): %v", err)
-		return
+		t.Fatalf("iso test install: %v", err)
 	}
 	require.NotNil(t, result, "Result should not be nil")
+	require.True(t, FileExists(opts.Disk), "the install should leave the disk at %s", opts.Disk)
 	t.Logf("TestInstall completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
 }
 
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
-	diskPath := filepath.Join(workDir, "test-install.qcow2")
-
-	if !FileExists(diskPath) {
-		t.Skip("Skipping: No installed disk available (run install test first)")
-	}
+	diskPath := ensureInstalledDisk(t, ctx, cmd, workDir)
 
 	testCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
@@ -844,8 +725,7 @@ func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir stri
 
 	result, err := cmd.TestBoot(testCtx, opts)
 	if err != nil {
-		t.Logf("TestBoot failed (may require interactive session): %v", err)
-		return
+		t.Fatalf("iso test boot: %v", err)
 	}
 	require.NotNil(t, result, "Result should not be nil")
 	t.Logf("TestBoot completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)

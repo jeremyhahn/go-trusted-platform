@@ -56,6 +56,12 @@ type Collector struct {
 	natDNAT         *prometheus.Desc
 	natPoolSize     *prometheus.Desc
 	pipelineHeld    *prometheus.Desc
+
+	vpnLeases            *prometheus.Desc
+	vpnAdmissions        *prometheus.Desc
+	vpnRevocations       *prometheus.Desc
+	vpnPostureViolations *prometheus.Desc
+	vpnReattest          *prometheus.Desc
 }
 
 // NewCollector builds the gateway metrics collector over a snapshot source.
@@ -103,6 +109,16 @@ func NewCollector(source SnapshotSource) *Collector {
 			"IPv4 addresses in the uplink's SNAT pools.", []string{"gateway", "uplink"}, nil),
 		pipelineHeld: prometheus.NewDesc(name("pipeline", "installed"),
 			"1 while this gateway holds the base OVS pipeline on its bridge.", []string{"gateway", "bridge", "terminal"}, nil),
+		vpnLeases: prometheus.NewDesc(name("vpn", "leases_active"),
+			"Active remote-access VPN leases by data plane.", []string{"gateway", "data_plane"}, nil),
+		vpnAdmissions: prometheus.NewDesc(name("vpn", "admissions_total"),
+			"Remote-access VPN admission decisions by outcome: admitted or refused.", []string{"gateway", "outcome"}, nil),
+		vpnRevocations: prometheus.NewDesc(name("vpn", "revocations_total"),
+			"Revoked remote-access VPN leases by reason.", []string{"gateway", "reason"}, nil),
+		vpnPostureViolations: prometheus.NewDesc(name("vpn", "posture_violations_total"),
+			"Posture rules that refused a VPN admission or renewal, by rule; rules past the label bound count as other.", []string{"gateway", "rule"}, nil),
+		vpnReattest: prometheus.NewDesc(name("vpn", "reattest_duration_seconds"),
+			"How long a VPN lease renewal's re-attestation took to verify.", []string{"gateway"}, nil),
 	}
 }
 
@@ -120,6 +136,7 @@ func (c *Collector) descs() []*prometheus.Desc {
 		c.bfdSessionUp, c.bfdFailures, c.tunnelUp, c.tunnelBytes, c.tunnelPackets,
 		c.tunnelLastRekey, c.uplinkRules, c.uplinkTunnels, c.hostfwInstalled,
 		c.hostfwRules, c.firewallFlows, c.natDNAT, c.natPoolSize, c.pipelineHeld,
+		c.vpnLeases, c.vpnAdmissions, c.vpnRevocations, c.vpnPostureViolations, c.vpnReattest,
 	}
 }
 
@@ -188,6 +205,32 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	if snap.Pipeline != nil {
 		gauge(c.pipelineHeld, boolValue(snap.Pipeline.Installed), id, snap.Pipeline.Bridge, snap.Pipeline.Terminal)
+	}
+	if snap.VPN != nil {
+		c.collectVPN(ch, id, snap.VPN, gauge, counter)
+	}
+}
+
+// collectVPN emits the remote-access VPN series of the telemetry section.
+func (c *Collector) collectVPN(ch chan<- prometheus.Metric, id string, section *gwstate.VPNState,
+	gauge, counter func(*prometheus.Desc, float64, ...string)) {
+	for plane, n := range section.LeasesByDataPlane {
+		gauge(c.vpnLeases, float64(n), id, plane)
+	}
+	counter(c.vpnAdmissions, float64(section.Admissions), id, "admitted")
+	counter(c.vpnAdmissions, float64(section.Refusals), id, "refused")
+	for reason, n := range section.Revocations {
+		counter(c.vpnRevocations, float64(n), id, reason)
+	}
+	for rule, n := range section.PostureViolations {
+		counter(c.vpnPostureViolations, float64(n), id, rule)
+	}
+	if h := section.Reattest; h != nil {
+		buckets := make(map[float64]uint64, len(h.Buckets))
+		for _, b := range h.Buckets {
+			buckets[b.UpperBoundSeconds] = b.Count
+		}
+		ch <- prometheus.MustNewConstHistogram(c.vpnReattest, h.Count, h.SumSeconds, buckets, id)
 	}
 }
 

@@ -5,7 +5,8 @@
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > One row per capability across all six transports. A transport that does not
-> carry a capability is written `MISSING — docs/13 G7`, never omitted.
+> carry a capability is written `MISSING — docs/13 G7`, or `MISSING — by design`
+> where the absence is ruled (§3), never omitted.
 
 ---
 
@@ -65,15 +66,26 @@ directly.
 | **Per-component health** | `Daemon.HealthCheckComponent(ctx, name)`; `Registry.CheckComponent(ctx, name)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Liveness probe** | `ServiceRegistry.Daemon` → `Liveness`; in-process `health.Liveness()` | `PlatformDaemon/Liveness` | `GET /health/live` | `PlatformDaemon/Liveness` | `OpLiveness` (`0x01`) | `platform_liveness` |
 | **Readiness probe** | `ServiceRegistry.Daemon` → `Readiness`; in-process `health.Readiness(ctx, reg)` | `PlatformDaemon/Readiness` | `GET /health/ready` | `PlatformDaemon/Readiness` | `OpReadiness` (`0x02`) | `platform_readiness` |
-| **Register a checker** | `Daemon.RegisterHealthChecker(c)`; `Registry.Register(c)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| **Unregister a checker** | `Registry.Unregister(name)` (registry only; **no `Daemon` method**) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| **List / count registered checkers** | `Registry.List()`, `Registry.Count()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| **Register a checker** | `Daemon.RegisterHealthChecker(c)`; `Registry.Register(c)` | `MISSING — by design` | `MISSING — by design` | `MISSING — by design` | `MISSING — by design` | `MISSING — by design` |
+| **Unregister a checker** | `Registry.Unregister(name)` (registry only; **no `Daemon` method**) | `MISSING — by design` | `MISSING — by design` | `MISSING — by design` | `MISSING — by design` | `MISSING — by design` |
+| **List / count registered checkers** | `Registry.List()`, `Registry.Count()` | `PlatformDaemon/GetHealth` → `components[]` | `GET /api/v1/health` → `components[]`; `GET /api/v1/platform/health` → `health.services[]` | `PlatformDaemon/GetHealth` → `components[]` | `MISSING — by design` | `MISSING — by design` |
 
-Two observations that matter more than the table:
+Three observations that matter more than the table:
 
 **Only the aggregate check and the two probes have a wire form.** Everything else — naming a single
 component, listing what is registered, adding a checker at runtime — is an
-in-process Go call with no wire form at all.
+in-process Go call with no wire form of its own.
+
+**Checker registration is in-process only, by design.** A checker is Go code running inside `platformd`; a remote caller
+has no checker to hand over, so registering and unregistering one have no
+transport and never will. **Listing is served by the existing health
+endpoint:** the aggregate response carries one `components[]` entry per
+registered checker (§5), so its names are the list and its length is the count.
+That is gRPC and Unix `PlatformDaemon/GetHealth` and REST `GET /api/v1/health`
+(`components[]`), and REST `GET /api/v1/platform/health` (`health.services[]`).
+QUIC `OpHealth` and MCP `platform_health` are unauthenticated probes that name
+no component (§4), so listing on them is by design absent too. No new list or
+count route is added.
 
 **Every transport answers the probes from one source.** `pkg/health/probe.go`
 defines `Liveness`, `Readiness` and `Aggregate`; gRPC

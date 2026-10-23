@@ -31,16 +31,19 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cache"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/messaging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/objectstorage"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/scheduler"
 )
 
 // appServiceServers are the gRPC services of the application services the
-// composed go-quicbaas SDK serves: Cache, Scheduler and Messaging. One
+// composed go-quicbaas SDK serves: Cache, Scheduler, Messaging and
+// ObjectStorage. One
 // instance of each backs gRPC, the Unix socket, REST, QUIC and MCP.
 type appServiceServers struct {
-	cache     *CacheGRPCService
-	scheduler *SchedulerGRPCService
-	messaging *MessagingGRPCService
+	cache         *CacheGRPCService
+	scheduler     *SchedulerGRPCService
+	messaging     *MessagingGRPCService
+	objectStorage *ObjectStorageGRPCService
 }
 
 // newAppServiceServers builds the application services over the SDK the
@@ -73,6 +76,12 @@ func appServiceServersOver(sdkClient func() sdk.Client, logger *logging.Logger) 
 			}
 			return nil
 		})),
+		objectStorage: NewObjectStorageGRPCService(logger, appservices.NewObjectStorageService(func() objectstorage.Client {
+			if client := sdkClient(); client != nil {
+				return client.ObjectStorage()
+			}
+			return nil
+		})),
 	}
 }
 
@@ -90,11 +99,15 @@ func (s appServiceServers) restServers() restapi.AppServiceServers {
 	if s.messaging != nil {
 		servers.Messaging = s.messaging
 	}
+	if s.objectStorage != nil {
+		servers.ObjectStorage = s.objectStorage
+	}
 	return servers
 }
 
 // AppServiceRESTServers returns the servers backing /api/v1/cache,
-// /api/v1/scheduler and /api/v1/messaging on the webservice listener: the
+// /api/v1/scheduler, /api/v1/messaging and /api/v1/object-storage on the
+// webservice listener: the
 // instances every other transport shares.
 func (d *Daemon) AppServiceRESTServers() restapi.AppServiceServers {
 	return d.appServices.restServers()
@@ -106,8 +119,8 @@ func (s appServiceServers) mcpServers() mcp.AppServiceServers {
 	return mcp.AppServiceServers(s.restServers())
 }
 
-// SetAppServiceServers wires the servers the cache_*, scheduler_* and
-// messaging_* MCP tools delegate to.
+// SetAppServiceServers wires the servers the cache_*, scheduler_*,
+// messaging_* and objectstorage_* MCP tools delegate to.
 func (m *MCPServiceProvider) SetAppServiceServers(servers mcp.AppServiceServers) {
 	m.appServices = servers
 }

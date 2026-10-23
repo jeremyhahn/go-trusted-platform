@@ -405,7 +405,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Capabilities
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_capabilities",
-		Description: "Get TPM fixed properties and capabilities (manufacturer, algorithms, key sizes)",
+		Description: "Get the algorithms, commands and ECC curves the TPM implements (manufacturer and fixed properties are in platform_tpm_info)",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -590,7 +590,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Platform Attributes
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_platform",
-		Description: "Get platform-level TPM attributes including configuration, simulator status, and key hierarchy",
+		Description: "Get platform-level TPM attributes: device, FIPS mode, platform PCR state, seal support, simulator status, manufacturer, and the EK, SRK and IAK handles and algorithms",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

@@ -103,6 +103,12 @@ go.work.sum
 # limit); the Dockerfile/scripts/configs in the same directory are source
 # and stay tracked.
 build/docker/bootstrap/pxeboot
+
+# FIPS builder outputs, written by each builder's `make build` and removed with
+# the directory by its `make clean`, so the ignore lives here and not in an
+# output/.gitignore. The ISO build reruns the builder; nothing reads these.
+/build/docker/fips-kernel-builder/output/
+/build/docker/openssl-fips-provider/output/
 .serena/cache/
 /provisioning-client
 examples/provisioning-client/provisioning-client
@@ -143,3 +149,6 @@ __pycache__/
 /pkg/cli/commands/db/trusted-data/
 /pkg/webservice/v1/test/trusted-data/log/
 /pkg/webservice/v1/test/trusted-data/quicbaas/
+
+# Forge credentials for the devcontainer module download (MODULE_ENV_FILE)
+/.devcontainer/.env

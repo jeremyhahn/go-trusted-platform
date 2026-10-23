@@ -413,7 +413,6 @@ var _ ovs.ClientInterface = (*stubOVSClient)(nil)
 // testSDNHandlerWithMocks is a helper struct for testing with mocks
 type testSDNHandlerWithMocks struct {
 	handler    *QUICServiceHandler
-	mockPolicy *MockSDNPolicyEngine
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 }
@@ -422,7 +421,6 @@ type testSDNHandlerWithMocks struct {
 func newTestSDNHandlerWithMocks(t *testing.T) *testSDNHandlerWithMocks {
 	t.Helper()
 	logger := logging.DefaultLogger()
-	mockPolicy := NewMockSDNPolicyEngine()
 
 	// Create handler with SDN service using a stub OVS client
 	sdnSvc, err := NewSDNService("", WithOVSClient(&stubOVSClient{}))
@@ -435,7 +433,6 @@ func newTestSDNHandlerWithMocks(t *testing.T) *testSDNHandlerWithMocks {
 
 	return &testSDNHandlerWithMocks{
 		handler:    handler,
-		mockPolicy: mockPolicy,
 		ctx:        ctx,
 		cancelFunc: cancel,
 	}

@@ -81,7 +81,7 @@ func NewGRPCAdapter() *GRPCAdapter {
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
 	tlsConfig := helpers.TLSConfigOrInsecure()
 
-	conn, err := grpc.DialContext(ctx, a.endpoint,
+	conn, err := grpc.NewClient(a.endpoint,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
 	if err != nil {

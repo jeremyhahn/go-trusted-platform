@@ -19,13 +19,13 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,15 +58,15 @@ func setupTestBridge(t *testing.T, bridgeName string) *testBridge {
 	t.Helper()
 
 	// Delete bridge if it already exists (cleanup from previous failed test)
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create the bridge
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge %s: %s", bridgeName, string(output))
 
 	// Set OpenFlow version to 1.3
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set OpenFlow version: %s", string(output))
 
@@ -96,7 +96,7 @@ func setupTestBridge(t *testing.T, bridgeName string) *testBridge {
 
 // cleanup removes the test bridge
 func (tb *testBridge) cleanup() {
-	cmd := exec.Command("ovs-vsctl", "--if-exists", "del-br", tb.name)
+	cmd := boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", tb.name)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		tb.t.Logf("Warning: Failed to delete bridge %s: %s", tb.name, string(output))
 	}

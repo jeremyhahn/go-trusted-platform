@@ -25,6 +25,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
@@ -97,7 +98,7 @@ func (s *KMSService) initializeServers() error {
 	s.kmsAdapter = NewKMSServerAdapter(sdkClient.Security().KMS(), s.logger)
 	s.secretsServer = NewSecretsServerAdapter(sdkClient.Security().Secrets(), s.logger)
 	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Security().Crypto(), s.logger)
-	s.dekServer = NewDEKServerAdapter(sdkClient.Security().KMS(), s.logger)
+	s.dekServer = NewDEKServerAdapter(sdkClient.Security().DEK(), s.logger)
 
 	s.initialized.Store(true)
 	return nil
@@ -203,19 +204,14 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
 
-	// Extract algorithm and usage from KeySpec
-	var algorithm kms.KeyAlgorithm
-	var usage []kms.KeyUsage
-
-	if req.GetKeySpec() != nil {
-		algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
-		usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
-	}
-
+	// The generate request's name is the key ID (docs/kms/api.md §2).
+	spec := req.GetKeySpec()
 	sdkReq := &kms.GenerateKeyRequest{
-		Name:      req.GetName(),
-		Algorithm: algorithm,
-		Usage:     usage,
+		Name:               req.GetName(),
+		Algorithm:          pbAlgorithmToSDK(spec.GetAlgorithm()),
+		Usage:              pbUsagesToSDK(spec.GetUsage()),
+		Exportable:         spec.GetExportable(),
+		DeletionProtection: spec.GetDeletionProtection(),
 	}
 
 	resp, err := a.client.GenerateKey(ctx, sdkReq)
@@ -223,12 +219,47 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
 	}
 
+	meta, err := recordGeneratedKeyMetadata(ctx, a.client, resp.KeyID, req.GetDescription(), req.GetTags())
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.GenerateKeyResponse{
 		Key: &pb.KeyHandle{
-			KeyId:   resp.KeyID,
-			Version: uint64(resp.Version),
+			KeyId:     resp.KeyID,
+			Version:   uint64(resp.Version),
+			Algorithm: sdkAlgorithmToPb(resp.Algorithm),
 		},
+		Metadata:  sdkKeyMetadataToPb(meta),
+		Timestamp: time.Now().Unix(),
 	}, nil
+}
+
+// recordGeneratedKeyMetadata applies a generate request's description and
+// tags to the key just generated and returns the metadata the KMS recorded.
+// The SDK GenerateKeyRequest has no description or tags, so they travel as a
+// metadata update; with neither, the metadata is read back as it stands. The
+// SDK has no field for a key owner at all: the owner returned is the one the
+// KMS recorded, never the requested one.
+func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, keyID, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
+	var meta *kms.KeyMetadataResponse
+	var err error
+	if description == "" && len(tags) == 0 {
+		meta, err = client.GetKeyMetadata(ctx, keyID)
+	} else {
+		meta, err = client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
+			KeyID:       keyID,
+			Description: description,
+			Tags:        tags,
+		})
+	}
+	if err != nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: err}
+	}
+	if meta == nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: ErrKMSNilMetadata{}}
+	}
+	return meta, nil
 }
 
 // GetKey implements pb.KeyManagementServer.GetKey.
@@ -1006,98 +1037,116 @@ func (a *CryptoServerAdapter) VerifyHMAC(ctx context.Context, req *pb.VerifyHMAC
 	}, nil
 }
 
-// DEKServerAdapter implements pb.DEKManagementServer by delegating to the SDK KMSClient.
-// DEK (Data Encryption Key) operations use the KMS client for key management.
+// DEKServerAdapter implements pb.DEKManagementServer by delegating to the SDK
+// DEK client, the same client the REST DEK routes call.
 type DEKServerAdapter struct {
 	pb.UnimplementedDEKManagementServer
-	client quicbaas.KMSClient
+	client dekclient.Client
 	logger *slog.Logger
 }
 
 // NewDEKServerAdapter creates a new DEK server adapter wrapping the SDK client.
-func NewDEKServerAdapter(client quicbaas.KMSClient, logger *slog.Logger) *DEKServerAdapter {
+func NewDEKServerAdapter(client dekclient.Client, logger *slog.Logger) *DEKServerAdapter {
 	return &DEKServerAdapter{
 		client: client,
 		logger: logger,
 	}
 }
 
-// CreateDEK implements pb.DEKManagementServer.CreateDEK.
+// CreateDEK creates a new Data Encryption Key.
 func (a *DEKServerAdapter) CreateDEK(ctx context.Context, req *pb.CreateDEKRequest) (*pb.CreateDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
-
-	// DEK creation uses the KMS GenerateKey with encryption-specific parameters
-	sdkReq := &kms.GenerateKeyRequest{
-		Name:      req.GetPath(),
-		Algorithm: kms.AlgorithmAES256GCM,
-		Usage:     []kms.KeyUsage{kms.KeyUsageEncrypt, kms.KeyUsageDecrypt},
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
 	}
 
-	resp, err := a.client.GenerateKey(ctx, sdkReq)
+	resp, err := a.client.CreateDEK(ctx, &dekclient.CreateDEKRequest{
+		Path:           req.GetPath(),
+		Algorithm:      pbAlgorithmToSDK(req.GetAlgorithm()).String(),
+		Description:    req.GetDescription(),
+		MaxOperations:  req.GetMaxOperations(),
+		MaxBytes:       req.GetMaxBytes(),
+		WarningPercent: int(req.GetWarningPercent()),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DEK creation failed: %v", err)
 	}
 
 	return &pb.CreateDEKResponse{
-		Dek: &pb.DEKMetadata{
-			Path:    req.GetPath(),
-			Version: uint64(resp.Version),
-		},
+		Dek:       dekInfoToPb(resp.DEK),
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
-// GetDEK implements pb.DEKManagementServer.GetDEK.
+// GetDEK retrieves DEK metadata by path.
 func (a *DEKServerAdapter) GetDEK(ctx context.Context, req *pb.GetDEKRequest) (*pb.GetDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
 
-	keyInfo, err := a.client.GetKey(ctx, req.GetPath())
+	info, err := a.client.GetDEK(ctx, req.GetPath())
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "DEK not found: %v", err)
 	}
 
 	return &pb.GetDEKResponse{
-		Dek: &pb.DEKMetadata{
-			Path:    req.GetPath(),
-			Version: uint64(keyInfo.Version),
-		},
+		Dek:       dekInfoToPb(info),
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
-// RotateDEK implements pb.DEKManagementServer.RotateDEK.
+// RotateDEK creates a new version of an existing DEK.
 func (a *DEKServerAdapter) RotateDEK(ctx context.Context, req *pb.RotateDEKRequest) (*pb.RotateDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
 
-	resp, err := a.client.RotateKey(ctx, req.GetPath())
+	resp, err := a.client.RotateDEK(ctx, &dekclient.RotateDEKRequest{
+		Path:       req.GetPath(),
+		Background: req.GetBackground(),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DEK rotation failed: %v", err)
 	}
 
 	return &pb.RotateDEKResponse{
-		Path:       req.GetPath(),
+		Path:       resp.Path,
+		OldVersion: uint64(resp.OldVersion),
 		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
-// DeleteDEK implements pb.DEKManagementServer.DeleteDEK.
+// DeleteDEK removes a DEK.
 func (a *DEKServerAdapter) DeleteDEK(ctx context.Context, req *pb.DeleteDEKRequest) (*pb.DeleteDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
 
-	err := a.client.DeleteKey(ctx, req.GetPath())
+	resp, err := a.client.DeleteDEK(ctx, &dekclient.DeleteDEKRequest{
+		Path:      req.GetPath(),
+		Force:     req.GetForce(),
+		MigrateTo: req.GetMigrateTo(),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DEK deletion failed: %v", err)
 	}
 
 	return &pb.DeleteDEKResponse{
-		Path:    req.GetPath(),
-		Deleted: true,
+		Path:      resp.Path,
+		Deleted:   resp.Deleted,
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 

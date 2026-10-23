@@ -57,6 +57,7 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerCacheHandlers(m, reg)
 	registerSchedulerHandlers(m, reg)
 	registerMessagingHandlers(m, reg)
+	registerObjectStorageHandlers(m, reg)
 
 	return m
 }
@@ -280,6 +281,21 @@ func registerTPMHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.TPMService_GetRandom_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetRandom(ctx, req.(*platformv1.GetRandomRequest))
 	}
+	m[platformv1.TPMService_GetCapabilities_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetCapabilities(ctx, req.(*platformv1.TPMCapabilitiesRequest))
+	}
+	m[platformv1.TPMService_GetPlatformAttributes_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPlatformAttributes(ctx, req.(*platformv1.TPMPlatformAttributesRequest))
+	}
+	m[platformv1.TPMService_ExtendPCR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ExtendPCR(ctx, req.(*platformv1.ExtendPCRRequest))
+	}
+	m[platformv1.TPMService_MakeCredential_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.MakeCredential(ctx, req.(*platformv1.MakeCredentialRequest))
+	}
+	m[platformv1.TPMService_ActivateCredential_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ActivateCredential(ctx, req.(*platformv1.TPMActivateCredentialRequest))
+	}
 }
 
 // registerVTPMHandlers registers VTPMService handlers.
@@ -412,6 +428,18 @@ func registerDeviceHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.DeviceService_CreateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateTemplate(ctx, req.(*platformv1.DeviceTemplateCreateRequest))
+	}
+	m[platformv1.DeviceService_GetTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetTemplate(ctx, req.(*platformv1.DeviceTemplateGetRequest))
+	}
+	m[platformv1.DeviceService_ListTemplates_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListTemplates(ctx, req.(*platformv1.DeviceTemplateListRequest))
+	}
+	m[platformv1.DeviceService_UpdateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateTemplate(ctx, req.(*platformv1.DeviceTemplateUpdateRequest))
+	}
+	m[platformv1.DeviceService_DeleteTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteTemplate(ctx, req.(*platformv1.DeviceTemplateDeleteRequest))
 	}
 	m[platformv1.DeviceService_CreateProfileFromTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateProfileFromTemplate(ctx, req.(*platformv1.CreateProfileFromTemplateRequest))
@@ -789,8 +817,17 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_ListSnapshots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ListSnapshots(ctx, req.(*platformv1.ListSnapshotsRequest))
 	}
+	m[platformv1.ComputeService_GetSnapshot_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSnapshot(ctx, req.(*platformv1.GetSnapshotRequest))
+	}
 	m[platformv1.ComputeService_MigrateVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.MigrateVM(ctx, req.(*platformv1.MigrateVMRequest))
+	}
+	m[platformv1.ComputeService_PrepareMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PrepareMigration(ctx, req.(*platformv1.PrepareMigrationRequest))
+	}
+	m[platformv1.ComputeService_FinalizeMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FinalizeMigration(ctx, req.(*platformv1.FinalizeMigrationRequest))
 	}
 	m[platformv1.ComputeService_CreateContainer_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateContainer(ctx, req.(*platformv1.CreateContainerRequest))
@@ -1719,5 +1756,38 @@ func registerMessagingHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.MessagingService_GetChannelStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetChannelStats(ctx, req.(*platformv1.GetMessagingChannelStatsRequest))
+	}
+}
+
+// registerObjectStorageHandlers registers ObjectStorageService handlers.
+func registerObjectStorageHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.ObjectStorage == nil {
+		return
+	}
+	svc := reg.ObjectStorage
+
+	m[platformv1.ObjectStorageService_PutObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PutObject(ctx, req.(*platformv1.PutObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_GetObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetObject(ctx, req.(*platformv1.GetObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_DeleteObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteObject(ctx, req.(*platformv1.DeleteObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_HeadObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.HeadObject(ctx, req.(*platformv1.HeadObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_ListObjects_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListObjects(ctx, req.(*platformv1.ListObjectsRequest))
+	}
+	m[platformv1.ObjectStorageService_CopyObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CopyObject(ctx, req.(*platformv1.CopyObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListObjectsByTag(ctx, req.(*platformv1.ListObjectsByTagRequest))
+	}
+	m[platformv1.ObjectStorageService_ListTenantObjects_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListTenantObjects(ctx, req.(*platformv1.ListTenantObjectsRequest))
 	}
 }

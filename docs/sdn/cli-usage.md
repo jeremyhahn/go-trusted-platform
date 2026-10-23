@@ -475,6 +475,9 @@ Examples:
   platformctl sdn ipam pool delete --id prod-v4
 ```
 
+The `/64` pool needs the `quicbaas` IPAM backend; the default `memory` backend
+refuses pools of more than 2^24 addresses ([Pool Size](ipam/configuration.md#pool-size)).
+
 ### Allocation Commands
 
 ```bash

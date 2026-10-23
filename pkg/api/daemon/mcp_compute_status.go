@@ -70,17 +70,6 @@ func (e ErrVMComputeNotAvailable) GRPCStatus() *status.Status {
 	return status.New(codes.FailedPrecondition, e.Error())
 }
 
-// GRPCStatus classifies a missing snapshot capability as ComputeService does.
-func (e ErrVMSnapshotsNotSupported) GRPCStatus() *status.Status {
-	return status.New(codes.FailedPrecondition, e.Error())
-}
-
-// GRPCStatus classifies a missing attestation capability as ComputeService
-// does.
-func (e ErrVMAttestationNotSupported) GRPCStatus() *status.Status {
-	return status.New(codes.FailedPrecondition, e.Error())
-}
-
 // GRPCStatus classifies a missing metrics capability as ComputeService does.
 func (e ErrVMMetricsNotSupported) GRPCStatus() *status.Status {
 	return status.New(codes.FailedPrecondition, e.Error())
@@ -100,11 +89,6 @@ func (e ErrVMLogsNotSupported) GRPCStatus() *status.Status {
 // does.
 func (e ErrVMMigrateNotSupported) GRPCStatus() *status.Status {
 	return status.New(codes.FailedPrecondition, e.Error())
-}
-
-// GRPCStatus classifies missing evidence as invalid input.
-func (e ErrVMEvidenceRequired) GRPCStatus() *status.Status {
-	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // GRPCStatus classifies an unknown snapshot as NotFound.

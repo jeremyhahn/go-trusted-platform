@@ -76,7 +76,7 @@ Examples:
 	cmd.Flags().StringVar(&templateID, "template-id", "", "template ID to use as base")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "labels in key=value format (can be repeated)")
 
-	_ = cmd.MarkFlagRequired("hostname")
+	cli.MarkFlagsRequired(cmd, "hostname")
 
 	return cmd
 }

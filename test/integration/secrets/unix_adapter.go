@@ -20,10 +20,9 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
-	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -76,18 +75,19 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 		s.socketPath = DefaultUnixSecretsPath
 	}
 
-	// Create gRPC connection using Unix socket dialer
-	conn, err := grpc.DialContext(ctx, "unix://"+s.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			// Strip the unix:// prefix if present
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-		grpc.WithBlock(),
-	)
+	conn, err := grpc.NewClient("unix://"+s.socketPath, helpers.GRPCUnixCredentials())
 	if err != nil {
+		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
+	}
+
+	// The readiness wait retries until its context ends, so bound it: on the
+	// suite's 10-minute context a missing socket outlived go test's timeout.
+	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeoutSeconds)
+	defer cancel()
+	if err := helpers.WaitGRPCReady(dialCtx, conn); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			return ErrUnixConnectionFailed{Path: s.socketPath, Err: errors.Join(err, closeErr)}
+		}
 		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
 	}
 
@@ -343,7 +343,7 @@ func (s *UnixAdapter) Status(ctx context.Context, name string, enabled bool) (*S
 
 	return &StatusResult{
 		SecretID:  resp.GetSecretId(),
-		Status:    s.secretStatusToString(resp.GetStatus()),
+		Status:    secretStatusName(resp.GetStatus()),
 		Timestamp: unixUnixToTime(resp.GetTimestamp()),
 	}, nil
 }
@@ -427,24 +427,6 @@ func (s *UnixAdapter) Prefix(ctx context.Context, prefix string, includeData boo
 		HasMore:    resp.GetHasMore(),
 		NextCursor: resp.GetNextCursor(),
 	}, nil
-}
-
-// =============================================================================
-// Type Conversion Helpers
-// =============================================================================
-
-// secretStatusToString converts proto SecretStatus to string.
-func (s *UnixAdapter) secretStatusToString(status pb.SecretStatus) string {
-	switch status {
-	case pb.SecretStatus_SECRET_STATUS_ENABLED:
-		return "enabled"
-	case pb.SecretStatus_SECRET_STATUS_DISABLED:
-		return "disabled"
-	case pb.SecretStatus_SECRET_STATUS_DELETED:
-		return "deleted"
-	default:
-		return "unspecified"
-	}
 }
 
 // =============================================================================

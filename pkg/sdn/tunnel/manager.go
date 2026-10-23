@@ -111,19 +111,30 @@ func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 		}
 	}
 
-	// Check if the interface already exists in the kernel (not managed by us)
-	if _, err := m.nl.LinkByName(config.Name); err == nil {
-		// Link exists but not managed: delete it first for idempotency
-		m.logger.Info("removing unmanaged tunnel before creation",
-			slog.String("name", config.Name))
-		dummy := &vnl.Dummy{LinkAttrs: vnl.LinkAttrs{Name: config.Name}}
-		if delErr := m.nl.LinkDel(dummy); delErr != nil {
-			return &ErrTunnelCreateFailed{Name: config.Name, Cause: delErr}
+	// A link the manager does not track yet is either this tunnel, left in
+	// place by a datapath that was killed, or something else holding the
+	// name. The first is adopted, so a relaunch does not drop the traffic it
+	// carries; anything else is deleted and recreated.
+	adopted := false
+	if link, err := m.nl.LinkByName(config.Name); err == nil {
+		adopted, err = m.adoptable(ctx, link, config)
+		if err != nil {
+			return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
+		}
+		if !adopted {
+			m.logger.Info("removing unmanaged tunnel before creation",
+				slog.String("name", config.Name))
+			dummy := &vnl.Dummy{LinkAttrs: vnl.LinkAttrs{Name: config.Name}}
+			if delErr := m.nl.LinkDel(dummy); delErr != nil {
+				return &ErrTunnelCreateFailed{Name: config.Name, Cause: delErr}
+			}
 		}
 	}
 
-	if err := m.createTransport(ctx, config); err != nil {
-		return err
+	if !adopted {
+		if err := m.createTransport(ctx, config); err != nil {
+			return err
+		}
 	}
 
 	managed := &managedTunnel{config: config}
@@ -138,6 +149,7 @@ func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 
 	m.logger.Info("tunnel created",
 		slog.String("name", config.Name),
+		slog.Bool("adopted", adopted),
 		slog.String("transport", config.effectiveTransport()),
 		slog.String("type", config.Type),
 		slog.String("uplink", config.Uplink),
@@ -175,7 +187,8 @@ func (m *Manager) createTransport(ctx context.Context, config TunnelConfig) erro
 	case TransportIPsec:
 		// Protection first: the carrier must never carry a packet in the
 		// clear, so the policies exist before the interface comes up.
-		if err := m.installIPsec(ctx, config); err != nil {
+		if err := m.reconcileIPsec(ctx, config); err != nil {
+			_ = m.removeIPsec(config)
 			return err
 		}
 		if err := m.createTunnel(config); err != nil {
@@ -465,6 +478,92 @@ func (m *Manager) addAddress(link vnl.Link, cidr string) error {
 		return err
 	}
 	return m.nl.AddrAdd(link, addr)
+}
+
+// adoptable reports whether a link already in the kernel is exactly the
+// tunnel config describes: same kind, endpoints, key, TTL and MTU, up, and
+// carrying exactly the configured tunnel addresses. A plain GRE link is
+// adopted on that alone. A WireGuard device is adopted when its private key
+// and listen port also match, and its peers are then reconciled by diff
+// (adoptWireGuard). An IPsec carrier is adopted the same way as a GRE link,
+// and its SAs and policies are then reconciled against the kernel's
+// (adoptIPsec). Anything that differs in a single field is recreated.
+func (m *Manager) adoptable(ctx context.Context, link vnl.Link, config TunnelConfig) (bool, error) {
+	switch config.effectiveTransport() {
+	case TransportGRE:
+		if !linkMatches(link, config) {
+			return false, nil
+		}
+		return m.hasTunnelAddresses(link, config)
+	case TransportIPsec:
+		return m.adoptIPsec(ctx, link, config)
+	case TransportWireGuard:
+		return m.adoptWireGuard(ctx, link, config)
+	default:
+		return false, nil
+	}
+}
+
+// hasTunnelAddresses reports whether link carries exactly the configured
+// tunnel addresses, link-local ones aside.
+func (m *Manager) hasTunnelAddresses(link vnl.Link, config TunnelConfig) (bool, error) {
+	addrs, err := m.nl.AddrList(link, vnl.FAMILY_ALL)
+	if err != nil {
+		return false, err
+	}
+	want := []string{config.TunnelIP}
+	if config.TunnelIPv6 != "" {
+		want = append(want, config.TunnelIPv6)
+	}
+	return sameAddresses(addrs, want), nil
+}
+
+// linkMatches compares the link's kind and attributes with the link
+// buildLink would create for config.
+func linkMatches(link vnl.Link, config TunnelConfig) bool {
+	attrs := link.Attrs()
+	if attrs.MTU != config.effectiveMTU() || attrs.Flags&net.FlagUp == 0 {
+		return false
+	}
+	local, remote := net.ParseIP(config.Local), net.ParseIP(config.Remote)
+	ttl := uint8(config.effectiveTTL())
+	switch tunnel := link.(type) {
+	case *vnl.Gretun:
+		return config.Type == TunnelTypeGRE && tunnel.Local.Equal(local) && tunnel.Remote.Equal(remote) &&
+			tunnel.Ttl == ttl && tunnel.IKey == config.Key && tunnel.OKey == config.Key
+	case *vnl.Ip6tnl:
+		return config.Type == TunnelTypeGRE6 && tunnel.Local.Equal(local) && tunnel.Remote.Equal(remote) &&
+			tunnel.Ttl == ttl && tunnel.Proto == syscall.IPPROTO_GRE
+	case *vnl.Iptun:
+		return config.Type == TunnelTypeIPIP && tunnel.Local.Equal(local) && tunnel.Remote.Equal(remote) &&
+			tunnel.Ttl == ttl
+	case *vnl.Wireguard:
+		return config.effectiveTransport() == TransportWireGuard
+	default:
+		return false
+	}
+}
+
+// sameAddresses reports whether the link's addresses, link-local ones
+// aside (the kernel assigns those itself), are exactly want.
+func sameAddresses(addrs []vnl.Addr, want []string) bool {
+	have := make(map[string]bool, len(addrs))
+	for _, addr := range addrs {
+		if addr.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		have[addr.IPNet.String()] = true
+	}
+	if len(have) != len(want) {
+		return false
+	}
+	for _, cidr := range want {
+		parsed, err := vnl.ParseAddr(cidr)
+		if err != nil || !have[parsed.IPNet.String()] {
+			return false
+		}
+	}
+	return true
 }
 
 // removeTunnelLocked removes a tunnel: the uplink pin, the interface, then

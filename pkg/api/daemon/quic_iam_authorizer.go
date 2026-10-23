@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"context"
+	"strconv"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -84,14 +86,29 @@ func (a *iamTokenAuthorizer) CheckPermission(ctx context.Context, token, resourc
 	if err != nil {
 		return false, err
 	}
-	if principal.Subject == "" || principal.TenantID == "" {
+	return checkPrincipalPermission(ctx, a.pep, principal, resource, action)
+}
+
+// checkPrincipalPermission asks the IAM policy enforcement point whether
+// principal may perform action on resource. An empty resource or action is
+// refused before the PEP is asked: no permission names nothing (#926). A
+// principal without a subject or tenant is denied, and a PEP that cannot
+// answer fails the check closed.
+func checkPrincipalPermission(ctx context.Context, pep quicbaassdk.IAMPEPClient, principal *tokenPrincipal, resource, action string) (bool, error) {
+	if strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
+		return false, ErrEmptyPermission{Resource: resource, Action: action}
+	}
+	if pep == nil {
+		return false, ErrPEPClientNotAvailable{}
+	}
+	if principal == nil || principal.Subject == "" || principal.TenantID == "" {
 		return false, nil
 	}
 
 	checkCtx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
-	resp, err := a.pep.Check(checkCtx, &sdkiam.CheckRequest{
+	resp, err := pep.Check(checkCtx, &sdkiam.CheckRequest{
 		Subject: sdkiam.CheckSubject{
 			ID:       principal.Subject,
 			TenantID: principal.TenantID,
@@ -111,4 +128,15 @@ type ErrPEPClientNotAvailable struct{}
 
 func (e ErrPEPClientNotAvailable) Error() string {
 	return "PEP client is not available"
+}
+
+// ErrEmptyPermission is returned when a permission check names no resource or
+// no action. It is a denial, never an allow (#926).
+type ErrEmptyPermission struct {
+	Resource string
+	Action   string
+}
+
+func (e ErrEmptyPermission) Error() string {
+	return "permission check refused: resource " + strconv.Quote(e.Resource) + " and action " + strconv.Quote(e.Action) + " must both be named"
 }

@@ -172,6 +172,14 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		if !called {
 			t.Error("expected next handler to be called")
 		}
+		// The decision must be asked for the session's own principal.
+		if len(pepService.checkCalls) != 1 {
+			t.Fatalf("expected 1 PDP check, got %d", len(pepService.checkCalls))
+		}
+		subject := pepService.checkCalls[0].Subject
+		if subject.ID != "user-123" || subject.TenantID != "tenant-456" || len(subject.Roles) != 1 || subject.Roles[0] != "admin" {
+			t.Errorf("PDP subject = %+v; want user-123 in tenant-456 with role admin", subject)
+		}
 	})
 
 	t.Run("denies_unauthorized_request", func(t *testing.T) {
@@ -771,6 +779,19 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 		}
 		if !results["/api/users/3"] {
 			t.Error("expected /api/users/3 to be allowed")
+		}
+		// Results are mapped back by index, so request i must carry resource i.
+		if len(pepService.checkBatchCalls) != 1 {
+			t.Fatalf("expected 1 batch call, got %d", len(pepService.checkBatchCalls))
+		}
+		requests := pepService.checkBatchCalls[0].Requests
+		if len(requests) != len(resources) {
+			t.Fatalf("expected %d batch requests, got %d", len(resources), len(requests))
+		}
+		for i, r := range requests {
+			if r.Resource != resources[i] || r.Action != "read" || r.Subject.ID != "user-123" || r.Subject.TenantID != "tenant-456" {
+				t.Errorf("request %d = %+v; want read %s by user-123 in tenant-456", i, r, resources[i])
+			}
 		}
 	})
 

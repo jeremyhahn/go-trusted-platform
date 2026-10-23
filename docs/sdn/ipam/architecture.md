@@ -489,8 +489,9 @@ var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Al
 |                                                                    |
 |  3. Claim                                                          |
 |     - memory: bitmap.Set(offset), all under the backend's write    |
-|       lock (memory.go:392)                                         |
-|     - quicbaas: no claim step; the Put in step 5 is unconditional  |
+|       lock (memory.go:401)                                         |
+|     - quicbaas: no conditional write; the last writer wins         |
+|       (see Concurrency Model)                                      |
 |                                                                    |
 |  4. Create Allocation Record                                       |
 |     - Generate UUID                                                |
@@ -498,8 +499,9 @@ var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Al
 |     - Calculate expiration                                         |
 |                                                                    |
 |  5. Persist                                                        |
+|     - QuicBaaS: write the pool first; a failed write returns       |
+|       ErrPoolOperationFailed and stores no allocation              |
 |     - Store allocation                                             |
-|     - Update pool stats                                            |
 |                                                                    |
 |  6. Return Allocation                                              |
 |                                                                    |
@@ -570,16 +572,40 @@ func (m *MemoryBackend) Allocate(ctx context.Context, req *AllocationRequest) (*
 }
 ```
 
-### QuicBaaS: no concurrency control
+### QuicBaaS Concurrency
 
-The QuicBaaS backend has no compare-and-swap and no retry loop. `Allocate`
-reads the pool's allocations, picks the first free offset in the window,
-and `Put`s the allocation unconditionally
-(`pkg/sdn/ipam/backends/quicbaas.go:487`). Two platformd instances
-allocating from the same pool at the same moment can both pick the same
-address. The configured `MaxRetries` is stored (`quicbaas.go:105`) but never read, and `ErrCASConflict` /
-`ErrMaxRetriesExceeded` are declared in `errors.go` but no backend returns
-them.
+The QuicBaaS backend has no conditional write. `Allocate`, `AllocateSpecific`
+and `Release` read the pool and its allocations, choose the address, then write
+the pool and the allocation with plain `Put` calls:
+
+```go
+// No version check and no retry: the last writer wins.
+func (d *QuicBaaSBackend) Allocate(ctx context.Context, req *AllocationRequest) (*Allocation, error) {
+    pool, err := d.GetPool(ctx, req.PoolID)
+    allocations, err := d.GetAllocationsByPool(ctx, req.PoolID)
+    ip := pool.NextDynamic(...) // lowest address not in allocations
+
+    if err := d.UpdatePool(ctx, pool); err != nil {
+        return nil, &ErrPoolOperationFailed{PoolID: pool.ID, Operation: "allocate", Cause: err}
+    }
+    if err := d.client.Put(ctx, entityTypeAllocation, ipID, data); err != nil {
+        return nil, &ErrStorageOperation{Operation: "put", Key: ip.String(), Cause: err}
+    }
+    return alloc, nil
+}
+```
+
+- Two allocators that read the same pool state can pick the same address.
+  Both writes succeed and the last one wins; neither caller sees an error.
+- A pool write that fails is returned as `ErrPoolOperationFailed` and no
+  allocation is stored (on `Release`, the allocation stays active).
+- `MaxRetries`, `ErrCASConflict` and `ErrMaxRetriesExceeded` exist, but nothing
+  in the backend uses them.
+
+**Known limitation:** atomic allocation needs a conditional put (write only if
+the stored version is unchanged) in the go-quicbaas SDK. The SDK has none: the
+KV `PutRequest` carries no expected version, and its transaction compare always
+checks version 1. The gap is reported upstream.
 
 ### DHT Eventual Consistency
 

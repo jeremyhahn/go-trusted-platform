@@ -20,8 +20,9 @@ import (
 
 // Application service QUIC wire mapping.
 //
-// CacheService, SchedulerService and MessagingService each multiplex under
-// their category opcode (0x53, 0x54, 0x55) with the sub-opcode in payload[0]
+// CacheService, SchedulerService, MessagingService and ObjectStorageService
+// each multiplex under their category opcode (0x53, 0x54, 0x55, 0x60) with
+// the sub-opcode in payload[0]
 // and the MessagePack-encoded platform.v1 request in payload[1:]. The daemon
 // dispatcher (pkg/api/daemon/quic_app_services.go::handleAppServiceCategory)
 // decodes the same generated types, so the MessagePack keys match on both
@@ -61,6 +62,15 @@ var appServiceSubOpcodes = map[string]appServiceSubOpcode{
 	platformv1.MessagingService_GetStats_FullMethodName:        {quicwire.OpMessagingCategory, quicwire.MessagingSubGetStats},
 	platformv1.MessagingService_GetDedupStats_FullMethodName:   {quicwire.OpMessagingCategory, quicwire.MessagingSubGetDedupStats},
 	platformv1.MessagingService_GetChannelStats_FullMethodName: {quicwire.OpMessagingCategory, quicwire.MessagingSubGetChannelStats},
+
+	platformv1.ObjectStorageService_PutObject_FullMethodName:         {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubPutObject},
+	platformv1.ObjectStorageService_GetObject_FullMethodName:         {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubGetObject},
+	platformv1.ObjectStorageService_DeleteObject_FullMethodName:      {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubDeleteObject},
+	platformv1.ObjectStorageService_HeadObject_FullMethodName:        {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubHeadObject},
+	platformv1.ObjectStorageService_ListObjects_FullMethodName:       {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubListObjects},
+	platformv1.ObjectStorageService_CopyObject_FullMethodName:        {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubCopyObject},
+	platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName:  {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubListObjectsByTag},
+	platformv1.ObjectStorageService_ListTenantObjects_FullMethodName: {quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubListTenantObjects},
 }
 
 // init merges the application service wire mapping into the shared adapter

@@ -302,6 +302,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.TPMService/Quote":       "platform_tpm_quote",
 	"/platform.v1.TPMService/VerifyQuote": "platform_tpm_verify_quote",
 	"/platform.v1.TPMService/Certify":     "platform_tpm_certify",
+	// Capabilities, platform attributes and PCR extend (#704); the argument
+	// and result mapping is in tpm_attrs.go.
+	"/platform.v1.TPMService/GetCapabilities":       "platform_tpm_capabilities",
+	"/platform.v1.TPMService/GetPlatformAttributes": "platform_tpm_platform",
+	"/platform.v1.TPMService/ExtendPCR":             "platform_tpm_pcr_extend",
 
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",
@@ -362,6 +367,15 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.KeyManagementService/GenerateRandom":         "kms_random",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "kms_generate_data_key",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "kms_generate_wrapped_data_key",
+	"/platform.v1.KeyManagementService/Hash":                   "kms_hash",
+	"/platform.v1.KeyManagementService/HMAC":                   "kms_hmac",
+	"/platform.v1.KeyManagementService/VerifyHMAC":             "kms_verify_hmac",
+	"/platform.v1.KeyManagementService/Rewrap":                 "kms_rewrap",
+	"/platform.v1.KeyManagementService/ImportKey":              "kms_import_key",
+	"/platform.v1.KeyManagementService/UpdateKeyStatus":        "kms_update_key_status",
+	"/platform.v1.KeyManagementService/GetKeyVersions":         "kms_list_key_versions",
+	"/platform.v1.KeyManagementService/BatchEncrypt":           "kms_batch_encrypt",
+	"/platform.v1.KeyManagementService/BatchDecrypt":           "kms_batch_decrypt",
 
 	// vTPM — proto: pkg/api/grpc/proto/vtpm.proto
 	"/platform.v1.VTPMService/QuoteVTPM":     "vtpm_quote",
@@ -395,14 +409,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 
 	// SDN — proto: pkg/api/grpc/proto/sdn.proto; registered in sdn.go
 
-	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto
-	"/platform.v1.DNSService/AddRecord":    "dns_add_record",
-	"/platform.v1.DNSService/DeleteRecord": "dns_delete_record",
-	"/platform.v1.DNSService/ListRecords":  "dns_list_records",
-	"/platform.v1.DNSService/Resolve":      "dns_resolve",
-	"/platform.v1.DNSService/CreateZone":   "dns_create_zone",
-	"/platform.v1.DNSService/DeleteZone":   "dns_delete_zone",
-	"/platform.v1.DNSService/ListZones":    "dns_list_zones",
+	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto; registered in dns.go
 
 	// Tenant — proto: pkg/api/grpc/proto/tenant.proto; registered in tenant.go.
 

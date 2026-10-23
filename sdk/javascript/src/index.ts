@@ -998,6 +998,8 @@ export type {
   VPNLease,
   VPNRejectedPeer,
   VPNGatewayStatus,
+  VPNDurationHistogram,
+  VPNHistogramBucket,
   EnrolVPNPeerRequest,
   EnrolVPNPeerResponse,
   ListVPNPeersResponse,

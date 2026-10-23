@@ -272,6 +272,7 @@ The following test packages have multi-protocol adapters implemented:
 | `pxe` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tenant` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `device` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `objectstorage` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Directory Structure
 
@@ -299,11 +300,15 @@ test/integration/
 
 ### Build Tags
 
-The targets build with `TEST_BUILD_TAGS` (Makefile:340): `integration`,
-`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`) and the full
-`BUILD_TAGS` list.
+The targets build with `TEST_BUILD_TAGS` (Makefile:365): `integration`,
+`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`),
+`INTEGRATION_VECTOR_TAGS` (`vector qrdb_vector`, the `WITH_VECTOR=1` tags) and
+the full `BUILD_TAGS` list, which includes any `GO_BUILD_TAGS` passed to `make`
+([build-tags.md](../configuration/build-tags.md#go_build_tags)).
 `integration` marks a file as needing the devcontainer; the codecs carry the
-QUIC wire protocol and the REST/MCP bodies.
+QUIC wire protocol and the REST/MCP bodies; the vector tags let the embedded
+`quicbaas.TestConfig` serve the Vector service that the quicbaas and sdk suites
+assert against.
 
 Never type the tag list by hand. Outside `make`, derive it:
 
@@ -322,6 +327,7 @@ make integration-test
 
 # Run one suite: integration-test-<key>, where <key> is a TARGET_PACKAGES key
 make integration-test-ca
+make integration-test-compute
 make integration-test-vtpm
 make integration-test-daemon
 make integration-test-root          # test/integration itself, not its subdirectories
@@ -340,7 +346,15 @@ every key except `cold-start` and `barrier-gate` (each needs the shared
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`).
+`ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
+daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
+which flushes the SRKs sealing the daemon's platform-policy key passwords, so
+no gRPC, QUIC or MCP handshake succeeds after it. `compute` is not in the
+list: one orchestrator serves both VMs and containers, and the shared daemon
+runs the container orchestrator the `container` suite needs, which refuses
+every VM spec. The run ends by stopping the shared daemon, restarting swtpm
+fresh and running `compute` on a `platformd` started on the `local-qemu`
+provider, as `make integration-test-compute` does.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
@@ -348,6 +362,23 @@ none (`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `installer`, `lb`,
 `e2e`, `ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`.
+
+Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
+`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `ipxe`, `installer`, `e2e`)
+run concurrently. Each writes its own log under `/tmp/integration-logs/`, and
+the runner prints that log whole when the suite ends, so the `-v` output of two
+suites never interleaves. The daemon-backed keys then run one at a time, in
+list order, on the one shared `platformd`. The run fails if any suite fails,
+and the closing summary lists every key with its `PASS` or `FAIL`.
+
+The runner does not pre-compile the whole of `./test/integration/...`. Each
+suite's package is checked with `go vet` under the run's tags, which compiles
+it without running a `TestMain`. A single key is checked before Open vSwitch,
+the software TPM or `platformd` starts, so a compile error ends the run with
+its `file:line` first. Under `make integration-test` each package is checked
+just before its own run. A compile error fails that suite, and the others
+still run. The check compiles the package's dependencies into the build cache
+that the suite's `go test` then reuses.
 
 Kept out of the runner, or out of its default set:
 
@@ -357,6 +388,7 @@ Kept out of the runner, or out of its default set:
 | `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
+| `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` key's `./test/integration/sdn/...`; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
 | `compute-aws` | A Floci emulator compose file, not a suite; the tests are in `pkg/compute/aws` | `make integration-test-compute-aws` on the host |
 | `diskimage/userspace` | An arm64 userspace container | `make integration-test-diskimage-userspace` |
 | `web` | Playwright (TypeScript), not Go | `npx playwright test --config ../test/integration/web/playwright.config.ts` from `web/` |
@@ -389,8 +421,8 @@ deliberate exception. They run on the host against services the caller has
 already started, they say so in their help text, and they are not what CI or a
 lane runs.
 
-No workflow runs these suites; they need the devcontainer. `.github/workflows/batch.yml`
-(#860) is the closest thing: a `workflow_dispatch`-only workflow, dispatched on
+CI runs `make integration-test` in its full tier (see CI below). The other
+workflow that touches tests is `.github/workflows/batch.yml` (#860): a `workflow_dispatch`-only workflow, dispatched on
 `main` and never part of a merge gate, that runs on the self-hosted `batch`
 runners. It fuzzes every `Fuzz*` target, runs the `make test-race` package set
 with `-count=3`, soaks by looping `make test-race` (not these suites), and
@@ -415,10 +447,22 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
+| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
+| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
+| `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
+
+The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
+writes both on first start (`pkg/daemon/commands/harness_admin_bundle_integration.go`,
+`integration` build only), from the same root admin request through the same
+issuer; the tenant bundle differs only in its subject `O`, and it is written
+first, so a run that has `client-bundle.pem` always has both. The mTLS
+transports bind a caller to the tenant its subject names, so a suite proves a
+cross-tenant refusal by dialing with `helpers.TenantTLSConfig()` instead of
+`helpers.TLSConfigOrInsecure()`.
 
 The endpoint variables are the ones the shared helpers in
 `test/integration/helpers/endpoints.go` read. Suites with a private namespace
-(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`, `INVITATION_*`) read
+(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`) read
 their own name first and otherwise use the shared helper. The defaults are
 there only for running a suite by hand against a platformd on its standard
 ports.
@@ -490,14 +534,166 @@ exactly that until #492.
 not follow this: they test packages under `pkg/`, not a suite under
 `test/integration`, so the runner has no key for them.
 
-No target hand-writes its own `docker run` of the runner either, including
-`make integration-test`, which calls the define with the runner's `all`
-keyword. A hand-written block drifts: `integration-test`, `-sdn` and
-`-barrier-gate` lost the define's module-cache mount and `GOWORK=off`, so the
-container resolved every module over the network and the SDN suite never got
-past building `platformd` (#539). `pkg/arch/integrationsuite_test.go` fails
-`make test` on any recipe that invokes the runner outside the define, and on a
-define that drops either flag.
+No target hand-writes its own `docker run` of the runner either. A
+hand-written block drifts: `integration-test`, `-sdn` and `-barrier-gate` lost
+the define's module-cache mount and `GOWORK=off`, so the container resolved
+every module over the network and the SDN suite never got past building
+`platformd` (#539). `pkg/arch/integrationsuite_test.go` fails `make test` on
+any recipe that names the runner outside the define, and on a define that
+drops either flag.
+
+`make integration-test` is the one target that does not use the define. It is
+the CI standard's integration stage, so it builds the `integration` stage of
+`build/docker/devcontainer/Dockerfile` as `IT_IMAGE` and runs
+`build/docker/devcontainer/compose.yaml`'s `integration` service under the
+compose project `IT_PROJECT`. The service's entrypoint is the runner, so the
+Makefile passes it only `all` and the tags; the service carries the define's
+flags (privileged, `/dev/net/tun`, an exec `/tmp`, `GOWORK=off`). The image
+bakes the source and the module cache with `GOPROXY=off`, so nothing is
+bind-mounted and nothing is fetched. The target tears the stack down on every
+exit and exits with the suites' status.
+
+### CI
+
+`.github/workflows/ci.yml` is the canonical CI (handbook `ci-standard.md`,
+ci-template). Its five stages are Makefile targets, `make build`, `make test`,
+`make integration-test`, `make security` and `make deps-check`, and run in the
+devcontainer image so a developer and CI run the same thing:
+
+| Job | Tier | What it runs |
+|-----|------|--------------|
+| `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) |
+| `image` | docs | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
+| `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
+| `lint` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls` |
+| `sdkjs`, `security`, `build`, `test` | docs | Native-runner checks: the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
+| `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
+| `fips` | main only | `make test-fips`; outside the gate |
+
+The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
+labelled `ci:full`. The docs tier runs on every run except a docs-only PR: one
+whose every changed file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`),
+none of them a page a unit test reads (`DOCS_TESTED_PATTERN`, today
+`docs/daemon/` and `docs/web/`). A docs-only PR runs `lint` and `CI Gate`
+only; `ci:full` overrides it, and so does any doubt in the diff. `CI Gate`
+passes when every PR-tier job passed, every docs-tier job passed or skipped on
+a docs-only PR (`docs_only` reading exactly `true`), and every full-tier job
+passed or was not selected. `pkg/arch/citiers_test.go` holds the tiers, the
+gate's `needs` and its check lines to one another.
+
+The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
+the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
+--ignore-unfixed`, handbook `devops.md` §8). It skips `/gomodcache`, the baked
+third-party module cache, whose test-fixture keys are not credentials; module
+vulnerabilities stay gated by govulncheck and `trivy fs` in `make security`.
+Its suppressions are `build/docker/devcontainer/trivyignore-image.yaml`, not
+the root `.trivyignore`: each entry is scoped by path to one package copy and
+carries its reason and an `expired_at` date, after which the finding fails the
+gate again. Today it holds only advisories in the dependencies npm itself
+bundles, which no Node or npm release fixes yet. A Debian package finding
+that the mirror has already fixed is not suppressed: bump the dated
+`APT_REFRESH` build argument in the `base` stage, which rebuilds the cached apt
+layer so its `apt-get upgrade` takes the fix.
+
+The images come from one Dockerfile, `build/docker/devcontainer/Dockerfile`,
+built from the repository root. `scripts/tool-pins.sh` holds the base image and
+the pins for govulncheck, trivy and Node.js (the integration image's official
+Node release archive, digest-checked per architecture in place of nvm), and the
+Makefile includes it;
+golangci-lint, actionlint, gosec and swag stay pinned in their
+`build/tools-src` modules, so each links the dependency versions its module
+names rather than the tool's own (#933). The integration stage installs only
+the packages a suite, the runner or a Makefile target run there calls; the
+CanoKey QEMU build, autotools, tpm2-abrmd, yubikey-manager, the Secure Boot
+signing tools, the X server and the legacy network tools were dropped because
+nothing called them, and the `trivy image` step scans every package left. The toolchain image is tagged with a hash of its inputs
+(`make -s toolchain-image`). Forge credentials reach the build only as the
+`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. Every job that starts
+containers first runs `scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-`,
+which removes the stacks a runner that died mid-job left behind.
+
+The toolchain container writes in four places: the checkout at `/src`, the
+build cache at `/gocache` (a named volume under compose, the container's own
+disk-backed layer under `scripts/in-toolchain-image.sh`), `/var/tmp` (likewise
+a named volume or the container's layer), which is `TMPDIR`, and a 3 GB tmpfs
+at `/tmp`, which is `HOME`. The image sets `GOTMPDIR=/gocache`, so the go
+command's work directory, every compiled package and linked test binary of a
+run, sits on disk beside the cache. `make test` over the whole tree needs more
+than `/tmp` holds: on a cold cache at `-p 8` its work directory peaked at
+4.2 GB and the build cache ended at 3.5 GB, and the peak grows with the
+runner's CPU count.
+
+The linker does not follow `GOTMPDIR`. An external (cgo) link writes its
+objects under `os.MkdirTemp("", "go-link-")` (`hostlinksetup` in
+`cmd/link/internal/ld/lib.go`), which follows `TMPDIR`, and `make test` links
+one test binary per CPU at once; with `TMPDIR=/tmp` those links failed with
+`no space left on device`. `/var/tmp` is on disk, and like `/tmp` it is sticky
+under root-owned ancestors, so a 0700 directory made under `os.TempDir()`
+still passes `cmd/deployer-pin`'s ancestor check, and its path is short
+enough for the Unix sockets the tests bind there. `t.TempDir()` follows
+`GOTMPDIR` and lands in `/gocache`.
+
+The stages that get a network (`make security`, `make deps-check` and CI's
+`trivy image`, with `IN_IMAGE_NETWORK=bridge`) keep their downloads off `/tmp`
+as well. `scripts/in-toolchain-image.sh` points their writable module cache at
+`/gocache/mod`: it starts empty, so the stage downloads its whole module graph
+(about 2.3 GB unpacked for the root module). The image sets
+`TRIVY_CACHE_DIR=/gocache/trivy`, so trivy's vulnerability DB (1.6 GB
+unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
+`make security` failed writing `trivy.db` with `no space left on device`.
+
+To run a stage locally as CI does: `make docker-build`, then
+`make docker-run CMD='make test'`.
+
+### Foreign-Failure Baseline
+
+Company Agent ruling 125: a failure in a class that ruling 104 counts as
+foreign (fixed only by an upstream release this repository pins, and named
+on an open upstream issue) does not block a merge. Such failures are listed in
+`.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
+nothing is admin-merged.
+
+CI runs `make integration-test IT_FOREIGN_BASELINE=1`. The suites' output
+still goes to the job log, and is also written to `IT_LOG`. When the suites
+pass, nothing else happens. When they fail, `scripts/foreignfailures` decides
+the step's result instead:
+
+- It passes only when every failed leaf test is a row of the baseline.
+- It fails, naming each one, on a failed leaf the baseline does not list.
+- It fails closed on anything it cannot attribute to a listed test: a build
+  or compile failure, a panic or timeout, a package that failed with no
+  failing test, a target that failed outside go test, or a log without the
+  runner's closing summary.
+
+It prints the baseline hits per upstream issue. Rows that did not fail are
+reported as a notice; they do not fail the step. `ci-gate` reads the job's
+result unchanged.
+
+A local `make integration-test` leaves `IT_FOREIGN_BASELINE` unset, so it
+exits with the suites' own status and shows every failure.
+
+The file is tab-separated, with the columns `kind`, `package`, `name`,
+`upstream` and `closing_release`:
+
+| Column | Value |
+|--------|-------|
+| `kind` | `test` (one leaf test) or `job` (one runner target in `ALL_TARGETS`) |
+| `package` | the module-relative package, e.g. `test/integration/kms` |
+| `name` | the full leaf name, e.g. `TestKMS/gRPC/HMAC`; for `job`, the target |
+| `upstream` | the open issue, `repo#number`; several are joined by `+` |
+| `closing_release` | the release whose adoption fixes it |
+
+**Adding an entry:**
+
+- Only a ruling-104 foreign class may be listed, with its open upstream issue.
+- Add one row per failing leaf, copied exactly from the job log.
+- There are no wildcards or patterns, so a new failure can never hide under
+  an existing row.
+- `go test ./scripts/foreignfailures/` refuses a malformed, incomplete or
+  duplicated row.
+
+**Removing an entry:** a row is removed in the PR that adopts its
+`closing_release`.
 
 ## Protocol Parity Assertions
 
@@ -639,12 +835,37 @@ Two helpers in `test/integration/helpers` carry this:
   cleanup if **no** transport ran, so a suite cannot degrade to zero adapters
   and still report success.
 
-Environment guards that fire *before* the adapter loop remain skips: they state
-that the suite is not applicable here, rather than hiding a transport that was
-supposed to work. `SkipIfNoTPM`, `SkipIfNoOVS` and their siblings are
-unaffected. The runner starts OVS and swtpm for every target, so in a `make` run these guards fire only when that
-bring-up failed, and the runner has already printed a warning saying so. For
+Environment guards fail as well. A suite whose prerequisite (a TPM, OVS,
+swtpm, a configured daemon section) is missing fails; where a suite checks the
+prerequisite itself, the failure is a typed error naming it and how to provide
+it. Nothing in `test/integration` skips (#260). The runner starts OVS and swtpm for every target, so in a `make`
+run such a failure means that bring-up failed, and the runner has already
+printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
+
+That swtpm is the daemon's TPM: `test/integration/config.yaml` and
+`test/integration/barrier_gate/config.yaml` set `tpm.device` to
+`/tmp/swtpm/swtpm.sock`, the socket `start_swtpm` serves, with only the SHA-256
+PCR bank active. The integration container is privileged and sees the host's
+`/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
+own TPM; on a host whose TPM has no active SHA-256 bank the daemon stops at
+`PCR 23 is not present in bank 0x000b`. `TestIntegrationConfig_TPMIsHarnessSwtpm`
+in `pkg/app` holds both configs to the runner's socket. It also holds the
+embedded quicbaas server's `seal.tpm2.device` to that socket. platformd copies
+`tpm.device` into that setting, so the server's hardware probe never opens the
+host's `/dev/tpmrm0` ([daemon configuration](../daemon/configuration.md)).
+
+The harness swtpm is provisioned like shipped hardware: it has an endorsement
+key and an EK certificate before `platformd` first opens it. `start_swtpm`
+calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
+which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
+persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
+certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
+is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
+recognises as initialized and does not take its recovery path, which no
+shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
+provisioning fails, the runner stops with a `FATAL` message instead of starting
+the daemons on a TPM without an EK.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
@@ -652,8 +873,9 @@ suite runs rather than handing the suites endpoints nothing is listening on.
 
 ## A Missing Surface Is Declared by Type, Never by Error Text
 
-A subtest may skip because an operation has no endpoint on a transport, but
-only when that gap is *declared*. Suites used to skip whenever the error text
+A subtest whose operation has no endpoint on a transport fails with the
+declared gap's own text, naming the transport and operation; it is never
+skipped (#260). The gap must be *declared*. Suites used to skip whenever the error text
 contained one of a dozen phrases ("not implemented", "unavailable", "501",
 "404", "unknown flag", ...), so a 404, a mistyped CLI flag, a timeout or a
 failed handshake read as "not built yet" (issue #487). Error text is never
@@ -666,20 +888,35 @@ matched now.
   names where the gap is recorded.
 - `surface.IsNotImplemented(err)` is true only for an `ErrNoSurface` anywhere in
   the chain (`errors.As`) or a gRPC status with `codes.Unimplemented`.
-- `surface.SkipIfNotImplemented(t, err)` skips on exactly that and leaves every
-  other error to the caller, which fails with its text or asserts it as an
+- `surface.RequireImplemented(t, err)` fails the test on exactly that, with the
+  gap's text, and leaves every other error to the caller, which fails with its text or asserts it as an
   expected refusal.
 - `surface.IsDeclaredRefusal(err, sentinels...)` recognises a deployment gap
   the daemon declares with a sentinel (for example
   `daemon.ErrFIDO2NotConfigured`), either in the chain or carried across the
   wire as that sentinel's exact text. The match comes from the sentinel value,
   so renaming or retiring a sentinel breaks the build rather than widening the
-  skip. The fido2, piv, luks and ceremony suites skip on their backend
-  sentinels this way.
+  match. The fido2, piv and luks suites assert their backend sentinels as the
+  expected refusal this way.
 
 Do not add a phrase list to a suite. If a transport lacks an operation, make
 its adapter return `ErrNoSurface`. If the server refuses for a deployment
 reason, match its sentinel with `IsDeclaredRefusal`.
+
+An upstream defect in the pinned go-quicbaas SDK is declared with
+`helpers.DeclaredGap` (`test/integration/helpers/declaredgap.go`), which names
+the go-quicbaas issue that fixes it. The subtest asserts the typed refusal
+(`Unserved`: the embedded transport's `UnknownMethodError`; `Mistyped`: its
+`InvalidRequestTypeError`) or the recorded behaviour (`Defect`), then returns
+before its success path. When a pin bump carries the fix, the assertion fails
+with the issue's name; deleting the gap check restores the success path. The
+quicbaas and sdk suites declare seven today: embedded `quicbaas.Batch/Execute`
+unrouted (go-quicbaas #1533), embedded Transaction request type mismatch
+(#1319), embedded KV List ignoring `PageSize` (#1534), embedded
+`quicbaas.Ollama` unrouted (#1535), embedded `quicbaas.Vector` unrouted in
+the pinned SDK (#1404, fixed on go-quicbaas main), embedded
+`quicbaas.ParameterStore` unrouted in the pinned SDK and in v0.14.0-alpha, and
+the embedded transport dispatching a KV `Put` on an already-cancelled context.
 
 ## Best Practices
 
@@ -690,7 +927,7 @@ reason, match its sentinel with `IsDeclaredRefusal`.
 5. **Never Skip an Unreachable Transport** - A transport whose `Setup` fails has
    not been tested. Fail with `helpers.RequireAdapterSetup` or
    `AdapterGate.RequireSetup`, never `t.Skip` (see the section above)
-6. **Skip Only on a Typed Declaration** - `surface.SkipIfNotImplemented` or a
-   server sentinel through `surface.IsDeclaredRefusal`, never a match on error
-   text (see the section above)
+6. **Recognise a Gap Only by Its Typed Declaration** - `surface.RequireImplemented`
+   or a server sentinel through `surface.IsDeclaredRefusal`, never a match on
+   error text (see the section above)
 7. **Assert Behavior, Not Implementation** - Test outcomes, not internals

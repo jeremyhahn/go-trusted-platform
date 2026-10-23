@@ -23,7 +23,7 @@
 //
 // Gating is skip-free and honest: when a tier variable is set but its
 // hardware precondition is missing, the test FAILS with a typed error — it
-// never t.Skip()s and never fakes success. When the variable is unset the
+// never skips and never fakes success. When the variable is unset the
 // tier is disabled (the default virtual/OVMF tier in the parent package
 // remains the CI default).
 //

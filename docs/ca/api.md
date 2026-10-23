@@ -249,7 +249,8 @@ that authenticates without scopes cannot reach it:
 
 | Transport | Allowed caller | Refused |
 |---|---|---|
-| REST (`/api/v1/ca/sign-csr`, both stacks) | Platform token granting `ca:sign-csr` | No token → 401; token without the scope, or no platform-token validator configured → 403 |
+| REST, platformd listener (`/api/v1/ca/sign-csr`) | Platform token granting `ca:sign-csr`, through the listener's shared `ScopeGuard` (`RequireToken`) | No token, a token the validator rejects, or an operator client certificate alone → 401 (`ErrRouteUnauthenticated`); token without the scope, or no guard → 403 (`ErrRouteForbidden`) |
+| REST, web service (`/api/v1/ca/sign-csr`) | Platform token granting `ca:sign-csr` | No token → 401; token without the scope → 403 (`ErrSignCSRScopeRequired`) |
 | gRPC (TCP) | Platform token granting `ca:sign-csr` | mTLS or a legacy token alone → `PermissionDenied` |
 | Unix (gRPC over the socket) | Root (uid 0), by peer credentials, or a platform token granting `ca:sign-csr` | Any other uid → `PermissionDenied` |
 | QUIC | Platform token granting `ca:sign-csr` | Anything else → `StatusPermissionDenied` |

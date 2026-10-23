@@ -32,6 +32,14 @@ var (
 	// not suspended
 	ErrInstanceNotSuspended = errors.New("instance is not suspended")
 
+	// ErrVMExitedDuringStart is returned when QEMU exits before its QMP
+	// monitor accepts a connection; the cause carries QEMU's reason
+	ErrVMExitedDuringStart = errors.New("QEMU exited during start")
+
+	// ErrMonitorNotReady is returned when QEMU keeps running but its QMP
+	// monitor does not accept a connection within the start deadline
+	ErrMonitorNotReady = errors.New("QMP monitor not ready")
+
 	// ErrInvalidConfiguration is returned when the configuration is invalid
 	ErrInvalidConfiguration = errors.New("invalid configuration")
 

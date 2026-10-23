@@ -21,6 +21,7 @@ import (
 	"time"
 
 	sdksecrets "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
 
 // fakeSession is an in-memory secret store keyed by path.
@@ -37,11 +38,11 @@ func (f *fakeSession) Get(_ context.Context, path string) (*sdksecrets.Secret, e
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	secret, ok := f.secrets[path]
+	stored, ok := f.secrets[path]
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return secret, nil
+	return stored, nil
 }
 
 func (f *fakeSession) Close() error {
@@ -78,10 +79,18 @@ func TestNewStore_DefaultsTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	if store.timeout != DefaultTimeout {
-		t.Fatalf("timeout %v, want %v", store.timeout, DefaultTimeout)
+	resolvers := store.registry.Resolvers()
+	if len(resolvers) != 1 {
+		t.Fatalf("registry holds %d resolvers, want only the kms:// resolver", len(resolvers))
 	}
-	if store.logger == nil {
+	kms, ok := resolvers[0].(*kmsResolver)
+	if !ok || kms.Scheme() != SchemeKMS {
+		t.Fatalf("registered resolver is %T, want *kmsResolver", resolvers[0])
+	}
+	if kms.timeout != DefaultTimeout {
+		t.Fatalf("timeout %v, want %v", kms.timeout, DefaultTimeout)
+	}
+	if kms.logger == nil {
 		t.Fatal("expected a default logger")
 	}
 }
@@ -107,17 +116,68 @@ func TestResolve_RawPayloadIsTheDataField(t *testing.T) {
 	}
 }
 
-func TestResolve_SecretSchemeNamesTheSameStore(t *testing.T) {
+// The removed scheme is built from its constant so the repository carries
+// no spelling of it outside the release note (#659).
+func TestResolve_RefusesTheRemovedSecretScheme(t *testing.T) {
 	session := &fakeSession{secrets: map[string]*sdksecrets.Secret{
 		"tunnel/mia/out": {Data: map[string]interface{}{"data": "abc"}},
 	}}
 	store := newTestStore(t, session)
-	got, err := store.Resolve(context.Background(), "secret://tunnel/mia/out")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+	ref := SchemeSecretRemoved + schemeSeparator + "tunnel/mia/out"
+	got, err := store.Resolve(context.Background(), ref)
+	if got != nil {
+		t.Fatalf("a removed-scheme reference resolved to %q", got)
 	}
-	if string(got) != "abc" {
-		t.Fatalf("got %q", got)
+	var removed *ErrSchemeRemoved
+	if !errors.As(err, &removed) {
+		t.Fatalf("got %T (%v), want *ErrSchemeRemoved", err, err)
+	}
+	if removed.Replacement != SchemeKMS {
+		t.Fatalf("Replacement = %q, want %q", removed.Replacement, SchemeKMS)
+	}
+	var invalid *secret.InvalidSecretURIError
+	if !errors.As(err, &invalid) || invalid.Raw != ref {
+		t.Fatalf("error does not wrap the SPI's InvalidSecretURIError for %q: %v", ref, err)
+	}
+	if !strings.Contains(err.Error(), "kms://tunnel/mia/out") {
+		t.Fatalf("error does not name the kms:// replacement: %v", err)
+	}
+	if len(session.gets) != 0 {
+		t.Fatalf("a refused reference reached the store: %v", session.gets)
+	}
+}
+
+// A reference no registered resolver claims falls through the SPI registry
+// as a literal; the store refuses it rather than return the reference text
+// as key material.
+func TestResolve_RefusesAnUnclaimedSchemeInsteadOfALiteral(t *testing.T) {
+	session := &fakeSession{}
+	store := newTestStore(t, session)
+	for _, ref := range []string{"env://TUNNEL_KEY", "file:///etc/key", "literal-key-material"} {
+		got, err := store.Resolve(context.Background(), ref)
+		var unsupported *ErrSchemeUnsupported
+		if got != nil || !errors.As(err, &unsupported) {
+			t.Fatalf("Resolve(%q) = %q, %v; want *ErrSchemeUnsupported", ref, got, err)
+		}
+	}
+	if len(session.gets) != 0 {
+		t.Fatalf("an unclaimed reference reached the store: %v", session.gets)
+	}
+}
+
+// Failures inside the kms:// resolver surface through the SPI's
+// ResolutionFailedError and still unwrap to the gateway's typed cause.
+func TestResolve_ResolverFailureCarriesTheSPIError(t *testing.T) {
+	session := &fakeSession{secrets: map[string]*sdksecrets.Secret{}}
+	store := newTestStore(t, session)
+	_, err := store.Resolve(context.Background(), "kms://tunnel/absent")
+	var failed *secret.ResolutionFailedError
+	if !errors.As(err, &failed) || failed.Scheme != SchemeKMS {
+		t.Fatalf("got %T (%v), want *secret.ResolutionFailedError for scheme kms", err, err)
+	}
+	var unresolvable *ErrSecretUnresolvable
+	if !errors.As(err, &unresolvable) {
+		t.Fatalf("error does not unwrap to *ErrSecretUnresolvable: %v", err)
 	}
 }
 
@@ -336,11 +396,11 @@ func TestZeroize_OverwritesEveryByte(t *testing.T) {
 }
 
 func TestParseRef_Parts(t *testing.T) {
-	got, err := parseRef("secret://a/b/c?enc=hex#key")
+	got, err := parseRef("kms://a/b/c?enc=hex#key")
 	if err != nil {
 		t.Fatalf("parseRef: %v", err)
 	}
-	if got.scheme != SchemeSecret || got.path != "a/b/c" || got.encoding != EncodingHex || got.field != "key" {
+	if got.path != "a/b/c" || got.encoding != EncodingHex || got.field != "key" {
 		t.Fatalf("parsed %+v", got)
 	}
 }

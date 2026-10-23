@@ -343,6 +343,57 @@ func TestComputeGRPCService_ListSnapshots(t *testing.T) {
 	})
 }
 
+func TestComputeGRPCService_GetSnapshot(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		svc, orchestrator := newVMCapableComputeService()
+		orchestrator.snapshots = []*compute.VMSnapshot{
+			{Name: "snap1", VMID: "vm1", SizeBytes: 100},
+			{Name: "snap2", VMID: "vm1", SizeBytes: 200, Description: "nightly"},
+		}
+
+		resp, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap2"})
+		require.NoError(t, err)
+		assert.Equal(t, "snap2", resp.GetSnapshot().GetId())
+		assert.Equal(t, uint64(200), resp.GetSnapshot().GetSizeBytes())
+		assert.Equal(t, "nightly", resp.GetSnapshot().GetConfig().GetDescription())
+	})
+
+	t.Run("missing VM ID", func(t *testing.T) {
+		svc, _ := newVMCapableComputeService()
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{SnapshotId: "snap1"})
+		assertStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("missing snapshot ID", func(t *testing.T) {
+		svc, _ := newVMCapableComputeService()
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1"})
+		assertStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("unknown snapshot maps to NotFound", func(t *testing.T) {
+		svc, orchestrator := newVMCapableComputeService()
+		orchestrator.snapshots = []*compute.VMSnapshot{{Name: "snap1", VMID: "vm1"}}
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap9"})
+		require.ErrorAs(t, err, &ErrVMSnapshotNotFound{})
+		assertStatusCode(t, err, codes.NotFound)
+	})
+
+	t.Run("list failure keeps its class", func(t *testing.T) {
+		svc, orchestrator := newVMCapableComputeService()
+		orchestrator.listErr = compute.ErrInstanceNotRunning
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap1"})
+		assertStatusCode(t, err, codes.FailedPrecondition)
+	})
+
+	t.Run("nil orchestrator", func(t *testing.T) {
+		svc := createTestComputeServiceNoOrchestrator(t)
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap1"})
+		assertStatusCode(t, err, codes.FailedPrecondition)
+	})
+}
+
 // =============================================================================
 // AttestVM / VerifyVMAttestation
 // =============================================================================

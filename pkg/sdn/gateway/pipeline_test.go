@@ -47,7 +47,6 @@ func (f *fakeOVSClient) SetBridgeFailMode(ctx context.Context, name string, fail
 	if f.failModeErr != nil {
 		return f.failModeErr
 	}
-	f.failModes = append(f.failModes, failMode)
 	f.failMode = failMode
 	return nil
 }

@@ -714,6 +714,13 @@ func TestFlowManager_WithController(t *testing.T) {
 		assert.True(t, controller.addFlowCalled)
 		assert.True(t, controller.setVLANCalled)
 	})
+
+	t.Run("controller called on remove", func(t *testing.T) {
+		rule := &FlowRule{ID: "rule-remove", PortID: "eth0", Type: FlowRuleTypeDrop}
+		require.NoError(t, manager.InstallRule(ctx, rule))
+		require.NoError(t, manager.RemoveRule(ctx, rule.ID))
+		assert.True(t, controller.deleteFlowCalled, "a removed rule must be deleted from the switch")
+	})
 }
 
 func TestFlowManager_WithControllerFailure(t *testing.T) {

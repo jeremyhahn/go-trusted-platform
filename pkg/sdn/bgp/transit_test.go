@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
@@ -32,7 +33,6 @@ type transitMockSpeaker struct {
 	withdrawErr       error
 	announcedPrefixes []netip.Prefix
 	withdrawnPrefixes []netip.Prefix
-	announceCallCount int
 	withdrawCallCount int
 }
 
@@ -47,7 +47,6 @@ func newTransitMockSpeaker() *transitMockSpeaker {
 }
 
 func (m *transitMockSpeaker) AnnouncePrefix(ctx context.Context, prefix netip.Prefix, nextHop netip.Addr, attrs *PathAttributes) error {
-	m.announceCallCount++
 	if m.announceErr != nil {
 		return m.announceErr
 	}
@@ -514,6 +513,9 @@ func TestWithdrawPrefix(t *testing.T) {
 		if err := tm.WithdrawPrefix(ctx, prefix); err != nil {
 			t.Errorf("WithdrawPrefix() error = %v", err)
 		}
+		if !slices.Equal(speaker.withdrawnPrefixes, []netip.Prefix{prefix}) {
+			t.Errorf("speaker withdrew %v, want [%v]", speaker.withdrawnPrefixes, prefix)
+		}
 	})
 
 	t.Run("withdraw non-existent prefix", func(t *testing.T) {
@@ -705,6 +707,9 @@ func TestDuplicateAnnouncement(t *testing.T) {
 	err = tm.AnnounceIPv6Prefix(ctx, prefix)
 	if err == nil {
 		t.Error("expected error for duplicate announcement")
+	}
+	if !slices.Equal(speaker.announcedPrefixes, []netip.Prefix{prefix}) {
+		t.Errorf("speaker announced %v, want only the first [%v]", speaker.announcedPrefixes, prefix)
 	}
 }
 

@@ -94,6 +94,12 @@ Field names per transport:
 The server does not range-check `slot`. On REST and QUIC an omitted `slot`
 decodes as `0`.
 
+EnrollFIDO2 with `require_pin: true` is refused with
+`ErrLUKSFIDO2PINUnsupported` before any keyslot or token is written: the SDK
+fido2 handler has no PIN support, so the slot would be guarded by user presence
+alone. The refusal stands until the SDK seam ships (#584). `require_uv` is
+honoured, and the token's `fido2-up-required` records it.
+
 ---
 
 ## 4. Error mapping
@@ -103,6 +109,7 @@ decodes as `0`.
 | `ErrLUKSNotConfigured` | 503 | `Unavailable` | `StatusUnavailable` |
 | `ErrLUKSRootRequired` | 403 | `PermissionDenied` | `StatusPermissionDenied` |
 | `ErrLUKS{Device,Passphrase,NewPassphrase,CredentialID,Slot}Required` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
+| `ErrLUKSFIDO2PINUnsupported` (EnrollFIDO2 with `require_pin`) | 400 | `InvalidArgument` | `StatusInvalidArgument`, message as payload |
 | any other error | 500 | `Internal` | `StatusInternalError` |
 | `ErrLUKSMalformedBody` (REST body that is not valid JSON) | 400 | — | — |
 

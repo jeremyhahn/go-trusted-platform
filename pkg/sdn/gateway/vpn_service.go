@@ -306,6 +306,14 @@ func (b *vpnBackend) state(ctx context.Context) (*gwstate.VPNState, error) {
 			out.LeasesByDataPlane[string(kind)] = n
 		}
 	}
+	if len(health.Revocations) > 0 {
+		out.Revocations = make(map[string]uint64, len(health.Revocations))
+		for reason, n := range health.Revocations {
+			out.Revocations[string(reason)] = n
+		}
+	}
+	out.PostureViolations = health.PostureViolations
+	out.Reattest = reattestState(health.Reattest)
 	leases, err := b.svc.Leases(ctx)
 	if err != nil {
 		return out, err
@@ -325,6 +333,19 @@ func (b *vpnBackend) state(ctx context.Context) (*gwstate.VPNState, error) {
 	}
 	sort.Slice(out.Leases, func(i, j int) bool { return out.Leases[i].ID < out.Leases[j].ID })
 	return out, nil
+}
+
+// reattestState is the telemetry form of the re-attestation histogram.
+func reattestState(h vpn.DurationHistogram) *gwstate.DurationHistogram {
+	out := &gwstate.DurationHistogram{
+		Count:      h.Count,
+		SumSeconds: h.Sum.Seconds(),
+		Buckets:    make([]gwstate.HistogramBucket, 0, len(h.Buckets)),
+	}
+	for _, b := range h.Buckets {
+		out.Buckets = append(out.Buckets, gwstate.HistogramBucket{UpperBoundSeconds: b.UpperBoundSeconds, Count: b.Count})
+	}
+	return out
 }
 
 // stopPlanes stops the planes in reverse order and joins the failures.

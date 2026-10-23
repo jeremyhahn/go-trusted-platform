@@ -15,6 +15,12 @@ service TPMService {
   // Info returns TPM capabilities and information
   rpc Info(TPMInfoRequest) returns (TPMInfoResponse);
 
+  // GetCapabilities returns the algorithms, commands and ECC curves the TPM implements
+  rpc GetCapabilities(TPMCapabilitiesRequest) returns (TPMCapabilitiesResponse);
+
+  // GetPlatformAttributes describes the TPM device and its provisioned identity keys
+  rpc GetPlatformAttributes(TPMPlatformAttributesRequest) returns (TPMPlatformAttributesResponse);
+
   // Provision initializes the TPM with required keys
   rpc Provision(TPMProvisionRequest) returns (TPMProvisionResponse);
 
@@ -48,6 +54,7 @@ service TPMService {
   rpc Certify(CertifyRequest) returns (CertifyResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
+  rpc ExtendPCR(ExtendPCRRequest) returns (ExtendPCRResponse);
 
   // Credential activation
   rpc MakeCredential(MakeCredentialRequest) returns (MakeCredentialResponse);
@@ -592,6 +599,74 @@ message PCRValue {
   bytes value = 3;
 }
 ```
+
+### ExtendPCR
+
+Extends PCR `index` (0-23) in the `hash_alg` bank (`sha1`, `sha256`, `sha384`
+or `sha512`; `sha256` when empty) with `data`. Scope `tpm:write`. An index past
+23 or empty `data` is `InvalidArgument` and the TPM is not called; a bank the
+TPM does not have is the TPM's refusal; QUIC `0x12` and MCP `platform_tpm_pcr_extend` run the same validator
+(`pkg/api/tpmpcr`). A successful extend returns `status` with `success: true`
+and the message `PCR <index> extended`, the pair QUIC and MCP return.
+
+```protobuf
+message ExtendPCRRequest {
+  uint32 index = 1;
+  string hash_alg = 2;
+  bytes data = 3;
+}
+
+message ExtendPCRResponse {
+  Status status = 1;
+}
+```
+
+## Capabilities and Platform Attributes
+
+### GetCapabilities
+
+Returns TPM2_GetCapability's algorithm, command and ECC-curve names. Scope
+`tpm:read`. A list the TPM refuses is `FailedPrecondition` naming the list.
+
+```protobuf
+message TPMCapabilitiesRequest {}
+
+message TPMCapabilitiesResponse {
+  repeated string algorithms = 1;
+  repeated string commands = 2;
+  repeated string ecc_curves = 3;
+}
+```
+
+### GetPlatformAttributes
+
+Describes the TPM device and its provisioned EK, SRK and IAK. Scope
+`tpm:read`. An attribute the TPM cannot report is false or empty; a key that is
+not provisioned is absent.
+
+```protobuf
+message TPMPlatformAttributesRequest {}
+
+message TPMPlatformAttributesResponse {
+  string device = 1;
+  bool is_fips = 2;
+  bool pcr_extended = 3;
+  bool can_seal = 4;
+  bool is_simulator = 5;
+  string manufacturer = 6;
+  TPMKeyRef ek = 7;
+  TPMKeyRef srk = 8;
+  TPMKeyRef iak = 9;
+}
+
+message TPMKeyRef {
+  uint32 handle = 1;
+  string algorithm = 2;
+}
+```
+
+QUIC `0x17` / `0x1E` and MCP `platform_tpm_capabilities` /
+`platform_tpm_platform` read the same values through `pkg/api/tpmattrs`.
 
 ## Event Log
 

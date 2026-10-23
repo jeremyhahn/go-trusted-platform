@@ -342,6 +342,7 @@ type KMSDecryptServiceResponse struct {
 
 // KMSBatchEncryptItem represents a single item in a batch encryption request.
 type KMSBatchEncryptItem struct {
+	ItemID    string
 	Plaintext []byte
 	Context   []byte
 	Nonce     []byte
@@ -355,6 +356,7 @@ type KMSBatchEncryptServiceRequest struct {
 
 // KMSBatchEncryptResultItem represents a single result in a batch encryption response.
 type KMSBatchEncryptResultItem struct {
+	ItemID     string
 	Ciphertext []byte
 	Nonce      []byte
 	Error      string
@@ -376,6 +378,7 @@ type KMSBatchEncryptServiceResponse struct {
 
 // KMSBatchDecryptItem represents a single item in a batch decryption request.
 type KMSBatchDecryptItem struct {
+	ItemID     string
 	Ciphertext []byte
 	Context    []byte
 	Nonce      []byte
@@ -390,6 +393,7 @@ type KMSBatchDecryptServiceRequest struct {
 
 // KMSBatchDecryptResultItem represents a single result in a batch decryption response.
 type KMSBatchDecryptResultItem struct {
+	ItemID     string
 	Plaintext  []byte
 	KeyVersion uint64
 	Error      string

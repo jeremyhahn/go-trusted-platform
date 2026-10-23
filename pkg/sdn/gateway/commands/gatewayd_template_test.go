@@ -188,6 +188,11 @@ func TestShippedGatewaydTemplate_OverlayExampleValidates(t *testing.T) {
 	// holds TCP 179 and the overlay speaker dials its route reflectors.
 	require.NotNil(t, cfg.Gateway.BGP, "the template runs a transit speaker")
 	require.NotEmpty(t, overlay.RRPeers, "the overlay runs its own EVPN speaker")
+	// The symmetric IRB example decodes: a routed VNI's subnet, the anycast
+	// gateway MAC and the L3VNI.
+	require.Equal(t, netip.MustParsePrefix("10.4.192.0/24"), overlay.VNIs[0].Subnet)
+	require.NotEmpty(t, overlay.AnycastGatewayMAC)
+	require.NotZero(t, overlay.L3VNI)
 
 	overlay.Enabled = true
 	require.NoError(t, overlay.Validate())

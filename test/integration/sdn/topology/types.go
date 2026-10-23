@@ -718,3 +718,18 @@ type ErrBGPConvergenceFailed struct {
 func (e ErrBGPConvergenceFailed) Error() string {
 	return "BGP convergence failed: " + e.Reason
 }
+
+// ErrDockerComposeMissing indicates docker-compose, which starts a topology,
+// is not in PATH.
+type ErrDockerComposeMissing struct {
+	Err error
+}
+
+func (e ErrDockerComposeMissing) Error() string {
+	return "docker-compose is not in PATH, so no topology can be started " +
+		"(run on a host with docker-compose and a Docker daemon): " + e.Err.Error()
+}
+
+func (e ErrDockerComposeMissing) Unwrap() error {
+	return e.Err
+}

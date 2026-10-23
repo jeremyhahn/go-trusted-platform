@@ -1,5 +1,7 @@
 # Security and Trust Architecture
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document consolidates security properties, threat models, cryptographic requirements, TPM trust policies, and incident response procedures for the go-trusted-platform network.
 
 ---

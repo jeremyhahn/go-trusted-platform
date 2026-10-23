@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -32,24 +33,29 @@ import (
 // mockSecretsQUICService implements SecretsServiceInterface with in-memory
 // state for QUIC secrets category tests.
 type mockSecretsQUICService struct {
-	secrets       map[string][]byte
-	policies      map[string]*pb.SecretRotationPolicy
-	shouldErr     bool
-	errToReturn   error
-	lastOperation string
+	// The version, rotate, rollback and status calls go to the real gRPC
+	// adapter over a fake SDK secrets client, as the daemon wires them.
+	*SecretsServerAdapter
+	versions    *versionSecretsClient
+	secrets     map[string][]byte
+	policies    map[string]*pb.SecretRotationPolicy
+	shouldErr   bool
+	errToReturn error
 }
 
 var _ SecretsServiceInterface = (*mockSecretsQUICService)(nil)
 
 func newMockSecretsQUICService() *mockSecretsQUICService {
+	versions := &versionSecretsClient{}
 	return &mockSecretsQUICService{
-		secrets:  make(map[string][]byte),
-		policies: make(map[string]*pb.SecretRotationPolicy),
+		SecretsServerAdapter: NewSecretsServerAdapter(versions, slog.Default()),
+		versions:             versions,
+		secrets:              make(map[string][]byte),
+		policies:             make(map[string]*pb.SecretRotationPolicy),
 	}
 }
 
 func (m *mockSecretsQUICService) StoreSecret(ctx context.Context, req *pb.StoreSecretRequest) (*pb.StoreSecretResponse, error) {
-	m.lastOperation = "StoreSecret"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -58,7 +64,6 @@ func (m *mockSecretsQUICService) StoreSecret(ctx context.Context, req *pb.StoreS
 }
 
 func (m *mockSecretsQUICService) GetSecret(ctx context.Context, req *pb.GetSecretRequest) (*pb.GetSecretResponse, error) {
-	m.lastOperation = "GetSecret"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -70,7 +75,6 @@ func (m *mockSecretsQUICService) GetSecret(ctx context.Context, req *pb.GetSecre
 }
 
 func (m *mockSecretsQUICService) ListSecrets(ctx context.Context, req *pb.ListSecretsRequest) (*pb.ListSecretsResponse, error) {
-	m.lastOperation = "ListSecrets"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -82,7 +86,6 @@ func (m *mockSecretsQUICService) ListSecrets(ctx context.Context, req *pb.ListSe
 }
 
 func (m *mockSecretsQUICService) DeleteSecret(ctx context.Context, req *pb.DeleteSecretRequest) (*pb.DeleteSecretResponse, error) {
-	m.lastOperation = "DeleteSecret"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -91,7 +94,6 @@ func (m *mockSecretsQUICService) DeleteSecret(ctx context.Context, req *pb.Delet
 }
 
 func (m *mockSecretsQUICService) SetRotationPolicy(ctx context.Context, req *pb.SetRotationPolicyRequest) (*pb.SetRotationPolicyResponse, error) {
-	m.lastOperation = "SetRotationPolicy"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -100,7 +102,6 @@ func (m *mockSecretsQUICService) SetRotationPolicy(ctx context.Context, req *pb.
 }
 
 func (m *mockSecretsQUICService) GetRotationPolicy(ctx context.Context, req *pb.GetRotationPolicyRequest) (*pb.GetRotationPolicyResponse, error) {
-	m.lastOperation = "GetRotationPolicy"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -281,4 +282,114 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
+}
+
+// secretsVersionsRequest builds a secrets sub-operation whose payload is the
+// quicbaas.kms.v1 request message, as the SDK QUIC adapter sends it.
+func secretsVersionsRequest(t *testing.T, sub byte, msg interface{}) *quicwire.Request {
+	t.Helper()
+	return kmsExtendedRequest(t, quicwire.OpSecretsCategory, sub, msg)
+}
+
+func TestHandleSecretsCategoryVersions(t *testing.T) {
+	handler, svc := newSecretsTestHandler()
+	ctx := context.Background()
+
+	t.Run("GetVersion", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubGetVersion,
+			&pb.GetSecretVersionRequest{SecretId: "db/pw", Version: 1}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.GetSecretVersionResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, []byte("v1-data"), out.GetData())
+		assert.Equal(t, "ops", out.GetVersion().GetCreatedBy())
+		assert.Equal(t, 1, svc.versions.lastGetVersion.Version)
+	})
+
+	t.Run("ListVersions", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubListVersions,
+			&pb.ListSecretVersionsRequest{SecretId: "db/pw"}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.ListSecretVersionsResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		require.Len(t, out.GetVersions(), 2)
+		assert.Equal(t, uint64(2), out.GetVersions()[1].GetVersion())
+	})
+
+	t.Run("Rotate", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubRotate,
+			&pb.RotateSecretRequest{SecretId: "db/pw", NewData: []byte("v3"), Metadata: map[string]string{"by": "ops"}}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.RotateSecretResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, uint64(3), out.GetNewVersion())
+		assert.Equal(t, []byte("v3"), svc.versions.lastRotate.NewData)
+		assert.Equal(t, "ops", svc.versions.lastRotate.Metadata["by"])
+	})
+
+	t.Run("Rollback", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubRollback,
+			&pb.RollbackSecretRequest{SecretId: "db/pw", TargetVersion: 1}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.RollbackSecretResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, uint64(4), out.GetNewVersion())
+		assert.Equal(t, 1, svc.versions.lastRollback.TargetVersion)
+	})
+
+	t.Run("UpdateStatus", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubUpdateStatus,
+			&pb.UpdateSecretStatusRequest{SecretId: "db/pw", Status: pb.SecretStatus_SECRET_STATUS_DISABLED}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out pb.UpdateSecretStatusResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.Equal(t, pb.SecretStatus_SECRET_STATUS_DISABLED, out.GetStatus())
+	})
+}
+
+// TestHandleSecretsCategoryVersionsErrors holds each QUIC sub-operation to
+// the class the gRPC method answers for the same input.
+func TestHandleSecretsCategoryVersionsErrors(t *testing.T) {
+	ctx := context.Background()
+	requests := map[string]struct {
+		sub     byte
+		valid   interface{}
+		noID    interface{}
+		failing byte
+	}{
+		"GetVersion": {quicwire.SecretsSubGetVersion,
+			&pb.GetSecretVersionRequest{SecretId: "db/pw", Version: 1}, &pb.GetSecretVersionRequest{Version: 1}, quicwire.StatusNotFound},
+		"ListVersions": {quicwire.SecretsSubListVersions,
+			&pb.ListSecretVersionsRequest{SecretId: "db/pw"}, &pb.ListSecretVersionsRequest{}, quicwire.StatusNotFound},
+		"Rotate": {quicwire.SecretsSubRotate,
+			&pb.RotateSecretRequest{SecretId: "db/pw", NewData: []byte("x")}, &pb.RotateSecretRequest{NewData: []byte("x")}, quicwire.StatusInternalError},
+		"Rollback": {quicwire.SecretsSubRollback,
+			&pb.RollbackSecretRequest{SecretId: "db/pw", TargetVersion: 1}, &pb.RollbackSecretRequest{TargetVersion: 1}, quicwire.StatusInternalError},
+		"UpdateStatus": {quicwire.SecretsSubUpdateStatus,
+			&pb.UpdateSecretStatusRequest{SecretId: "db/pw", Status: pb.SecretStatus_SECRET_STATUS_ENABLED},
+			&pb.UpdateSecretStatusRequest{Status: pb.SecretStatus_SECRET_STATUS_ENABLED}, quicwire.StatusInternalError},
+	}
+
+	for name, tc := range requests {
+		t.Run(name, func(t *testing.T) {
+			handler, _ := newSecretsTestHandler()
+			resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, tc.sub, tc.noID))
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, "missing secret_id")
+
+			resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Payload: []byte{tc.sub, 0xC1}})
+			assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status, "undecodable payload")
+
+			// An SDK client that fails every call answers the gRPC class.
+			failing := newTestQUICServiceHandler(logging.DefaultLogger())
+			failing.SetSecretsService(NewSecretsServerAdapter(&extSecretsClientMock{}, slog.Default()))
+			resp = failing.HandleRequest(ctx, secretsVersionsRequest(t, tc.sub, tc.valid))
+			assert.Equal(t, tc.failing, resp.Status, "SDK failure")
+		})
+	}
+
+	handler, _ := newSecretsTestHandler()
+	resp := handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubRotate, &pb.RotateSecretRequest{SecretId: "db/pw"}))
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, "rotate without new data")
+	resp = handler.HandleRequest(ctx, secretsVersionsRequest(t, quicwire.SecretsSubUpdateStatus, &pb.UpdateSecretStatusRequest{SecretId: "db/pw"}))
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, "unspecified status")
 }

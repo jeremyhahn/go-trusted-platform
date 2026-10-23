@@ -71,8 +71,10 @@ Schemas: `CreateProxyRouteRequest{route}` → `CreateProxyRouteResponse{route, v
 `ProxyRoute` = `{id, hosts[], path_prefix, pool_id, auth, strip_prefix,
 preserve_host, passthrough_tcp}`.
 `ProxyAuthRequirements` = `{mode, require_idevid, allowed_zones[],
-backend_zone, require_attestation, attestation_max_age_nanos, required_roles[],
-required_scopes[], opa_policy, token_zone}`.
+backend_zone, require_attestation, attestation_max_age_nanos,
+required_scopes[], opa_policy, token_zone}`. Field 7 (`required_roles`) is
+reserved: it was removed (#926), and a route's permission is its
+`required_scopes`.
 
 **`attestation_max_age_nanos` is nanoseconds**, not seconds and not a duration
 string. Likewise `idle_conn_timeout_nanos` on a pool.

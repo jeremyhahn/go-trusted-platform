@@ -8,8 +8,7 @@
 ## Feature folders — start here
 
 Documentation uses the five-file feature-folder layout defined by
-`../handbook/software/conventions/feature-docs.md` (ratified 2026-08-19). Each
-feature has:
+`../handbook/software/conventions/feature-docs.md`. Each feature has:
 
 ```
 docs/<feature>/
@@ -82,7 +81,7 @@ picture. Other feature folders link to it rather than repeating it.
 ### The remaining directories are not features
 
 `api/`, `architecture/`, `archive/`, `assets/`, `cli/`, `configuration/`,
-`man/`, `operations/`, `plans/`, `reference/`, `roadmap/`, `test/` and
+`operations/`, `plans/`, `reference/`, `roadmap/`, `test/` and
 `testing/` are cross-cutting sections and collections, not capabilities, so the
 five-file layout does not apply to them. They still predate the convention and
 their shape is **not a precedent** (feature-docs.md §8): do not add a file in the
@@ -138,7 +137,7 @@ platformctl status
 
 ```bash
 # Create a VM with a virtual TPM on a bridge and start it
-platformctl compute create --name test-vm --cpus 2 --memory 4096 --tpm --network-bridge br0 --start
+platformctl compute create --name test-vm --cpus 2 --memory 4096 --tpm --start
 platformctl compute get test-vm
 ```
 
@@ -199,8 +198,7 @@ platformctl compute get test-vm
 |-----------|-------------|
 | [JavaScript SDK](api/sdk-javascript.md) | TypeScript SDK for web applications |
 | [API Reference](api/) | Multi-protocol API docs: REST, gRPC, QUIC, MCP, Unix Socket |
-| [CLI Reference](daemon/cli.md) | `platformctl` global flags and command tree; the six binaries |
-| [Man Pages](man/) | Unix manual pages |
+| [CLI Reference](daemon/cli.md) | `platformctl` global flags and command tree; the six binaries; each command group's `cli.md` |
 | [Operations](operations/) | Monitoring, troubleshooting, and maintenance |
 | [Web UI](web/) | Platform management dashboard and admin interface |
 

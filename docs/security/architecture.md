@@ -70,7 +70,15 @@ Six embedded policies:
 | `container.rego` | `attestation.container` | Container admission |
 | `image.rego` | `attestation.image` | Image admission |
 | `quote.rego` | `attestation.quote` | TPM quote acceptance |
-| `proxy_authz.rego` | `proxy.authz` | Edge-proxy request authorization |
+| `proxy_authz.rego` | `proxy.authz` | Edge-proxy request evidence (zone, attestation, method) — not access |
+
+**OPA answers evidence questions; it never answers access questions.** "May
+this principal perform this action on this resource" is the IAM decision, made
+by go-qrdb ABAC through the go-quicbaas PEP (`docs/iam/`). Rego decides whether
+the evidence presented is acceptable: a TPM quote, an image digest, a client
+zone, an attestation outcome, an auth method. That is why `proxy_authz` is given
+no roles and a proxy route carries no role requirement — a route's permission is
+its `required-scopes` (#926).
 
 ### Alternatives rejected
 
@@ -82,7 +90,7 @@ Six embedded policies:
 | **Let the operator directory be additive only** | Then a broken default could not be replaced without a build. Same-name override is the escape hatch. |
 | **Default to allow when a policy is silent** | An undefined `allow` rule is the commonest Rego mistake. `DefaultPolicyAction` is `deny`, and `proxysvc.NewOPAEvaluator` hard-codes `DefaultAction: "deny"` regardless of configuration. |
 | **Fail open when the engine will not initialise** | `NewOPAEvaluator` returns initialisation errors so the proxy **fails closed at assembly time** rather than denying every request at runtime with an opaque error. |
-| **Use this engine as the platform's token/RBAC decision point** | There is exactly one RBAC decision point in the portfolio, in go-qrdb. This engine does workload admission, attestation-evidence and proxy-authz policy — never `scp` claim authorization. |
+| **Use this engine as the platform's token/RBAC decision point** | There is exactly one RBAC decision point in the portfolio, in go-qrdb. This engine does workload admission, attestation-evidence and proxy request-evidence policy — never `scp` claim authorization, and never an access decision. |
 | **Use OPA for SDN port authentication** | SDN port authentication is a separate engine in `pkg/sdn/policy/`, a port state machine, not a Rego evaluation. |
 
 ---
@@ -148,7 +156,8 @@ documenting the gap.
 
 The §R capability rows touched are *"TPM attestation of nodes and workloads"*
 (the engine evaluates the evidence) and the gateway/proxy row (the engine
-authorizes proxied requests).
+evaluates a proxied request's evidence; access is the route's
+`required-scopes`).
 
 ---
 
@@ -164,8 +173,11 @@ authorizes proxied requests).
 2. `Initialize` stats the directory, loads `*.rego` from it, loads the embedded
    set for names not already present, and compiles everything into one
    `ast.Compiler`.
-3. A request arrives. `pkg/proxy`'s auth chain reads the route's
-   `auth.opa-policy` name; an empty name means no policy check.
+3. A request arrives and has already been authenticated, and on the token path
+   its `required-scopes` checked. `pkg/proxy`'s auth chain reads the route's
+   `auth.opa-policy` name; an empty name means no policy check. The input
+   document carries the client's id, zone, device id, attestation outcome and
+   auth method — no roles (`docs/proxy/engineering.md` §6).
 4. `OPAEvaluator.Evaluate(ctx, policy, input)` calls
    `OPAEngine.Evaluate`, which builds two queries from the policy's package
    path — `data.<pkg>.allow` and `data.<pkg>.violations` — and evaluates both
@@ -236,8 +248,9 @@ Nothing. Policies live in the binary and on disk; the engine's store is
    different `data` for the same key race.** Use `Evaluate` unless you need
    external data and can guarantee it is stable.
 
-7. **The engine is not an authorization decision point for tokens.** It decides
-   workload admission, attestation-evidence acceptance and proxy authorization.
+7. **The engine is not an access decision point.** It decides workload
+   admission, attestation-evidence acceptance and a proxied request's evidence
+   (zone, attestation, method); access is the IAM decision.
    `scp` claim enforcement is the interceptors' job
    ([`docs/daemon/api.md`](../daemon/api.md) §5).
 

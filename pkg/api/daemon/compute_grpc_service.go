@@ -20,6 +20,7 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
@@ -75,31 +76,31 @@ func (s *ComputeGRPCService) CreateVM(ctx context.Context, req *platformv1.Creat
 		return nil, status.Error(codes.InvalidArgument, "VM name is required")
 	}
 
-	// Extract memory and CPU from nested config
-	memory := 1024 // Default
-	cpus := 1      // Default
-	if config.GetMemory() != nil {
-		memory = int(config.GetMemory().GetSizeMb())
-	}
-	if config.GetCpu() != nil {
-		cpus = int(config.GetCpu().GetCores())
+	spec, err := vmSpecFromConfig(config)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build device profile from request config
 	profile := &entities.DeviceProfile{
 		Name: config.GetName(),
 	}
-
-	// Add metadata for compute settings (we pass these via metadata since DeviceProfile
-	// doesn't have direct compute fields)
-	profile.Model = fmt.Sprintf("vm:memory=%d,cpus=%d,tpm=%v,secureboot=%v",
-		memory, cpus, config.GetTpm() != nil, config.GetSecureBoot())
-
-	// Create the instance using orchestrator
-	instance, err := s.orchestrator.Create(ctx, profile)
+	instance, err := compute.CreateWithSpec(ctx, s.orchestrator, profile, spec)
 	if err != nil {
 		s.logger.Error(err, "Failed to create VM", "name", config.GetName())
 		return nil, vmLifecycleStatus("create", err)
+	}
+
+	if req.GetStart() {
+		// A VM that cannot start is deleted, so the failed request leaves
+		// nothing behind.
+		if err := compute.StartOrDelete(ctx, s.orchestrator, instance.ID); err != nil {
+			s.logger.Error(err, "Failed to start created VM", "vm_id", instance.ID)
+			return nil, vmLifecycleStatus("start", err)
+		}
+		instance, err = s.orchestrator.Get(ctx, instance.ID)
+		if err != nil {
+			return nil, vmLifecycleStatus("get", err)
+		}
 	}
 
 	return &platformv1.CreateVMResponse{
@@ -146,7 +147,11 @@ func (s *ComputeGRPCService) StopVM(ctx context.Context, req *platformv1.StopVMR
 		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
 	}
 
-	if err := s.orchestrator.Stop(ctx, vmID); err != nil {
+	opts := compute.StopOptions{
+		Force:   req.GetForce(),
+		Timeout: time.Duration(req.GetTimeoutSeconds()) * time.Second,
+	}
+	if err := compute.StopWithOptions(ctx, s.orchestrator, vmID, opts); err != nil {
 		s.logger.Error(err, "Failed to stop VM", "vm_id", vmID)
 		return nil, vmLifecycleStatus("stop", err)
 	}
@@ -170,7 +175,8 @@ func (s *ComputeGRPCService) RebootVM(ctx context.Context, req *platformv1.Reboo
 		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
 	}
 
-	if err := compute.Reboot(ctx, s.orchestrator, vmID); err != nil {
+	opts := compute.StopOptions{Force: req.GetForce()}
+	if err := compute.RebootWithOptions(ctx, s.orchestrator, vmID, opts); err != nil {
 		s.logger.Error(err, "Failed to reboot VM", "vm_id", vmID)
 		return nil, vmLifecycleStatus("reboot", err)
 	}
@@ -279,10 +285,16 @@ func (s *ComputeGRPCService) GetVM(ctx context.Context, req *platformv1.GetVMReq
 	}, nil
 }
 
-// ListVMs lists virtual machines.
+// ListVMs lists the VMs in the requested states that carry every
+// selector.match_labels pair, sorted by pagination.sort_by and paged by
+// pagination.page and page_size the way the EAB list pages. An unknown state,
+// a selector expression or an unsupported sort field is InvalidArgument.
 func (s *ComputeGRPCService) ListVMs(ctx context.Context, req *platformv1.ListVMsRequest) (*platformv1.ListVMsResponse, error) {
 	if s.orchestrator == nil {
 		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	if err := validateVMListFilter(req); err != nil {
+		return nil, err
 	}
 
 	vmType := compute.ComputeTypeVM
@@ -296,13 +308,22 @@ func (s *ComputeGRPCService) ListVMs(ctx context.Context, req *platformv1.ListVM
 		return nil, status.Error(codes.Internal, "failed to list VMs: "+err.Error())
 	}
 
-	protoVMs := make([]*platformv1.VM, len(instances))
-	for i, instance := range instances {
-		protoVMs[i] = s.instanceToVMProto(instance)
+	protoVMs := make([]*platformv1.VM, 0, len(instances))
+	for _, instance := range instances {
+		vm := s.instanceToVMProto(instance)
+		if vmMatchesListFilter(vm, req) {
+			protoVMs = append(protoVMs, vm)
+		}
 	}
 
+	if !sortPage(protoVMs, req.GetPagination(), vmListOrders) {
+		return nil, ErrVMListUnsupportedSortField{Field: req.GetPagination().GetSortBy()}
+	}
+	page, pagination := paginatePage(protoVMs, req.GetPagination())
+
 	return &platformv1.ListVMsResponse{
-		Vms: protoVMs,
+		Vms:        page,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -359,7 +380,10 @@ func vmOpsErrToStatus(err error) error {
 	switch {
 	case errors.Is(err, compute.ErrInstanceNotFound), errors.Is(err, compute.ErrDiskNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, compute.ErrInvalidInstanceID), errors.Is(err, compute.ErrInvalidDiskRequest):
+	case errors.Is(err, compute.ErrInvalidInstanceID),
+		errors.Is(err, compute.ErrInvalidDiskRequest),
+		errors.Is(err, compute.ErrInvalidStopOptions),
+		errors.Is(err, compute.ErrInvalidVMSpec):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, compute.ErrDiskAlreadyAttached):
 		return status.Error(codes.AlreadyExists, err.Error())
@@ -369,7 +393,8 @@ func vmOpsErrToStatus(err error) error {
 		errors.Is(err, compute.ErrInvalidState),
 		errors.Is(err, compute.ErrConsoleUnavailable),
 		errors.Is(err, compute.ErrVMMetricsUnavailable),
-		errors.Is(err, compute.ErrVMLogsUnavailable):
+		errors.Is(err, compute.ErrVMLogsUnavailable),
+		errors.Is(err, compute.ErrUnsupportedOperation):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -803,6 +828,30 @@ func (s *ComputeGRPCService) ListSnapshots(ctx context.Context, req *platformv1.
 	return &platformv1.ListSnapshotsResponse{
 		Snapshots: protoSnapshots,
 	}, nil
+}
+
+// GetSnapshot returns one snapshot of a VM. The snapshot id is the snapshot
+// name ListSnapshots reports; an unknown id is NotFound.
+func (s *ComputeGRPCService) GetSnapshot(ctx context.Context, req *platformv1.GetSnapshotRequest) (*platformv1.GetSnapshotResponse, error) {
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	snapshotID := req.GetSnapshotId()
+	if snapshotID == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot ID is required")
+	}
+
+	listed, err := s.ListSnapshots(ctx, &platformv1.ListSnapshotsRequest{VmId: vmID})
+	if err != nil {
+		return nil, err
+	}
+	for _, snapshot := range listed.GetSnapshots() {
+		if snapshot.GetId() == snapshotID {
+			return &platformv1.GetSnapshotResponse{Snapshot: snapshot}, nil
+		}
+	}
+	return nil, ErrVMSnapshotNotFound{VMID: vmID, SnapshotID: snapshotID}
 }
 
 // vmMigrator returns the orchestrator's VM migration capability or a gRPC error
@@ -1429,7 +1478,10 @@ func (s *ComputeGRPCService) instanceToVMProto(instance *compute.Instance) *plat
 	// Populate config from instance config if available
 	if instance.Config != nil {
 		vm.Config = &platformv1.VMConfig{
-			Name: instance.Name,
+			Name:        instance.Name,
+			Description: instance.Config.Description,
+			Firmware:    vmConfigFirmware(instance.Config.SecureBoot),
+			BootDevice:  vmConfigBootDevice(instance.Config.BootMode),
 			Memory: &platformv1.MemoryConfig{
 				SizeMb: uint64(instance.Config.Memory),
 			},
@@ -1437,6 +1489,8 @@ func (s *ComputeGRPCService) instanceToVMProto(instance *compute.Instance) *plat
 				Cores: uint32(instance.Config.CPUs),
 			},
 			SecureBoot: instance.Config.SecureBoot,
+			Labels:     instance.Config.Labels,
+			Metadata:   instance.Config.Metadata,
 		}
 		if instance.Config.TPMEnabled {
 			vm.Config.Tpm = &platformv1.TPMConfig{

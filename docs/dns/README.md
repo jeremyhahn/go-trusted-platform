@@ -223,9 +223,9 @@ The DNS subsystem supports dynamic macro expansion in zone configurations:
 | [Records](records.md) | DNS record types and management |
 | [Resolution](resolution.md) | Query resolution and forwarding |
 | [DNSSEC](dnssec.md) | DNSSEC signing and validation |
-| [DNSSEC Rollover](dnssec-rollover.md) | Key rollover procedures |
+| [DNSSEC Rollover](dnssec-rollover.md) | Key rollover: not implemented; what the code does with zone keys |
 | [DANE/TLSA](dane.md) | DANE certificate pinning and TLSA records |
-| [Dynamic DNS](dynamic-dns.md) | RFC 2136 dynamic updates with attestation |
+| [Dynamic DNS](dynamic-dns.md) | RFC 2136 UPDATE: not implemented; how records change today |
 | [DoT/DoH](dot-doh.md) | DNS over TLS/HTTPS (planned) |
 | [Zone Transfer](zone-transfer.md) | Outbound AXFR to TSIG-authenticated secondaries |
 | [ACME Integration](acme-integration.md) | DNS-01 challenge support |
@@ -240,10 +240,8 @@ The DNS subsystem supports dynamic macro expansion in zone configurations:
 
 | Component | Integration |
 |-----------|-------------|
-| **KMS** | DNSSEC key storage and management via go-quicbaas |
-| **TPM** | Hardware-backed protection for DNSSEC signing keys |
-| **CA** | Certificate issuance for DNS-over-TLS/HTTPS |
-| **ACME** | DNS-01 challenge automation for certificate enrollment |
+| **KMS** | DNSSEC keys in the go-quicbaas KMS software store ([security.md](security.md)) |
+| **ACME** | dns-01 TXT records for BMC certificates; dns-01 verification in the ACME server ([acme-integration.md](acme-integration.md)) |
 | **IAM/ABAC** | Access control for zone and record management |
 | **Datastore** | Persistent storage for zones and records |
 
@@ -282,10 +280,10 @@ Security events include:
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| DNSSEC Signing | Implemented | Full DNSSEC with TPM-backed keys |
-| Dynamic DNS (RFC 2136) | Implemented | TSIG-authenticated dynamic updates with TPM attestation |
-| DNS-01 ACME Challenges | Implemented | Automatic certificate enrollment support |
-| Key Rollover Automation | Implemented | Scheduled ZSK/KSK rotation |
+| DNSSEC Signing | Implemented | One KSK and one ZSK per zone, in the go-quicbaas KMS ([dnssec.md](dnssec.md)) |
+| Dynamic DNS (RFC 2136) | Not implemented | No UPDATE server or client ([dynamic-dns.md](dynamic-dns.md)) |
+| DNS-01 ACME Challenges | Implemented | TXT records for BMC certificates; verification in the ACME server ([acme-integration.md](acme-integration.md)) |
+| Key Rollover Automation | Not implemented | No scheduler, API route or CLI verb ([dnssec-rollover.md](dnssec-rollover.md)) |
 | Multi-Backend KMS | Implemented | Software, TPM2, PKCS#11, Cloud KMS |
 | DANE/TLSA | Implemented | Certificate pinning with auto-generation |
 | CAA Records | Implemented | Certificate Authority Authorization |

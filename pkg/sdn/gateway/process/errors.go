@@ -323,6 +323,31 @@ func (e *ErrPrivilegeNotHeld) Error() string {
 
 // ErrSocketDir reports a control-socket directory the supervisor could not
 // create or secure.
+// ErrSeccompUnsupportedArch is a child on an architecture the seccomp
+// filter has no syscall table for. The child refuses to start rather than
+// run unconfined: a filter written against another architecture's syscall
+// numbers would deny the wrong calls.
+type ErrSeccompUnsupportedArch struct {
+	// Arch is runtime.GOARCH.
+	Arch string
+}
+
+func (e *ErrSeccompUnsupportedArch) Error() string {
+	return fmt.Sprintf("gatewayd service: no seccomp syscall table for %s", e.Arch)
+}
+
+// ErrSeccompThreadNotSynced is a seccomp install whose thread
+// synchronisation failed: the kernel names the thread it could not move to
+// the new filter, and no thread was given it.
+type ErrSeccompThreadNotSynced struct {
+	// Thread is the thread id the kernel returned.
+	Thread int
+}
+
+func (e *ErrSeccompThreadNotSynced) Error() string {
+	return fmt.Sprintf("gatewayd service: seccomp could not synchronise thread %d", e.Thread)
+}
+
 type ErrSocketDir struct {
 	Path  string
 	Op    string

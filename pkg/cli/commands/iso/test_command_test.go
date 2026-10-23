@@ -329,7 +329,7 @@ func TestCreateTestLogger_Normal(t *testing.T) {
 }
 
 func TestCreateTestContext(t *testing.T) {
-	ctx, cancel := createTestContext()
+	ctx, cancel := createTestContext(0)
 	defer cancel()
 
 	assert.NotNil(t, ctx)

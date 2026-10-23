@@ -146,7 +146,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		result, err := adapter.RegisterDevice(ctx, opts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -173,7 +173,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -185,7 +185,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		getResult, err := adapter.GetDevice(ctx, getOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("GetDevice failed: %v", err)
 		}
 
@@ -208,7 +208,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -221,7 +221,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		updateResult, err := adapter.UpdateDevice(ctx, updateOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("UpdateDevice failed: %v", err)
 		}
 
@@ -247,7 +247,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 			AttestCert: attestCert,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 		if registerResult.Device.AttestCert != attestCert {
@@ -293,7 +293,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -305,7 +305,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		deleteResult, err := adapter.DeleteDevice(ctx, deleteOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("DeleteDevice failed: %v", err)
 		}
 
@@ -336,7 +336,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 			_, err := adapter.RegisterDevice(ctx, registerOpts)
 			if err != nil {
-				surface.SkipIfNotImplemented(t, err)
+				surface.RequireImplemented(t, err)
 				t.Fatalf("RegisterDevice failed: %v", err)
 			}
 		}
@@ -349,7 +349,7 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 
 		listResult, err := adapter.ListDevices(ctx, listOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("ListDevices failed: %v", err)
 		}
 
@@ -379,7 +379,7 @@ func testDeviceLookups(t *testing.T, ctx context.Context, adapter DeviceCommands
 
 		_, err := adapter.RegisterDevice(ctx, registerOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
@@ -391,7 +391,7 @@ func testDeviceLookups(t *testing.T, ctx context.Context, adapter DeviceCommands
 
 		findResult, err := adapter.FindBySerial(ctx, findOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("FindBySerial failed: %v", err)
 		}
 
@@ -437,7 +437,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		result, err := adapter.CreateProfile(ctx, opts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -461,7 +461,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		createResult, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -473,7 +473,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		getResult, err := adapter.GetProfile(ctx, getOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("GetProfile failed: %v", err)
 		}
 
@@ -497,7 +497,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		createResult, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -512,7 +512,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		updateResult, err := adapter.UpdateProfile(ctx, updateOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("UpdateProfile failed: %v", err)
 		}
 
@@ -536,7 +536,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		createResult, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -548,7 +548,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		deleteResult, err := adapter.DeleteProfile(ctx, deleteOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("DeleteProfile failed: %v", err)
 		}
 
@@ -580,7 +580,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 			_, err := adapter.CreateProfile(ctx, createOpts)
 			if err != nil {
-				surface.SkipIfNotImplemented(t, err)
+				surface.RequireImplemented(t, err)
 				t.Fatalf("CreateProfile failed: %v", err)
 			}
 		}
@@ -593,7 +593,7 @@ func testProfileCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 		listResult, err := adapter.ListProfiles(ctx, listOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("ListProfiles failed: %v", err)
 		}
 
@@ -625,7 +625,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		_, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -636,8 +636,11 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 		}
 
 		findResult, err := adapter.FindProfileByMACAddress(ctx, findOpts)
+		if requireQUICProfileLookupGap(t, adapter, "FindProfileByMACAddress", err) {
+			return
+		}
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("FindProfileByMACAddress failed: %v", err)
 		}
 
@@ -660,7 +663,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		_, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -671,8 +674,11 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 		}
 
 		findResult, err := adapter.FindProfileBySerial(ctx, findOpts)
+		if requireQUICProfileLookupGap(t, adapter, "FindProfileBySerial", err) {
+			return
+		}
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("FindProfileBySerial failed: %v", err)
 		}
 
@@ -694,7 +700,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		_, err := adapter.CreateProfile(ctx, createOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfile failed: %v", err)
 		}
 
@@ -708,7 +714,7 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 		findResult, err := adapter.FindMatchingProfile(ctx, findOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("FindMatchingProfile failed: %v", err)
 		}
 
@@ -716,6 +722,28 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 			t.Fatal("FindMatchingProfile returned nil profile")
 		}
 	})
+}
+
+// requireQUICProfileLookupGap records the declared QUIC profile-lookup gap:
+// docs/device/api.md §3 reads MISSING on QUIC for "Find profile by MAC" and
+// "Find profile by serial", so the QUIC adapter refuses both with
+// surface.ErrNoSurface. On QUIC it asserts that typed refusal for the named
+// operation and reports true; every other transport reports false and keeps
+// the success assertions. When the QUIC opcodes land, drop this check so QUIC
+// runs the success path too.
+func requireQUICProfileLookupGap(t *testing.T, adapter DeviceCommands, op string, err error) bool {
+	t.Helper()
+	if adapter.Name() != "QUIC" {
+		return false
+	}
+	var noSurface surface.ErrNoSurface
+	if !errors.As(err, &noSurface) {
+		t.Fatalf("%s over QUIC: got %v, want surface.ErrNoSurface (docs/device/api.md §3)", op, err)
+	}
+	if noSurface.Transport != "QUIC" || noSurface.Operation != op {
+		t.Fatalf("%s over QUIC: declared %s %s, want QUIC %s", op, noSurface.Transport, noSurface.Operation, op)
+	}
+	return true
 }
 
 // ============================================================================
@@ -763,7 +791,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 			Model:    "test-model-attcert",
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 		deviceID := fmt.Sprintf("%d", registerResult.Device.ID)
@@ -775,7 +803,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 			if err == nil {
 				t.Fatalf("RecordAttestCert(reissue=%t, clear_on_refusal=%t) must be refused for a device with no enrolled attestation key, got %+v", opts.Reissue, opts.ClearOnRefusal, result)
 			}
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			if !strings.Contains(strings.ToLower(err.Error()), "attestation") {
 				t.Fatalf("refusal should name the attestation certificate, got: %v", err)
 			}
@@ -910,7 +938,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 		}
 
 		createResult, err := adapter.CreateTemplate(ctx, createOpts)
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -946,7 +974,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 
 		getResult, err := adapter.GetTemplate(ctx, getOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("GetTemplate failed: %v", err)
 		}
 
@@ -985,7 +1013,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 		}
 
 		createResult, err := adapter.CreateTemplate(ctx, createOpts)
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -1002,7 +1030,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 
 		updateResult, err := adapter.UpdateTemplate(ctx, updateOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("UpdateTemplate failed: %v", err)
 		}
 
@@ -1026,7 +1054,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 			TemplateID: fmt.Sprintf("%d", createResult.Template.ID),
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("GetTemplate after update failed: %v", err)
 		}
 
@@ -1047,7 +1075,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 			}
 
 			_, err := adapter.CreateTemplate(ctx, createOpts)
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			if err != nil {
 				t.Fatalf("CreateTemplate failed: %v", err)
 			}
@@ -1061,7 +1089,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 
 		listResult, err := adapter.ListTemplates(ctx, listOpts)
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("ListTemplates failed: %v", err)
 		}
 
@@ -1080,7 +1108,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 		}
 
 		createResult, err := adapter.CreateTemplate(ctx, createOpts)
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -1093,7 +1121,7 @@ func testTemplateCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands)
 			TemplateID: templateID,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("DeleteTemplate failed: %v", err)
 		}
 
@@ -1134,7 +1162,7 @@ func testTemplateToProfile(t *testing.T, ctx context.Context, adapter DeviceComm
 		}
 
 		templateResult, err := adapter.CreateTemplate(ctx, createOpts)
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -1150,7 +1178,7 @@ func testTemplateToProfile(t *testing.T, ctx context.Context, adapter DeviceComm
 			EKSerial:   ekSerial,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -1208,7 +1236,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			Role:        entities.DeviceRoleServer,
 			Config:      []byte(`{"ek_test": true}`),
 		})
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -1224,7 +1252,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			EKSerial:   ekSerial,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -1234,7 +1262,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			EKSerial: ekSerial,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("FindConfigForDevice by EK serial failed: %v", err)
 		}
 
@@ -1269,7 +1297,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			Role:        entities.DeviceRoleEdge,
 			Config:      []byte(`{"mac_test": true}`),
 		})
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -1285,7 +1313,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			MACAddress: macAddr,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -1295,7 +1323,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			MACAddress: macAddr,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("FindConfigForDevice by MAC failed: %v", err)
 		}
 
@@ -1326,7 +1354,7 @@ func testConfigForDevice(t *testing.T, ctx context.Context, adapter DeviceComman
 			TenantID: tenantID,
 			EKSerial: "NONEXISTENT-EK-" + testID,
 		})
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err == nil {
 			t.Error("FindConfigForDevice should fail for unknown device identity")
 		}
@@ -1350,7 +1378,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			Role:        entities.DeviceRoleServer,
 			Config:      []byte(`{"assign_test": true}`),
 		})
-		surface.SkipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		if err != nil {
 			t.Fatalf("CreateTemplate failed: %v", err)
 		}
@@ -1364,7 +1392,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			Name:       GenerateTestProfileName(testID + "-assign"),
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreateProfileFromTemplate failed: %v", err)
 		}
 
@@ -1383,7 +1411,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			EKSerial:  ekSerial,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("AssignProfileToDevice failed: %v", err)
 		}
 
@@ -1406,7 +1434,7 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 			ProfileID: profileID,
 		})
 		if err != nil {
-			surface.SkipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("GetProfile after assignment failed: %v", err)
 		}
 
@@ -1485,7 +1513,7 @@ func TestDeviceMultiProtocol_ErrorHandling(t *testing.T) {
 				}
 
 				_, err := adapter.GetTemplate(ctx, opts)
-				surface.SkipIfNotImplemented(t, err)
+				surface.RequireImplemented(t, err)
 				if err == nil {
 					t.Error("GetTemplate should return error for non-existent template")
 				}
@@ -1504,7 +1532,7 @@ func TestDeviceMultiProtocol_ErrorHandling(t *testing.T) {
 
 				_, err := adapter.RegisterDevice(ctx, opts)
 				if err != nil {
-					surface.SkipIfNotImplemented(t, err)
+					surface.RequireImplemented(t, err)
 					t.Fatalf("First RegisterDevice failed: %v", err)
 				}
 

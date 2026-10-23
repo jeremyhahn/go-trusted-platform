@@ -149,31 +149,36 @@ different concepts, one key name.
 
 ## 5. Invariants
 
-1. **A VM with a vTPM gets its own virtual TPM instance.** `--tpm` on create
-   provisions one through `pkg/vtpm` / `pkg/swtpm`
-   ([`docs/vtpm/`](../vtpm/)); it is not shared with the host TPM.
-2. **Secure Boot requires UEFI firmware.** `--firmware` accepts `bios`, `uefi`
-   and `uefi-secure-boot`; `--secure-boot` is meaningless with `bios`.
-3. **Attestation of a VM requires the host to have attested first.** The
+1. **A VM with a vTPM gets its own virtual TPM instance.** Create provisions
+   one through `pkg/vtpm` / `pkg/swtpm` ([`docs/vtpm/`](../vtpm/)) unless
+   `config.tpm.enabled` is false (`--tpm=false`); it is not shared with the
+   host TPM.
+2. **VMs boot UEFI firmware.** CreateVM refuses `bios`; Secure Boot
+   (`uefi-secure-boot` or `secure_boot`) also needs `ovmf_code_secure`.
+3. **CreateVM honours its config or refuses it.** Every `VMConfig` field is
+   applied or refused with InvalidArgument naming it, before anything is
+   created ([api.md §2](api.md#2-vm-lifecycle)); a failed `start` deletes the
+   VM it created.
+4. **Attestation of a VM requires the host to have attested first.** The
    ordering is enforced in `pkg/attestation` — see
    [`docs/attestation/`](../attestation/).
-4. **Migration is two-phase.** `PrepareMigration` and `FinalizeMigration` exist
+5. **Migration is two-phase.** `PrepareMigration` and `FinalizeMigration` exist
    alongside `MigrateVM` precisely so a migration can be staged and confirmed;
    `vm_receive.go` is the receiving side. The receiver binds
    `compute.migration_listen_address` (defaults layer `0.0.0.0:0`, port 0 =
    ephemeral per receiver). An empty or non-`IP:port` value refuses the
    receiver with `MigrationListenAddressError` (`FAILED_PRECONDITION`); no
    address is assumed ([Configuration](#4-configuration)).
-5. **Live migration requires shared storage.** The CLI says so on `--live`; the
+6. **Live migration requires shared storage.** The CLI says so on `--live`; the
    backend cannot copy a disk it does not share. `compute.shared_storage`
    reaches the orchestrator through `applyLocalQEMUSettings`
    (`pkg/daemon/commands/serve.go`).
-6. **Placement decides where, port auth decides whether.** `placement.go` picks
+7. **Placement decides where, port auth decides whether.** `placement.go` picks
    a host; `port_auth.go` decides whether the resulting VNIC is allowed on the
    network. Both must succeed.
-7. **`ErrNoNetworkInZone`** means placement found no network in the requested
+8. **`ErrNoNetworkInZone`** means placement found no network in the requested
    zone — a configuration gap in the zone graph, not a capacity problem.
-8. **The fleet container attestor fails closed.** `container.FleetContainerAttestor`
+9. **The fleet container attestor fails closed.** `container.FleetContainerAttestor`
    (`fleet_attestor.go`) serves the go-quicbaas `WithContainerAttestor` seam.
    - **Before any quote, it refuses:**
      - a trust level that does not use the host TPM;

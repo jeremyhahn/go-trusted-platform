@@ -245,6 +245,9 @@ func TestSSHISOStager_UploadsWhenSidecarSizeMatchesButHashDiffers(t *testing.T) 
 	if len(env.fake.uploaded) != 2 {
 		t.Fatalf("expected ISO + sidecar uploads, got %v", env.fake.uploaded)
 	}
+	if !env.fake.connected || !env.fake.closed {
+		t.Fatalf("SSH session connected=%v closed=%v; want it opened and released", env.fake.connected, env.fake.closed)
+	}
 	if got := env.fake.remoteFiles[env.remotePath]; string(got) != string(local) {
 		t.Fatalf("remote bytes after upload: got %q want %q", got, local)
 	}

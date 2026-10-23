@@ -4097,6 +4097,102 @@ func (x *ListSnapshotsResponse) GetSnapshots() []*Snapshot {
 	return nil
 }
 
+type GetSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	SnapshotId    string                 `protobuf:"bytes,2,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSnapshotRequest) Reset() {
+	*x = GetSnapshotRequest{}
+	mi := &file_compute_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSnapshotRequest) ProtoMessage() {}
+
+func (x *GetSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_compute_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*GetSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_compute_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *GetSnapshotRequest) GetVmId() string {
+	if x != nil {
+		return x.VmId
+	}
+	return ""
+}
+
+func (x *GetSnapshotRequest) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+type GetSnapshotResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Snapshot      *Snapshot              `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSnapshotResponse) Reset() {
+	*x = GetSnapshotResponse{}
+	mi := &file_compute_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSnapshotResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSnapshotResponse) ProtoMessage() {}
+
+func (x *GetSnapshotResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_compute_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSnapshotResponse.ProtoReflect.Descriptor instead.
+func (*GetSnapshotResponse) Descriptor() ([]byte, []int) {
+	return file_compute_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *GetSnapshotResponse) GetSnapshot() *Snapshot {
+	if x != nil {
+		return x.Snapshot
+	}
+	return nil
+}
+
 // Migration request/response
 type MigrateVMRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
@@ -4110,7 +4206,7 @@ type MigrateVMRequest struct {
 
 func (x *MigrateVMRequest) Reset() {
 	*x = MigrateVMRequest{}
-	mi := &file_compute_proto_msgTypes[57]
+	mi := &file_compute_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4122,7 +4218,7 @@ func (x *MigrateVMRequest) String() string {
 func (*MigrateVMRequest) ProtoMessage() {}
 
 func (x *MigrateVMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[57]
+	mi := &file_compute_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4135,7 +4231,7 @@ func (x *MigrateVMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateVMRequest.ProtoReflect.Descriptor instead.
 func (*MigrateVMRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{57}
+	return file_compute_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *MigrateVMRequest) GetVmId() string {
@@ -4175,7 +4271,7 @@ type MigrateVMResponse struct {
 
 func (x *MigrateVMResponse) Reset() {
 	*x = MigrateVMResponse{}
-	mi := &file_compute_proto_msgTypes[58]
+	mi := &file_compute_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4187,7 +4283,7 @@ func (x *MigrateVMResponse) String() string {
 func (*MigrateVMResponse) ProtoMessage() {}
 
 func (x *MigrateVMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[58]
+	mi := &file_compute_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4200,7 +4296,7 @@ func (x *MigrateVMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateVMResponse.ProtoReflect.Descriptor instead.
 func (*MigrateVMResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{58}
+	return file_compute_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *MigrateVMResponse) GetStatus() *Status {
@@ -4228,7 +4324,7 @@ type VMMigrationSpec struct {
 
 func (x *VMMigrationSpec) Reset() {
 	*x = VMMigrationSpec{}
-	mi := &file_compute_proto_msgTypes[59]
+	mi := &file_compute_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4240,7 +4336,7 @@ func (x *VMMigrationSpec) String() string {
 func (*VMMigrationSpec) ProtoMessage() {}
 
 func (x *VMMigrationSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[59]
+	mi := &file_compute_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4253,7 +4349,7 @@ func (x *VMMigrationSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VMMigrationSpec.ProtoReflect.Descriptor instead.
 func (*VMMigrationSpec) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{59}
+	return file_compute_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *VMMigrationSpec) GetMemoryMb() int32 {
@@ -4338,7 +4434,7 @@ type PrepareMigrationRequest struct {
 
 func (x *PrepareMigrationRequest) Reset() {
 	*x = PrepareMigrationRequest{}
-	mi := &file_compute_proto_msgTypes[60]
+	mi := &file_compute_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4350,7 +4446,7 @@ func (x *PrepareMigrationRequest) String() string {
 func (*PrepareMigrationRequest) ProtoMessage() {}
 
 func (x *PrepareMigrationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[60]
+	mi := &file_compute_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4363,7 +4459,7 @@ func (x *PrepareMigrationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareMigrationRequest.ProtoReflect.Descriptor instead.
 func (*PrepareMigrationRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{60}
+	return file_compute_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *PrepareMigrationRequest) GetVmId() string {
@@ -4406,7 +4502,7 @@ type PrepareMigrationResponse struct {
 
 func (x *PrepareMigrationResponse) Reset() {
 	*x = PrepareMigrationResponse{}
-	mi := &file_compute_proto_msgTypes[61]
+	mi := &file_compute_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4418,7 +4514,7 @@ func (x *PrepareMigrationResponse) String() string {
 func (*PrepareMigrationResponse) ProtoMessage() {}
 
 func (x *PrepareMigrationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[61]
+	mi := &file_compute_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4431,7 +4527,7 @@ func (x *PrepareMigrationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareMigrationResponse.ProtoReflect.Descriptor instead.
 func (*PrepareMigrationResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{61}
+	return file_compute_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *PrepareMigrationResponse) GetStatus() *Status {
@@ -4472,7 +4568,7 @@ type FinalizeMigrationRequest struct {
 
 func (x *FinalizeMigrationRequest) Reset() {
 	*x = FinalizeMigrationRequest{}
-	mi := &file_compute_proto_msgTypes[62]
+	mi := &file_compute_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4484,7 +4580,7 @@ func (x *FinalizeMigrationRequest) String() string {
 func (*FinalizeMigrationRequest) ProtoMessage() {}
 
 func (x *FinalizeMigrationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[62]
+	mi := &file_compute_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4497,7 +4593,7 @@ func (x *FinalizeMigrationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeMigrationRequest.ProtoReflect.Descriptor instead.
 func (*FinalizeMigrationRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{62}
+	return file_compute_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *FinalizeMigrationRequest) GetReceiverId() string {
@@ -4523,7 +4619,7 @@ type FinalizeMigrationResponse struct {
 
 func (x *FinalizeMigrationResponse) Reset() {
 	*x = FinalizeMigrationResponse{}
-	mi := &file_compute_proto_msgTypes[63]
+	mi := &file_compute_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4535,7 +4631,7 @@ func (x *FinalizeMigrationResponse) String() string {
 func (*FinalizeMigrationResponse) ProtoMessage() {}
 
 func (x *FinalizeMigrationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[63]
+	mi := &file_compute_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4548,7 +4644,7 @@ func (x *FinalizeMigrationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeMigrationResponse.ProtoReflect.Descriptor instead.
 func (*FinalizeMigrationResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{63}
+	return file_compute_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *FinalizeMigrationResponse) GetStatus() *Status {
@@ -4570,7 +4666,7 @@ type CreateContainerRequest struct {
 
 func (x *CreateContainerRequest) Reset() {
 	*x = CreateContainerRequest{}
-	mi := &file_compute_proto_msgTypes[64]
+	mi := &file_compute_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4582,7 +4678,7 @@ func (x *CreateContainerRequest) String() string {
 func (*CreateContainerRequest) ProtoMessage() {}
 
 func (x *CreateContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[64]
+	mi := &file_compute_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4595,7 +4691,7 @@ func (x *CreateContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateContainerRequest.ProtoReflect.Descriptor instead.
 func (*CreateContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{64}
+	return file_compute_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *CreateContainerRequest) GetConfig() *ContainerConfig {
@@ -4629,7 +4725,7 @@ type CreateContainerResponse struct {
 
 func (x *CreateContainerResponse) Reset() {
 	*x = CreateContainerResponse{}
-	mi := &file_compute_proto_msgTypes[65]
+	mi := &file_compute_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4641,7 +4737,7 @@ func (x *CreateContainerResponse) String() string {
 func (*CreateContainerResponse) ProtoMessage() {}
 
 func (x *CreateContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[65]
+	mi := &file_compute_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4654,7 +4750,7 @@ func (x *CreateContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateContainerResponse.ProtoReflect.Descriptor instead.
 func (*CreateContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{65}
+	return file_compute_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CreateContainerResponse) GetStatus() *Status {
@@ -4680,7 +4776,7 @@ type StartContainerRequest struct {
 
 func (x *StartContainerRequest) Reset() {
 	*x = StartContainerRequest{}
-	mi := &file_compute_proto_msgTypes[66]
+	mi := &file_compute_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4692,7 +4788,7 @@ func (x *StartContainerRequest) String() string {
 func (*StartContainerRequest) ProtoMessage() {}
 
 func (x *StartContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[66]
+	mi := &file_compute_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4705,7 +4801,7 @@ func (x *StartContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartContainerRequest.ProtoReflect.Descriptor instead.
 func (*StartContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{66}
+	return file_compute_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *StartContainerRequest) GetId() string {
@@ -4724,7 +4820,7 @@ type StartContainerResponse struct {
 
 func (x *StartContainerResponse) Reset() {
 	*x = StartContainerResponse{}
-	mi := &file_compute_proto_msgTypes[67]
+	mi := &file_compute_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4736,7 +4832,7 @@ func (x *StartContainerResponse) String() string {
 func (*StartContainerResponse) ProtoMessage() {}
 
 func (x *StartContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[67]
+	mi := &file_compute_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4749,7 +4845,7 @@ func (x *StartContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartContainerResponse.ProtoReflect.Descriptor instead.
 func (*StartContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{67}
+	return file_compute_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *StartContainerResponse) GetStatus() *Status {
@@ -4769,7 +4865,7 @@ type StopContainerRequest struct {
 
 func (x *StopContainerRequest) Reset() {
 	*x = StopContainerRequest{}
-	mi := &file_compute_proto_msgTypes[68]
+	mi := &file_compute_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4781,7 +4877,7 @@ func (x *StopContainerRequest) String() string {
 func (*StopContainerRequest) ProtoMessage() {}
 
 func (x *StopContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[68]
+	mi := &file_compute_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4794,7 +4890,7 @@ func (x *StopContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopContainerRequest.ProtoReflect.Descriptor instead.
 func (*StopContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{68}
+	return file_compute_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *StopContainerRequest) GetId() string {
@@ -4820,7 +4916,7 @@ type StopContainerResponse struct {
 
 func (x *StopContainerResponse) Reset() {
 	*x = StopContainerResponse{}
-	mi := &file_compute_proto_msgTypes[69]
+	mi := &file_compute_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4832,7 +4928,7 @@ func (x *StopContainerResponse) String() string {
 func (*StopContainerResponse) ProtoMessage() {}
 
 func (x *StopContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[69]
+	mi := &file_compute_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4845,7 +4941,7 @@ func (x *StopContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopContainerResponse.ProtoReflect.Descriptor instead.
 func (*StopContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{69}
+	return file_compute_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *StopContainerResponse) GetStatus() *Status {
@@ -4866,7 +4962,7 @@ type DeleteContainerRequest struct {
 
 func (x *DeleteContainerRequest) Reset() {
 	*x = DeleteContainerRequest{}
-	mi := &file_compute_proto_msgTypes[70]
+	mi := &file_compute_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4878,7 +4974,7 @@ func (x *DeleteContainerRequest) String() string {
 func (*DeleteContainerRequest) ProtoMessage() {}
 
 func (x *DeleteContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[70]
+	mi := &file_compute_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4891,7 +4987,7 @@ func (x *DeleteContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteContainerRequest.ProtoReflect.Descriptor instead.
 func (*DeleteContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{70}
+	return file_compute_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *DeleteContainerRequest) GetId() string {
@@ -4924,7 +5020,7 @@ type DeleteContainerResponse struct {
 
 func (x *DeleteContainerResponse) Reset() {
 	*x = DeleteContainerResponse{}
-	mi := &file_compute_proto_msgTypes[71]
+	mi := &file_compute_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4936,7 +5032,7 @@ func (x *DeleteContainerResponse) String() string {
 func (*DeleteContainerResponse) ProtoMessage() {}
 
 func (x *DeleteContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[71]
+	mi := &file_compute_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4949,7 +5045,7 @@ func (x *DeleteContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteContainerResponse.ProtoReflect.Descriptor instead.
 func (*DeleteContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{71}
+	return file_compute_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DeleteContainerResponse) GetStatus() *Status {
@@ -4968,7 +5064,7 @@ type GetContainerRequest struct {
 
 func (x *GetContainerRequest) Reset() {
 	*x = GetContainerRequest{}
-	mi := &file_compute_proto_msgTypes[72]
+	mi := &file_compute_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4980,7 +5076,7 @@ func (x *GetContainerRequest) String() string {
 func (*GetContainerRequest) ProtoMessage() {}
 
 func (x *GetContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[72]
+	mi := &file_compute_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4993,7 +5089,7 @@ func (x *GetContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerRequest.ProtoReflect.Descriptor instead.
 func (*GetContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{72}
+	return file_compute_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *GetContainerRequest) GetId() string {
@@ -5012,7 +5108,7 @@ type GetContainerResponse struct {
 
 func (x *GetContainerResponse) Reset() {
 	*x = GetContainerResponse{}
-	mi := &file_compute_proto_msgTypes[73]
+	mi := &file_compute_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5024,7 +5120,7 @@ func (x *GetContainerResponse) String() string {
 func (*GetContainerResponse) ProtoMessage() {}
 
 func (x *GetContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[73]
+	mi := &file_compute_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5037,7 +5133,7 @@ func (x *GetContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerResponse.ProtoReflect.Descriptor instead.
 func (*GetContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{73}
+	return file_compute_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *GetContainerResponse) GetContainer() *Container {
@@ -5059,7 +5155,7 @@ type ListContainersRequest struct {
 
 func (x *ListContainersRequest) Reset() {
 	*x = ListContainersRequest{}
-	mi := &file_compute_proto_msgTypes[74]
+	mi := &file_compute_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5071,7 +5167,7 @@ func (x *ListContainersRequest) String() string {
 func (*ListContainersRequest) ProtoMessage() {}
 
 func (x *ListContainersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[74]
+	mi := &file_compute_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5084,7 +5180,7 @@ func (x *ListContainersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListContainersRequest.ProtoReflect.Descriptor instead.
 func (*ListContainersRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{74}
+	return file_compute_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ListContainersRequest) GetSelector() *LabelSelector {
@@ -5125,7 +5221,7 @@ type ListContainersResponse struct {
 
 func (x *ListContainersResponse) Reset() {
 	*x = ListContainersResponse{}
-	mi := &file_compute_proto_msgTypes[75]
+	mi := &file_compute_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5137,7 +5233,7 @@ func (x *ListContainersResponse) String() string {
 func (*ListContainersResponse) ProtoMessage() {}
 
 func (x *ListContainersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[75]
+	mi := &file_compute_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5150,7 +5246,7 @@ func (x *ListContainersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListContainersResponse.ProtoReflect.Descriptor instead.
 func (*ListContainersResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{75}
+	return file_compute_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ListContainersResponse) GetContainers() []*Container {
@@ -5181,7 +5277,7 @@ type AttachContainerRequest struct {
 
 func (x *AttachContainerRequest) Reset() {
 	*x = AttachContainerRequest{}
-	mi := &file_compute_proto_msgTypes[76]
+	mi := &file_compute_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5193,7 +5289,7 @@ func (x *AttachContainerRequest) String() string {
 func (*AttachContainerRequest) ProtoMessage() {}
 
 func (x *AttachContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[76]
+	mi := &file_compute_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5206,7 +5302,7 @@ func (x *AttachContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachContainerRequest.ProtoReflect.Descriptor instead.
 func (*AttachContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{76}
+	return file_compute_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *AttachContainerRequest) GetId() string {
@@ -5258,7 +5354,7 @@ type ExecContainerRequest struct {
 
 func (x *ExecContainerRequest) Reset() {
 	*x = ExecContainerRequest{}
-	mi := &file_compute_proto_msgTypes[77]
+	mi := &file_compute_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5270,7 +5366,7 @@ func (x *ExecContainerRequest) String() string {
 func (*ExecContainerRequest) ProtoMessage() {}
 
 func (x *ExecContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[77]
+	mi := &file_compute_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5283,7 +5379,7 @@ func (x *ExecContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecContainerRequest.ProtoReflect.Descriptor instead.
 func (*ExecContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{77}
+	return file_compute_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ExecContainerRequest) GetId() string {
@@ -5333,7 +5429,7 @@ type ExecContainerResponse struct {
 
 func (x *ExecContainerResponse) Reset() {
 	*x = ExecContainerResponse{}
-	mi := &file_compute_proto_msgTypes[78]
+	mi := &file_compute_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5345,7 +5441,7 @@ func (x *ExecContainerResponse) String() string {
 func (*ExecContainerResponse) ProtoMessage() {}
 
 func (x *ExecContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[78]
+	mi := &file_compute_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5358,7 +5454,7 @@ func (x *ExecContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecContainerResponse.ProtoReflect.Descriptor instead.
 func (*ExecContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{78}
+	return file_compute_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ExecContainerResponse) GetStatus() *Status {
@@ -5406,7 +5502,7 @@ type GetContainerLogsRequest struct {
 
 func (x *GetContainerLogsRequest) Reset() {
 	*x = GetContainerLogsRequest{}
-	mi := &file_compute_proto_msgTypes[79]
+	mi := &file_compute_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5418,7 +5514,7 @@ func (x *GetContainerLogsRequest) String() string {
 func (*GetContainerLogsRequest) ProtoMessage() {}
 
 func (x *GetContainerLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[79]
+	mi := &file_compute_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5431,7 +5527,7 @@ func (x *GetContainerLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerLogsRequest.ProtoReflect.Descriptor instead.
 func (*GetContainerLogsRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{79}
+	return file_compute_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *GetContainerLogsRequest) GetId() string {
@@ -5500,7 +5596,7 @@ type GetContainerMetricsRequest struct {
 
 func (x *GetContainerMetricsRequest) Reset() {
 	*x = GetContainerMetricsRequest{}
-	mi := &file_compute_proto_msgTypes[80]
+	mi := &file_compute_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5512,7 +5608,7 @@ func (x *GetContainerMetricsRequest) String() string {
 func (*GetContainerMetricsRequest) ProtoMessage() {}
 
 func (x *GetContainerMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[80]
+	mi := &file_compute_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5525,7 +5621,7 @@ func (x *GetContainerMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerMetricsRequest.ProtoReflect.Descriptor instead.
 func (*GetContainerMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{80}
+	return file_compute_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *GetContainerMetricsRequest) GetId() string {
@@ -5544,7 +5640,7 @@ type ContainerMetricsResponse struct {
 
 func (x *ContainerMetricsResponse) Reset() {
 	*x = ContainerMetricsResponse{}
-	mi := &file_compute_proto_msgTypes[81]
+	mi := &file_compute_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5556,7 +5652,7 @@ func (x *ContainerMetricsResponse) String() string {
 func (*ContainerMetricsResponse) ProtoMessage() {}
 
 func (x *ContainerMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[81]
+	mi := &file_compute_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5569,7 +5665,7 @@ func (x *ContainerMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContainerMetricsResponse.ProtoReflect.Descriptor instead.
 func (*ContainerMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{81}
+	return file_compute_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ContainerMetricsResponse) GetMetrics() *ContainerMetrics {
@@ -5592,7 +5688,7 @@ type AttestVMRequest struct {
 
 func (x *AttestVMRequest) Reset() {
 	*x = AttestVMRequest{}
-	mi := &file_compute_proto_msgTypes[82]
+	mi := &file_compute_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5604,7 +5700,7 @@ func (x *AttestVMRequest) String() string {
 func (*AttestVMRequest) ProtoMessage() {}
 
 func (x *AttestVMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[82]
+	mi := &file_compute_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5617,7 +5713,7 @@ func (x *AttestVMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestVMRequest.ProtoReflect.Descriptor instead.
 func (*AttestVMRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{82}
+	return file_compute_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *AttestVMRequest) GetVmId() string {
@@ -5665,7 +5761,7 @@ type AttestVMResponse struct {
 
 func (x *AttestVMResponse) Reset() {
 	*x = AttestVMResponse{}
-	mi := &file_compute_proto_msgTypes[83]
+	mi := &file_compute_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5677,7 +5773,7 @@ func (x *AttestVMResponse) String() string {
 func (*AttestVMResponse) ProtoMessage() {}
 
 func (x *AttestVMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[83]
+	mi := &file_compute_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5690,7 +5786,7 @@ func (x *AttestVMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestVMResponse.ProtoReflect.Descriptor instead.
 func (*AttestVMResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{83}
+	return file_compute_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *AttestVMResponse) GetStatus() *Status {
@@ -5758,7 +5854,7 @@ type VerifyVMAttestationRequest struct {
 
 func (x *VerifyVMAttestationRequest) Reset() {
 	*x = VerifyVMAttestationRequest{}
-	mi := &file_compute_proto_msgTypes[84]
+	mi := &file_compute_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5770,7 +5866,7 @@ func (x *VerifyVMAttestationRequest) String() string {
 func (*VerifyVMAttestationRequest) ProtoMessage() {}
 
 func (x *VerifyVMAttestationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[84]
+	mi := &file_compute_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5783,7 +5879,7 @@ func (x *VerifyVMAttestationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyVMAttestationRequest.ProtoReflect.Descriptor instead.
 func (*VerifyVMAttestationRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{84}
+	return file_compute_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *VerifyVMAttestationRequest) GetVmId() string {
@@ -5840,7 +5936,7 @@ type VerifyVMAttestationResponse struct {
 
 func (x *VerifyVMAttestationResponse) Reset() {
 	*x = VerifyVMAttestationResponse{}
-	mi := &file_compute_proto_msgTypes[85]
+	mi := &file_compute_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5852,7 +5948,7 @@ func (x *VerifyVMAttestationResponse) String() string {
 func (*VerifyVMAttestationResponse) ProtoMessage() {}
 
 func (x *VerifyVMAttestationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[85]
+	mi := &file_compute_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5865,7 +5961,7 @@ func (x *VerifyVMAttestationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyVMAttestationResponse.ProtoReflect.Descriptor instead.
 func (*VerifyVMAttestationResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{85}
+	return file_compute_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *VerifyVMAttestationResponse) GetStatus() *Status {
@@ -5909,7 +6005,7 @@ type AttestContainerRequest struct {
 
 func (x *AttestContainerRequest) Reset() {
 	*x = AttestContainerRequest{}
-	mi := &file_compute_proto_msgTypes[86]
+	mi := &file_compute_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5921,7 +6017,7 @@ func (x *AttestContainerRequest) String() string {
 func (*AttestContainerRequest) ProtoMessage() {}
 
 func (x *AttestContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[86]
+	mi := &file_compute_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5934,7 +6030,7 @@ func (x *AttestContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestContainerRequest.ProtoReflect.Descriptor instead.
 func (*AttestContainerRequest) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{86}
+	return file_compute_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *AttestContainerRequest) GetId() string {
@@ -5985,7 +6081,7 @@ type AttestContainerResponse struct {
 
 func (x *AttestContainerResponse) Reset() {
 	*x = AttestContainerResponse{}
-	mi := &file_compute_proto_msgTypes[87]
+	mi := &file_compute_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5997,7 +6093,7 @@ func (x *AttestContainerResponse) String() string {
 func (*AttestContainerResponse) ProtoMessage() {}
 
 func (x *AttestContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_compute_proto_msgTypes[87]
+	mi := &file_compute_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6010,7 +6106,7 @@ func (x *AttestContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestContainerResponse.ProtoReflect.Descriptor instead.
 func (*AttestContainerResponse) Descriptor() ([]byte, []int) {
-	return file_compute_proto_rawDescGZIP(), []int{87}
+	return file_compute_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *AttestContainerResponse) GetStatus() *Status {
@@ -6387,7 +6483,13 @@ const file_compute_proto_rawDesc = "" +
 	"\x14ListSnapshotsRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\"L\n" +
 	"\x15ListSnapshotsResponse\x123\n" +
-	"\tsnapshots\x18\x01 \x03(\v2\x15.platform.v1.SnapshotR\tsnapshots\"\xab\x01\n" +
+	"\tsnapshots\x18\x01 \x03(\v2\x15.platform.v1.SnapshotR\tsnapshots\"J\n" +
+	"\x12GetSnapshotRequest\x12\x13\n" +
+	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x1f\n" +
+	"\vsnapshot_id\x18\x02 \x01(\tR\n" +
+	"snapshotId\"H\n" +
+	"\x13GetSnapshotResponse\x121\n" +
+	"\bsnapshot\x18\x01 \x01(\v2\x15.platform.v1.SnapshotR\bsnapshot\"\xab\x01\n" +
 	"\x10MigrateVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12)\n" +
 	"\x10destination_host\x18\x02 \x01(\tR\x0fdestinationHost\x12%\n" +
@@ -6612,7 +6714,7 @@ const file_compute_proto_rawDesc = "" +
 	"\x11RESTART_POLICY_NO\x10\x01\x12\x1d\n" +
 	"\x19RESTART_POLICY_ON_FAILURE\x10\x02\x12\x19\n" +
 	"\x15RESTART_POLICY_ALWAYS\x10\x03\x12!\n" +
-	"\x1dRESTART_POLICY_UNLESS_STOPPED\x10\x042\xd4\x17\n" +
+	"\x1dRESTART_POLICY_UNLESS_STOPPED\x10\x042\xa6\x18\n" +
 	"\x0eComputeService\x12G\n" +
 	"\bCreateVM\x12\x1c.platform.v1.CreateVMRequest\x1a\x1d.platform.v1.CreateVMResponse\x12D\n" +
 	"\aStartVM\x12\x1b.platform.v1.StartVMRequest\x1a\x1c.platform.v1.StartVMResponse\x12A\n" +
@@ -6636,7 +6738,8 @@ const file_compute_proto_rawDesc = "" +
 	"\x0eCreateSnapshot\x12\".platform.v1.CreateSnapshotRequest\x1a#.platform.v1.CreateSnapshotResponse\x12\\\n" +
 	"\x0fRestoreSnapshot\x12#.platform.v1.RestoreSnapshotRequest\x1a$.platform.v1.RestoreSnapshotResponse\x12Y\n" +
 	"\x0eDeleteSnapshot\x12\".platform.v1.DeleteSnapshotRequest\x1a#.platform.v1.DeleteSnapshotResponse\x12V\n" +
-	"\rListSnapshots\x12!.platform.v1.ListSnapshotsRequest\x1a\".platform.v1.ListSnapshotsResponse\x12J\n" +
+	"\rListSnapshots\x12!.platform.v1.ListSnapshotsRequest\x1a\".platform.v1.ListSnapshotsResponse\x12P\n" +
+	"\vGetSnapshot\x12\x1f.platform.v1.GetSnapshotRequest\x1a .platform.v1.GetSnapshotResponse\x12J\n" +
 	"\tMigrateVM\x12\x1d.platform.v1.MigrateVMRequest\x1a\x1e.platform.v1.MigrateVMResponse\x12_\n" +
 	"\x10PrepareMigration\x12$.platform.v1.PrepareMigrationRequest\x1a%.platform.v1.PrepareMigrationResponse\x12b\n" +
 	"\x11FinalizeMigration\x12%.platform.v1.FinalizeMigrationRequest\x1a&.platform.v1.FinalizeMigrationResponse\x12\\\n" +
@@ -6667,7 +6770,7 @@ func file_compute_proto_rawDescGZIP() []byte {
 }
 
 var file_compute_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
-var file_compute_proto_msgTypes = make([]protoimpl.MessageInfo, 94)
+var file_compute_proto_msgTypes = make([]protoimpl.MessageInfo, 96)
 var file_compute_proto_goTypes = []any{
 	(VMState)(0),                        // 0: platform.v1.VMState
 	(FirmwareType)(0),                   // 1: platform.v1.FirmwareType
@@ -6735,59 +6838,61 @@ var file_compute_proto_goTypes = []any{
 	(*DeleteSnapshotResponse)(nil),      // 63: platform.v1.DeleteSnapshotResponse
 	(*ListSnapshotsRequest)(nil),        // 64: platform.v1.ListSnapshotsRequest
 	(*ListSnapshotsResponse)(nil),       // 65: platform.v1.ListSnapshotsResponse
-	(*MigrateVMRequest)(nil),            // 66: platform.v1.MigrateVMRequest
-	(*MigrateVMResponse)(nil),           // 67: platform.v1.MigrateVMResponse
-	(*VMMigrationSpec)(nil),             // 68: platform.v1.VMMigrationSpec
-	(*PrepareMigrationRequest)(nil),     // 69: platform.v1.PrepareMigrationRequest
-	(*PrepareMigrationResponse)(nil),    // 70: platform.v1.PrepareMigrationResponse
-	(*FinalizeMigrationRequest)(nil),    // 71: platform.v1.FinalizeMigrationRequest
-	(*FinalizeMigrationResponse)(nil),   // 72: platform.v1.FinalizeMigrationResponse
-	(*CreateContainerRequest)(nil),      // 73: platform.v1.CreateContainerRequest
-	(*CreateContainerResponse)(nil),     // 74: platform.v1.CreateContainerResponse
-	(*StartContainerRequest)(nil),       // 75: platform.v1.StartContainerRequest
-	(*StartContainerResponse)(nil),      // 76: platform.v1.StartContainerResponse
-	(*StopContainerRequest)(nil),        // 77: platform.v1.StopContainerRequest
-	(*StopContainerResponse)(nil),       // 78: platform.v1.StopContainerResponse
-	(*DeleteContainerRequest)(nil),      // 79: platform.v1.DeleteContainerRequest
-	(*DeleteContainerResponse)(nil),     // 80: platform.v1.DeleteContainerResponse
-	(*GetContainerRequest)(nil),         // 81: platform.v1.GetContainerRequest
-	(*GetContainerResponse)(nil),        // 82: platform.v1.GetContainerResponse
-	(*ListContainersRequest)(nil),       // 83: platform.v1.ListContainersRequest
-	(*ListContainersResponse)(nil),      // 84: platform.v1.ListContainersResponse
-	(*AttachContainerRequest)(nil),      // 85: platform.v1.AttachContainerRequest
-	(*ExecContainerRequest)(nil),        // 86: platform.v1.ExecContainerRequest
-	(*ExecContainerResponse)(nil),       // 87: platform.v1.ExecContainerResponse
-	(*GetContainerLogsRequest)(nil),     // 88: platform.v1.GetContainerLogsRequest
-	(*GetContainerMetricsRequest)(nil),  // 89: platform.v1.GetContainerMetricsRequest
-	(*ContainerMetricsResponse)(nil),    // 90: platform.v1.ContainerMetricsResponse
-	(*AttestVMRequest)(nil),             // 91: platform.v1.AttestVMRequest
-	(*AttestVMResponse)(nil),            // 92: platform.v1.AttestVMResponse
-	(*VerifyVMAttestationRequest)(nil),  // 93: platform.v1.VerifyVMAttestationRequest
-	(*VerifyVMAttestationResponse)(nil), // 94: platform.v1.VerifyVMAttestationResponse
-	(*AttestContainerRequest)(nil),      // 95: platform.v1.AttestContainerRequest
-	(*AttestContainerResponse)(nil),     // 96: platform.v1.AttestContainerResponse
-	nil,                                 // 97: platform.v1.VMConfig.LabelsEntry
-	nil,                                 // 98: platform.v1.VMConfig.MetadataEntry
-	nil,                                 // 99: platform.v1.VolumeMount.OptionsEntry
-	nil,                                 // 100: platform.v1.ContainerConfig.LabelsEntry
-	nil,                                 // 101: platform.v1.ContainerConfig.MetadataEntry
-	nil,                                 // 102: platform.v1.LogEntry.MetadataEntry
-	(TPMVersion)(0),                     // 103: platform.v1.TPMVersion
-	(*timestamppb.Timestamp)(nil),       // 104: google.protobuf.Timestamp
-	(*ResourceLimits)(nil),              // 105: platform.v1.ResourceLimits
-	(*Status)(nil),                      // 106: platform.v1.Status
-	(*LabelSelector)(nil),               // 107: platform.v1.LabelSelector
-	(*PaginationRequest)(nil),           // 108: platform.v1.PaginationRequest
-	(*PaginationResponse)(nil),          // 109: platform.v1.PaginationResponse
-	(PCRBank)(0),                        // 110: platform.v1.PCRBank
-	(*PCRValue)(nil),                    // 111: platform.v1.PCRValue
+	(*GetSnapshotRequest)(nil),          // 66: platform.v1.GetSnapshotRequest
+	(*GetSnapshotResponse)(nil),         // 67: platform.v1.GetSnapshotResponse
+	(*MigrateVMRequest)(nil),            // 68: platform.v1.MigrateVMRequest
+	(*MigrateVMResponse)(nil),           // 69: platform.v1.MigrateVMResponse
+	(*VMMigrationSpec)(nil),             // 70: platform.v1.VMMigrationSpec
+	(*PrepareMigrationRequest)(nil),     // 71: platform.v1.PrepareMigrationRequest
+	(*PrepareMigrationResponse)(nil),    // 72: platform.v1.PrepareMigrationResponse
+	(*FinalizeMigrationRequest)(nil),    // 73: platform.v1.FinalizeMigrationRequest
+	(*FinalizeMigrationResponse)(nil),   // 74: platform.v1.FinalizeMigrationResponse
+	(*CreateContainerRequest)(nil),      // 75: platform.v1.CreateContainerRequest
+	(*CreateContainerResponse)(nil),     // 76: platform.v1.CreateContainerResponse
+	(*StartContainerRequest)(nil),       // 77: platform.v1.StartContainerRequest
+	(*StartContainerResponse)(nil),      // 78: platform.v1.StartContainerResponse
+	(*StopContainerRequest)(nil),        // 79: platform.v1.StopContainerRequest
+	(*StopContainerResponse)(nil),       // 80: platform.v1.StopContainerResponse
+	(*DeleteContainerRequest)(nil),      // 81: platform.v1.DeleteContainerRequest
+	(*DeleteContainerResponse)(nil),     // 82: platform.v1.DeleteContainerResponse
+	(*GetContainerRequest)(nil),         // 83: platform.v1.GetContainerRequest
+	(*GetContainerResponse)(nil),        // 84: platform.v1.GetContainerResponse
+	(*ListContainersRequest)(nil),       // 85: platform.v1.ListContainersRequest
+	(*ListContainersResponse)(nil),      // 86: platform.v1.ListContainersResponse
+	(*AttachContainerRequest)(nil),      // 87: platform.v1.AttachContainerRequest
+	(*ExecContainerRequest)(nil),        // 88: platform.v1.ExecContainerRequest
+	(*ExecContainerResponse)(nil),       // 89: platform.v1.ExecContainerResponse
+	(*GetContainerLogsRequest)(nil),     // 90: platform.v1.GetContainerLogsRequest
+	(*GetContainerMetricsRequest)(nil),  // 91: platform.v1.GetContainerMetricsRequest
+	(*ContainerMetricsResponse)(nil),    // 92: platform.v1.ContainerMetricsResponse
+	(*AttestVMRequest)(nil),             // 93: platform.v1.AttestVMRequest
+	(*AttestVMResponse)(nil),            // 94: platform.v1.AttestVMResponse
+	(*VerifyVMAttestationRequest)(nil),  // 95: platform.v1.VerifyVMAttestationRequest
+	(*VerifyVMAttestationResponse)(nil), // 96: platform.v1.VerifyVMAttestationResponse
+	(*AttestContainerRequest)(nil),      // 97: platform.v1.AttestContainerRequest
+	(*AttestContainerResponse)(nil),     // 98: platform.v1.AttestContainerResponse
+	nil,                                 // 99: platform.v1.VMConfig.LabelsEntry
+	nil,                                 // 100: platform.v1.VMConfig.MetadataEntry
+	nil,                                 // 101: platform.v1.VolumeMount.OptionsEntry
+	nil,                                 // 102: platform.v1.ContainerConfig.LabelsEntry
+	nil,                                 // 103: platform.v1.ContainerConfig.MetadataEntry
+	nil,                                 // 104: platform.v1.LogEntry.MetadataEntry
+	(TPMVersion)(0),                     // 105: platform.v1.TPMVersion
+	(*timestamppb.Timestamp)(nil),       // 106: google.protobuf.Timestamp
+	(*ResourceLimits)(nil),              // 107: platform.v1.ResourceLimits
+	(*Status)(nil),                      // 108: platform.v1.Status
+	(*LabelSelector)(nil),               // 109: platform.v1.LabelSelector
+	(*PaginationRequest)(nil),           // 110: platform.v1.PaginationRequest
+	(*PaginationResponse)(nil),          // 111: platform.v1.PaginationResponse
+	(PCRBank)(0),                        // 112: platform.v1.PCRBank
+	(*PCRValue)(nil),                    // 113: platform.v1.PCRValue
 }
 var file_compute_proto_depIdxs = []int32{
 	3,   // 0: platform.v1.DiskConfig.type:type_name -> platform.v1.DiskType
 	4,   // 1: platform.v1.DiskConfig.bus:type_name -> platform.v1.DiskBus
 	5,   // 2: platform.v1.NetworkConfig.model:type_name -> platform.v1.NetworkModel
 	6,   // 3: platform.v1.GraphicsConfig.type:type_name -> platform.v1.GraphicsType
-	103, // 4: platform.v1.TPMConfig.version:type_name -> platform.v1.TPMVersion
+	105, // 4: platform.v1.TPMConfig.version:type_name -> platform.v1.TPMVersion
 	1,   // 5: platform.v1.VMConfig.firmware:type_name -> platform.v1.FirmwareType
 	2,   // 6: platform.v1.VMConfig.boot_device:type_name -> platform.v1.BootDevice
 	9,   // 7: platform.v1.VMConfig.cpu:type_name -> platform.v1.CPUConfig
@@ -6796,169 +6901,172 @@ var file_compute_proto_depIdxs = []int32{
 	12,  // 10: platform.v1.VMConfig.networks:type_name -> platform.v1.NetworkConfig
 	13,  // 11: platform.v1.VMConfig.graphics:type_name -> platform.v1.GraphicsConfig
 	14,  // 12: platform.v1.VMConfig.tpm:type_name -> platform.v1.TPMConfig
-	97,  // 13: platform.v1.VMConfig.labels:type_name -> platform.v1.VMConfig.LabelsEntry
-	98,  // 14: platform.v1.VMConfig.metadata:type_name -> platform.v1.VMConfig.MetadataEntry
+	99,  // 13: platform.v1.VMConfig.labels:type_name -> platform.v1.VMConfig.LabelsEntry
+	100, // 14: platform.v1.VMConfig.metadata:type_name -> platform.v1.VMConfig.MetadataEntry
 	15,  // 15: platform.v1.VM.config:type_name -> platform.v1.VMConfig
 	0,   // 16: platform.v1.VM.state:type_name -> platform.v1.VMState
-	104, // 17: platform.v1.VM.created_at:type_name -> google.protobuf.Timestamp
-	104, // 18: platform.v1.VM.updated_at:type_name -> google.protobuf.Timestamp
+	106, // 17: platform.v1.VM.created_at:type_name -> google.protobuf.Timestamp
+	106, // 18: platform.v1.VM.updated_at:type_name -> google.protobuf.Timestamp
 	17,  // 19: platform.v1.VM.metrics:type_name -> platform.v1.VMMetrics
 	18,  // 20: platform.v1.Snapshot.config:type_name -> platform.v1.SnapshotConfig
-	104, // 21: platform.v1.Snapshot.created_at:type_name -> google.protobuf.Timestamp
+	106, // 21: platform.v1.Snapshot.created_at:type_name -> google.protobuf.Timestamp
 	0,   // 22: platform.v1.Snapshot.vm_state:type_name -> platform.v1.VMState
-	99,  // 23: platform.v1.VolumeMount.options:type_name -> platform.v1.VolumeMount.OptionsEntry
+	101, // 23: platform.v1.VolumeMount.options:type_name -> platform.v1.VolumeMount.OptionsEntry
 	22,  // 24: platform.v1.ContainerConfig.env:type_name -> platform.v1.EnvVar
 	20,  // 25: platform.v1.ContainerConfig.volumes:type_name -> platform.v1.VolumeMount
 	21,  // 26: platform.v1.ContainerConfig.ports:type_name -> platform.v1.PortMapping
-	105, // 27: platform.v1.ContainerConfig.resources:type_name -> platform.v1.ResourceLimits
+	107, // 27: platform.v1.ContainerConfig.resources:type_name -> platform.v1.ResourceLimits
 	8,   // 28: platform.v1.ContainerConfig.restart_policy:type_name -> platform.v1.RestartPolicy
-	100, // 29: platform.v1.ContainerConfig.labels:type_name -> platform.v1.ContainerConfig.LabelsEntry
-	101, // 30: platform.v1.ContainerConfig.metadata:type_name -> platform.v1.ContainerConfig.MetadataEntry
+	102, // 29: platform.v1.ContainerConfig.labels:type_name -> platform.v1.ContainerConfig.LabelsEntry
+	103, // 30: platform.v1.ContainerConfig.metadata:type_name -> platform.v1.ContainerConfig.MetadataEntry
 	23,  // 31: platform.v1.Container.config:type_name -> platform.v1.ContainerConfig
 	7,   // 32: platform.v1.Container.state:type_name -> platform.v1.ContainerState
-	104, // 33: platform.v1.Container.created_at:type_name -> google.protobuf.Timestamp
-	104, // 34: platform.v1.Container.started_at:type_name -> google.protobuf.Timestamp
-	104, // 35: platform.v1.Container.finished_at:type_name -> google.protobuf.Timestamp
+	106, // 33: platform.v1.Container.created_at:type_name -> google.protobuf.Timestamp
+	106, // 34: platform.v1.Container.started_at:type_name -> google.protobuf.Timestamp
+	106, // 35: platform.v1.Container.finished_at:type_name -> google.protobuf.Timestamp
 	25,  // 36: platform.v1.Container.metrics:type_name -> platform.v1.ContainerMetrics
-	104, // 37: platform.v1.ConsoleOutput.timestamp:type_name -> google.protobuf.Timestamp
-	106, // 38: platform.v1.ConsoleInputResponse.status:type_name -> platform.v1.Status
-	104, // 39: platform.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	102, // 40: platform.v1.LogEntry.metadata:type_name -> platform.v1.LogEntry.MetadataEntry
+	106, // 37: platform.v1.ConsoleOutput.timestamp:type_name -> google.protobuf.Timestamp
+	108, // 38: platform.v1.ConsoleInputResponse.status:type_name -> platform.v1.Status
+	106, // 39: platform.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	104, // 40: platform.v1.LogEntry.metadata:type_name -> platform.v1.LogEntry.MetadataEntry
 	15,  // 41: platform.v1.CreateVMRequest.config:type_name -> platform.v1.VMConfig
-	106, // 42: platform.v1.CreateVMResponse.status:type_name -> platform.v1.Status
+	108, // 42: platform.v1.CreateVMResponse.status:type_name -> platform.v1.Status
 	16,  // 43: platform.v1.CreateVMResponse.vm:type_name -> platform.v1.VM
-	106, // 44: platform.v1.StartVMResponse.status:type_name -> platform.v1.Status
-	106, // 45: platform.v1.StopVMResponse.status:type_name -> platform.v1.Status
-	106, // 46: platform.v1.RebootVMResponse.status:type_name -> platform.v1.Status
-	106, // 47: platform.v1.SuspendVMResponse.status:type_name -> platform.v1.Status
-	106, // 48: platform.v1.ResumeVMResponse.status:type_name -> platform.v1.Status
-	106, // 49: platform.v1.DeleteVMResponse.status:type_name -> platform.v1.Status
+	108, // 44: platform.v1.StartVMResponse.status:type_name -> platform.v1.Status
+	108, // 45: platform.v1.StopVMResponse.status:type_name -> platform.v1.Status
+	108, // 46: platform.v1.RebootVMResponse.status:type_name -> platform.v1.Status
+	108, // 47: platform.v1.SuspendVMResponse.status:type_name -> platform.v1.Status
+	108, // 48: platform.v1.ResumeVMResponse.status:type_name -> platform.v1.Status
+	108, // 49: platform.v1.DeleteVMResponse.status:type_name -> platform.v1.Status
 	16,  // 50: platform.v1.GetVMResponse.vm:type_name -> platform.v1.VM
-	107, // 51: platform.v1.ListVMsRequest.selector:type_name -> platform.v1.LabelSelector
-	108, // 52: platform.v1.ListVMsRequest.pagination:type_name -> platform.v1.PaginationRequest
+	109, // 51: platform.v1.ListVMsRequest.selector:type_name -> platform.v1.LabelSelector
+	110, // 52: platform.v1.ListVMsRequest.pagination:type_name -> platform.v1.PaginationRequest
 	0,   // 53: platform.v1.ListVMsRequest.states:type_name -> platform.v1.VMState
 	16,  // 54: platform.v1.ListVMsResponse.vms:type_name -> platform.v1.VM
-	109, // 55: platform.v1.ListVMsResponse.pagination:type_name -> platform.v1.PaginationResponse
-	104, // 56: platform.v1.GetVMLogsRequest.since:type_name -> google.protobuf.Timestamp
+	111, // 55: platform.v1.ListVMsResponse.pagination:type_name -> platform.v1.PaginationResponse
+	106, // 56: platform.v1.GetVMLogsRequest.since:type_name -> google.protobuf.Timestamp
 	17,  // 57: platform.v1.VMMetricsResponse.metrics:type_name -> platform.v1.VMMetrics
 	11,  // 58: platform.v1.AttachDiskRequest.disk:type_name -> platform.v1.DiskConfig
-	106, // 59: platform.v1.AttachDiskResponse.status:type_name -> platform.v1.Status
-	106, // 60: platform.v1.DetachDiskResponse.status:type_name -> platform.v1.Status
-	106, // 61: platform.v1.ResizeDiskResponse.status:type_name -> platform.v1.Status
+	108, // 59: platform.v1.AttachDiskResponse.status:type_name -> platform.v1.Status
+	108, // 60: platform.v1.DetachDiskResponse.status:type_name -> platform.v1.Status
+	108, // 61: platform.v1.ResizeDiskResponse.status:type_name -> platform.v1.Status
 	18,  // 62: platform.v1.CreateSnapshotRequest.config:type_name -> platform.v1.SnapshotConfig
-	106, // 63: platform.v1.CreateSnapshotResponse.status:type_name -> platform.v1.Status
+	108, // 63: platform.v1.CreateSnapshotResponse.status:type_name -> platform.v1.Status
 	19,  // 64: platform.v1.CreateSnapshotResponse.snapshot:type_name -> platform.v1.Snapshot
-	106, // 65: platform.v1.RestoreSnapshotResponse.status:type_name -> platform.v1.Status
-	106, // 66: platform.v1.DeleteSnapshotResponse.status:type_name -> platform.v1.Status
+	108, // 65: platform.v1.RestoreSnapshotResponse.status:type_name -> platform.v1.Status
+	108, // 66: platform.v1.DeleteSnapshotResponse.status:type_name -> platform.v1.Status
 	19,  // 67: platform.v1.ListSnapshotsResponse.snapshots:type_name -> platform.v1.Snapshot
-	106, // 68: platform.v1.MigrateVMResponse.status:type_name -> platform.v1.Status
-	68,  // 69: platform.v1.PrepareMigrationRequest.spec:type_name -> platform.v1.VMMigrationSpec
-	106, // 70: platform.v1.PrepareMigrationResponse.status:type_name -> platform.v1.Status
-	106, // 71: platform.v1.FinalizeMigrationResponse.status:type_name -> platform.v1.Status
-	23,  // 72: platform.v1.CreateContainerRequest.config:type_name -> platform.v1.ContainerConfig
-	106, // 73: platform.v1.CreateContainerResponse.status:type_name -> platform.v1.Status
-	24,  // 74: platform.v1.CreateContainerResponse.container:type_name -> platform.v1.Container
-	106, // 75: platform.v1.StartContainerResponse.status:type_name -> platform.v1.Status
-	106, // 76: platform.v1.StopContainerResponse.status:type_name -> platform.v1.Status
-	106, // 77: platform.v1.DeleteContainerResponse.status:type_name -> platform.v1.Status
-	24,  // 78: platform.v1.GetContainerResponse.container:type_name -> platform.v1.Container
-	107, // 79: platform.v1.ListContainersRequest.selector:type_name -> platform.v1.LabelSelector
-	108, // 80: platform.v1.ListContainersRequest.pagination:type_name -> platform.v1.PaginationRequest
-	7,   // 81: platform.v1.ListContainersRequest.states:type_name -> platform.v1.ContainerState
-	24,  // 82: platform.v1.ListContainersResponse.containers:type_name -> platform.v1.Container
-	109, // 83: platform.v1.ListContainersResponse.pagination:type_name -> platform.v1.PaginationResponse
-	22,  // 84: platform.v1.ExecContainerRequest.env:type_name -> platform.v1.EnvVar
-	106, // 85: platform.v1.ExecContainerResponse.status:type_name -> platform.v1.Status
-	104, // 86: platform.v1.GetContainerLogsRequest.since:type_name -> google.protobuf.Timestamp
-	104, // 87: platform.v1.GetContainerLogsRequest.until:type_name -> google.protobuf.Timestamp
-	25,  // 88: platform.v1.ContainerMetricsResponse.metrics:type_name -> platform.v1.ContainerMetrics
-	110, // 89: platform.v1.AttestVMRequest.pcr_bank:type_name -> platform.v1.PCRBank
-	106, // 90: platform.v1.AttestVMResponse.status:type_name -> platform.v1.Status
-	111, // 91: platform.v1.AttestVMResponse.pcr_values:type_name -> platform.v1.PCRValue
-	111, // 92: platform.v1.VerifyVMAttestationRequest.expected_pcrs:type_name -> platform.v1.PCRValue
-	106, // 93: platform.v1.VerifyVMAttestationResponse.status:type_name -> platform.v1.Status
-	111, // 94: platform.v1.VerifyVMAttestationResponse.actual_pcrs:type_name -> platform.v1.PCRValue
-	110, // 95: platform.v1.AttestContainerRequest.pcr_bank:type_name -> platform.v1.PCRBank
-	106, // 96: platform.v1.AttestContainerResponse.status:type_name -> platform.v1.Status
-	111, // 97: platform.v1.AttestContainerResponse.pcr_values:type_name -> platform.v1.PCRValue
-	104, // 98: platform.v1.AttestContainerResponse.timestamp:type_name -> google.protobuf.Timestamp
-	30,  // 99: platform.v1.ComputeService.CreateVM:input_type -> platform.v1.CreateVMRequest
-	32,  // 100: platform.v1.ComputeService.StartVM:input_type -> platform.v1.StartVMRequest
-	34,  // 101: platform.v1.ComputeService.StopVM:input_type -> platform.v1.StopVMRequest
-	36,  // 102: platform.v1.ComputeService.RebootVM:input_type -> platform.v1.RebootVMRequest
-	38,  // 103: platform.v1.ComputeService.SuspendVM:input_type -> platform.v1.SuspendVMRequest
-	40,  // 104: platform.v1.ComputeService.ResumeVM:input_type -> platform.v1.ResumeVMRequest
-	42,  // 105: platform.v1.ComputeService.DeleteVM:input_type -> platform.v1.DeleteVMRequest
-	44,  // 106: platform.v1.ComputeService.GetVM:input_type -> platform.v1.GetVMRequest
-	46,  // 107: platform.v1.ComputeService.ListVMs:input_type -> platform.v1.ListVMsRequest
-	48,  // 108: platform.v1.ComputeService.AttachVMConsole:input_type -> platform.v1.AttachVMConsoleRequest
-	27,  // 109: platform.v1.ComputeService.SendVMConsoleInput:input_type -> platform.v1.ConsoleInput
-	49,  // 110: platform.v1.ComputeService.GetVMLogs:input_type -> platform.v1.GetVMLogsRequest
-	50,  // 111: platform.v1.ComputeService.GetVMMetrics:input_type -> platform.v1.GetVMMetricsRequest
-	52,  // 112: platform.v1.ComputeService.AttachDisk:input_type -> platform.v1.AttachDiskRequest
-	54,  // 113: platform.v1.ComputeService.DetachDisk:input_type -> platform.v1.DetachDiskRequest
-	56,  // 114: platform.v1.ComputeService.ResizeDisk:input_type -> platform.v1.ResizeDiskRequest
-	58,  // 115: platform.v1.ComputeService.CreateSnapshot:input_type -> platform.v1.CreateSnapshotRequest
-	60,  // 116: platform.v1.ComputeService.RestoreSnapshot:input_type -> platform.v1.RestoreSnapshotRequest
-	62,  // 117: platform.v1.ComputeService.DeleteSnapshot:input_type -> platform.v1.DeleteSnapshotRequest
-	64,  // 118: platform.v1.ComputeService.ListSnapshots:input_type -> platform.v1.ListSnapshotsRequest
-	66,  // 119: platform.v1.ComputeService.MigrateVM:input_type -> platform.v1.MigrateVMRequest
-	69,  // 120: platform.v1.ComputeService.PrepareMigration:input_type -> platform.v1.PrepareMigrationRequest
-	71,  // 121: platform.v1.ComputeService.FinalizeMigration:input_type -> platform.v1.FinalizeMigrationRequest
-	73,  // 122: platform.v1.ComputeService.CreateContainer:input_type -> platform.v1.CreateContainerRequest
-	75,  // 123: platform.v1.ComputeService.StartContainer:input_type -> platform.v1.StartContainerRequest
-	77,  // 124: platform.v1.ComputeService.StopContainer:input_type -> platform.v1.StopContainerRequest
-	79,  // 125: platform.v1.ComputeService.DeleteContainer:input_type -> platform.v1.DeleteContainerRequest
-	81,  // 126: platform.v1.ComputeService.GetContainer:input_type -> platform.v1.GetContainerRequest
-	83,  // 127: platform.v1.ComputeService.ListContainers:input_type -> platform.v1.ListContainersRequest
-	85,  // 128: platform.v1.ComputeService.AttachContainer:input_type -> platform.v1.AttachContainerRequest
-	86,  // 129: platform.v1.ComputeService.ExecContainer:input_type -> platform.v1.ExecContainerRequest
-	88,  // 130: platform.v1.ComputeService.GetContainerLogs:input_type -> platform.v1.GetContainerLogsRequest
-	89,  // 131: platform.v1.ComputeService.GetContainerMetrics:input_type -> platform.v1.GetContainerMetricsRequest
-	91,  // 132: platform.v1.ComputeService.AttestVM:input_type -> platform.v1.AttestVMRequest
-	93,  // 133: platform.v1.ComputeService.VerifyVMAttestation:input_type -> platform.v1.VerifyVMAttestationRequest
-	95,  // 134: platform.v1.ComputeService.AttestContainer:input_type -> platform.v1.AttestContainerRequest
-	31,  // 135: platform.v1.ComputeService.CreateVM:output_type -> platform.v1.CreateVMResponse
-	33,  // 136: platform.v1.ComputeService.StartVM:output_type -> platform.v1.StartVMResponse
-	35,  // 137: platform.v1.ComputeService.StopVM:output_type -> platform.v1.StopVMResponse
-	37,  // 138: platform.v1.ComputeService.RebootVM:output_type -> platform.v1.RebootVMResponse
-	39,  // 139: platform.v1.ComputeService.SuspendVM:output_type -> platform.v1.SuspendVMResponse
-	41,  // 140: platform.v1.ComputeService.ResumeVM:output_type -> platform.v1.ResumeVMResponse
-	43,  // 141: platform.v1.ComputeService.DeleteVM:output_type -> platform.v1.DeleteVMResponse
-	45,  // 142: platform.v1.ComputeService.GetVM:output_type -> platform.v1.GetVMResponse
-	47,  // 143: platform.v1.ComputeService.ListVMs:output_type -> platform.v1.ListVMsResponse
-	26,  // 144: platform.v1.ComputeService.AttachVMConsole:output_type -> platform.v1.ConsoleOutput
-	28,  // 145: platform.v1.ComputeService.SendVMConsoleInput:output_type -> platform.v1.ConsoleInputResponse
-	29,  // 146: platform.v1.ComputeService.GetVMLogs:output_type -> platform.v1.LogEntry
-	51,  // 147: platform.v1.ComputeService.GetVMMetrics:output_type -> platform.v1.VMMetricsResponse
-	53,  // 148: platform.v1.ComputeService.AttachDisk:output_type -> platform.v1.AttachDiskResponse
-	55,  // 149: platform.v1.ComputeService.DetachDisk:output_type -> platform.v1.DetachDiskResponse
-	57,  // 150: platform.v1.ComputeService.ResizeDisk:output_type -> platform.v1.ResizeDiskResponse
-	59,  // 151: platform.v1.ComputeService.CreateSnapshot:output_type -> platform.v1.CreateSnapshotResponse
-	61,  // 152: platform.v1.ComputeService.RestoreSnapshot:output_type -> platform.v1.RestoreSnapshotResponse
-	63,  // 153: platform.v1.ComputeService.DeleteSnapshot:output_type -> platform.v1.DeleteSnapshotResponse
-	65,  // 154: platform.v1.ComputeService.ListSnapshots:output_type -> platform.v1.ListSnapshotsResponse
-	67,  // 155: platform.v1.ComputeService.MigrateVM:output_type -> platform.v1.MigrateVMResponse
-	70,  // 156: platform.v1.ComputeService.PrepareMigration:output_type -> platform.v1.PrepareMigrationResponse
-	72,  // 157: platform.v1.ComputeService.FinalizeMigration:output_type -> platform.v1.FinalizeMigrationResponse
-	74,  // 158: platform.v1.ComputeService.CreateContainer:output_type -> platform.v1.CreateContainerResponse
-	76,  // 159: platform.v1.ComputeService.StartContainer:output_type -> platform.v1.StartContainerResponse
-	78,  // 160: platform.v1.ComputeService.StopContainer:output_type -> platform.v1.StopContainerResponse
-	80,  // 161: platform.v1.ComputeService.DeleteContainer:output_type -> platform.v1.DeleteContainerResponse
-	82,  // 162: platform.v1.ComputeService.GetContainer:output_type -> platform.v1.GetContainerResponse
-	84,  // 163: platform.v1.ComputeService.ListContainers:output_type -> platform.v1.ListContainersResponse
-	26,  // 164: platform.v1.ComputeService.AttachContainer:output_type -> platform.v1.ConsoleOutput
-	87,  // 165: platform.v1.ComputeService.ExecContainer:output_type -> platform.v1.ExecContainerResponse
-	29,  // 166: platform.v1.ComputeService.GetContainerLogs:output_type -> platform.v1.LogEntry
-	90,  // 167: platform.v1.ComputeService.GetContainerMetrics:output_type -> platform.v1.ContainerMetricsResponse
-	92,  // 168: platform.v1.ComputeService.AttestVM:output_type -> platform.v1.AttestVMResponse
-	94,  // 169: platform.v1.ComputeService.VerifyVMAttestation:output_type -> platform.v1.VerifyVMAttestationResponse
-	96,  // 170: platform.v1.ComputeService.AttestContainer:output_type -> platform.v1.AttestContainerResponse
-	135, // [135:171] is the sub-list for method output_type
-	99,  // [99:135] is the sub-list for method input_type
-	99,  // [99:99] is the sub-list for extension type_name
-	99,  // [99:99] is the sub-list for extension extendee
-	0,   // [0:99] is the sub-list for field type_name
+	19,  // 68: platform.v1.GetSnapshotResponse.snapshot:type_name -> platform.v1.Snapshot
+	108, // 69: platform.v1.MigrateVMResponse.status:type_name -> platform.v1.Status
+	70,  // 70: platform.v1.PrepareMigrationRequest.spec:type_name -> platform.v1.VMMigrationSpec
+	108, // 71: platform.v1.PrepareMigrationResponse.status:type_name -> platform.v1.Status
+	108, // 72: platform.v1.FinalizeMigrationResponse.status:type_name -> platform.v1.Status
+	23,  // 73: platform.v1.CreateContainerRequest.config:type_name -> platform.v1.ContainerConfig
+	108, // 74: platform.v1.CreateContainerResponse.status:type_name -> platform.v1.Status
+	24,  // 75: platform.v1.CreateContainerResponse.container:type_name -> platform.v1.Container
+	108, // 76: platform.v1.StartContainerResponse.status:type_name -> platform.v1.Status
+	108, // 77: platform.v1.StopContainerResponse.status:type_name -> platform.v1.Status
+	108, // 78: platform.v1.DeleteContainerResponse.status:type_name -> platform.v1.Status
+	24,  // 79: platform.v1.GetContainerResponse.container:type_name -> platform.v1.Container
+	109, // 80: platform.v1.ListContainersRequest.selector:type_name -> platform.v1.LabelSelector
+	110, // 81: platform.v1.ListContainersRequest.pagination:type_name -> platform.v1.PaginationRequest
+	7,   // 82: platform.v1.ListContainersRequest.states:type_name -> platform.v1.ContainerState
+	24,  // 83: platform.v1.ListContainersResponse.containers:type_name -> platform.v1.Container
+	111, // 84: platform.v1.ListContainersResponse.pagination:type_name -> platform.v1.PaginationResponse
+	22,  // 85: platform.v1.ExecContainerRequest.env:type_name -> platform.v1.EnvVar
+	108, // 86: platform.v1.ExecContainerResponse.status:type_name -> platform.v1.Status
+	106, // 87: platform.v1.GetContainerLogsRequest.since:type_name -> google.protobuf.Timestamp
+	106, // 88: platform.v1.GetContainerLogsRequest.until:type_name -> google.protobuf.Timestamp
+	25,  // 89: platform.v1.ContainerMetricsResponse.metrics:type_name -> platform.v1.ContainerMetrics
+	112, // 90: platform.v1.AttestVMRequest.pcr_bank:type_name -> platform.v1.PCRBank
+	108, // 91: platform.v1.AttestVMResponse.status:type_name -> platform.v1.Status
+	113, // 92: platform.v1.AttestVMResponse.pcr_values:type_name -> platform.v1.PCRValue
+	113, // 93: platform.v1.VerifyVMAttestationRequest.expected_pcrs:type_name -> platform.v1.PCRValue
+	108, // 94: platform.v1.VerifyVMAttestationResponse.status:type_name -> platform.v1.Status
+	113, // 95: platform.v1.VerifyVMAttestationResponse.actual_pcrs:type_name -> platform.v1.PCRValue
+	112, // 96: platform.v1.AttestContainerRequest.pcr_bank:type_name -> platform.v1.PCRBank
+	108, // 97: platform.v1.AttestContainerResponse.status:type_name -> platform.v1.Status
+	113, // 98: platform.v1.AttestContainerResponse.pcr_values:type_name -> platform.v1.PCRValue
+	106, // 99: platform.v1.AttestContainerResponse.timestamp:type_name -> google.protobuf.Timestamp
+	30,  // 100: platform.v1.ComputeService.CreateVM:input_type -> platform.v1.CreateVMRequest
+	32,  // 101: platform.v1.ComputeService.StartVM:input_type -> platform.v1.StartVMRequest
+	34,  // 102: platform.v1.ComputeService.StopVM:input_type -> platform.v1.StopVMRequest
+	36,  // 103: platform.v1.ComputeService.RebootVM:input_type -> platform.v1.RebootVMRequest
+	38,  // 104: platform.v1.ComputeService.SuspendVM:input_type -> platform.v1.SuspendVMRequest
+	40,  // 105: platform.v1.ComputeService.ResumeVM:input_type -> platform.v1.ResumeVMRequest
+	42,  // 106: platform.v1.ComputeService.DeleteVM:input_type -> platform.v1.DeleteVMRequest
+	44,  // 107: platform.v1.ComputeService.GetVM:input_type -> platform.v1.GetVMRequest
+	46,  // 108: platform.v1.ComputeService.ListVMs:input_type -> platform.v1.ListVMsRequest
+	48,  // 109: platform.v1.ComputeService.AttachVMConsole:input_type -> platform.v1.AttachVMConsoleRequest
+	27,  // 110: platform.v1.ComputeService.SendVMConsoleInput:input_type -> platform.v1.ConsoleInput
+	49,  // 111: platform.v1.ComputeService.GetVMLogs:input_type -> platform.v1.GetVMLogsRequest
+	50,  // 112: platform.v1.ComputeService.GetVMMetrics:input_type -> platform.v1.GetVMMetricsRequest
+	52,  // 113: platform.v1.ComputeService.AttachDisk:input_type -> platform.v1.AttachDiskRequest
+	54,  // 114: platform.v1.ComputeService.DetachDisk:input_type -> platform.v1.DetachDiskRequest
+	56,  // 115: platform.v1.ComputeService.ResizeDisk:input_type -> platform.v1.ResizeDiskRequest
+	58,  // 116: platform.v1.ComputeService.CreateSnapshot:input_type -> platform.v1.CreateSnapshotRequest
+	60,  // 117: platform.v1.ComputeService.RestoreSnapshot:input_type -> platform.v1.RestoreSnapshotRequest
+	62,  // 118: platform.v1.ComputeService.DeleteSnapshot:input_type -> platform.v1.DeleteSnapshotRequest
+	64,  // 119: platform.v1.ComputeService.ListSnapshots:input_type -> platform.v1.ListSnapshotsRequest
+	66,  // 120: platform.v1.ComputeService.GetSnapshot:input_type -> platform.v1.GetSnapshotRequest
+	68,  // 121: platform.v1.ComputeService.MigrateVM:input_type -> platform.v1.MigrateVMRequest
+	71,  // 122: platform.v1.ComputeService.PrepareMigration:input_type -> platform.v1.PrepareMigrationRequest
+	73,  // 123: platform.v1.ComputeService.FinalizeMigration:input_type -> platform.v1.FinalizeMigrationRequest
+	75,  // 124: platform.v1.ComputeService.CreateContainer:input_type -> platform.v1.CreateContainerRequest
+	77,  // 125: platform.v1.ComputeService.StartContainer:input_type -> platform.v1.StartContainerRequest
+	79,  // 126: platform.v1.ComputeService.StopContainer:input_type -> platform.v1.StopContainerRequest
+	81,  // 127: platform.v1.ComputeService.DeleteContainer:input_type -> platform.v1.DeleteContainerRequest
+	83,  // 128: platform.v1.ComputeService.GetContainer:input_type -> platform.v1.GetContainerRequest
+	85,  // 129: platform.v1.ComputeService.ListContainers:input_type -> platform.v1.ListContainersRequest
+	87,  // 130: platform.v1.ComputeService.AttachContainer:input_type -> platform.v1.AttachContainerRequest
+	88,  // 131: platform.v1.ComputeService.ExecContainer:input_type -> platform.v1.ExecContainerRequest
+	90,  // 132: platform.v1.ComputeService.GetContainerLogs:input_type -> platform.v1.GetContainerLogsRequest
+	91,  // 133: platform.v1.ComputeService.GetContainerMetrics:input_type -> platform.v1.GetContainerMetricsRequest
+	93,  // 134: platform.v1.ComputeService.AttestVM:input_type -> platform.v1.AttestVMRequest
+	95,  // 135: platform.v1.ComputeService.VerifyVMAttestation:input_type -> platform.v1.VerifyVMAttestationRequest
+	97,  // 136: platform.v1.ComputeService.AttestContainer:input_type -> platform.v1.AttestContainerRequest
+	31,  // 137: platform.v1.ComputeService.CreateVM:output_type -> platform.v1.CreateVMResponse
+	33,  // 138: platform.v1.ComputeService.StartVM:output_type -> platform.v1.StartVMResponse
+	35,  // 139: platform.v1.ComputeService.StopVM:output_type -> platform.v1.StopVMResponse
+	37,  // 140: platform.v1.ComputeService.RebootVM:output_type -> platform.v1.RebootVMResponse
+	39,  // 141: platform.v1.ComputeService.SuspendVM:output_type -> platform.v1.SuspendVMResponse
+	41,  // 142: platform.v1.ComputeService.ResumeVM:output_type -> platform.v1.ResumeVMResponse
+	43,  // 143: platform.v1.ComputeService.DeleteVM:output_type -> platform.v1.DeleteVMResponse
+	45,  // 144: platform.v1.ComputeService.GetVM:output_type -> platform.v1.GetVMResponse
+	47,  // 145: platform.v1.ComputeService.ListVMs:output_type -> platform.v1.ListVMsResponse
+	26,  // 146: platform.v1.ComputeService.AttachVMConsole:output_type -> platform.v1.ConsoleOutput
+	28,  // 147: platform.v1.ComputeService.SendVMConsoleInput:output_type -> platform.v1.ConsoleInputResponse
+	29,  // 148: platform.v1.ComputeService.GetVMLogs:output_type -> platform.v1.LogEntry
+	51,  // 149: platform.v1.ComputeService.GetVMMetrics:output_type -> platform.v1.VMMetricsResponse
+	53,  // 150: platform.v1.ComputeService.AttachDisk:output_type -> platform.v1.AttachDiskResponse
+	55,  // 151: platform.v1.ComputeService.DetachDisk:output_type -> platform.v1.DetachDiskResponse
+	57,  // 152: platform.v1.ComputeService.ResizeDisk:output_type -> platform.v1.ResizeDiskResponse
+	59,  // 153: platform.v1.ComputeService.CreateSnapshot:output_type -> platform.v1.CreateSnapshotResponse
+	61,  // 154: platform.v1.ComputeService.RestoreSnapshot:output_type -> platform.v1.RestoreSnapshotResponse
+	63,  // 155: platform.v1.ComputeService.DeleteSnapshot:output_type -> platform.v1.DeleteSnapshotResponse
+	65,  // 156: platform.v1.ComputeService.ListSnapshots:output_type -> platform.v1.ListSnapshotsResponse
+	67,  // 157: platform.v1.ComputeService.GetSnapshot:output_type -> platform.v1.GetSnapshotResponse
+	69,  // 158: platform.v1.ComputeService.MigrateVM:output_type -> platform.v1.MigrateVMResponse
+	72,  // 159: platform.v1.ComputeService.PrepareMigration:output_type -> platform.v1.PrepareMigrationResponse
+	74,  // 160: platform.v1.ComputeService.FinalizeMigration:output_type -> platform.v1.FinalizeMigrationResponse
+	76,  // 161: platform.v1.ComputeService.CreateContainer:output_type -> platform.v1.CreateContainerResponse
+	78,  // 162: platform.v1.ComputeService.StartContainer:output_type -> platform.v1.StartContainerResponse
+	80,  // 163: platform.v1.ComputeService.StopContainer:output_type -> platform.v1.StopContainerResponse
+	82,  // 164: platform.v1.ComputeService.DeleteContainer:output_type -> platform.v1.DeleteContainerResponse
+	84,  // 165: platform.v1.ComputeService.GetContainer:output_type -> platform.v1.GetContainerResponse
+	86,  // 166: platform.v1.ComputeService.ListContainers:output_type -> platform.v1.ListContainersResponse
+	26,  // 167: platform.v1.ComputeService.AttachContainer:output_type -> platform.v1.ConsoleOutput
+	89,  // 168: platform.v1.ComputeService.ExecContainer:output_type -> platform.v1.ExecContainerResponse
+	29,  // 169: platform.v1.ComputeService.GetContainerLogs:output_type -> platform.v1.LogEntry
+	92,  // 170: platform.v1.ComputeService.GetContainerMetrics:output_type -> platform.v1.ContainerMetricsResponse
+	94,  // 171: platform.v1.ComputeService.AttestVM:output_type -> platform.v1.AttestVMResponse
+	96,  // 172: platform.v1.ComputeService.VerifyVMAttestation:output_type -> platform.v1.VerifyVMAttestationResponse
+	98,  // 173: platform.v1.ComputeService.AttestContainer:output_type -> platform.v1.AttestContainerResponse
+	137, // [137:174] is the sub-list for method output_type
+	100, // [100:137] is the sub-list for method input_type
+	100, // [100:100] is the sub-list for extension type_name
+	100, // [100:100] is the sub-list for extension extendee
+	0,   // [0:100] is the sub-list for field type_name
 }
 
 func init() { file_compute_proto_init() }
@@ -6974,7 +7082,7 @@ func file_compute_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_compute_proto_rawDesc), len(file_compute_proto_rawDesc)),
 			NumEnums:      9,
-			NumMessages:   94,
+			NumMessages:   96,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

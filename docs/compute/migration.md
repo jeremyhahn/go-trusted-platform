@@ -64,7 +64,8 @@ TLS identity and vTPM EK certificates.
 
 The destination side of a migration is exposed as two RPCs on the
 `ComputeService`, served on the same gRPC TCP and Unix-socket listeners as every
-other compute method:
+other compute method, and on REST, QUIC and MCP through the same service
+([api.md §3](api.md#3-vm-disks-snapshots-and-migration)):
 
 ```protobuf
 // Inter-daemon migration handshake (destination side)

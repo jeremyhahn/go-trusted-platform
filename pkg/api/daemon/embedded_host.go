@@ -163,8 +163,9 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 		registry.DNS = svc
 	}
 
-	// New always builds Cache, Scheduler and Messaging: a node whose SDK
-	// does not serve them answers Unavailable, as on every other transport.
+	// New always builds Cache, Scheduler, Messaging and ObjectStorage: a node
+	// whose SDK does not serve them answers Unavailable, as on every other
+	// transport.
 	if d.appServices.cache != nil {
 		registry.Cache = d.appServices.cache
 	}
@@ -173,6 +174,9 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	}
 	if d.appServices.messaging != nil {
 		registry.Messaging = d.appServices.messaging
+	}
+	if d.appServices.objectStorage != nil {
+		registry.ObjectStorage = d.appServices.objectStorage
 	}
 
 	// Any other unconfigured service stays a nil interface, never a typed nil.

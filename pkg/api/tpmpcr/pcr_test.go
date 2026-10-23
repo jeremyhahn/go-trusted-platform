@@ -88,3 +88,8 @@ func TestExtend_PassesTPMErrorThrough(t *testing.T) {
 func TestErrInvalidIndex_Message(t *testing.T) {
 	assert.Equal(t, "invalid PCR index 24 (must be 0-23)", ErrInvalidIndex{Index: 24}.Error())
 }
+
+func TestExtendedMessage_NamesThePCR(t *testing.T) {
+	assert.Equal(t, "PCR 16 extended", ExtendedMessage(16))
+	assert.Equal(t, "PCR 0 extended", ExtendedMessage(0))
+}

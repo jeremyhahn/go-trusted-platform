@@ -15,6 +15,7 @@ package modes
 
 import (
 	"context"
+	"net"
 	"net/netip"
 	"slices"
 	"testing"
@@ -25,6 +26,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 )
 
+// testOverlayCookie is the overlay cookie of one generation, which the
+// builder tests build flows under.
+const testOverlayCookie = OverlayCookie | 0x2A
+
 // ovlBaseTable is the base pipeline of the default test config, as the
 // switch holds it.
 var ovlBaseTable = []string{
@@ -34,7 +39,6 @@ var ovlBaseTable = []string{
 	"t=20 p=0 any -> goto:30",
 	"t=30 p=0 any -> goto:40",
 	"t=30 p=250 in_port=7,eth_dst=02:aa:aa:aa:aa:aa -> drop",
-	"t=30 p=300 in_port=3,eth_dst=02:aa:aa:aa:aa:aa -> goto:50",
 	"t=30 p=300 tun_id=50000,eth_dst=02:00:00:00:00:0a -> goto:50",
 	"t=40 p=0 any -> goto:60",
 	"t=40 p=210 in_port=3,eth_type=0x86dd,ip_proto=58,icmpv6_type=135,ipv6_src=:: -> goto:60",
@@ -48,7 +52,7 @@ var ovlBaseTable = []string{
 // access port 3.
 func testBuilder(t *testing.T) *flowBuilder {
 	t.Helper()
-	b, err := newFlowBuilder(overlayConfig(newFakeSpeaker()), overlayPorts{vxlan: 7, access: 3})
+	b, err := newFlowBuilder(overlayConfig(newFakeSpeaker()), overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 	require.NoError(t, err)
 	return b
 }
@@ -221,7 +225,7 @@ func TestFlowTable_StrictDelete(t *testing.T) {
 	d := strictDelete(flow)
 
 	assert.Equal(t, uint8(openflow.OFPFCDeleteStrict), d.Command)
-	assert.Equal(t, OverlayCookie, d.Cookie)
+	assert.Equal(t, testOverlayCookie, d.Cookie)
 	assert.Equal(t, ^uint64(0), d.CookieMask)
 	assert.Equal(t, flow.TableID, d.TableID)
 	assert.Equal(t, flow.Priority, d.Priority)
@@ -261,10 +265,12 @@ func TestFlowBuilder_Base(t *testing.T) {
 	})
 
 	t.Run("only access frames reach the anycast gateway", func(t *testing.T) {
+		b := testBuilder(t)
 		sw := newFakeSwitch()
-		require.NoError(t, sw.SendFlowMods(context.Background(), testBuilder(t).base()))
+		require.NoError(t, sw.SendFlowMods(context.Background(), b.base()))
+		require.NoError(t, sw.SendFlowMods(context.Background(), b.segment(ovlL2VNI, &overlaySegment{vlan: ovlVLAN})))
 
-		assert.Equal(t, "goto:50", sw.lookup(t, TableMACLearning, "in_port=3", "eth_dst=02:aa:aa:aa:aa:aa"))
+		assert.Equal(t, "goto:50", sw.lookup(t, TableMACLearning, "in_port=3", "tun_id=10100", "eth_dst=02:aa:aa:aa:aa:aa"))
 		assert.Equal(t, "drop", sw.lookup(t, TableMACLearning, "in_port=7", "tun_id=10100", "eth_dst=02:aa:aa:aa:aa:aa"),
 			"a tunnelled frame does not bypass the L3VNI's decap authorisation")
 		assert.Equal(t, "goto:50", sw.lookup(t, TableMACLearning, "in_port=7", "tun_id=50000", "eth_dst=02:00:00:00:00:0a"),
@@ -273,8 +279,8 @@ func TestFlowBuilder_Base(t *testing.T) {
 
 	t.Run("bridging only", func(t *testing.T) {
 		cfg := overlayConfig(newFakeSpeaker())
-		cfg.AnycastGatewayIP, cfg.AnycastGatewayMAC, cfg.L3VNI = netip.Addr{}, nil, 0
-		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3})
+		cfg.AnycastGateways, cfg.Subnets, cfg.AnycastGatewayMAC, cfg.L3VNI = nil, nil, nil, 0
+		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 		require.NoError(t, err)
 		sw := newFakeSwitch()
 		require.NoError(t, sw.SendFlowMods(context.Background(), b.base()))
@@ -298,6 +304,8 @@ func TestFlowBuilder_Segment(t *testing.T) {
 		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=10100,tun_src=10.0.0.2 -> goto:20"))
 		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=10100,tun_src=10.0.0.3 -> goto:20"))
 		assert.Len(t, sw.matching("t=40 ", "arp_tpa=10.1.0.1"), 1, "the gateway answers ARP")
+		assert.True(t, sw.has("t=30 p=300 in_port=3,tun_id=10100,eth_dst=02:aa:aa:aa:aa:aa -> goto:50"),
+			"the routed VNI's frames for the gateway MAC enter routing")
 	})
 
 	t.Run("an empty flood list reaches the access port only", func(t *testing.T) {
@@ -306,6 +314,20 @@ func TestFlowBuilder_Segment(t *testing.T) {
 
 		assert.True(t, sw.has("t=60 p=100 tun_id=10100 -> push_vlan,set:vlan=100,output:3,pop_vlan"))
 		assert.Empty(t, sw.matching("tun_src="), "no VTEP is authorised")
+	})
+
+	t.Run("each VNI answers ARP for its own gateway only", func(t *testing.T) {
+		cfg := overlayConfig(newFakeSpeaker())
+		cfg.AnycastGateways[ovlL2VNI+1] = netip.MustParseAddr("10.2.0.1")
+		perVNI, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
+		require.NoError(t, err)
+		sw := newFakeSwitch()
+		require.NoError(t, sw.SendFlowMods(context.Background(), perVNI.segment(ovlL2VNI+1, &overlaySegment{vlan: ovlVLAN + 1})))
+		require.NoError(t, sw.SendFlowMods(context.Background(), perVNI.segment(ovlL2VNI+2, &overlaySegment{vlan: ovlVLAN + 2})))
+
+		assert.Len(t, sw.matching("t=40 ", "arp_tpa=10.2.0.1"), 1, "the second VNI's gateway answers")
+		assert.Empty(t, sw.matching("t=40 ", "arp_tpa=10.1.0.1"), "another VNI's gateway is not answered")
+		assert.Empty(t, sw.matching("t=40 ", "vlan=102"), "a VNI without a gateway answers no ARP")
 	})
 }
 
@@ -381,6 +403,39 @@ func TestFlowBuilder_Host(t *testing.T) {
 	})
 }
 
+// A bridge-only VNI beside a routed one stays bridged: routing is decided
+// per VNI by its anycast gateway, not by whether any VNI has one.
+func TestFlowBuilder_RoutingIsPerVNI(t *testing.T) {
+	const bridged, bridgedVLAN = ovlL2VNI + 1, ovlVLAN + 1
+	b := testBuilder(t)
+	localIP, remoteIP := netip.MustParseAddr("10.9.0.10"), netip.MustParseAddr("10.9.0.20")
+	sw := newFakeSwitch()
+	install := func(flows []*openflow.FlowMod) { require.NoError(t, sw.SendFlowMods(context.Background(), flows)) }
+	install(b.base())
+	install(b.segment(ovlL2VNI, &overlaySegment{vlan: ovlVLAN}))
+	install(b.segment(bridged, &overlaySegment{vlan: bridgedVLAN}))
+	install(b.host(ovlL2VNI, ovlVLAN, &overlayHost{mac: ovlHostMAC, ips: map[netip.Addr]irbBinding{ovlHostIP: {}}}))
+	install(b.host(bridged, bridgedVLAN, &overlayHost{mac: net.HardwareAddr{0x02, 0, 0, 0, 0x09, 0x10},
+		ips: map[netip.Addr]irbBinding{localIP: {}}}))
+	install(b.host(bridged, bridgedVLAN, &overlayHost{mac: net.HardwareAddr{0x02, 0, 0, 0, 0x09, 0x20}, vtep: ovlVTEPB,
+		ips: map[netip.Addr]irbBinding{remoteIP: {l3vni: ovlL3VNI, routerMAC: ovlRouterMACB}}}))
+
+	t.Run("the routed VNI routes", func(t *testing.T) {
+		assert.Equal(t, "goto:50", sw.lookup(t, TableMACLearning, "in_port=3", "tun_id=10100", "eth_dst=02:aa:aa:aa:aa:aa"))
+		assert.Len(t, sw.matching("t=50 ", "ipv4_dst=10.1.0.10"), 1, "a host route to the routed VNI's host")
+	})
+
+	t.Run("the bridge-only VNI does not", func(t *testing.T) {
+		assert.Equal(t, "goto:40", sw.lookup(t, TableMACLearning, "in_port=3", "tun_id=10101", "eth_dst=02:aa:aa:aa:aa:aa"),
+			"a frame for the gateway MAC on a bridge-only VNI is bridged, not routed")
+		assert.Empty(t, sw.matching("t=30 ", "tun_id=10101", "eth_dst=02:aa:aa:aa:aa:aa"), "no gateway-MAC ingress")
+		assert.Empty(t, sw.matching("t=50 ", "ipv4_dst=10.9.0.10"), "no host route to a local host")
+		assert.Empty(t, sw.matching("t=50 ", "ipv4_dst=10.9.0.20"), "no host route to a remote host")
+		assert.Empty(t, sw.matching("t=10 ", "tun_id=50000"), "no L3VNI decap for a bridged host")
+		assert.Len(t, sw.matching("t=30 ", "tun_id=10101"), 2, "both hosts are still bridged to")
+	})
+}
+
 func TestFlowBuilder_Prefix(t *testing.T) {
 	b := testBuilder(t)
 	sw := newFakeSwitch()
@@ -399,7 +454,7 @@ func TestNewFlowBuilder(t *testing.T) {
 		cfg := overlayConfig(newFakeSpeaker())
 		cfg.L3VNI = 0
 
-		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3})
+		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 
 		require.NoError(t, err)
 		assert.Nil(t, b.routerMAC)
@@ -410,7 +465,8 @@ func TestNewFlowBuilder(t *testing.T) {
 		b := testBuilder(t)
 
 		assert.Equal(t, ovlRouterMAC, b.routerMAC)
-		assert.True(t, b.routing())
+		assert.True(t, b.routes(ovlL2VNI))
+		assert.False(t, b.routes(ovlL2VNI+1), "a VNI without a gateway is bridged only")
 	})
 }
 

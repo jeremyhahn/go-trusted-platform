@@ -372,9 +372,31 @@ process:
   stop-timeout: 10s
   restart-budget: 5           # restarts allowed within restart-window
   restart-window: 5m
+  platform-uids: []           # non-root platformd uids admitted to the
+                              # datapath child's live LB/NAT64/perf calls
 ```
 
 The values shown are the defaults; `cgroup-root` defaults to `/sys/fs/cgroup`.
+platformd reads the load balancer, NAT64 and perf live from the `datapath`
+process's socket (`<runtime-dir>/datapath.sock`, #660). A root platformd is
+admitted as the supervisor's uid; a platformd running as another account
+needs its uid in `platform-uids` and membership of the socket's group.
+platformd finds the socket through `datapath-socket` in the `gateway`
+section of **its own** `sdn:` configuration:
+
+```yaml
+# platformd configuration
+sdn:
+  gateway:
+    enabled: true
+    datapath-socket: /run/gatewayd/datapath.sock  # <runtime-dir>/datapath.sock
+```
+
+It has no default. Unset (single-process mode), the load-balancer and NAT64
+verbs answer "unavailable" and perf is measured by platformd's own OVS
+connection. Set, platformd dials the socket lazily: it starts before
+gatewayd, and a call that cannot reach the `datapath` process answers
+"unavailable" until it does.
 gatewayd enables the `memory` and `cpu` controllers in each `cgroup-parent`
 directory it creates; the `cgroup-root` itself must already offer them to its
 children (`cgroup.subtree_control`), which systemd does on a host and a
@@ -566,12 +588,17 @@ gateway:
         peer-key-ref: kms://platform/gateway/tunnel/relay-ispa/in?enc=base64
 ```
 
-A reference is `kms://<path>` or `secret://<path>` — the same store under two
-spellings, so use whichever reads better. `<path>` is the secret's path as
+A reference is `kms://<path>`. `<path>` is the secret's path as
 `platformctl secrets` shows it. Two options refine it: `?enc=base64` (or
 `?enc=hex`) decodes the stored text into bytes, which is what a 36-byte ESP key
 or a 32-byte WireGuard key needs, and `#<field>` picks one field out of a secret
 that holds several. Without `#<field>` the secret must hold exactly one.
+
+`kms://` is the only scheme. The second spelling the gateway once accepted for
+the same store was removed (#659); a reference that still uses it is refused at
+service start with `secrets.ErrSchemeRemoved`, whose message gives the `kms://`
+form to write instead. Any other scheme, and a bare value, is refused with
+`secrets.ErrSchemeUnsupported`.
 
 Store a key with `platformctl secrets`. To mint one, generate it there — the
 gateway only reads.
@@ -592,12 +619,28 @@ Everything about this fails closed, on purpose:
   This is gatewayd's platform anchor: it verifies every platform service the
   gateway talks to — the store, platformd over grpc, the proxy's mTLS callers
   and `trust-class: platform` backends, the control-plane reporter. It is not a
-  `trust:` class; there is no strategy to choose. Verification is one-way today
-  — the gateway checks the store, the store does not yet get a client
-  certificate from the gateway (#658). Both shipped gateway templates set it;
-  removing it means commenting `secret-store:` out too. The file is read at
-  each verification, so a rotated bundle needs no restart; a bundle not yet
-  delivered fails the verification naming the path.
+  `trust:` class; there is no strategy to choose. Both shipped gateway
+  templates set it; removing it means commenting `secret-store:` out too. The
+  file is read at each verification, so a rotated bundle needs no restart; a
+  bundle not yet delivered fails the verification naming the path.
+- A `secret-store:` without the node identity is refused
+  (`secrets.ErrClientIdentityRequired`). The session is mutual: the gateway
+  checks the store against the platform CA, and the store checks the gateway
+  by its provisioned mTLS node identity, so a store that requires a client
+  certificate knows which node is reading. That identity is the
+  `control-plane:` pair, the same certificate the telemetry reporter presents;
+  `secret-store:` has no credential of its own. The pair is needed whether or
+  not `control-plane.enabled` is on:
+
+  ```yaml
+  control-plane:
+    cert-file: /etc/gatewayd/client.pem       # the node identity
+    key-file: /etc/gatewayd/client-key.pem
+  ```
+
+  A pair that does not load (`proxysvc.ErrCertificateLoadFailed`, naming the
+  cert-file) also refuses the start. Like the reporter, gatewayd reads the
+  pair once at start: a renewed node certificate takes effect on restart.
 - A reference that does not resolve, or that resolves to nothing, refuses the
   service. An empty password is not a password.
 - A bare value where a reference belongs is refused rather than used as the
@@ -773,9 +816,10 @@ The flows sit above every pipeline table and never match traffic.
 installation behind one barrier versus one flow at a time. Do not compare the two
 numbers.
 
-If these return "unavailable" rather than zeroes, the perf backend is not wired
-in. That is a different problem from an idle datapath, and the status code tells
-you which you have.
+If these return "unavailable" rather than zeroes, platformd cannot reach the
+perf backend: with `datapath-socket` set, the `datapath` process is down or
+refuses platformd's uid (see `platform-uids` above). That is a different
+problem from an idle datapath, and the status code tells you which you have.
 
 ---
 

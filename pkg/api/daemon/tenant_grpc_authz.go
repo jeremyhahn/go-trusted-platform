@@ -68,14 +68,7 @@ func (s *TenantGRPCServer) authorizeTenant(ctx context.Context, requested string
 // the system tenant (tenant.AuthorizeCrossTenant), with
 // codes.PermissionDenied.
 func (s *TenantGRPCServer) authorizeSystemTenant(ctx context.Context, method string) error {
-	caller, bound := callerTenant(ctx)
-	if !bound {
-		return nil
-	}
-	if err := tenant.AuthorizeCrossTenant(s.isSystemTenant(caller), method); err != nil {
-		return status.Error(codes.PermissionDenied, err.Error())
-	}
-	return nil
+	return authorizeSystemCaller(ctx, s.systemTenantID, method)
 }
 
 // authorizeTenantName decides a lookup by name once the name has been

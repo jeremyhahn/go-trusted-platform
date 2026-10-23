@@ -315,7 +315,7 @@ func newIDevIDInstallCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&certFile, "cert-file", "", "path to certificate file (PEM format)")
-	_ = cmd.MarkFlagRequired("cert-file")
+	cli.MarkFlagsRequired(cmd, "cert-file")
 
 	return cmd
 }

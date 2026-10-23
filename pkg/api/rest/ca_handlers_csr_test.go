@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -92,12 +93,12 @@ func (a *scopedAuthorizer) AuthorizeToken(_ context.Context, token, requiredPerm
 // signCSRRouter routes to CA handlers whose KMS holds "rpi/fleet" as key,
 // and whose platform tokens grant adminToken ca:sign-csr.
 func signCSRRouter(ca CAServiceInterface, kms issuance.KMS) *mux.Router {
-	return signCSRRouterWith(ca, kms, &scopedAuthorizer{scopes: map[string][]string{adminToken: {issuance.SignCSRScope}}})
+	return signCSRRouterWith(ca, kms, NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{adminToken: {issuance.SignCSRScope}}}, nil, nil))
 }
 
-func signCSRRouterWith(ca CAServiceInterface, kms issuance.KMS, tokens TokenAuthorizer) *mux.Router {
+func signCSRRouterWith(ca CAServiceInterface, kms issuance.KMS, guard *ScopeGuard) *mux.Router {
 	router := mux.NewRouter()
-	NewCAHandlers(ca, slog.Default(), nil).WithKMS(kms).WithTokenAuthorizer(tokens).RegisterRoutes(router)
+	NewCAHandlers(ca, slog.Default(), nil).WithKMS(kms).WithScopeGuard(guard).RegisterRoutes(router)
 	return router
 }
 
@@ -113,7 +114,7 @@ func TestCAHandlers_SignCSR_NeedsItsOwnScope(t *testing.T) {
 		code  int
 	}{
 		{"no bearer token", "", http.StatusUnauthorized},
-		{"token the validator refuses", "forged", http.StatusForbidden},
+		{"token the validator refuses", "forged", http.StatusUnauthorized},
 		{"ca:write only", "writer", http.StatusForbidden},
 		{"every other ca scope", "operator", http.StatusForbidden},
 		{"*:write", "wildcard-action", http.StatusForbidden},
@@ -132,29 +133,31 @@ func TestCAHandlers_SignCSR_NeedsItsOwnScope(t *testing.T) {
 				"ca-admin":        {"ca:*"},
 			}}
 
-			rr := postJSONAs(t, signCSRRouterWith(ca, fleetKMS(t, key), tokens), "/api/v1/ca/sign-csr", tc.token, csr)
+			rr := postJSONAs(t, signCSRRouterWith(ca, fleetKMS(t, key), NewScopeGuard(tokens, nil, nil)), "/api/v1/ca/sign-csr", tc.token, csr)
 			assert.Equal(t, tc.code, rr.Code, rr.Body.String())
 			assert.Equal(t, tc.code == http.StatusCreated, ca.csrCA.Opts != nil, "reached the CA")
 		})
 	}
 }
 
-func TestCAHandlers_SignCSR_AsksForTheSignCSRScope(t *testing.T) {
+// The guard validates the token for this request (its DPoP htu) and checks
+// ca:sign-csr itself.
+func TestCAHandlers_SignCSR_ValidatesTheTokenForThisRequest(t *testing.T) {
 	key := issuancetest.RSAKey(t)
 	tokens := &scopedAuthorizer{scopes: map[string][]string{adminToken: {issuance.SignCSRScope}}}
 	ca := newMockCAService()
 	ca.csrCA = issuancetest.NewCA(t)
 
-	rr := postJSON(t, signCSRRouterWith(ca, fleetKMS(t, key), tokens), "/api/v1/ca/sign-csr",
+	rr := postJSON(t, signCSRRouterWith(ca, fleetKMS(t, key), NewScopeGuard(tokens, nil, nil)), "/api/v1/ca/sign-csr",
 		&platformv1.SignCSRRequest{CsrPem: string(issuancetest.CSR(t, key, "rpi/fleet"))})
 	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
-	assert.Equal(t, "ca:sign-csr", tokens.asked)
+	assert.Empty(t, tokens.asked, "the guard checks the route scope itself")
 	assert.Equal(t, "http://example.com/api/v1/ca/sign-csr", tokens.askedHTU)
 }
 
-// Without a platform-token validator nobody can hold ca:sign-csr, so the
-// endpoint refuses every request rather than falling open.
-func TestCAHandlers_SignCSR_WithoutATokenAuthorizer(t *testing.T) {
+// Without a guard nobody can hold ca:sign-csr, so the endpoint refuses every
+// request rather than falling open.
+func TestCAHandlers_SignCSR_WithoutAGuard(t *testing.T) {
 	ca := newMockCAService()
 	ca.csrCA = issuancetest.NewCA(t)
 	key := issuancetest.RSAKey(t)
@@ -162,7 +165,26 @@ func TestCAHandlers_SignCSR_WithoutATokenAuthorizer(t *testing.T) {
 	rr := postJSON(t, signCSRRouterWith(ca, fleetKMS(t, key), nil), "/api/v1/ca/sign-csr",
 		&platformv1.SignCSRRequest{CsrPem: string(issuancetest.CSR(t, key, "rpi/fleet"))})
 	assert.Equal(t, http.StatusForbidden, rr.Code, rr.Body.String())
-	assert.Contains(t, rr.Body.String(), "requires ca:sign-csr: no platform-token validator is configured")
+	assert.Contains(t, rr.Body.String(), "scope ca:sign-csr required: no authorization is configured")
+	assert.Nil(t, ca.csrCA.Opts, "reached the CA")
+}
+
+// A verified operator certificate holds *:* on every other route, but a
+// client certificate alone never certifies a code-signing key (#691).
+func TestCAHandlers_SignCSR_RefusesAClientCertificate(t *testing.T) {
+	ca := newMockCAService()
+	ca.csrCA = issuancetest.NewCA(t)
+	key := issuancetest.RSAKey(t)
+	body, err := protojson.Marshal(&platformv1.SignCSRRequest{CsrPem: string(issuancetest.CSR(t, key, "rpi/fleet"))})
+	require.NoError(t, err)
+	req := certificateRequest(http.MethodPost, "/api/v1/ca/sign-csr", "operator")
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	guard := NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)
+
+	rr := httptest.NewRecorder()
+	signCSRRouterWith(ca, fleetKMS(t, key), guard).ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusUnauthorized, rr.Code, rr.Body.String())
+	assert.Contains(t, rr.Body.String(), "requires a platform bearer token granting ca:sign-csr")
 	assert.Nil(t, ca.csrCA.Opts, "reached the CA")
 }
 
@@ -254,7 +276,7 @@ func TestCAHandlers_SignCSR_SDKSeesTheRefusal(t *testing.T) {
 	ca := newMockCAService()
 	ca.csrCA = issuancetest.NewCA(t)
 	client := sdkCAClient(t, signCSRRouterWith(ca, fleetKMS(t, issuancetest.RSAKey(t)),
-		&scopedAuthorizer{scopes: map[string][]string{adminToken: {"ca:write"}}}))
+		NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{adminToken: {"ca:write"}}}, nil, nil)))
 
 	_, err := client.SignCSR(context.Background(), &platformv1.SignCSRRequest{
 		CsrPem: string(issuancetest.CSR(t, issuancetest.RSAKey(t), "rpi/fleet")),
