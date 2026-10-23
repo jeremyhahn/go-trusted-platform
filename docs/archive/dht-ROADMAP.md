@@ -1,10 +1,6 @@
 # DHT Component Roadmap
 
-> **Status: ARCHIVED** · Last verified: 2026-10-20
-
-**STATUS: Design Complete - Implementation Pending**
-
-*Design documentation finalized 2026-01-10 (Phase 4 audit complete). Implementation to follow.*
+> **Status: ARCHIVE — historical record. Do NOT build from this document.** · Last verified: 2026-10-21
 
 ---
 
