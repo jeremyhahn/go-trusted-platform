@@ -110,6 +110,10 @@ func TestSecretRawData(t *testing.T) {
 		{name: "null", data: map[string]interface{}{secretRawKey: nil}},
 		{name: "not base64", data: map[string]interface{}{secretRawKey: "%%%"}, wantErr: true},
 		{name: "number", data: map[string]interface{}{secretRawKey: 42.0}, wantErr: true},
+		{name: "secrets service string", data: map[string]interface{}{secretServiceDataKey: "prefix-data-0"}, want: []byte("prefix-data-0")},
+		{name: "raw key wins over service key", data: map[string]interface{}{secretRawKey: "YWJj", secretServiceDataKey: "other"}, want: []byte("abc")},
+		{name: "secrets service null", data: map[string]interface{}{secretServiceDataKey: nil}},
+		{name: "secrets service number", data: map[string]interface{}{secretServiceDataKey: 42.0}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

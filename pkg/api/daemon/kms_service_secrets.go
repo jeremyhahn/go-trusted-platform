@@ -31,6 +31,10 @@ const (
 	// secret bytes under.
 	secretRawKey = "_raw"
 
+	// secretServiceDataKey is the SDK data-map key the embedded transport
+	// answers a quicbaas-secrets-service secret's bytes under.
+	secretServiceDataKey = "data"
+
 	// secretPrefixDataKey names the secret bytes in a GetSecretsByPrefix
 	// SecretData.Data map.
 	secretPrefixDataKey = "data"
@@ -56,11 +60,15 @@ func (e ErrSecretRawData) GRPCStatus() *status.Status {
 // secretRawData extracts the secret bytes StoreSecret wrote under
 // secretRawKey. The SDK keeps them as []byte in memory, but a transport
 // that JSON-encodes the data map (the embedded transport does) returns them
-// as a base64 string. A secret without the key carries no raw payload.
+// as a base64 string. A secret the quicbaas secrets service wrote (the MCP
+// secret_store and secret_rotate tools) has no secretRawKey: the embedded
+// transport answers its bytes, when they are not a JSON object, as a plain
+// string under secretServiceDataKey. A secret with neither key carries no
+// raw payload.
 func secretRawData(secretID string, data map[string]interface{}) ([]byte, error) {
 	raw, ok := data[secretRawKey]
 	if !ok || raw == nil {
-		return nil, nil
+		return secretServiceData(secretID, data)
 	}
 	switch v := raw.(type) {
 	case []byte:
@@ -74,6 +82,21 @@ func secretRawData(secretID string, data map[string]interface{}) ([]byte, error)
 	default:
 		return nil, ErrSecretRawData{SecretID: secretID, Type: fmt.Sprintf("%T", raw)}
 	}
+}
+
+// secretServiceData extracts the bytes of a secret the quicbaas secrets
+// service wrote: the embedded transport's handleSecretsGet puts bytes that
+// do not decode as a JSON object under secretServiceDataKey as a string.
+func secretServiceData(secretID string, data map[string]interface{}) ([]byte, error) {
+	value, ok := data[secretServiceDataKey]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	text, isString := value.(string)
+	if !isString {
+		return nil, ErrSecretRawData{SecretID: secretID, Type: fmt.Sprintf("%T", value)}
+	}
+	return []byte(text), nil
 }
 
 // listSecretPaths returns the sorted secret paths under prefix so offset
