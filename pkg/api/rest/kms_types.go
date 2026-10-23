@@ -696,6 +696,20 @@ func (e ErrKMSInvalidAlgorithm) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrKMSInvalidKeyUsage is returned when a key usage name is invalid.
+type ErrKMSInvalidKeyUsage struct {
+	Usage string
+}
+
+func (e ErrKMSInvalidKeyUsage) Error() string {
+	return "invalid key usage: " + e.Usage
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSInvalidKeyUsage) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSServiceUnavailable is returned when the KMS service is unavailable.
 type ErrKMSServiceUnavailable struct {
 	Reason string

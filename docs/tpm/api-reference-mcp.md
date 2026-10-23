@@ -29,8 +29,8 @@ scope of gRPC `Info`, and `pcr_extend` the scope of gRPC `ExtendPCR` and
 QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` take the scope of
 gRPC `GetCapabilities` and `GetPlatformAttributes` and of their QUIC twins
 (`0x99` · `0x17`, `0x99` · `0x1E`). `ek_delete` and
-`srk_delete` flush a persistent handle, which deletes nothing, exactly as gRPC
-`DeleteEK` and `DeleteSRK` do. `iak_delete` takes the scope of its twins, gRPC
+`srk_delete` evict the configured persistent key, exactly as gRPC `DeleteEK`
+and `DeleteSRK` do. `iak_delete` takes the scope of its twins, gRPC
 `TPMService/DeleteAK` and QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`), and
 refuses as they do: `FailedPrecondition` (`ErrDeviceIdentityKeyNotDeletable`),
 the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
@@ -53,7 +53,7 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 |------|-------------|
 | `platform_tpm_ek` | Get Endorsement Key public key and handle |
 | `platform_tpm_ek_create` | Create Endorsement Key |
-| `platform_tpm_ek_delete` | Flush EK handle from TPM |
+| `platform_tpm_ek_delete` | Evict the persisted Endorsement Key |
 | `platform_tpm_ek_cert` | Get EK certificate |
 | `platform_tpm_ek_import_cert` | Import EK certificate |
 
@@ -63,7 +63,7 @@ the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 |------|-------------|
 | `platform_tpm_srk` | Get Storage Root Key |
 | `platform_tpm_srk_create` | Create Storage Root Key |
-| `platform_tpm_srk_delete` | Flush SRK handle |
+| `platform_tpm_srk_delete` | Evict the persisted Shared SRK |
 
 ### Initial Attestation Key Tools
 
@@ -267,7 +267,11 @@ Create an Endorsement Key (EK) using the platform's configured algorithm.
 
 ### platform_tpm_ek_delete
 
-Flush the Endorsement Key (EK) handle from the TPM.
+Evict the Endorsement Key (EK) that `tpm.ek` configures from its persistent
+handle (`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5), authorised by the
+`tpm.ek` hierarchy auth. The result is
+`{"success": true, "message": "EK evicted", "handle": <handle>}`. An empty
+handle is `NotFound`; a `tpm.ek` without a handle is `FailedPrecondition`.
 
 **Input Schema:**
 ```json
@@ -309,7 +313,11 @@ Create a Storage Root Key (SRK) under the Endorsement Key.
 
 ### platform_tpm_srk_delete
 
-Flush the Storage Root Key (SRK) handle from the TPM.
+Evict the Shared SRK that `tpm.ssrk` configures from its persistent handle
+(`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5), authorised by the
+`tpm.ssrk` hierarchy auth. The result is
+`{"success": true, "message": "SRK evicted", "handle": <handle>}`. An empty
+handle is `NotFound`; a `tpm.ssrk` without a handle is `FailedPrecondition`.
 
 **Input Schema:**
 ```json

@@ -23,11 +23,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -553,9 +555,15 @@ func (h *KMSHandlers) handleGenerateKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	keySpec, err := h.keySpecRequestToService(&req.KeySpec)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	// Convert request to service format
 	serviceReq := &KMSGenerateKeyServiceRequest{
-		KeySpec:     h.keySpecRequestToService(&req.KeySpec),
+		KeySpec:     keySpec,
 		Name:        req.Name,
 		Description: req.Description,
 		Tags:        req.Tags,
@@ -945,10 +953,16 @@ func (h *KMSHandlers) handleImportKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	keySpec, err := h.keySpecRequestToService(&req.KeySpec)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	serviceReq := &KMSImportKeyServiceRequest{
 		KeyMaterial:   keyMaterial,
 		WrappingKeyID: req.WrappingKeyID,
-		KeySpec:       h.keySpecRequestToService(&req.KeySpec),
+		KeySpec:       keySpec,
 		Name:          req.Name,
 		Description:   req.Description,
 		Tags:          req.Tags,
@@ -1784,24 +1798,34 @@ func (h *KMSHandlers) getPaginationParams(r *http.Request) (int32, string) {
 	return limit, cursor
 }
 
-// keySpecRequestToService converts API request to service format.
-func (h *KMSHandlers) keySpecRequestToService(spec *KMSKeySpecRequest) *KMSKeySpec {
+// keySpecRequestToService converts API request to service format. An
+// algorithm or usage name with no platform.v1 number is an error, never a
+// default.
+func (h *KMSHandlers) keySpecRequestToService(spec *KMSKeySpecRequest) (*KMSKeySpec, error) {
 	if spec == nil {
-		return nil
+		return nil, nil
+	}
+
+	algorithm, err := kmsAlgorithmNumber(spec.Algorithm)
+	if err != nil {
+		return nil, err
 	}
 
 	usage := make([]int32, len(spec.Usage))
 	for i, u := range spec.Usage {
-		usage[i] = h.stringToKeyUsage(u)
+		usage[i], err = kmsUsageNumber(u)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &KMSKeySpec{
-		Algorithm:          h.stringToKeyAlgorithm(spec.Algorithm),
+		Algorithm:          algorithm,
 		KeySize:            spec.KeySize,
 		Usage:              usage,
 		Exportable:         spec.Exportable,
 		DeletionProtection: spec.DeletionProtection,
-	}
+	}, nil
 }
 
 // keyHandleToResponse converts service key handle to API response.
@@ -1841,72 +1865,64 @@ func (h *KMSHandlers) keyMetadataToResponse(metadata *KMSKeyMetadata) *KMSKeyMet
 	}
 }
 
-// stringToKeyAlgorithm converts string algorithm to int32.
-func (h *KMSHandlers) stringToKeyAlgorithm(s string) int32 {
-	switch s {
-	case "AES-128-GCM":
-		return 1
-	case "AES-192-GCM":
-		return 2
-	case "AES-256-GCM":
-		return 3
-	case "CHACHA20-POLY1305":
-		return 4
-	case "XCHACHA20-POLY1305":
-		return 5
-	case "RSA-2048":
-		return 10
-	case "RSA-3072":
-		return 11
-	case "RSA-4096":
-		return 12
-	case "ECDSA-P256":
-		return 20
-	case "ECDSA-P384":
-		return 21
-	case "ECDSA-P521":
-		return 22
-	case "ED25519":
-		return 30
-	case "ED448":
-		return 31
-	case "X25519":
-		return 40
-	case "X448":
-		return 41
-	case "HMAC-SHA256":
-		return 50
-	case "HMAC-SHA384":
-		return 51
-	case "HMAC-SHA512":
-		return 52
-	default:
-		return 0
-	}
+// kmsAlgorithmNumbers maps the REST algorithm names to the platform.v1
+// KMSKeyAlgorithm numbers the KMS service decodes. A name with no
+// platform.v1 number (XCHACHA20-POLY1305, ED448, X25519, X448) is not here
+// and is refused.
+var kmsAlgorithmNumbers = map[string]platformv1.KMSKeyAlgorithm{
+	"AES-128-GCM":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128,
+	"AES-192-GCM":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192,
+	"AES-256-GCM":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256,
+	"CHACHA20-POLY1305": platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305,
+	"RSA-2048":          platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048,
+	"RSA-3072":          platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072,
+	"RSA-4096":          platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096,
+	"ECDSA-P256":        platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256,
+	"ECDSA-P384":        platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384,
+	"ECDSA-P521":        platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521,
+	"ED25519":           platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519,
+	"HMAC-SHA256":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256,
+	"HMAC-SHA384":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384,
+	"HMAC-SHA512":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512,
 }
 
-// stringToKeyUsage converts string usage to int32.
-func (h *KMSHandlers) stringToKeyUsage(s string) int32 {
-	switch s {
-	case "ENCRYPT":
-		return 1
-	case "DECRYPT":
-		return 2
-	case "SIGN":
-		return 3
-	case "VERIFY":
-		return 4
-	case "WRAP_KEY":
-		return 5
-	case "DERIVE_KEY":
-		return 6
-	case "GENERATE_MAC":
-		return 7
-	case "VERIFY_MAC":
-		return 8
-	default:
-		return 0
+// kmsUsageNumbers maps the REST key usage names to the platform.v1
+// KeyUsage numbers the KMS service decodes. WRAP and UNWRAP are the short
+// forms of WRAP_KEY and UNWRAP_KEY; both MAC directions are the one HMAC
+// usage.
+var kmsUsageNumbers = map[string]platformv1.KeyUsage{
+	"ENCRYPT":      platformv1.KeyUsage_KEY_USAGE_ENCRYPT,
+	"DECRYPT":      platformv1.KeyUsage_KEY_USAGE_DECRYPT,
+	"SIGN":         platformv1.KeyUsage_KEY_USAGE_SIGN,
+	"VERIFY":       platformv1.KeyUsage_KEY_USAGE_VERIFY,
+	"WRAP":         platformv1.KeyUsage_KEY_USAGE_WRAP,
+	"WRAP_KEY":     platformv1.KeyUsage_KEY_USAGE_WRAP,
+	"UNWRAP":       platformv1.KeyUsage_KEY_USAGE_UNWRAP,
+	"UNWRAP_KEY":   platformv1.KeyUsage_KEY_USAGE_UNWRAP,
+	"DERIVE_KEY":   platformv1.KeyUsage_KEY_USAGE_DERIVE,
+	"GENERATE_MAC": platformv1.KeyUsage_KEY_USAGE_HMAC,
+	"VERIFY_MAC":   platformv1.KeyUsage_KEY_USAGE_HMAC,
+}
+
+// kmsAlgorithmNumber converts a REST algorithm name to its platform.v1
+// KMSKeyAlgorithm number. Underscores are accepted for dashes. A name with
+// no platform.v1 number returns ErrKMSInvalidAlgorithm.
+func kmsAlgorithmNumber(name string) (int32, error) {
+	number, ok := kmsAlgorithmNumbers[strings.ReplaceAll(name, "_", "-")]
+	if !ok {
+		return 0, ErrKMSInvalidAlgorithm{Algorithm: name}
 	}
+	return int32(number), nil
+}
+
+// kmsUsageNumber converts a REST key usage name to its platform.v1 KeyUsage
+// number. A name with no platform.v1 number returns ErrKMSInvalidKeyUsage.
+func kmsUsageNumber(name string) (int32, error) {
+	number, ok := kmsUsageNumbers[name]
+	if !ok {
+		return 0, ErrKMSInvalidKeyUsage{Usage: name}
+	}
+	return int32(number), nil
 }
 
 // writeJSON writes a JSON response.

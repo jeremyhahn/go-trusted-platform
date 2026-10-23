@@ -972,6 +972,10 @@ shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting
 the daemons on a TPM without an EK.
 
+`TestIntegrationConfig_EKCertificateAtHarnessIndex` in `pkg/app` also holds
+both configs to the index the provisioning script writes, read from the
+script's `swtpm_setup` flags.
+
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
 suite runs rather than handing the suites endpoints nothing is listening on.

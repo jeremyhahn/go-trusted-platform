@@ -57,7 +57,7 @@ platform-initrd recovery --device /dev/sda2
 **Options:**
 - `--device, -d`: LUKS device path (required)
 - `--name, -n`: LUKS mapping name (default: cryptroot)
-- `--reseal-pcrs`: Automatically reseal to current PCRs after unlock (default: true)
+- `--reseal-pcrs`: Recorded but not read; recovery does not reseal the TPM-PCR key (default: true)
 - `--fido2`: Enable FIDO2 authenticator unlock (default: true)
 - `--interactive`: Interactive recovery menu
 - `--tpm-path`: TPM device path (default: /dev/tpmrm0)

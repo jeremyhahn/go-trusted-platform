@@ -251,14 +251,24 @@ func seedDBSigningKey(t *testing.T, ctx context.Context) string {
 	steps := [][]string{
 		{"kms", "key", "generate", keyID, "--algorithm", "ECDSA-P256", "--purpose", "sign"},
 		{"kms", "key", "csr", keyID, "--out", csrPath},
-		{"ca", "sign-csr", csrPath, "--out", filepath.Join(dir, "db.pem")},
+		{"ca", "sign-csr", csrPath, "--valid-days", "1", "--out", filepath.Join(dir, "db.pem")},
 	}
-	for _, args := range steps {
+	for i, args := range steps {
 		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 		_, err := cli.runCommand(callCtx, args...)
 		cancel()
 		if err != nil {
 			t.Fatalf("seeding: DB signing key %q: %v", keyID, err)
+		}
+		if i == 0 {
+			// The key exists from here on: delete it when the test ends.
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), callTimeout)
+				defer cleanupCancel()
+				if _, err := cli.runCommand(cleanupCtx, "kms", "key", "delete", keyID, "--force"); err != nil {
+					t.Logf("Warning: seeding cleanup KMS key delete(%s) error: %v", keyID, err)
+				}
+			})
 		}
 	}
 	return keyID

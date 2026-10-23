@@ -54,3 +54,10 @@ func TestStatusResultFromProto_ComponentWithoutDetails(t *testing.T) {
 		t.Errorf("details = %v, want none", result.Components[0].Details)
 	}
 }
+
+// TestStatusResultFromProto_Nil checks that a nil response converts to nil.
+func TestStatusResultFromProto_Nil(t *testing.T) {
+	if result := StatusResultFromProto(nil); result != nil {
+		t.Fatalf("nil response converted to %+v, want nil", result)
+	}
+}
