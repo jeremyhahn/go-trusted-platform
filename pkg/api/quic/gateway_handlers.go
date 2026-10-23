@@ -392,6 +392,7 @@ type SnapshotOverlayInfo struct {
 	RemoteMACCount           uint32                             `codec:"remote_mac_count,omitempty"`
 	PrefixCount              uint32                             `codec:"prefix_count,omitempty"`
 	RefusedBindings          uint64                             `codec:"refused_bindings,omitempty"`
+	RefusedReplays           uint64                             `codec:"refused_replays,omitempty"`
 	L3VNI                    uint32                             `codec:"l3_vni,omitempty"`
 	ARPSuppressionEnabled    bool                               `codec:"arp_suppression_enabled,omitempty"`
 	AnycastGatewayConfigured bool                               `codec:"anycast_gateway_configured,omitempty"`
